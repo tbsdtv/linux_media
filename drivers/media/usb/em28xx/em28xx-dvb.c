@@ -44,7 +44,7 @@
 #include "mt352.h"
 #include "mt352_priv.h" /* FIXME */
 #include "tda1002x.h"
-#include "drx39xyj/drx39xxj.h"
+#include "drx39xxj.h"
 #include "tda18271.h"
 #include "s921.h"
 #include "drxd.h"
