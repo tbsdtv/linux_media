@@ -624,6 +624,7 @@ struct tbsecp3_board tbsecp3_boards[] = {
 			{
 				.ts_in = 0,
 				.i2c_bus_nr = 0,
+				.pusi_gse = 1,
 				.gpio.demod_reset.lvl = TBSECP3_GPIODEF_LOW,
 				.gpio.demod_reset.nr  = TBSECP3_GPIO_PIN(0, 0),
 			}, 
@@ -826,6 +827,7 @@ struct tbsecp3_board tbsecp3_boards[] = {
 		.adap_config	= {
 			{
 				.ts_in = 0,
+				.pusi_gse = 1,
 				.i2c_bus_nr = 0,
 				.gpio.demod_reset.lvl = TBSECP3_GPIODEF_LOW,
 				.gpio.demod_reset.nr  = TBSECP3_GPIO_PIN(0, 0),
@@ -836,6 +838,7 @@ struct tbsecp3_board tbsecp3_boards[] = {
 			}, 
 			{
 				.ts_in = 1,
+				.pusi_gse = 1,
 				.i2c_bus_nr = 0,
 				.gpio.lnb_power.lvl   = TBSECP3_GPIODEF_LOW,
 				.gpio.lnb_power.nr    = TBSECP3_GPIO_PIN(1, 2),
