@@ -98,9 +98,15 @@ struct dvb_net_priv {
 	struct net_device *net;
 	struct dvb_net *host;
 	struct dmx_demux *demux;
+	struct dmx_ip_section_feed *ip_secfeed;
+	struct dmx_ip_section_filter *multi_ipsecfilter[DVB_NET_MAX_NO_OF_PID];
+	struct set_multi_pid_mac_entry multi_pid_mac_entry;
+	u8 valid_multi_pid_mac_entry;
+	int runtime_pid_change;
 	struct dmx_section_feed *secfeed;
 	struct dmx_section_filter *secfilter;
 	struct dmx_ts_feed *tsfeed;
+	struct dmx_gse_feed *gsefeed;
 	int multi_num;
 	struct dmx_section_filter *multi_secfilter[DVB_NET_MULTICAST_MAX];
 	unsigned char multi_macs[DVB_NET_MULTICAST_MAX][6];
@@ -114,6 +120,7 @@ struct dvb_net_priv {
 	unsigned char feedtype;			/* Either FEED_TYPE_ or FEED_TYPE_ULE */
 	int need_pusi;				/* Set to 1, if synchronization on PUSI required. */
 	unsigned char tscc;			/* TS continuity counter after sync on PUSI. */
+	struct sk_buff *gse_skb;		/* Gse Packet gets copied in this buffer */
 	struct sk_buff *ule_skb;		/* ULE SNDU decodes into this buffer. */
 	unsigned char *ule_next_hdr;		/* Pointer into skb to next ULE extension header. */
 	unsigned short ule_sndu_len;		/* ULE SNDU length in bytes, w/o D-Bit. */
@@ -898,6 +905,124 @@ static int dvb_net_ts_callback(const u8 *buffer1, size_t buffer1_len,
 	return 0;
 }
 
+/*
+** handle the gse packet payload for destination address present or absent.
+** push it on network
+*/
+static int dvb_net_gse(struct net_device *dev, const u8 *buffer,
+		size_t buff_len,
+		size_t header_len)
+{
+	struct dvb_net_priv *priv = netdev_priv(dev);
+	int ret = 0;
+	struct ethhdr *ethh = NULL;
+	u8 dest_addr[ETH_ALEN];
+	static const u8 bc_addr[ETH_ALEN] = { [ 0 ... ETH_ALEN-1] = 0xff };
+	u8 gse_lbits = (buffer[0] & GSE_LABEL_BITS) >> 4;
+	u16 gse_sndu_type = *(buffer + header_len - 2) << 8 |
+				*(buffer + header_len - 1);
+
+	pr_warn("gse_lbits = %d gse_sndu_type = %d buff_len = %lu header_len= %lu first4bytes=%x\n",
+			gse_lbits, gse_sndu_type, buff_len, header_len,
+			*((u32*)buffer));
+
+	if (!(priv->gse_skb = dev_alloc_skb(buff_len + ETH_HLEN + ETH_ALEN - header_len))) {
+
+		pr_warn("%s: Memory squeeze, dropping packet.\n",
+				dev->name);
+		dev->stats.rx_dropped++;
+		return -ENOMEM;
+	}
+
+	skb_reserve(priv->gse_skb, ETH_HLEN + ETH_ALEN);
+	priv->gse_skb->dev = dev;
+	memcpy(skb_put(priv->gse_skb, buff_len - header_len),
+			buffer + header_len,
+			buff_len - header_len);
+
+	if (gse_lbits != GSE_PKT_LABEL_NONE) {
+		/*Handling this Case similar to ULE */
+		if(gse_lbits == GSE_PKT_LABEL_SIX_BYTES) {
+			/*
+			* The destination MAC address is the next data in the skb.
+			* It comes before any extension headers.Check if the payload
+			* of this SNDU should be passed up the stack.
+			*/
+			register int drop = 0;
+			if (priv->rx_mode != RX_MODE_PROMISC) {
+				if (priv->gse_skb->data[0] & 0x01) {
+					/* multicast or broadcast */
+					if (memcmp(priv->gse_skb->data, bc_addr,
+								ETH_ALEN)) {
+						/* multicast */
+						if (priv->rx_mode == RX_MODE_MULTI) {
+							int i;
+							for(i = 0; i < priv->multi_num && memcmp(priv->gse_skb->data, priv->multi_macs[i], ETH_ALEN); i++)
+								;
+							if (i == priv->multi_num)
+								drop = 1;
+						} else if (priv->rx_mode != RX_MODE_ALL_MULTI)
+							drop = 1; /* no broadcast; */
+						/* else: all multicast mode: accept all multicast packets */
+					}
+					/* else: broadcast */
+				}
+				else if (memcmp(priv->gse_skb->data, dev->dev_addr, ETH_ALEN))
+					drop = 1;
+				/* else: destination address matches the MAC address of our receiver device */
+			}
+			/* else: promiscuous mode; pass everything up the stack */
+			if (drop) {
+				pr_warn("Dropping SNDU: MAC destination address does not match: dest addr: \n");
+				dev_kfree_skb(priv->gse_skb);
+				priv->gse_skb = NULL;
+				dev->stats.rx_dropped++;
+				return -EINVAL;
+			}
+			else
+			{
+				skb_copy_from_linear_data(priv->gse_skb,
+						dest_addr,
+						ETH_ALEN);
+				skb_pull(priv->gse_skb, ETH_ALEN);
+			}
+		}
+		else
+		{
+			pr_warn("TODO:Handling case when MAC address is of 3 bytes  \n");
+		}
+	}
+	skb_push(priv->gse_skb, ETH_HLEN);
+	ethh = (struct ethhdr *)priv->gse_skb->data;
+	if (gse_lbits != GSE_PKT_LABEL_NONE) {
+		/* dest_addr buffer is only valid if labels bits are present */
+		memcpy(ethh->h_dest, dest_addr, ETH_ALEN);
+		memset(ethh->h_source, 0, ETH_ALEN);
+	}
+	else /* zeroize source and dest */
+		memset(ethh, 0, ETH_ALEN*2);
+	ethh = (struct ethhdr *)priv->gse_skb->data;
+	ethh->h_proto = htons(gse_sndu_type);
+	/* Stuff into kernel's protocol stack. */
+	priv->gse_skb->protocol = dvb_net_eth_type_trans(priv->gse_skb, dev);
+	dev->stats.rx_packets++;
+	dev->stats.rx_bytes += priv->gse_skb->len;
+	netif_rx(priv->gse_skb);
+	return ret;
+}
+
+static int dvb_net_gse_callback(const u8 *buff, size_t buffer_len,size_t header_len,
+		struct dmx_gse_feed *feed, u32 *buffer_flags)
+{
+	struct net_device *dev = feed->priv;
+	int ret = 0;
+
+	if (buffer_len > 65540)
+		pr_warn("%s: length > GSE MAX Packet size: %zu.\n",
+				dev->name, buffer_len);
+	ret = dvb_net_gse(dev, buff, buffer_len, header_len);
+	return ret;
+}
 
 static void dvb_net_sec(struct net_device *dev,
 			const u8 *pkt, int pkt_len)
@@ -1005,6 +1130,17 @@ static int dvb_net_sec_callback(const u8 *buffer1, size_t buffer1_len,
 	return 0;
 }
 
+static int dvb_net_ip_sec_callback(const u8 *buffer1, size_t buffer1_len,
+		const u8 *buffer2, size_t buffer2_len,
+		struct dmx_ip_section_filter *filter,
+		u32 *buffer_flags)
+{
+	struct net_device *dev = filter->priv;
+
+	dvb_net_sec(dev, buffer1, buffer1_len);
+	return 0;
+}
+
 static netdev_tx_t dvb_net_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	dev_kfree_skb(skb);
@@ -1057,16 +1193,65 @@ static int dvb_net_filter_sec_set(struct net_device *dev,
 	return 0;
 }
 
+static int dvb_net_filter_ip_sec_set(struct net_device *dev,
+		struct dmx_ip_section_filter **ip_secfilter,
+		u8 *mac, u8 *mac_mask, u16 pid)
+{
+	struct dvb_net_priv *priv = netdev_priv(dev);
+	int ret;
+
+	*ip_secfilter = NULL;
+	ret = priv->ip_secfeed->allocate_ip_filter(priv->ip_secfeed,
+			ip_secfilter);
+	if (ret < 0) {
+		pr_err("%s: could not get filter\n", dev->name);
+		return ret;
+	}
+	pr_warn("Allocated ip filter 0x%p with pid 0x%x\n",
+			*ip_secfilter, pid);
+	(*ip_secfilter)->priv = (void *) dev;
+
+	memset((*ip_secfilter)->filter_value, 0x00, DMX_MAX_FILTER_SIZE);
+	memset((*ip_secfilter)->filter_mask, 0x00, DMX_MAX_FILTER_SIZE);
+	memset((*ip_secfilter)->filter_mode, 0xff, DMX_MAX_FILTER_SIZE);
+
+	(*ip_secfilter)->filter_value[0] = 0x3e;
+	(*ip_secfilter)->filter_value[3] = mac[5];
+	(*ip_secfilter)->filter_value[4] = mac[4];
+	(*ip_secfilter)->filter_value[8] = mac[3];
+	(*ip_secfilter)->filter_value[9] = mac[2];
+	(*ip_secfilter)->filter_value[10] = mac[1];
+	(*ip_secfilter)->filter_value[11] = mac[0];
+
+	(*ip_secfilter)->filter_mask[0] = 0xff;
+	(*ip_secfilter)->filter_mask[3] = mac_mask[5];
+	(*ip_secfilter)->filter_mask[4] = mac_mask[4];
+	(*ip_secfilter)->filter_mask[8] = mac_mask[3];
+	(*ip_secfilter)->filter_mask[9] = mac_mask[2];
+	(*ip_secfilter)->filter_mask[10] = mac_mask[1];
+	(*ip_secfilter)->filter_mask[11] = mac_mask[0];
+
+	(*ip_secfilter)->pid = pid;
+
+	netdev_dbg(dev, "ip filter mac=%pM mask=%pM\n", mac, mac_mask);
+	netdev_dbg(dev, "ip filter pid =0x%xM\n", pid);
+
+	return 0;
+}
+
 static int dvb_net_feed_start(struct net_device *dev)
 {
-	int ret = 0, i;
+	int ret = 0, i, j, k;
 	struct dvb_net_priv *priv = netdev_priv(dev);
 	struct dmx_demux *demux = priv->demux;
 	unsigned char *mac = (unsigned char *) dev->dev_addr;
+	uint16_t pid_set_in_table = 0, new_pid = 0;
+	struct dvb_demux_feed *dvbdmxfeed = NULL;
 
 	netdev_dbg(dev, "rx_mode %i\n", priv->rx_mode);
 	mutex_lock(&priv->mutex);
-	if (priv->tsfeed || priv->secfeed || priv->secfilter || priv->multi_secfilter[0])
+	if (priv->tsfeed || priv->secfeed || priv->secfilter ||
+		priv->multi_secfilter[0] || priv->multi_ipsecfilter[0])
 		pr_err("%s: BUG %d\n", __func__, __LINE__);
 
 	priv->secfeed=NULL;
@@ -1075,51 +1260,208 @@ static int dvb_net_feed_start(struct net_device *dev)
 
 	if (priv->feedtype == DVB_NET_FEEDTYPE_MPE) {
 		netdev_dbg(dev, "alloc secfeed\n");
-		ret=demux->allocate_section_feed(demux, &priv->secfeed,
-					 dvb_net_sec_callback);
-		if (ret<0) {
-			pr_err("%s: could not allocate section feed\n",
-			       dev->name);
-			goto error;
-		}
-
-		ret = priv->secfeed->set(priv->secfeed, priv->pid, 1);
-
-		if (ret<0) {
-			pr_err("%s: could not set section feed\n", dev->name);
-			priv->demux->release_section_feed(priv->demux, priv->secfeed);
-			priv->secfeed=NULL;
-			goto error;
-		}
-
-		if (priv->rx_mode != RX_MODE_PROMISC) {
-			netdev_dbg(dev, "set secfilter\n");
-			dvb_net_filter_sec_set(dev, &priv->secfilter, mac, mask_normal);
-		}
-
-		switch (priv->rx_mode) {
-		case RX_MODE_MULTI:
-			for (i = 0; i < priv->multi_num; i++) {
-				netdev_dbg(dev, "set multi_secfilter[%d]\n", i);
-				dvb_net_filter_sec_set(dev, &priv->multi_secfilter[i],
-						       priv->multi_macs[i], mask_normal);
+		if (priv->valid_multi_pid_mac_entry) {
+			/* check added for re-use ipsec feed*/
+			if(!priv->runtime_pid_change) {
+				ret = demux->allocate_ip_section_feed(demux,
+						&priv->ip_secfeed,
+						dvb_net_ip_sec_callback);
+				if (ret < 0) {
+					pr_err("%s: could not allocate ip_section feed\n",
+						dev->name);
+					goto error;
+				}
 			}
-			break;
-		case RX_MODE_ALL_MULTI:
-			priv->multi_num=1;
-			netdev_dbg(dev, "set multi_secfilter[0]\n");
-			dvb_net_filter_sec_set(dev, &priv->multi_secfilter[0],
-					       mac_allmulti, mask_allmulti);
-			break;
-		case RX_MODE_PROMISC:
-			priv->multi_num=0;
-			netdev_dbg(dev, "set secfilter\n");
-			dvb_net_filter_sec_set(dev, &priv->secfilter, mac, mask_promisc);
-			break;
-		}
+			priv->ip_secfeed->runtime_pid_change =
+				priv->runtime_pid_change;
 
-		netdev_dbg(dev, "start filtering\n");
-		priv->secfeed->start_filtering(priv->secfeed);
+			ret = priv->ip_secfeed->set(priv->ip_secfeed,
+				&priv->multi_pid_mac_entry.pid[0],
+				priv->multi_pid_mac_entry.multi_pid_count, 1);
+			if (ret < 0) {
+				pr_err("%s: could not set section feed\n", dev->name);
+				priv->demux->release_ip_section_feed(
+						priv->demux, priv->ip_secfeed);
+				priv->ip_secfeed = NULL;
+				goto error;
+			}
+
+			if(!priv->runtime_pid_change) {
+				for (j = 0; j <
+				priv->multi_pid_mac_entry.multi_pid_count; j++) {
+					pr_warn("%s %d ip secfilter rx mode %d\n",
+						__func__, __LINE__,
+						priv->rx_mode);
+					switch (priv->rx_mode) {
+					case RX_MODE_MULTI:
+						dvb_net_filter_ip_sec_set(dev,
+							&priv->multi_ipsecfilter[j],
+							priv->multi_pid_mac_entry.multi_mac_address[j],
+							mask_normal,
+							priv->multi_pid_mac_entry.pid[j]);
+
+						break;
+					case RX_MODE_ALL_MULTI:
+						dvb_net_filter_ip_sec_set(dev,
+							&priv->multi_ipsecfilter[j],
+							mac_allmulti,
+							mask_allmulti,
+							priv->multi_pid_mac_entry.pid[j]);
+
+						break;
+					case RX_MODE_PROMISC:
+						dvb_net_filter_ip_sec_set(dev,
+							&priv->multi_ipsecfilter[j],
+							priv->multi_pid_mac_entry.multi_mac_address[j],
+							mask_promisc,
+							priv->multi_pid_mac_entry.pid[j]);
+						break;
+					}
+				}
+			} else {
+				dvbdmxfeed = (struct dvb_demux_feed *) priv->ip_secfeed;
+
+				for (i = 0; i < DVB_NET_MAX_NO_OF_PID; i++) {
+					pr_warn("Step 1 dvb_net_feed_stop new pid[%d] 0x%x 0x%x 0x%x filter 0x%p\n", i,priv->multi_pid_mac_entry.pid[i],
+						dvbdmxfeed->ip_pid[i], dvbdmxfeed->ip_new_pid[i],
+						priv->multi_ipsecfilter[i]);
+				}
+				/* release filters with pid not there in
+				* new pid table */
+				for (i = 0;i < DMX_MAX_NUMBER_OF_PID; i++) {
+					if (priv->multi_ipsecfilter[i]) {
+						pid_set_in_table =
+						priv->multi_ipsecfilter[i]->pid;
+
+						pr_warn("Step1 search for 0x%x if present in new table\n",pid_set_in_table);
+
+						for (j = 0;j < DMX_MAX_NUMBER_OF_PID && (pid_set_in_table != 0xffff); j++){
+							if(dvbdmxfeed->ip_new_pid[j] == pid_set_in_table)
+								break;
+						}
+						if (j == DMX_MAX_NUMBER_OF_PID){
+							pr_warn("Step1 0x%x pid not present in new table thus release filter[%d] 0x%p\n",pid_set_in_table,
+								i,
+								priv->multi_ipsecfilter[i]);
+							/* crash avoid */
+							dvbdmxfeed->ip_pid[i] = 0xffff;
+							priv->ip_secfeed->release_ip_filter(
+								priv->ip_secfeed,
+								priv->multi_ipsecfilter[i]);
+							priv->multi_ipsecfilter[i] = NULL;
+						}
+		
+					}
+				}
+
+				for(i = 0; i < DVB_NET_MAX_NO_OF_PID; i++) {
+					pr_warn("Step 2 dvb_net_feed_stop new pid[%d] 0x%x 0x%x 0x%x filter 0x%p\n", i,priv->multi_pid_mac_entry.pid[i],
+					dvbdmxfeed->ip_pid[i], dvbdmxfeed->ip_new_pid[i],
+					priv->multi_ipsecfilter[i]);
+				}
+ 
+				/* compare new pid table for new entries */
+				for (i = 0;i < priv->multi_pid_mac_entry.multi_pid_count; i++) {
+					new_pid = priv->multi_pid_mac_entry.pid[i];
+					for (j = 0;j < DMX_MAX_NUMBER_OF_PID && (new_pid != 0xffff); j++) {
+						/* if not null then check for next pid in filter table */
+						if (priv->multi_ipsecfilter[j]) {
+							/* entry found in old filter table */
+							if(new_pid == priv->multi_ipsecfilter[j]->pid )
+								break;
+						}
+						if (j == (DMX_MAX_NUMBER_OF_PID -1)) {
+							pr_warn("Step2  0x%x pid not present in old table allocate it\n",new_pid);
+							/* find out free filter in multi_ipsecfilter list */
+							for (k = 0;k < DMX_MAX_NUMBER_OF_PID; k++) 
+								if (priv->multi_ipsecfilter[k] == NULL)
+									break;
+
+							/* update old pid table entry */
+							dvbdmxfeed->ip_pid[k] = new_pid;
+							switch (priv->rx_mode) {
+								case RX_MODE_MULTI:
+									dvb_net_filter_ip_sec_set(dev,
+										&priv->multi_ipsecfilter[k],
+										priv->multi_pid_mac_entry.multi_mac_address[i],
+										mask_normal,
+										priv->multi_pid_mac_entry.pid[i]);
+
+									break;
+								case RX_MODE_ALL_MULTI:
+									dvb_net_filter_ip_sec_set(dev,
+										&priv->multi_ipsecfilter[k],
+										mac_allmulti,
+										mask_allmulti,
+										priv->multi_pid_mac_entry.pid[i]);
+
+									break;
+								case RX_MODE_PROMISC:
+									dvb_net_filter_ip_sec_set(dev,
+										&priv->multi_ipsecfilter[k],
+										priv->multi_pid_mac_entry.multi_mac_address[i],
+										mask_promisc,
+										priv->multi_pid_mac_entry.pid[i]);
+									break;
+							}
+						}
+					}
+				}
+				for (i = 0; i < DVB_NET_MAX_NO_OF_PID; i++) {
+						pr_warn("Step 3 dvb_net_feed_stop new pid[%d] 0x%x 0x%x 0x%x filter 0x%p\n", i,priv->multi_pid_mac_entry.pid[i],
+							dvbdmxfeed->ip_pid[i], dvbdmxfeed->ip_new_pid[i],
+							priv->multi_ipsecfilter[i]);
+				}
+			}
+			netdev_dbg(dev, "start filtering\n");
+			priv->ip_secfeed->start_filtering(priv->ip_secfeed);
+		} else {
+			ret=demux->allocate_section_feed(demux, &priv->secfeed,
+						dvb_net_sec_callback);
+			if (ret<0) {
+				pr_err("%s: could not allocate section feed\n",
+				      dev->name);
+				goto error;
+			}
+
+			ret = priv->secfeed->set(priv->secfeed, priv->pid, 1);
+
+			if (ret<0) {
+				pr_err("%s: could not set section feed\n", dev->name);
+				priv->demux->release_section_feed(priv->demux, priv->secfeed);
+				priv->secfeed=NULL;
+				goto error;
+			}
+
+			if (priv->rx_mode != RX_MODE_PROMISC) {
+				netdev_dbg(dev, "set secfilter\n");
+				dvb_net_filter_sec_set(dev, &priv->secfilter, mac, mask_normal);
+			}
+
+			switch (priv->rx_mode) {
+			case RX_MODE_MULTI:
+				for (i = 0; i < priv->multi_num; i++) {
+					netdev_dbg(dev, "set multi_secfilter[%d]\n", i);
+					dvb_net_filter_sec_set(dev, &priv->multi_secfilter[i],
+							      priv->multi_macs[i], mask_normal);
+				}
+				break;
+			case RX_MODE_ALL_MULTI:
+				priv->multi_num=1;
+				netdev_dbg(dev, "set multi_secfilter[0]\n");
+				dvb_net_filter_sec_set(dev, &priv->multi_secfilter[0],
+						      mac_allmulti, mask_allmulti);
+				break;
+			case RX_MODE_PROMISC:
+				priv->multi_num=0;
+				netdev_dbg(dev, "set secfilter\n");
+				dvb_net_filter_sec_set(dev, &priv->secfilter, mac, mask_promisc);
+				break;
+			}
+
+			netdev_dbg(dev, "start filtering\n");
+			priv->secfeed->start_filtering(priv->secfeed);
+		}
 	} else if (priv->feedtype == DVB_NET_FEEDTYPE_ULE) {
 		ktime_t timeout = ns_to_ktime(10 * NSEC_PER_MSEC);
 
@@ -1149,6 +1491,34 @@ static int dvb_net_feed_start(struct net_device *dev)
 
 		netdev_dbg(dev, "start filtering\n");
 		priv->tsfeed->start_filtering(priv->tsfeed);
+	} else if (priv->feedtype == DVB_NET_FEEDTYPE_GSE) {
+		pr_warn("%s: alloc gse feed\n", __func__);
+		ret = demux->allocate_gse_feed(demux,
+				&priv->gsefeed,
+				dvb_net_gse_callback,
+				NULL);
+		if (ret < 0) {
+			pr_err("%s: could not allocate gse feed\n", dev->name);
+			goto error;
+		}
+
+		/* Set netdevice pointer for gse decaps callback. */
+		priv->gsefeed->priv = (void *)dev;
+		ret = priv->gsefeed->set(priv->gsefeed, DMX_GSE_PDU,
+				GSE_FULL_PACKET, /* type */
+				priv->pid, /* protocol filter */
+				1);
+
+		if (ret < 0) {
+			printk("%s: could not set gse feed\n", dev->name);
+			priv->demux->release_gse_feed(priv->demux,
+					priv->gsefeed);
+			priv->gsefeed = NULL;
+			goto error;
+		}
+		pr_warn("%s: start filtering\n", __func__);
+		priv->gsefeed->start_filtering(priv->gsefeed,
+				dev->dev_addr);
 	} else
 		ret = -EINVAL;
 
@@ -1160,11 +1530,47 @@ error:
 static int dvb_net_feed_stop(struct net_device *dev)
 {
 	struct dvb_net_priv *priv = netdev_priv(dev);
+	struct dvb_demux_feed *dvbdmxfeed = NULL;
 	int i, ret = 0;
 
 	mutex_lock(&priv->mutex);
 	if (priv->feedtype == DVB_NET_FEEDTYPE_MPE) {
-		if (priv->secfeed) {
+		if (priv->ip_secfeed) {
+			dvbdmxfeed = (struct dvb_demux_feed *)priv->ip_secfeed;
+			priv->ip_secfeed->runtime_pid_change = priv->runtime_pid_change;
+
+			if(!priv->runtime_pid_change) {
+				if (priv->ip_secfeed->is_filtering) {
+					netdev_dbg(dev, "stop ip_secfeed\n");
+					priv->ip_secfeed->stop_filtering(
+							priv->ip_secfeed);
+				}
+				for (i = 0;
+				i < priv->multi_pid_mac_entry.multi_pid_count; i++) {
+					if (priv->multi_ipsecfilter[i]) {
+						netdev_dbg(dev, "release multi_ipsecfilter[%d]\n",i);
+						priv->ip_secfeed->release_ip_filter(
+							priv->ip_secfeed,
+							priv->multi_ipsecfilter[i]);
+						priv->multi_ipsecfilter[i] = NULL;
+					}
+				}
+			}
+
+			for (i = 0; i < DVB_NET_MAX_NO_OF_PID; i++) {
+					netdev_dbg(dev, "new pid[%d] 0x%x 0x%x 0x%x filter 0x%p\n", i,priv->multi_pid_mac_entry.pid[i],
+						dvbdmxfeed->ip_pid[i],dvbdmxfeed->ip_new_pid[i], priv->multi_ipsecfilter[i]);
+			}
+
+			/* if actual stop */
+			if(!priv->runtime_pid_change) {
+				priv->demux->release_ip_section_feed(
+						priv->demux,
+						priv->ip_secfeed);
+				priv->ip_secfeed = NULL;
+			}
+		} else if (priv->secfeed) {
+
 			if (priv->secfeed->is_filtering) {
 				netdev_dbg(dev, "stop secfeed\n");
 				priv->secfeed->stop_filtering(priv->secfeed);
@@ -1202,6 +1608,19 @@ static int dvb_net_feed_stop(struct net_device *dev)
 		}
 		else
 			pr_err("%s: no ts feed to stop\n", dev->name);
+	} else if (priv->feedtype == DVB_NET_FEEDTYPE_GSE) {
+		if (priv->gsefeed) {
+			if (priv->gsefeed->is_filtering) {
+				netdev_dbg(dev, "stop gsefeed\n");
+				priv->gsefeed->stop_filtering(priv->gsefeed,
+						dev->dev_addr);
+			}
+			priv->demux->release_gse_feed(priv->demux,
+					priv->gsefeed);
+			priv->gsefeed = NULL;
+		}
+		else
+			pr_err("%s: no gse feed to stop\n", dev->name);
 	} else
 		ret = -EINVAL;
 	mutex_unlock(&priv->mutex);
@@ -1306,6 +1725,8 @@ static int dvb_net_stop(struct net_device *dev)
 	struct dvb_net_priv *priv = netdev_priv(dev);
 
 	priv->in_use--;
+	if (priv->ip_secfeed)
+		priv->runtime_pid_change = 0;
 	return dvb_net_feed_stop(dev);
 }
 
@@ -1358,7 +1779,8 @@ static int dvb_net_add_if(struct dvb_net *dvbnet, u16 pid, u8 feedtype)
 	int result;
 	int if_num;
 
-	if (feedtype != DVB_NET_FEEDTYPE_MPE && feedtype != DVB_NET_FEEDTYPE_ULE)
+	if (feedtype != DVB_NET_FEEDTYPE_MPE && feedtype != DVB_NET_FEEDTYPE_ULE &&
+		feedtype != DVB_NET_FEEDTYPE_GSE)
 		return -EINVAL;
 	if ((if_num = get_if(dvbnet)) < 0)
 		return -EINVAL;
@@ -1430,6 +1852,48 @@ static int dvb_net_remove_if(struct dvb_net *dvbnet, unsigned long num)
 	return 0;
 }
 
+static int dvb_net_set_multi_pid_mac(struct dvb_net *dvbnet,
+		struct set_multi_pid_mac_entry *multi_pid_mac)
+{
+	struct net_device *netdev;
+	struct dvb_net_priv *priv_data;
+	int i = 0;
+
+	netdev = dvbnet->device[multi_pid_mac->if_num];
+	priv_data = netdev_priv(netdev);
+
+	priv_data->multi_pid_mac_entry.multi_pid_count =
+		multi_pid_mac->multi_pid_count;
+
+	pr_info("multiple pid count %d\n", multi_pid_mac->multi_pid_count);
+
+	for (i = 0; i < DVB_NET_MAX_NO_OF_PID; i++) {
+		if (i < multi_pid_mac->multi_pid_count) {
+			priv_data->multi_pid_mac_entry.pid[i] =
+				multi_pid_mac->pid[i];
+			memcpy(
+			&priv_data->multi_pid_mac_entry.multi_mac_address[i],
+			multi_pid_mac->multi_mac_address[i],
+			ETH_ALEN);
+		} else {
+			priv_data->multi_pid_mac_entry.pid[i] = 0xffff;
+			memset(&priv_data->multi_pid_mac_entry.multi_mac_address[i],
+			0xffff,
+			ETH_ALEN);
+		}
+	}
+	if (priv_data->valid_multi_pid_mac_entry == 1) {
+		if (netif_running(netdev))
+			priv_data->runtime_pid_change = 1;
+			schedule_work(&priv_data->restart_net_feed_wq);
+	} else {
+		priv_data->runtime_pid_change = 0;
+		priv_data->valid_multi_pid_mac_entry = 1;
+	}
+
+	return 0;
+}
+
 static int dvb_net_do_ioctl(struct file *file,
 		  unsigned int cmd, void *parg)
 {
@@ -1485,6 +1949,15 @@ static int dvb_net_do_ioctl(struct file *file,
 		priv_data = netdev_priv(netdev);
 		dvbnetif->pid=priv_data->pid;
 		dvbnetif->feedtype=priv_data->feedtype;
+#ifdef DVBNET_MULTIPID_INFO
+		if (priv_data->valid_multi_pid_mac_entry == 1)
+			memcpy(&dvbnetif->multi_pid_table,
+					&priv_data->multi_pid_mac_entry,
+					sizeof(struct set_multi_pid_mac_entry));
+		else
+			memset(&dvbnetif->multi_pid_table, 0x0,
+					sizeof(struct set_multi_pid_mac_entry));
+#endif
 		break;
 	}
 	case NET_REMOVE_IF:
@@ -1526,6 +1999,25 @@ static int dvb_net_do_ioctl(struct file *file,
 			goto ioctl_error;
 		}
 		dvbnetif->if_num=result;
+		break;
+	}
+	case NET_SET_MULTI_PID_MAC_IF:
+	{
+		struct net_device *netdev;
+		struct dvb_net_priv *priv_data;
+		struct set_multi_pid_mac_entry *multi_pid_mac_entry = parg;
+
+		if (multi_pid_mac_entry->if_num >= DVB_NET_DEVICES_MAX ||
+			!dvbnet->state[multi_pid_mac_entry->if_num] ||
+			multi_pid_mac_entry->multi_pid_count >
+				DVB_NET_MAX_NO_OF_PID ||
+			(multi_pid_mac_entry->multi_pid_count == 0)) {
+				ret = -EINVAL;
+				goto ioctl_error;
+		}
+		netdev = dvbnet->device[multi_pid_mac_entry->if_num];
+		priv_data = netdev_priv(netdev);
+		dvb_net_set_multi_pid_mac(dvbnet, multi_pid_mac_entry);
 		break;
 	}
 	case __NET_GET_IF_OLD:

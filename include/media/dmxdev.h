@@ -48,6 +48,13 @@ enum dmxdev_type {
 	DMXDEV_TYPE_NONE,
 	DMXDEV_TYPE_SEC,
 	DMXDEV_TYPE_PES,
+	DMXDEV_TYPE_GSE,
+};
+
+enum demux_type {
+	DEMUX_TYPE_NONE,
+	DEMUX_TYPE_TS,
+	DEMUX_TYPE_GSE
 };
 
 /**
@@ -125,17 +132,21 @@ struct dmxdev_feed {
 struct dmxdev_filter {
 	union {
 		struct dmx_section_filter *sec;
+		struct dmx_gsesection_filter *gse;
+		struct dmx_gselabel_filter *gselabel;
 	} filter;
 
 	union {
 		/* list of TS and PES feeds (struct dmxdev_feed) */
 		struct list_head ts;
 		struct dmx_section_feed *sec;
+		struct dmx_gse_feed *gse;
 	} feed;
 
 	union {
 		struct dmx_sct_filter_params sec;
 		struct dmx_pes_filter_params pes;
+		struct dmx_gse_filter_params gse;
 	} params;
 
 	enum dmxdev_type type;
@@ -180,6 +191,8 @@ struct dmxdev {
 
 	int filternum;
 	int capabilities;
+
+	enum demux_type dmx_type;
 
 	unsigned int may_do_mmap:1;
 	unsigned int exit:1;

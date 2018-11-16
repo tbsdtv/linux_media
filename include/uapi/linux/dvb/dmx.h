@@ -32,6 +32,8 @@
 
 
 #define DMX_FILTER_SIZE 16
+#define DMX_MULTICAST_MAX 10
+#define DMX_NO_PROTOCOL_FILTER 0x0
 
 /**
  * enum dmx_output - Output for the demux.
@@ -301,6 +303,89 @@ struct dmx_exportbuffer {
 	__s32		fd;
 };
 
+/** GSE filter output types.  */
+enum dmx_gse_type {
+	/* Output GSE Continuous PDU */
+	DMX_GSE_PDU_CONT = 0,
+	/* Output GSE PDU */
+	DMX_GSE_PDU,
+	/* Output GSE NCR */
+	DMX_GSE_NCR,
+	/* Output GSE SI */
+	DMX_GSE_SI
+};
+
+/* GSE Ouput Filter DMX_GSE_NCR */
+/* while opening the NCR filter, output struct will be below type*/
+struct dmx_gse_ncr_op {
+	__u8	ncr[6];		/*NCR base  ncr extension*/
+	__u8	tagtm[6];	/*STFE time when packet received at STFE*/
+};
+
+/* MPE Ouput Filter DMX_MPE_NCR */
+/* while opening the MPE filter, output struct will be below type*/
+struct dmx_mpe_pcr_op {
+	__u8	pcr[6];		/*MPE base  pcr extension*/
+	__u8	tagtm[6];	/*STFE time when packet received at STFEenum dmx_input*/
+};
+
+/* GSE Label types */
+enum label_type {
+	/* Indicates that a 6 bytes label is present and  shall
+	 * be used for filtering. (e.g., a IEEE MAC address) */
+	GSE_LT_SIX_BYTES = 1,
+	/* Indicates that a 3 bytes label is present and shall
+	 * be used for filtering. (e.g., a RCS group/logon ID) */
+	GSE_LT_THREE_BYTES = 2,
+	/*No label present. All receivers shall process this packet */
+	GSE_LT_NO_LABEL = 4,
+	/* label is the same as the previous GSE packet
+	 * in the same base band frame */
+	GSE_LT_LABEL_REUSE = 8,
+};
+
+struct label_filter {
+	__u8 multi_mac_count;
+	__u8 multi_mac_address[DMX_MULTICAST_MAX][6];
+	_Bool set_short_mac;
+	__u8 short_mac_address[3]; /*As per Protocol GSE support simultaneous
+				     use of several 6-byte and one 3-byte addresses */
+};
+
+struct dmx_gse_sec_filter {
+	struct dmx_filter filter;
+	_Bool set_short_mac;
+	__u8 mac_address[6];
+};
+
+struct dmx_gse_pdu_filter {
+	/*Indicate whether to do label filtering or not: not set means dump all data */
+        _Bool set_label_type;
+	/*Indicate label filtering */
+	enum label_type label_type;
+	/* Used only in case of PDU filtering */
+	struct label_filter label_filter;
+};
+
+struct dmx_gse_filter_params {
+	enum dmx_input	input;
+	/* Tells the filter where the data should be routed to
+	 * (e.g. dvr device or demux file handle. */
+	enum dmx_output	output;
+	/* Specifies what type of data should be delivered by this filter.  */
+	enum dmx_gse_type type;
+	/* To Define Payload type */
+	__u16  protocol_type;
+
+	union {
+		struct dmx_gse_sec_filter dmx_gse_sec_filter; /* GSE SI Filter */
+		struct dmx_gse_pdu_filter dmx_gse_pdu_filter; /*GSE PDU Filter */
+	};
+	__u32           flags;
+	#define DMX_GSE_IMMEDIATE_START 1
+	#define DMX_GSE_CRC_CHECK 2
+};
+
 #define DMX_START                _IO('o', 41)
 #define DMX_STOP                 _IO('o', 42)
 #define DMX_SET_FILTER           _IOW('o', 43, struct dmx_sct_filter_params)
@@ -310,6 +395,7 @@ struct dmx_exportbuffer {
 #define DMX_GET_STC              _IOWR('o', 50, struct dmx_stc)
 #define DMX_ADD_PID              _IOW('o', 51, __u16)
 #define DMX_REMOVE_PID           _IOW('o', 52, __u16)
+#define DMX_SET_GSE_FILTER       _IOW('o', 162, struct dmx_gse_filter_params)
 
 #if !defined(__KERNEL__)
 
@@ -319,6 +405,11 @@ typedef enum dmx_input dmx_input_t;
 typedef enum dmx_ts_pes dmx_pes_type_t;
 typedef struct dmx_filter dmx_filter_t;
 
+typedef enum dmx_gse_type dmx_gse_type_t;
+typedef struct label_filter label_filter_t;
+typedef struct dmx_gse_pdu_filter dmx_gse_pdu_filter_t;
+typedef struct dmx_gse_sec_filter dmx_gse_sec_filter_t;
+typedef enum label_type label_type_t;
 #endif
 
 #define DMX_REQBUFS              _IOWR('o', 60, struct dmx_requestbuffers)

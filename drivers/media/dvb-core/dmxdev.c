@@ -267,7 +267,12 @@ static ssize_t dvb_dvr_write(struct file *file, const char __user *buf,
 		mutex_unlock(&dmxdev->mutex);
 		return -ENODEV;
 	}
-	ret = dmxdev->demux->write(dmxdev->demux, buf, count);
+
+	if (dmxdev->dmx_type == DEMUX_TYPE_GSE)
+		ret = dmxdev->demux->write_gse(dmxdev->demux, buf, count);
+	else
+		ret = dmxdev->demux->write(dmxdev->demux, buf, count);
+
 	mutex_unlock(&dmxdev->mutex);
 	return ret;
 }
@@ -428,6 +433,51 @@ static int dvb_dmxdev_section_callback(const u8 *buffer1, size_t buffer1_len,
 	return 0;
 }
 
+static int dvb_dmxdev_gse_section_callback(const u8 *buffer1, size_t buffer1_len,
+					   const u8 *buffer2, size_t buffer2_len,
+					   struct dmx_gsesection_filter *filter,
+					   u32 *buffer_flags)
+{
+	struct dmxdev_filter *dmxdevfilter = filter->priv;
+	int ret;
+
+	if (!dvb_vb2_is_streaming(&dmxdevfilter->vb2_ctx) &&
+	    dmxdevfilter->buffer.error) {
+		wake_up(&dmxdevfilter->buffer.queue);
+		return 0;
+	}
+	spin_lock(&dmxdevfilter->dev->lock);
+	if (dmxdevfilter->state != DMXDEV_STATE_GO) {
+		spin_unlock(&dmxdevfilter->dev->lock);
+		return 0;
+	}
+	del_timer(&dmxdevfilter->timer);
+	dprintk("section callback %*ph\n", 6, buffer1);
+	if (dvb_vb2_is_streaming(&dmxdevfilter->vb2_ctx)) {
+		ret = dvb_vb2_fill_buffer(&dmxdevfilter->vb2_ctx,
+					  buffer1, buffer1_len,
+					  buffer_flags);
+		if (ret == buffer1_len)
+			ret = dvb_vb2_fill_buffer(&dmxdevfilter->vb2_ctx,
+						  buffer2, buffer2_len,
+						  buffer_flags);
+	} else {
+		ret = dvb_dmxdev_buffer_write(&dmxdevfilter->buffer,
+					      buffer1, buffer1_len);
+		if (ret == buffer1_len) {
+			ret = dvb_dmxdev_buffer_write(&dmxdevfilter->buffer,
+						      buffer2, buffer2_len);
+		}
+	}
+	if (ret < 0)
+		dmxdevfilter->buffer.error = ret;
+	if (dmxdevfilter->params.sec.flags & DMX_ONESHOT)
+		dmxdevfilter->state = DMXDEV_STATE_DONE;
+	spin_unlock(&dmxdevfilter->dev->lock);
+	wake_up(&dmxdevfilter->buffer.queue);
+	return 0;
+}
+
 static int dvb_dmxdev_ts_callback(const u8 *buffer1, size_t buffer1_len,
 				  const u8 *buffer2, size_t buffer2_len,
 				  struct dmx_ts_feed *feed,
@@ -483,6 +533,55 @@ static int dvb_dmxdev_ts_callback(const u8 *buffer1, size_t buffer1_len,
 	return 0;
 }
 
+static int dvb_dmxdev_gse_callback(const u8 *buf, size_t len, size_t header_len,
+				struct dmx_gse_feed *feed,
+				u32 *buffer_flags)
+{
+	struct dmxdev_filter *dmxdevfilter = feed->priv;
+	struct dvb_ringbuffer *buffer;
+#ifdef CONFIG_DVB_MMAP
+	struct dvb_vb2_ctx *ctx;
+#endif
+	int ret = 0;
+
+	dprintk(KERN_DEBUG "dmxdev: gse callback len=%u, header_len=%u\n",
+			(unsigned) len, (unsigned) header_len);
+
+	spin_lock(&dmxdevfilter->dev->lock);
+
+	if (dmxdevfilter->params.gse.output == DMX_OUT_TAP) {
+		buffer = &dmxdevfilter->buffer;
+#ifdef CONFIG_DVB_MMAP
+		ctx = &dmxdevfilter->vb2_ctx;
+#endif
+		if (dvb_vb2_is_streaming(ctx))
+			ret = dvb_vb2_fill_buffer(ctx, buf + header_len, len - header_len,
+						  buffer_flags);
+		else
+			ret = dvb_dmxdev_buffer_write(buffer, buf + header_len,
+					len - header_len);
+	}
+	else {
+		buffer = &dmxdevfilter->dev->dvr_buffer;
+#ifdef CONFIG_DVB_MMAP
+		ctx = &dmxdevfilter->dev->dvr_vb2_ctx;
+#endif
+		if (dvb_vb2_is_streaming(ctx))
+			ret = dvb_vb2_fill_buffer(ctx, buf, len,
+						  buffer_flags);
+		else
+			ret = dvb_dmxdev_buffer_write(buffer, buf, len);
+	}
+	if (ret < 0) {
+		dprintk(KERN_ERR "dmxdev: Error in dvb_dmxdev_buffer_write \n");
+		dvb_ringbuffer_flush(buffer);
+		buffer->error = ret;
+	}
+	spin_unlock(&dmxdevfilter->dev->lock);
+	wake_up(&buffer->queue);
+	return ret;
+}
+
 /* stop feed but only mark the specified filter as stopped (state set) */
 static int dvb_dmxdev_feed_stop(struct dmxdev_filter *dmxdevfilter)
 {
@@ -498,6 +597,10 @@ static int dvb_dmxdev_feed_stop(struct dmxdev_filter *dmxdevfilter)
 	case DMXDEV_TYPE_PES:
 		list_for_each_entry(feed, &dmxdevfilter->feed.ts, next)
 			feed->ts->stop_filtering(feed->ts);
+		break;
+	case DMXDEV_TYPE_GSE:
+		dmxdevfilter->feed.gse->stop_filtering(
+				dmxdevfilter->feed.gse, NULL);
 		break;
 	default:
 		return -EINVAL;
@@ -525,9 +628,32 @@ static int dvb_dmxdev_feed_start(struct dmxdev_filter *filter)
 			}
 		}
 		break;
+	case DMXDEV_TYPE_GSE:
+		return filter->feed.gse->start_filtering(filter->feed.gse,
+						NULL);
 	default:
 		return -EINVAL;
 	}
+
+	return 0;
+}
+
+/* restart gse feed if it has filters left associated with it,
+otherwise release the feed */
+static int dvb_dmxdev_gsefeed_restart(struct dmxdev_filter *filter)
+{
+	int i;
+	struct dmxdev *dmxdev = filter->dev;
+
+	for (i = 0; i < dmxdev->filternum; i++)
+		if (dmxdev->filter[i].state >= DMXDEV_STATE_GO &&
+				dmxdev->filter[i].type == DMXDEV_TYPE_GSE) {
+			dvb_dmxdev_feed_start(&dmxdev->filter[i]);
+			return 0;
+		}
+
+	filter->dev->demux->release_gse_feed(dmxdev->demux,
+			filter->feed.gse);
 
 	return 0;
 }
@@ -581,6 +707,18 @@ static int dvb_dmxdev_filter_stop(struct dmxdev_filter *dmxdevfilter)
 			demux->release_ts_feed(demux, feed->ts);
 			feed->ts = NULL;
 		}
+		break;
+	case DMXDEV_TYPE_GSE:
+		if (!dmxdevfilter->feed.gse)
+			break;
+		dvb_dmxdev_feed_stop(dmxdevfilter);
+		if (dmxdevfilter->filter.gse)
+			dmxdevfilter->feed.gse->
+				release_filter(dmxdevfilter->feed.gse,
+						dmxdevfilter->filter.gse);
+
+		dvb_dmxdev_gsefeed_restart(dmxdevfilter);
+		dmxdevfilter->feed.gse = NULL;
 		break;
 	default:
 		if (dmxdevfilter->state == DMXDEV_STATE_ALLOCATED)
@@ -779,6 +917,147 @@ static int dvb_dmxdev_filter_start(struct dmxdev_filter *filter)
 			}
 		}
 		break;
+	case DMXDEV_TYPE_GSE:
+		{
+			static const int gse_types[] = {DMX_GSE_PDU_CONT,
+				DMX_GSE_PDU, DMX_GSE_NCR, DMX_GSE_SI};
+			struct dmx_gse_filter_params *para =
+						&filter->params.gse;
+			struct dmx_gse_sec_filter *gse_sec_filter =
+				&filter->params.gse.dmx_gse_sec_filter;
+			struct dmx_gse_pdu_filter *gse_label_filter =
+				&filter->params.gse.dmx_gse_pdu_filter;
+			struct dmx_demux *demux = dmxdev->demux;
+			struct dmx_gsesection_filter **gsesecfilter =
+						&filter->filter.gse;
+			struct dmx_gselabel_filter **gselabelfilter =
+						&filter->filter.gselabel;
+			struct dmx_gse_feed **gsefeed = &filter->feed.gse;
+			int ret = 0;
+			int gse_payload_type = 0;
+
+			*gsesecfilter = NULL;
+			*gsefeed = NULL;
+			if(para->type != DMX_GSE_SI)
+				ret = demux->allocate_gse_feed(demux,
+						gsefeed,
+						dvb_dmxdev_gse_callback,
+						NULL);
+			else {
+				/* find active filter/feed */
+				for (i = 0; i < dmxdev->filternum; i++) {
+					if (dmxdev->filter[i].state >= DMXDEV_STATE_GO &&
+					dmxdev->filter[i].type == DMXDEV_TYPE_GSE) {
+					*gsefeed = dmxdev->filter[i].feed.gse;
+						break;
+					}
+				}
+
+				/* if no feed found, try to allocate new one */
+				if (!*gsefeed)
+					ret = dmxdev->demux->allocate_gse_feed(
+						dmxdev->demux,
+						gsefeed, NULL,
+						dvb_dmxdev_gse_section_callback);
+				else
+					dvb_dmxdev_feed_stop(filter);
+
+			}
+
+			if (ret < 0) {
+				printk("DVB (%s): could not alloc gse feed\n",
+						__FUNCTION__);
+				return ret;
+			}
+			gse_payload_type = (para->output == DMX_OUT_TAP) ?
+					GSE_PAYLOAD_ONLY:GSE_FULL_PACKET;
+			(*gsefeed)->priv = filter;
+
+			ret = (*gsefeed)->set(*gsefeed,
+					gse_types[para->type], /*type */
+					gse_payload_type,
+					para->protocol_type, /* gse protocol type*/
+					(para->flags & DMX_CHECK_CRC) ? 1 : 0);
+			if (ret < 0) {
+				printk("DVB (%s): could not set gse feed\n",
+						__FUNCTION__);
+				demux->release_gse_feed(demux, *gsefeed);
+				return ret;
+			}
+
+			if(para->type != DMX_GSE_SI) {
+				ret = (*gsefeed)->allocate_labelfilter(*gsefeed,
+						gselabelfilter);
+				if (ret < 0) {
+					dvb_dmxdev_gsefeed_restart(filter);
+					filter->feed.gse->start_filtering(
+							*gsefeed,
+							NULL);
+					dprintk("could not get filter\n");
+					return ret;
+				}
+				(*gselabelfilter)->priv = filter;
+				(*gselabelfilter)->set_label_type =
+					gse_label_filter->set_label_type;
+				memcpy(&(*gselabelfilter)->label_type,
+					&(gse_label_filter->label_type), 1);
+				memcpy(&(*gselabelfilter)->mac_count,
+					&(gse_label_filter->label_filter.multi_mac_count),1);
+				memcpy(&(*gselabelfilter)->set_short_mac,
+					&(gse_label_filter->label_filter.set_short_mac),1);
+				memcpy(&(*gselabelfilter)->mac_address,
+					&(gse_label_filter->label_filter.multi_mac_address),
+					6*gse_label_filter->label_filter.multi_mac_count);
+				memcpy(&(*gselabelfilter)->short_mac_address,
+					&(gse_label_filter->label_filter.short_mac_address),
+					3);
+				filter->todo = 0;
+				ret = filter->feed.gse->start_filtering(filter->feed.gse,NULL);
+			}
+			else {
+				u8 label_len = 0;
+				ret = (*gsefeed)->allocate_filter(*gsefeed, gsesecfilter);
+				if (ret < 0) {
+					dvb_dmxdev_gsefeed_restart(filter);
+					filter->feed.gse->start_filtering(*gsefeed,NULL);
+					dprintk("could not get filter\n");
+					return ret;
+				}
+
+				(*gsesecfilter)->priv = filter;
+
+				memcpy(&(*gsesecfilter)->filter_value[3],
+						&(gse_sec_filter->filter.filter[1]), DMX_FILTER_SIZE - 1);
+				memcpy(&(*gsesecfilter)->filter_mask[3],
+						&(gse_sec_filter->filter.mask[1]), DMX_FILTER_SIZE - 1);
+				memcpy(&(*gsesecfilter)->filter_mode[3],
+						&(gse_sec_filter->filter.mode[1]), DMX_FILTER_SIZE - 1);
+
+				(*gsesecfilter)->filter_value[0] = gse_sec_filter->filter.filter[0];
+				(*gsesecfilter)->filter_mask[0] = gse_sec_filter->filter.mask[0];
+				(*gsesecfilter)->filter_mode[0] = gse_sec_filter->filter.mode[0];
+				(*gsesecfilter)->filter_mask[1] = 0;
+				(*gsesecfilter)->filter_mask[2] = 0;
+
+				memcpy(&(*gsesecfilter)->set_short_mac,
+					&(gse_label_filter->label_filter.set_short_mac),1);
+				label_len = (gse_label_filter->label_filter.set_short_mac == 1) ? 3:6;
+				memcpy(&((*gsesecfilter)->mac_address),
+						&(gse_sec_filter->mac_address),
+						label_len);
+
+				filter->todo = 0;
+				ret = filter->feed.gse->start_filtering(filter->feed.gse,NULL);
+			}
+			if (ret < 0) {
+				dprintk("DVB (%s): could not start filtering on gse feed\n",
+						__FUNCTION__);
+				dmxdev->demux->release_gse_feed(dmxdev->demux,
+						*gsefeed);
+				return ret;
+			}
+			break;
+		}
 	default:
 		return -EINVAL;
 	}
@@ -969,6 +1248,29 @@ static int dvb_dmxdev_pes_filter_set(struct dmxdev *dmxdev,
 	return 0;
 }
 
+static int dvb_dmxdev_gse_filter_set(struct dmxdev *dmxdev,
+		struct dmxdev_filter *dmxdevfilter,
+		struct dmx_gse_filter_params *params)
+{
+	dvb_dmxdev_filter_stop(dmxdevfilter);
+
+	if (params->output != DMX_OUT_TAP && params->output != DMX_OUT_TS_TAP)
+		return -EINVAL;
+	if (params->type < DMX_GSE_PDU_CONT || params->type > DMX_GSE_SI)
+		return -EINVAL;
+
+	dmxdevfilter->type = DMXDEV_TYPE_GSE;
+	memcpy(&dmxdevfilter->params, params,
+			sizeof(struct dmx_gse_filter_params));
+
+	dvb_dmxdev_filter_state_set(dmxdevfilter, DMXDEV_STATE_SET);
+
+	if (params->flags & DMX_IMMEDIATE_START)
+		return dvb_dmxdev_filter_start(dmxdevfilter);
+
+	return 0;
+}
+
 static ssize_t dvb_dmxdev_read_sec(struct dmxdev_filter *dfil,
 				   struct file *file, char __user *buf,
 				   size_t count, loff_t *ppos)
@@ -1069,7 +1371,15 @@ static int dvb_demux_do_ioctl(struct file *file,
 			mutex_unlock(&dmxdev->mutex);
 			return -ERESTARTSYS;
 		}
+		if (dmxdev->dmx_type == DEMUX_TYPE_GSE) {
+			dprintk("function : %s DMX_SET_FILTER cannot be opened\n",
+			__func__);
+			ret = -EINVAL;
+			mutex_unlock(&dmxdevfilter->mutex);
+			break;
+		}
 		ret = dvb_dmxdev_filter_set(dmxdev, dmxdevfilter, parg);
+		dmxdev->dmx_type = DEMUX_TYPE_TS;
 		mutex_unlock(&dmxdevfilter->mutex);
 		break;
 
@@ -1078,9 +1388,34 @@ static int dvb_demux_do_ioctl(struct file *file,
 			mutex_unlock(&dmxdev->mutex);
 			return -ERESTARTSYS;
 		}
+		if (dmxdev->dmx_type == DEMUX_TYPE_GSE) {
+			dprintk("function : %s DMX_SET_PES_FILTER cannot be opened\n",
+			__func__);
+			ret = -EINVAL;
+			mutex_unlock(&dmxdevfilter->mutex);
+			break;
+		}
 		ret = dvb_dmxdev_pes_filter_set(dmxdev, dmxdevfilter, parg);
+		dmxdev->dmx_type = DEMUX_TYPE_TS;
 		mutex_unlock(&dmxdevfilter->mutex);
 		break;
+
+	case DMX_SET_GSE_FILTER:
+		if (mutex_lock_interruptible(&dmxdevfilter->mutex)) {
+			mutex_unlock(&dmxdev->mutex);
+			return -ERESTARTSYS;
+		}
+		if (dmxdev->dmx_type == DEMUX_TYPE_TS) {
+			dprintk("function : %s DMX_SET_GSE_FILTER cannot be opened\n",
+			__func__);
+			ret = -EINVAL;
+			mutex_unlock(&dmxdevfilter->mutex);
+			break;
+		}
+		ret = dvb_dmxdev_gse_filter_set(dmxdev, dmxdevfilter, parg);
+		dmxdev->dmx_type = DEMUX_TYPE_GSE;
+ 		mutex_unlock(&dmxdevfilter->mutex);
+ 		break;
 
 	case DMX_SET_BUFFER_SIZE:
 		if (mutex_lock_interruptible(&dmxdevfilter->mutex)) {
@@ -1458,6 +1793,7 @@ void dvb_dmxdev_release(struct dmxdev *dmxdev)
 	dvb_unregister_device(dmxdev->dvbdev);
 	dvb_unregister_device(dmxdev->dvr_dvbdev);
 
+	dmxdev->dmx_type = DEMUX_TYPE_NONE;
 	vfree(dmxdev->filter);
 	dmxdev->filter = NULL;
 	dmxdev->demux->close(dmxdev->demux);

@@ -56,6 +56,10 @@
 #define DMX_MAX_SECFEED_SIZE (DMX_MAX_SECTION_SIZE + 188)
 #endif
 
+#ifndef DMX_MAX_NUMBER_OF_PID
+#define DMX_MAX_NUMBER_OF_PID		16
+#endif
+
 /*
  * TS packet reception
  */
@@ -135,6 +139,16 @@ struct dmx_section_filter {
 	void *priv;
 };
 
+struct dmx_ip_section_filter {
+	u8 filter_value[DMX_MAX_FILTER_SIZE];
+	u8 filter_mask[DMX_MAX_FILTER_SIZE];
+	u8 filter_mode[DMX_MAX_FILTER_SIZE];
+	u16 pid;
+	struct dmx_ip_section_feed *parent; /* Back-pointer */
+
+	void *priv; /* Pointer to private data of the API client */
+};
+
 /**
  * struct dmx_section_feed - Structure that contains a section feed filter
  *
@@ -184,6 +198,88 @@ struct dmx_section_feed {
 			      struct dmx_section_filter *filter);
 	int (*start_filtering)(struct dmx_section_feed *feed);
 	int (*stop_filtering)(struct dmx_section_feed *feed);
+};
+
+struct dmx_ip_section_feed {
+	int is_filtering; /* Set to non-zero when filtering in progress */
+	struct dmx_demux *parent; /* Back-pointer */
+	void *priv; /* Pointer to private data of the API client */
+
+	int check_crc;
+	int runtime_pid_change;
+	u32 crc_val[DMX_MAX_NUMBER_OF_PID];
+
+	u8 *secbuf[DMX_MAX_NUMBER_OF_PID];
+	u8 secbuf_base[DMX_MAX_NUMBER_OF_PID][DMX_MAX_SECFEED_SIZE];
+	u16 secbufp[DMX_MAX_NUMBER_OF_PID],
+	    seclen[DMX_MAX_NUMBER_OF_PID],
+	    tsfeedp[DMX_MAX_NUMBER_OF_PID];
+
+	int (*set)(struct dmx_ip_section_feed *feed,
+		    u16 *pid,
+		    u8 no_of_pid,
+		    int check_crc);
+	int (*allocate_ip_filter)(struct dmx_ip_section_feed *feed,
+				struct dmx_ip_section_filter **filter);
+	int (*release_ip_filter)(struct dmx_ip_section_feed *feed,
+			       struct dmx_ip_section_filter *filter);
+	int (*start_filtering)(struct dmx_ip_section_feed *feed);
+	int (*stop_filtering)(struct dmx_ip_section_feed *feed);
+};
+
+/* Deliver full GSE Packet (incl. header) to demux feed (default) */
+#define GSE_FULL_PACKET	0x01
+/* Deliver GSE packet without header */
+#define GSE_PAYLOAD_ONLY 0x40
+
+struct dmx_gselabel_filter {
+	bool set_label_type;
+        int label_type;
+	u8 mac_count;
+	u8 mac_address[10][6];
+	u8 set_short_mac;
+	u8 short_mac_address[3];
+       struct dmx_gse_feed* parent; /* Back-pointer */
+       void* priv; /* Pointer to private data of the API client */
+};
+
+
+struct dmx_gsesection_filter {
+	u8 filter_value [DMX_MAX_FILTER_SIZE];
+	u8 filter_mask [DMX_MAX_FILTER_SIZE];
+	u8 filter_mode [DMX_MAX_FILTER_SIZE];
+	struct dmx_gse_feed* parent; /* Back-pointer */
+	void* priv; /* Pointer to private data of the API client */
+	u8 set_short_mac;
+	u8 mac_address [6];
+};
+
+struct dmx_gse_feed {
+	int is_filtering; /* Set to non-zero when filtering in progress */
+	struct dmx_demux *parent; /* Back-pointer */
+	void *priv; /* Pointer to private data of the API client */
+	unsigned char *mac; /* Pointer to net mac address */
+
+	int check_crc;
+	u32 crc_val;
+
+	int (*set) (struct dmx_gse_feed *feed,int type,int gse_payload_type,
+			int protocol_type,int check_crc);
+
+	int (*allocate_filter) (struct dmx_gse_feed* feed,
+                                struct dmx_gsesection_filter** filter);
+
+        int (*release_filter) (struct dmx_gse_feed* feed,
+                               struct dmx_gsesection_filter* filter);
+
+	int (*allocate_labelfilter) (struct dmx_gse_feed* feed,
+                                struct dmx_gselabel_filter** filter);
+
+        int (*release_labelfilter) (struct dmx_gse_feed* feed,
+                               struct dmx_gselabel_filter* filter);
+
+	int (*start_filtering) (struct dmx_gse_feed* feed,unsigned char *);
+	int (*stop_filtering) (struct dmx_gse_feed* feed,unsigned char *);
 };
 
 /**
@@ -298,6 +394,23 @@ typedef int (*dmx_section_cb)(const u8 *buffer1,
 			      size_t buffer2_len,
 			      struct dmx_section_filter *source,
 			      u32 *buffer_flags);
+
+typedef int (*dmx_ip_section_cb)(const u8 *buffer1,
+				size_t buffer1_len,
+				const u8 *buffer2,
+				size_t buffer2_len,
+				struct dmx_ip_section_filter *source,
+				u32 *buffer_flags);
+
+typedef int (*dmx_gse_section_cb) (const u8 * buffer1,
+				size_t buffer1_len,
+				const u8 * buffer2,
+				size_t buffer2_len,
+				struct dmx_gsesection_filter * source,
+				u32 *buffer_flags);
+
+typedef int (*dmx_gse_cb)(const u8 *buffer, size_t len, size_t header_len,
+				struct dmx_gse_feed* source, u32 *buffer_flags);
 
 /*
  * DVB Front-End
@@ -565,6 +678,8 @@ struct dmx_demux {
 	int (*close)(struct dmx_demux *demux);
 	int (*write)(struct dmx_demux *demux, const char __user *buf,
 		     size_t count);
+	int (*write_gse) (struct dmx_demux* demux, const char __user *buf,
+			  size_t count);
 	int (*allocate_ts_feed)(struct dmx_demux *demux,
 				struct dmx_ts_feed **feed,
 				dmx_ts_cb callback);
@@ -575,6 +690,16 @@ struct dmx_demux {
 				     dmx_section_cb callback);
 	int (*release_section_feed)(struct dmx_demux *demux,
 				    struct dmx_section_feed *feed);
+	int (*allocate_ip_section_feed)(struct dmx_demux *demux,
+				      struct dmx_ip_section_feed **feed,
+				      dmx_ip_section_cb callback);
+	int (*release_ip_section_feed)(struct dmx_demux *demux,
+		       struct dmx_ip_section_feed *feed);
+	int (*allocate_gse_feed) (struct dmx_demux* demux,
+				 struct dmx_gse_feed** feed,
+				 dmx_gse_cb gse_callback,dmx_gse_section_cb sec_callback);
+	int (*release_gse_feed) (struct dmx_demux* demux,
+				struct dmx_gse_feed* feed);
 	int (*add_frontend)(struct dmx_demux *demux,
 			    struct dmx_frontend *frontend);
 	int (*remove_frontend)(struct dmx_demux *demux,

@@ -26,6 +26,8 @@
 
 #include <media/demux.h>
 
+#define MAX_NUMBER_OF_PID		16
+
 /**
  * enum dvb_dmx_filter_type - type of demux feed.
  *
@@ -35,6 +37,9 @@
 enum dvb_dmx_filter_type {
 	DMX_TYPE_TS,
 	DMX_TYPE_SEC,
+	DMX_TYPE_PES,
+	DMX_TYPE_GSE,
+	DMX_TYPE_IP_SEC,
 };
 
 /**
@@ -60,6 +65,88 @@ enum dvb_dmx_state {
 
 #define SPEED_PKTS_INTERVAL 50000
 
+#define GSE_FULL_PDU_HEADER_LENGTH 4
+#define GSE_FIRST_FRAG_HEADER_LENGTH 7
+#define GSE_END_BIT_MANUALY_SET  (0x1 << 6)
+#define GSE_TOTAL_LENGTH_OFFSET 3
+#define GSE_MAX_FRAGMENT_COUNT 0xffff
+#define GSE_PACKET_MAX_TIMEOUT  0xffffffff /*TODO*/
+
+#define GSE_STATUS_OK   0x00000000
+/**< Minimum length of a GSE packet (in Bytes)  1Byte fragid + 1Byte pdu + 2Byte min header*/
+#define GSE_MIN_PACKET_LENGTH 4
+/* Maximum GSE packet length = GSE length  4095 + Minimum 2 Bytes header. */
+#define GSE_MAX_PACKET_LENGTH 4097
+/**< Minimum value for EtherTypes */
+#define GSE_MIN_ETHER_TYPE 1536
+/**< Length of the mandatory fields (in Bytes) (E, S, LT, GSE_Length) */
+#define GSE_MANDATORY_FIELDS_LENGTH 2
+/**< Length of Frag ID field (in Bytes) */
+#define GSE_FRAG_ID_LENGTH 1
+/**< Length of Total length field (in Bytes) */
+#define GSE_TOTAL_LENGTH_LENGTH 2
+/**< Length of Protocol type field (in Bytes) */
+#define GSE_PROTOCOL_TYPE_LENGTH 2
+/* Maximum length of a GSE header (in Bytes) */
+#define GSE_MAX_HEADER_LENGTH 13
+/* Maximum length of a GSE trailer (in Bytes) (length of CRC32) */
+#define GSE_MAX_TRAILER_LENGTH 4
+/* Maximum offset between a fragmented PDU and a refragmented one */
+#define GSE_MAX_REFRAG_HEAD_OFFSET 3
+/* Max supported PDU Frag ID */
+#define MAX_PDU_FRAGMENT_ID             255
+/* Maximum length of a PDU (in Bytes) */
+#define GSE_MAX_PDU_LENGTH 65535
+/* GSE 6 Bytes label */
+#define GSE_6_BYTES_LABEL       6
+/* GSE 3 Bytes label */
+#define GSE_3_BYTES_LABEL       3
+
+/* Special ID has been defined to manage full PDU packet
+*  Warning: It is reserved for full PDU. It should not be used
+*  any other purpose */
+#define FULL_PDU_PACKET_ID      256
+#define GSE_LABEL_BITS          0x30
+
+/* Pass first 4 bytes.Then, shift 30 bits to extract payload type */
+#define GSE_PAYLOAD_TYPE(four_bytes)    (four_bytes >> 30)
+/* Pass first 4 bytes.Then, shift 28 bits to extract label type */
+#define GSE_LABEL_TYPE(four_bytes)      ((four_bytes & 0x30000000)>> 28)
+
+/**< Initial value for CRC32 computation */
+#define GSE_CRC_INIT 0xFFFFFFFF
+
+typedef enum {
+	/* Indicates that a 6 bytes label is present and  shall
+	 * be used for filtering. (e.g., a IEEE MAC address) */
+	GSE_PKT_LABEL_SIX_BYTES = 0,
+	/* Indicates that a 3 bytes label is present and shall
+	 * be used for filtering. (e.g., a RCS group/logon ID) */
+	GSE_PKT_LABEL_THREE_BYTES = 1,
+	/*No label present. All receivers shall process this packet */
+	GSE_PKT_LABEL_NONE = 2,
+	/* label is the same as the previous GSE packet
+	 * in the same base band frame */
+	GSE_PKT_LABEL_REUSE = 3,
+}gse_label_type_t;
+
+#if 0
+typedef enum {
+        GSE_LT_6_BYTES  = 0,   /**< 6-bytes label '00' */
+        GSE_LT_3_BYTES  ,   /**< 3-bytes label '01' */
+        GSE_LT_NO_LABELS ,   /**< No label '10' */
+        GSE_LT_REUSE       /**< label re-use or reserved value for PDU subsequent fragments '11' */
+}gse_label_type_t;
+#endif
+
+/** Type of payload carried by the GSE packet */
+enum gse_payload_type {
+  GSE_NEXT_FRAG_PDU = 0,   /**< Subsequent fragment of PDU which is not the last one */
+  GSE_LAST_FRAG_PDU,   /**< Last fragment of PDU */
+  GSE_FIRST_FRAG_PDU,  /**< First fragment of PDU */
+  GSE_FULL_PDU    /**< Complete PDU */
+};
+
 /**
  * struct dvb_demux_filter - Describes a DVB demux section filter.
  *
@@ -77,6 +164,9 @@ enum dvb_dmx_state {
 
 struct dvb_demux_filter {
 	struct dmx_section_filter filter;
+	struct dmx_ip_section_filter ip_filter;
+	struct dmx_gsesection_filter gsefilter;
+	struct dmx_gselabel_filter gselabelfilter;
 	u8 maskandmode[DMX_MAX_FILTER_SIZE];
 	u8 maskandnotmode[DMX_MAX_FILTER_SIZE];
 	bool doneq;
@@ -89,6 +179,15 @@ struct dvb_demux_filter {
 
 	/* private: used only by av7110 */
 	u16 hw_handle;
+};
+
+/* gse demux_feed */
+struct dvb_demux_gse {
+	/* Feed type (GSE_SI, GSE_PDU_CONT or GSE_PDU) */
+	u8 type;
+	/* Payload only or full Gse Packet */
+	u8 gse_payload_type;
+	u16 protocol_type;
 };
 
 /**
@@ -131,11 +230,16 @@ struct dvb_demux_feed {
 	union {
 		struct dmx_ts_feed ts;
 		struct dmx_section_feed sec;
+		struct dmx_gse_feed gse;
+		struct dmx_ip_section_feed ip_sec;
 	} feed;
 
 	union {
 		dmx_ts_cb ts;
 		dmx_section_cb sec;
+		dmx_ip_section_cb ip_sec;
+		dmx_gse_cb gse;
+		dmx_gse_section_cb gse_sec;
 	} cb;
 
 	struct dvb_demux *demux;
@@ -143,6 +247,14 @@ struct dvb_demux_feed {
 	enum dvb_dmx_filter_type type;
 	enum dvb_dmx_state state;
 	u16 pid;
+	u16 ip_pid[MAX_NUMBER_OF_PID];
+	u16 ip_new_pid[MAX_NUMBER_OF_PID];
+
+	u8 ip_pid_index;
+	struct {
+		u8  pcr[6];
+		u8	tagtm[6];
+	} time_info;
 
 	ktime_t timeout;
 	struct dvb_demux_filter *filter;
@@ -152,13 +264,31 @@ struct dvb_demux_feed {
 	enum ts_filter_type ts_type;
 	enum dmx_ts_pes pes_type;
 
-	int cc;
-	bool pusi_seen;
+	struct dvb_demux_gse gse;
+	int cc[MAX_NUMBER_OF_PID];
+	bool pusi_seen[MAX_NUMBER_OF_PID];		/* prevents feeding of garbage from previous section */
 
 	u16 peslen;
 
 	struct list_head list_head;
 	unsigned int index;
+};
+
+struct gse_buff {
+        unsigned char   *data;
+        unsigned int    len;
+	unsigned int    frag_id;
+        ktime_t         tstamp;
+	struct list_head list_head;
+};
+
+struct demux_gse {
+	struct gse_buff *gse_full_pdu;       /* GSE for full pdu case SNDU decodes into this buffer. */
+	struct gse_buff *gse_frag_pdu[MAX_PDU_FRAGMENT_ID];/* GSE for partiall pdu SNDU decodes into this buffer. */
+	u8 gse_frag_pdu_count[MAX_PDU_FRAGMENT_ID];  /* fragmented  pdu count */
+	u8 gse_label_len;
+	u8 gse_label[6];
+	u8 active_gse_buff_count;
 };
 
 /**
@@ -227,6 +357,10 @@ struct dvb_demux {
 	struct list_head feed_list;
 	u8 tsbuf[204];
 	int tsbufp;
+
+	/* Members which are specific to the GSE-Demux */
+	struct demux_gse gse;
+	struct list_head gse_buff_list;
 
 	struct mutex mutex;
 	spinlock_t lock;
@@ -350,5 +484,13 @@ void dvb_dmx_swfilter_204(struct dvb_demux *demux, const u8 *buf,
  */
 void dvb_dmx_swfilter_raw(struct dvb_demux *demux, const u8 *buf,
 			  size_t count);
+
+/* Pass a single gse packet to  demultiplexer
+ * param demux Pointer to DVB demux context
+ * param frame Buffer containing the gse packet
+ * param len Length of the gse packet
+ * note This function MUST NOT be call from inside a feed callback
+ */
+void dvb_dmx_swfilter_gse(struct dvb_demux *demux, const u8 *frame, size_t len);
 
 #endif /* _DVB_DEMUX_H_ */
