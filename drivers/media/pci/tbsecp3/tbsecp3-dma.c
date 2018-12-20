@@ -38,7 +38,7 @@ MODULE_PARM_DESC(gse_feed_err_pkts,
 #define dprintk(fmt, arg...) \
 	printk(KERN_DEBUG pr_fmt("%s: " fmt),  __func__, ##arg)
 
-#define dprintk_tscheck(x...) do {			\
+#define dprintk_gse_tscheck(x...) do {			\
 	if (gse_tscheck && printk_ratelimit())	\
 		dprintk(x);				\
 } while (0)
@@ -110,7 +110,7 @@ static void tbsecp3_ts_to_gse(struct tbsecp3_adapter *adap, const u8 *buf)
 		else {
 			adap->gse_info.sofi = 0x0;
 			adap->gse_info.next_pkt = 0x0;
-			dprintk_tscheck("TS/GSE packet count is not continous expected =%d received =%d\n",
+			dprintk_gse_tscheck("TS/GSE packet count is not continous expected =%d received =%d\n",
 				adap->gse_info.pkt_cnt+1,buf[8]);
 		}
 	}
@@ -120,7 +120,7 @@ static void tbsecp3_swfilter_packets(struct tbsecp3_adapter *adap, const u8 *buf
 {
 	int i;
 	dvb_dmx_swfilter_packets(&adap->demux, buf, count);
-	
+
 	if (!adap->cfg->pusi_gse)
 		return;
 
@@ -128,7 +128,7 @@ static void tbsecp3_swfilter_packets(struct tbsecp3_adapter *adap, const u8 *buf
 		/* GSE PUSI packets processing */
 		if((buf[0]==0x47)&&((buf[1]&0x7F)==0x41)&&(buf[2]==0x18)&&(buf[5]==0x80)) {
 			if (buf[1] & 0x80) {
-				dprintk_tscheck("TEI detected. data1=0x%x\n", buf[1]);
+				dprintk_gse_tscheck("TEI detected. data1=0x%x\n", buf[1]);
 
 				/* data in this packet cant be trusted - drop it unless
 				  * module option dvb_demux_feed_err_pkts is set */
@@ -141,7 +141,7 @@ static void tbsecp3_swfilter_packets(struct tbsecp3_adapter *adap, const u8 *buf
 								(adap->gse_info.cnt_storage + 1) & 0xf;
 
 						if ((buf[3] & 0xf) != adap->gse_info.cnt_storage) {
-							dprintk_tscheck("TS packet counter mismatch. expected 0x%x got 0x%x\n",
+							dprintk_gse_tscheck("TS packet counter mismatch. expected 0x%x got 0x%x\n",
 								adap->gse_info.cnt_storage,
 								buf[3] & 0xf);
 							adap->gse_info.cnt_storage = buf[3] & 0xf;
@@ -153,7 +153,7 @@ static void tbsecp3_swfilter_packets(struct tbsecp3_adapter *adap, const u8 *buf
 			if(!((buf[8]==0xd0)&&(buf[11]==0xff)&&(buf[12]==0xff))) {
 				if(gse_dump)
 					for(i=0; i<1; i++)
-						dprintk("buf[%03d]:%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", 20*i, buf[20*i], buf[20*i+1], buf[20*i+2], buf[20*i+3], buf[20*i+4], buf[20*i+5], buf[20*i+6], buf[20*i+7], buf[20*i+8], buf[20*i+9], buf[20*i+10], buf[20*i+11], buf[20*i+12], buf[20*i+13], buf[20*i+14], buf[20*i+15], buf[20*i+16], buf[20*i+17], buf[20*i+18], buf[20*i+19]);
+						dprintk_gse_tscheck("buf[%03d]:%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", 20*i, buf[20*i], buf[20*i+1], buf[20*i+2], buf[20*i+3], buf[20*i+4], buf[20*i+5], buf[20*i+6], buf[20*i+7], buf[20*i+8], buf[20*i+9], buf[20*i+10], buf[20*i+11], buf[20*i+12], buf[20*i+13], buf[20*i+14], buf[20*i+15], buf[20*i+16], buf[20*i+17], buf[20*i+18], buf[20*i+19]);
 
 				tbsecp3_ts_to_gse(adap,buf);
 			}

@@ -47,11 +47,21 @@ module_param(dvb_demux_feed_err_pkts, int, 0644);
 MODULE_PARM_DESC(dvb_demux_feed_err_pkts,
 		 "when set to 0, drop packets with the TEI bit set (1 by default)");
 
+static int dvb_demux_gsecheck;
+module_param(dvb_demux_gsecheck, int, 0644);
+MODULE_PARM_DESC(dvb_demux_gsecheck,
+		"enable GSE check");
+
 #define dprintk(fmt, arg...) \
 	printk(KERN_DEBUG pr_fmt("%s: " fmt),  __func__, ##arg)
 
 #define dprintk_tscheck(x...) do {			\
 	if (dvb_demux_tscheck && printk_ratelimit())	\
+		dprintk(x);				\
+} while (0)
+
+#define dprintk_gsecheck(x...) do {			\
+	if (dvb_demux_gsecheck && printk_ratelimit())	\
 		dprintk(x);				\
 } while (0)
 
@@ -1036,7 +1046,7 @@ static inline int  dvb_dmx_swfilter_gsepacket_type(struct dvb_demux_feed *feed,c
 	int section_syntax_indicator;
 	int len = 0;
 	int ret = 0;
-
+	
 	switch (feed->gse.type) {
 		case DMX_GSE_PDU:
 			if (!feed->feed.gse.is_filtering)
@@ -1122,7 +1132,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 	/* Sanity check for arguments */
 	if((buf == NULL)||(buf_len == 0)||(buf_len < GSE_MIN_PACKET_LENGTH) ||
 			(buf_len > GSE_MAX_PACKET_LENGTH)) {
-		printk(KERN_ERR "dvb_demux: Invalid GSE packet \n");
+		dprintk_gsecheck("Invalid GSE packet \n");
 		return -EINVAL;
 	}
 
@@ -1135,7 +1145,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 	/* Get GSE Packet Length */
 	gse_sndu_len = (*buf <<8 | *(buf+1)) & 0x0fff ;
 
-	printk(KERN_WARNING "dvb_demux: GSE packet length = %lu First 4byte of GSE header = %u\n",
+	dprintk_gsecheck("GSE packet length = %lu First 4byte of GSE header = %u\n",
 			buf_len,header_info);
 
 	/* finding protocol type,label length and label bits for
@@ -1145,7 +1155,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 		protocol_type = *(buf + header_len - 2) << 8 | *(buf + header_len - 1);
 		/*check for extension header */
 		if((protocol_type != 0x82) && (protocol_type != 0x81) && (protocol_type < 0x0600)) {
-			printk(KERN_ERR "dvb_demux: Unsupported GSE packet \n");
+			dprintk_gsecheck("Unsupported GSE packet \n");
 			return -EINVAL;
 		}
 
@@ -1188,11 +1198,11 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 		/* Determine the length of the GSE header */
 		header_len = GSE_FULL_PDU_HEADER_LENGTH + label_length;
 
-		printk(KERN_INFO "dvb_demux: payload_type = %d label_type = %d header_len = %d\n",
+		dprintk_gsecheck("payload_type = %d label_type = %d header_len = %d\n",
 				payload_type, label_type,header_len);
 
 		if((header_len > buf_len)||(gse_sndu_len <= 3) || (gse_sndu_len > GSE_MAX_PACKET_LENGTH-2)) {
-			printk(KERN_ERR "dvb_demux: buffer len = %lu  is less than header len = %u or invalid gse packet len \n",
+			dprintk_gsecheck("buffer len = %lu  is less than header len = %u or invalid gse packet len \n",
 					buf_len, header_len);
 			return -EINVAL;
 		}
@@ -1201,14 +1211,15 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 		 * prepare as per label type */
 		priv->gse_full_pdu = kzalloc(sizeof(struct gse_buff), GFP_KERNEL);
 		if (priv->gse_full_pdu == NULL) {
-			printk(KERN_NOTICE "dvb_demux: Memory squeeze, dropping packet.\n");
+			dprintk_gsecheck("Memory squeeze, dropping packet.\n");
 			return -ENOMEM;
 		}
 		else {
 			priv->gse_full_pdu->data = kzalloc((gse_sndu_len + GSE_MANDATORY_FIELDS_LENGTH),GFP_KERNEL);
 			if (priv->gse_full_pdu->data == NULL) {
 				kfree(priv->gse_full_pdu);
-				printk(KERN_NOTICE "dvb_demux: Memory squeeze, dropping packet.\n");
+				priv->gse_full_pdu = NULL;
+				dprintk_gsecheck("Memory squeeze, dropping packet.\n");
 				return -ENOMEM;
 			}
 		}
@@ -1251,14 +1262,14 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 			/*calculate by sum of mandatory header field in case of first fragment and label lenght */
 			header_len = GSE_FIRST_FRAG_HEADER_LENGTH + label_length;
 
-			printk(KERN_INFO "dvb_demux: payload_type = %d label_type = %d header_len = %d\n",
+			dprintk_gsecheck("payload_type = %d label_type = %d header_len = %d\n",
 					payload_type, label_type,header_len);
 
 			/* PDU total length  3rd and 4th byte of Gse packet */
 			gse_pdu_total_len =  *(buf + 3) << 8 | *(buf + 4);
 
 			if((gse_pdu_total_len > GSE_MAX_PDU_LENGTH ) || (header_len > buf_len)) {
-				printk(KERN_ERR "dvb_demux: Invalid GSE packet len or invalid total length \n");
+				dprintk_gsecheck("Invalid GSE packet len or invalid total length \n");
 				return -EINVAL;
 			}
 
@@ -1275,7 +1286,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 			/* Allocate the buffer (decoder target buffer) with the correct size, as follows:*/
 			priv->gse_frag_pdu[frag_id] = kzalloc(sizeof(struct gse_buff), GFP_KERNEL);
 			if (priv->gse_frag_pdu[frag_id] == NULL) {
-				printk(KERN_NOTICE "dvb_demux: Memory squeeze, dropping packet.\n");
+				dprintk_gsecheck("Memory squeeze, dropping packet.\n");
 				return -ENOMEM;
 			}
 			else {
@@ -1283,7 +1294,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 									GFP_KERNEL);
 				if (priv->gse_frag_pdu[frag_id]->data == NULL) {
 					kfree(priv->gse_frag_pdu[frag_id]);
-					printk(KERN_NOTICE "dvb_demux: Memory squeeze, dropping packet.\n");
+					dprintk_gsecheck("Memory squeeze, dropping packet.\n");
 					return -ENOMEM;
 				}
 			}
@@ -1325,7 +1336,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 			/* Packet coming before 1st Fragment or coming after drop of partial packet */
 			/*Handle Padding Case when S,B and label type are all 0.*/
 			if((priv->gse_frag_pdu[frag_id] == NULL) || (label_type !=  GSE_PKT_LABEL_REUSE)) {
-				printk(KERN_ERR "dvb_demux: Invalid case \n");
+				dprintk_gsecheck("Invalid case \n");
 				return -EINVAL;
 			}
 			/*Handling of Case GSE packet coming after  more then 64 baseband frames from the start of first fragment */
@@ -1344,7 +1355,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 			/* Check for payload lenght is not exceding the max limit or not exceding the max time */
 			if((total_len > GSE_MAX_PDU_LENGTH) || (ktime_to_ms(ktime_sub(tstamp,priv->gse_frag_pdu[frag_id]->tstamp)) > GSE_PACKET_MAX_TIMEOUT))
 			{
-				printk(KERN_ERR "dvb_demux: pdu overflow or max time out reached \n");
+				dprintk_gsecheck("pdu overflow or max time out reached \n");
 				reset_gse(demux,frag_id);
 				return -EINVAL;
 			}
@@ -1352,7 +1363,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 				priv->gse_frag_pdu_count[frag_id]++;
 				/* Check count is not exceding 6:GSE_MAX_FRAGMENT_COUNT */
 				if(priv->gse_frag_pdu_count[frag_id] >= GSE_MAX_FRAGMENT_COUNT) {
-					printk(KERN_ERR "dvb_demux: pdu max fragmentation count reached \n");
+					dprintk_gsecheck("pdu max fragmentation count reached \n");
 					reset_gse(demux,frag_id);
 					return -EINVAL;
 				}
@@ -1418,7 +1429,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 					else
 						gse_crc = iov_crc32(gse_crc, iov, 1);
 					if(gse_crc != expected_crc) {
-						printk(KERN_WARNING "dvb_demux: CRC32 check FAILED: %08x / %08x, SNDU len %d \n",
+						dprintk_gsecheck("CRC32 check FAILED: %08x / %08x, SNDU len %d \n",
 								gse_crc, expected_crc, priv->gse_frag_pdu[frag_id]->len);
 						reset_gse(demux,frag_id);
 						return  -EINVAL;
@@ -1439,7 +1450,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 
 				}
 				else {
-					printk(KERN_ERR "dvb_demux: Invalid pdu assembely \n");
+					dprintk_gsecheck("Invalid pdu assembely\n");
 					reset_gse(demux,frag_id);
 					return -EINVAL;
 				}
@@ -1490,7 +1501,7 @@ void dvb_dmx_swfilter_gse(struct dvb_demux *demux, const u8 *buf, size_t len)
 
 	if(gse_feed_set)
 	{
-		dprintk_tscheck("GSE packet len %d\n", len);
+		dprintk_gsecheck("GSE packet len %d\n", len);
 		ret = _dvb_dmx_swfilter_gse(demux, buf, len);
 	}
 

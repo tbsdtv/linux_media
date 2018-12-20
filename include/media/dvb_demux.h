@@ -284,8 +284,8 @@ struct gse_buff {
 
 struct demux_gse {
 	struct gse_buff *gse_full_pdu;       /* GSE for full pdu case SNDU decodes into this buffer. */
-	struct gse_buff *gse_frag_pdu[MAX_PDU_FRAGMENT_ID];/* GSE for partiall pdu SNDU decodes into this buffer. */
-	u8 gse_frag_pdu_count[MAX_PDU_FRAGMENT_ID];  /* fragmented  pdu count */
+	struct gse_buff *gse_frag_pdu[MAX_PDU_FRAGMENT_ID+1];/* GSE for partiall pdu SNDU decodes into this buffer. */
+	u8 gse_frag_pdu_count[MAX_PDU_FRAGMENT_ID+1];  /* fragmented  pdu count */
 	u8 gse_label_len;
 	u8 gse_label[6];
 	u8 active_gse_buff_count;
