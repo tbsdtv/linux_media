@@ -724,8 +724,10 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 		return -EBADF;
 
 	/* IN_MASK_ADD and IN_MASK_CREATE don't make sense together */
-	if (unlikely((mask & IN_MASK_ADD) && (mask & IN_MASK_CREATE)))
-		return -EINVAL;
+	if (unlikely((mask & IN_MASK_ADD) && (mask & IN_MASK_CREATE))) {
+		ret = -EINVAL;
+		goto fput_and_out;
+	}
 
 	/* verify that this is indeed an inotify instance */
 	if (unlikely(f.file->f_op != &inotify_fops)) {
@@ -815,7 +817,7 @@ static int __init inotify_user_setup(void)
 	BUILD_BUG_ON(IN_ISDIR != FS_ISDIR);
 	BUILD_BUG_ON(IN_ONESHOT != FS_IN_ONESHOT);
 
-	BUG_ON(hweight32(ALL_INOTIFY_BITS) != 22);
+	BUILD_BUG_ON(HWEIGHT32(ALL_INOTIFY_BITS) != 22);
 
 	inotify_inode_mark_cachep = KMEM_CACHE(inotify_inode_mark,
 					       SLAB_PANIC|SLAB_ACCOUNT);

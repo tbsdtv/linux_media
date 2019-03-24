@@ -21,13 +21,6 @@
 
 /********************************** send *************************************/
 
-struct smc_cdc_tx_pend {
-	struct smc_connection	*conn;		/* socket connection */
-	union smc_host_cursor	cursor;	/* tx sndbuf cursor sent */
-	union smc_host_cursor	p_cursor;	/* rx RMBE cursor produced */
-	u16			ctrl_seq;	/* conn. tx sequence # */
-};
-
 /* handler for send/transmission completion of a CDC msg */
 static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 			       struct smc_link *link,
@@ -61,12 +54,14 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 
 int smc_cdc_get_free_slot(struct smc_connection *conn,
 			  struct smc_wr_buf **wr_buf,
+			  struct smc_rdma_wr **wr_rdma_buf,
 			  struct smc_cdc_tx_pend **pend)
 {
 	struct smc_link *link = &conn->lgr->lnk[SMC_SINGLE_LINK];
 	int rc;
 
 	rc = smc_wr_tx_get_free_slot(link, smc_cdc_tx_handler, wr_buf,
+				     wr_rdma_buf,
 				     (struct smc_wr_tx_pend_priv **)pend);
 	if (!conn->alert_token_local)
 		/* abnormal termination */
@@ -81,7 +76,7 @@ static inline void smc_cdc_add_pending_send(struct smc_connection *conn,
 		sizeof(struct smc_cdc_msg) > SMC_WR_BUF_SIZE,
 		"must increase SMC_WR_BUF_SIZE to at least sizeof(struct smc_cdc_msg)");
 	BUILD_BUG_ON_MSG(
-		sizeof(struct smc_cdc_msg) != SMC_WR_TX_SIZE,
+		offsetofend(struct smc_cdc_msg, reserved) > SMC_WR_TX_SIZE,
 		"must adapt SMC_WR_TX_SIZE to sizeof(struct smc_cdc_msg); if not all smc_wr upper layer protocols use the same message size any more, must start to set link->wr_tx_sges[i].length on each individual smc_wr_tx_send()");
 	BUILD_BUG_ON_MSG(
 		sizeof(struct smc_cdc_tx_pend) > SMC_WR_TX_PEND_PRIV_SIZE,
@@ -96,6 +91,7 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 		     struct smc_wr_buf *wr_buf,
 		     struct smc_cdc_tx_pend *pend)
 {
+	union smc_host_cursor cfed;
 	struct smc_link *link;
 	int rc;
 
@@ -105,12 +101,10 @@ int smc_cdc_msg_send(struct smc_connection *conn,
 
 	conn->tx_cdc_seq++;
 	conn->local_tx_ctrl.seqno = conn->tx_cdc_seq;
-	smc_host_msg_to_cdc((struct smc_cdc_msg *)wr_buf,
-			    &conn->local_tx_ctrl, conn);
+	smc_host_msg_to_cdc((struct smc_cdc_msg *)wr_buf, conn, &cfed);
 	rc = smc_wr_tx_send(link, (struct smc_wr_tx_pend_priv *)pend);
 	if (!rc)
-		smc_curs_copy(&conn->rx_curs_confirmed,
-			      &conn->local_tx_ctrl.cons, conn);
+		smc_curs_copy(&conn->rx_curs_confirmed, &cfed, conn);
 
 	return rc;
 }
@@ -121,11 +115,14 @@ static int smcr_cdc_get_slot_and_msg_send(struct smc_connection *conn)
 	struct smc_wr_buf *wr_buf;
 	int rc;
 
-	rc = smc_cdc_get_free_slot(conn, &wr_buf, &pend);
+	rc = smc_cdc_get_free_slot(conn, &wr_buf, NULL, &pend);
 	if (rc)
 		return rc;
 
-	return smc_cdc_msg_send(conn, wr_buf, pend);
+	spin_lock_bh(&conn->send_lock);
+	rc = smc_cdc_msg_send(conn, wr_buf, pend);
+	spin_unlock_bh(&conn->send_lock);
+	return rc;
 }
 
 int smc_cdc_get_slot_and_msg_send(struct smc_connection *conn)
@@ -177,23 +174,24 @@ void smc_cdc_tx_dismiss_slots(struct smc_connection *conn)
 int smcd_cdc_msg_send(struct smc_connection *conn)
 {
 	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
+	union smc_host_cursor curs;
 	struct smcd_cdc_msg cdc;
 	int rc, diff;
 
 	memset(&cdc, 0, sizeof(cdc));
 	cdc.common.type = SMC_CDC_MSG_TYPE;
-	cdc.prod_wrap = conn->local_tx_ctrl.prod.wrap;
-	cdc.prod_count = conn->local_tx_ctrl.prod.count;
-
-	cdc.cons_wrap = conn->local_tx_ctrl.cons.wrap;
-	cdc.cons_count = conn->local_tx_ctrl.cons.count;
-	cdc.prod_flags = conn->local_tx_ctrl.prod_flags;
-	cdc.conn_state_flags = conn->local_tx_ctrl.conn_state_flags;
+	curs.acurs.counter = atomic64_read(&conn->local_tx_ctrl.prod.acurs);
+	cdc.prod.wrap = curs.wrap;
+	cdc.prod.count = curs.count;
+	curs.acurs.counter = atomic64_read(&conn->local_tx_ctrl.cons.acurs);
+	cdc.cons.wrap = curs.wrap;
+	cdc.cons.count = curs.count;
+	cdc.cons.prod_flags = conn->local_tx_ctrl.prod_flags;
+	cdc.cons.conn_state_flags = conn->local_tx_ctrl.conn_state_flags;
 	rc = smcd_tx_ism_write(conn, &cdc, sizeof(cdc), 0, 1);
 	if (rc)
 		return rc;
-	smc_curs_copy(&conn->rx_curs_confirmed, &conn->local_tx_ctrl.cons,
-		      conn);
+	smc_curs_copy(&conn->rx_curs_confirmed, &curs, conn);
 	/* Calculate transmitted data and increment free send buffer space */
 	diff = smc_curs_diff(conn->sndbuf_desc->len, &conn->tx_curs_fin,
 			     &conn->tx_curs_sent);
@@ -331,13 +329,16 @@ static void smc_cdc_msg_recv(struct smc_sock *smc, struct smc_cdc_msg *cdc)
 static void smcd_cdc_rx_tsklet(unsigned long data)
 {
 	struct smc_connection *conn = (struct smc_connection *)data;
+	struct smcd_cdc_msg *data_cdc;
 	struct smcd_cdc_msg cdc;
 	struct smc_sock *smc;
 
 	if (!conn)
 		return;
 
-	memcpy(&cdc, conn->rmb_desc->cpu_addr, sizeof(cdc));
+	data_cdc = (struct smcd_cdc_msg *)conn->rmb_desc->cpu_addr;
+	smcd_curs_copy(&cdc.prod, &data_cdc->prod, conn);
+	smcd_curs_copy(&cdc.cons, &data_cdc->cons, conn);
 	smc = container_of(conn, struct smc_sock, conn);
 	smc_cdc_msg_recv(smc, (struct smc_cdc_msg *)&cdc);
 }

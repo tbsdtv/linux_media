@@ -33,6 +33,7 @@
 
 #define CIFS_MAGIC_NUMBER 0xFF534D42      /* the first four bytes of SMB PDUs */
 
+#define SMB_PATH_MAX 260
 #define CIFS_PORT 445
 #define RFC1001_PORT 139
 
@@ -465,6 +466,11 @@ struct smb_version_operations {
 	enum securityEnum (*select_sectype)(struct TCP_Server_Info *,
 			    enum securityEnum);
 	int (*next_header)(char *);
+	/* ioctl passthrough for query_info */
+	int (*ioctl_query_info)(const unsigned int xid,
+				struct cifs_tcon *tcon,
+				__le16 *path, int is_dir,
+				unsigned long p);
 };
 
 struct smb_version_values {
@@ -654,6 +660,7 @@ struct TCP_Server_Info {
 	/* 16th byte of RFC1001 workstation name is always null */
 	char workstation_RFC1001_name[RFC1001_NAME_LEN_WITH_NULL];
 	__u32 sequence_number; /* for signing, protected by srv_mutex */
+	__u32 reconnect_instance; /* incremented on each reconnect */
 	struct session_key session_key;
 	unsigned long lstrp; /* when we got last response from this server */
 	struct cifs_secmech secmech; /* crypto sec mech functs, descriptors */
@@ -694,6 +701,13 @@ struct TCP_Server_Info {
 	struct delayed_work reconnect; /* reconnect workqueue job */
 	struct mutex reconnect_mutex; /* prevent simultaneous reconnects */
 	unsigned long echo_interval;
+
+	/*
+	 * Number of targets available for reconnect. The more targets
+	 * the more tasks have to wait to let the demultiplex thread
+	 * reconnect.
+	 */
+	int nr_targets;
 };
 
 static inline unsigned int
@@ -798,6 +812,7 @@ compare_mid(__u16 mid, const struct smb_hdr *smb)
  * a single wsize request with a single call.
  */
 #define CIFS_DEFAULT_IOSIZE (1024 * 1024)
+#define SMB3_DEFAULT_IOSIZE (4 * 1024 * 1024)
 
 /*
  * Windows only supports a max of 60kb reads and 65535 byte writes. Default to
@@ -924,6 +939,8 @@ struct cifs_tcon {
 	struct list_head tcon_list;
 	int tc_count;
 	struct list_head rlist; /* reconnect list */
+	atomic_t num_local_opens;  /* num of all opens including disconnected */
+	atomic_t num_remote_opens; /* num of all network opens on server */
 	struct list_head openFileList;
 	spinlock_t open_file_lock; /* protects list above */
 	struct cifs_ses *ses;	/* pointer to session associated with */
@@ -1004,6 +1021,11 @@ struct cifs_tcon {
 	struct list_head pending_opens;	/* list of incomplete opens */
 	struct cached_fid crfid; /* Cached root fid */
 	/* BB add field for back pointer to sb struct(s)? */
+#ifdef CONFIG_CIFS_DFS_UPCALL
+	char *dfs_path;
+	int remap:2;
+	struct list_head ulist; /* cache update list */
+#endif
 };
 
 /*
@@ -1072,7 +1094,8 @@ struct cifsLockInfo {
 	__u64 offset;
 	__u64 length;
 	__u32 pid;
-	__u32 type;
+	__u16 type;
+	__u16 flags;
 };
 
 /*
@@ -1114,6 +1137,9 @@ struct cifs_fid {
 	__u8 create_guid[16];
 	struct cifs_pending_open *pending_open;
 	unsigned int epoch;
+#ifdef CONFIG_CIFS_DEBUG2
+	__u64 mid;
+#endif /* CIFS_DEBUG2 */
 	bool purge_cache;
 };
 
@@ -1172,6 +1198,11 @@ struct cifs_aio_ctx {
 	unsigned int		len;
 	unsigned int		total_len;
 	bool			should_dirty;
+	/*
+	 * Indicates if this aio_ctx is for direct_io,
+	 * If yes, iter is a copy of the user passed iov_iter
+	 */
+	bool			direct_io;
 };
 
 struct cifs_readdata;
@@ -1407,6 +1438,7 @@ struct mid_q_entry {
 	int mid_state;	/* wish this were enum but can not pass to wait_event */
 	unsigned int mid_flags;
 	__le16 command;		/* smb command code */
+	unsigned int optype;	/* operation type */
 	bool large_buf:1;	/* if valid response, is pointer to large buf */
 	bool multiRsp:1;	/* multiple trans2 responses for one request  */
 	bool multiEnd:1;	/* both received */
@@ -1489,6 +1521,7 @@ struct dfs_info3_param {
 	int ref_flag;
 	char *path_name;
 	char *node_name;
+	int ttl;
 };
 
 /*
@@ -1526,7 +1559,6 @@ static inline void free_dfs_info_param(struct dfs_info3_param *param)
 	if (param) {
 		kfree(param->path_name);
 		kfree(param->node_name);
-		kfree(param);
 	}
 }
 
@@ -1541,6 +1573,25 @@ static inline void free_dfs_info_array(struct dfs_info3_param *param,
 		kfree(param[i].node_name);
 	}
 	kfree(param);
+}
+
+static inline bool is_interrupt_error(int error)
+{
+	switch (error) {
+	case -EINTR:
+	case -ERESTARTSYS:
+	case -ERESTARTNOHAND:
+	case -ERESTARTNOINTR:
+		return true;
+	}
+	return false;
+}
+
+static inline bool is_retryable_error(int error)
+{
+	if (is_interrupt_error(error) || error == -EAGAIN)
+		return true;
+	return false;
 }
 
 #define   MID_FREE 0
@@ -1715,6 +1766,7 @@ GLOBAL_EXTERN atomic_t bufAllocCount;    /* current number allocated  */
 #ifdef CONFIG_CIFS_STATS2
 GLOBAL_EXTERN atomic_t totBufAllocCount; /* total allocated over all time */
 GLOBAL_EXTERN atomic_t totSmBufAllocCount;
+extern unsigned int slow_rsp_threshold; /* number of secs before logging */
 #endif
 GLOBAL_EXTERN atomic_t smBufAllocCount;
 GLOBAL_EXTERN atomic_t midCount;
@@ -1770,6 +1822,7 @@ extern struct smb_version_values smb3any_values;
 extern struct smb_version_operations smb30_operations;
 extern struct smb_version_values smb30_values;
 #define SMB302_VERSION_STRING	"3.02"
+#define ALT_SMB302_VERSION_STRING "3.0.2"
 /*extern struct smb_version_operations smb302_operations;*/ /* not needed yet */
 extern struct smb_version_values smb302_values;
 #define SMB311_VERSION_STRING	"3.1.1"

@@ -54,6 +54,9 @@
 	DC_LOG_HW_HOTPLUG(  \
 		__VA_ARGS__)
 
+#define RETIMER_REDRIVER_INFO(...) \
+	DC_LOG_RETIMER_REDRIVER(  \
+		__VA_ARGS__)
 /*******************************************************************************
  * Private structures
  ******************************************************************************/
@@ -195,10 +198,25 @@ static bool program_hpd_filter(
 	return result;
 }
 
+/**
+ * dc_link_detect_sink() - Determine if there is a sink connected
+ *
+ * @type: Returned connection type
+ * Does not detect downstream devices, such as MST sinks
+ * or display connected through active dongles
+ */
 bool dc_link_detect_sink(struct dc_link *link, enum dc_connection_type *type)
 {
 	uint32_t is_hpd_high = 0;
 	struct gpio *hpd_pin;
+
+	if (link->connector_signal == SIGNAL_TYPE_LVDS) {
+		*type = dc_connection_single;
+		return true;
+	}
+
+	if (link->connector_signal == SIGNAL_TYPE_EDP)
+		link->dc->hwss.edp_wait_for_hpd_ready(link, true);
 
 	/* todo: may need to lock gpio access */
 	hpd_pin = get_hpd_gpio(link->ctx->dc_bios, link->link_id, link->ctx->gpio_service);
@@ -316,15 +334,15 @@ static enum signal_type get_basic_signal_type(
 	return SIGNAL_TYPE_NONE;
 }
 
-/*
- * @brief
- * Check whether there is a dongle on DP connector
+/**
+ * dc_link_is_dp_sink_present() - Check if there is a native DP
+ * or passive DP-HDMI dongle connected
  */
 bool dc_link_is_dp_sink_present(struct dc_link *link)
 {
 	enum gpio_result gpio_result;
 	uint32_t clock_pin = 0;
-
+	uint8_t retry = 0;
 	struct ddc *ddc;
 
 	enum connector_id connector_id =
@@ -353,11 +371,22 @@ bool dc_link_is_dp_sink_present(struct dc_link *link)
 		return present;
 	}
 
-	/* Read GPIO: DP sink is present if both clock and data pins are zero */
-	/* [anaumov] in DAL2, there was no check for GPIO failure */
-
-	gpio_result = dal_gpio_get_value(ddc->pin_clock, &clock_pin);
-	ASSERT(gpio_result == GPIO_RESULT_OK);
+	/*
+	 * Read GPIO: DP sink is present if both clock and data pins are zero
+	 *
+	 * [W/A] plug-unplug DP cable, sometimes customer board has
+	 * one short pulse on clk_pin(1V, < 1ms). DP will be config to HDMI/DVI
+	 * then monitor can't br light up. Add retry 3 times
+	 * But in real passive dongle, it need additional 3ms to detect
+	 */
+	do {
+		gpio_result = dal_gpio_get_value(ddc->pin_clock, &clock_pin);
+		ASSERT(gpio_result == GPIO_RESULT_OK);
+		if (clock_pin)
+			udelay(1000);
+		else
+			break;
+	} while (retry++ < 3);
 
 	present = (gpio_result == GPIO_RESULT_OK) && !clock_pin;
 
@@ -585,6 +614,14 @@ static bool is_same_edid(struct dc_edid *old_edid, struct dc_edid *new_edid)
 	return (memcmp(old_edid->raw_edid, new_edid->raw_edid, new_edid->length) == 0);
 }
 
+/**
+ * dc_link_detect() - Detect if a sink is attached to a given link
+ *
+ * link->local_sink is created or destroyed as needed.
+ *
+ * This does not create remote sinks but will trigger DM
+ * to start MST detection if a branch is detected.
+ */
 bool dc_link_detect(struct dc_link *link, enum dc_detect_reason reason)
 {
 	struct dc_sink_init_data sink_init_data = { 0 };
@@ -610,6 +647,10 @@ bool dc_link_detect(struct dc_link *link, enum dc_detect_reason reason)
 	}
 
 	if (link->connector_signal == SIGNAL_TYPE_EDP &&
+			link->local_sink)
+		return true;
+
+	if (link->connector_signal == SIGNAL_TYPE_LVDS &&
 			link->local_sink)
 		return true;
 
@@ -646,6 +687,12 @@ bool dc_link_detect(struct dc_link *link, enum dc_detect_reason reason)
 			break;
 		}
 
+		case SIGNAL_TYPE_LVDS: {
+			sink_caps.transaction_type = DDC_TRANSACTION_TYPE_I2C;
+			sink_caps.signal = SIGNAL_TYPE_LVDS;
+			break;
+		}
+
 		case SIGNAL_TYPE_EDP: {
 			detect_edp_sink_caps(link);
 			sink_caps.transaction_type =
@@ -670,12 +717,26 @@ bool dc_link_detect(struct dc_link *link, enum dc_detect_reason reason)
 				if (memcmp(&link->dpcd_caps, &prev_dpcd_caps, sizeof(struct dpcd_caps)))
 					same_dpcd = false;
 			}
-			/* Active dongle downstream unplug */
+			/* Active dongle plug in without display or downstream unplug*/
 			if (link->type == dc_connection_active_dongle
 					&& link->dpcd_caps.sink_count.
 					bits.SINK_COUNT == 0) {
-				if (prev_sink != NULL)
+				if (prev_sink != NULL) {
+					/* Downstream unplug */
 					dc_sink_release(prev_sink);
+				} else {
+					/* Empty dongle plug in */
+					for (i = 0; i < LINK_TRAINING_MAX_VERIFY_RETRY; i++) {
+						int fail_count = 0;
+
+						dp_verify_link_cap(link,
+								  &link->reported_link_cap,
+								  &fail_count);
+
+						if (fail_count == 0)
+							break;
+					}
+				}
 				return true;
 			}
 
@@ -870,6 +931,24 @@ bool dc_link_detect(struct dc_link *link, enum dc_detect_reason reason)
 		dc_sink_release(prev_sink);
 
 	return true;
+}
+
+bool dc_link_get_hpd_state(struct dc_link *dc_link)
+{
+	struct gpio *hpd_pin;
+	uint32_t state;
+
+	hpd_pin = get_hpd_gpio(dc_link->ctx->dc_bios,
+					dc_link->link_id, dc_link->ctx->gpio_service);
+	if (hpd_pin == NULL)
+		ASSERT(false);
+
+	dal_gpio_open(hpd_pin, GPIO_MODE_INTERRUPT);
+	dal_gpio_get_value(hpd_pin, &state);
+	dal_gpio_close(hpd_pin);
+	dal_gpio_destroy_irq(&hpd_pin);
+
+	return state;
 }
 
 static enum hpd_source_id get_hpd_line(
@@ -1087,6 +1166,9 @@ static bool construct(
 			link->irq_source_hpd_rx =
 					dal_irq_get_rx_source(hpd_gpio);
 		}
+		break;
+	case CONNECTOR_ID_LVDS:
+		link->connector_signal = SIGNAL_TYPE_LVDS;
 		break;
 	default:
 		DC_LOG_WARNING("Unsupported Connector type:%d!\n", link->link_id.id);
@@ -1318,28 +1400,13 @@ static enum dc_status enable_link_dp(
 	struct dc_link *link = stream->sink->link;
 	struct dc_link_settings link_settings = {0};
 	enum dp_panel_mode panel_mode;
-	enum dc_link_rate max_link_rate = LINK_RATE_HIGH2;
 
 	/* get link settings for video mode timing */
 	decide_link_settings(stream, &link_settings);
 
-	/* raise clock state for HBR3 if required. Confirmed with HW DCE/DPCS
-	 * logic for HBR3 still needs Nominal (0.8V) on VDDC rail
-	 */
-	if (link->link_enc->features.flags.bits.IS_HBR3_CAPABLE)
-		max_link_rate = LINK_RATE_HIGH3;
-
-	if (link_settings.link_rate == max_link_rate) {
-		struct dc_clocks clocks = state->bw.dcn.clk;
-
-		/* dce/dcn compat, do not update dispclk */
-		clocks.dispclk_khz = 0;
-		/* 27mhz = 27000000hz= 27000khz */
-		clocks.phyclk_khz = link_settings.link_rate * 27000;
-
-		state->dis_clk->funcs->update_clocks(
-				state->dis_clk, &clocks, false);
-	}
+	pipe_ctx->stream_res.pix_clk_params.requested_sym_clk =
+			link_settings.link_rate * LINK_RATE_REF_FREQ_IN_KHZ;
+	state->dccg->funcs->update_clocks(state->dccg, state, false);
 
 	dp_enable_link_phy(
 		link,
@@ -1371,8 +1438,6 @@ static enum dc_status enable_link_dp(
 	}
 	else
 		status = DC_FAIL_DP_LINK_TRAINING;
-
-	enable_stream_features(pipe_ctx);
 
 	return status;
 }
@@ -1531,8 +1596,8 @@ static bool i2c_write(struct pipe_ctx *pipe_ctx,
 	payload.write = true;
 	cmd.payloads = &payload;
 
-	if (dc_submit_i2c(pipe_ctx->stream->ctx->dc,
-			pipe_ctx->stream->sink->link->link_index, &cmd))
+	if (dm_helpers_submit_i2c(pipe_ctx->stream->ctx,
+			pipe_ctx->stream->sink->link, &cmd))
 		return true;
 
 	return false;
@@ -1551,6 +1616,7 @@ static void write_i2c_retimer_setting(
 	uint8_t value = 0;
 	int i = 0;
 	bool i2c_success = false;
+	DC_LOGGER_INIT(pipe_ctx->stream->ctx->logger);
 
 	memset(&buffer, 0, sizeof(buffer));
 
@@ -1564,6 +1630,9 @@ static void write_i2c_retimer_setting(
 			buffer[1] = settings->reg_settings[i].i2c_reg_val;
 			i2c_success = i2c_write(pipe_ctx, slave_address,
 						buffer, sizeof(buffer));
+			RETIMER_REDRIVER_INFO("retimer write to slave_address = 0x%x,\
+				offset = 0x%x, reg_val= 0x%x, i2c_success = %d\n",
+				slave_address, buffer[0], buffer[1], i2c_success?1:0);
 
 			if (!i2c_success)
 				/* Write failure */
@@ -1594,6 +1663,9 @@ static void write_i2c_retimer_setting(
 				buffer[1] = value | apply_rx_tx_change;
 				i2c_success = i2c_write(pipe_ctx, slave_address,
 						buffer, sizeof(buffer));
+				RETIMER_REDRIVER_INFO("retimer write to slave_address = 0x%x,\
+					offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+					slave_address, buffer[0], buffer[1], i2c_success?1:0);
 				if (!i2c_success)
 					/* Write failure */
 					ASSERT(i2c_success);
@@ -1611,6 +1683,9 @@ static void write_i2c_retimer_setting(
 				buffer[1] = settings->reg_settings_6g[i].i2c_reg_val;
 				i2c_success = i2c_write(pipe_ctx, slave_address,
 							buffer, sizeof(buffer));
+				RETIMER_REDRIVER_INFO("above 340Mhz: retimer write to slave_address = 0x%x,\
+					offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+					slave_address, buffer[0], buffer[1], i2c_success?1:0);
 
 				if (!i2c_success)
 					/* Write failure */
@@ -1641,6 +1716,9 @@ static void write_i2c_retimer_setting(
 					buffer[1] = value | apply_rx_tx_change;
 					i2c_success = i2c_write(pipe_ctx, slave_address,
 							buffer, sizeof(buffer));
+					RETIMER_REDRIVER_INFO("retimer write to slave_address = 0x%x,\
+						offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+						slave_address, buffer[0], buffer[1], i2c_success?1:0);
 					if (!i2c_success)
 						/* Write failure */
 						ASSERT(i2c_success);
@@ -1657,6 +1735,9 @@ static void write_i2c_retimer_setting(
 		buffer[1] = 0x01;
 		i2c_success = i2c_write(pipe_ctx, slave_address,
 				buffer, sizeof(buffer));
+		RETIMER_REDRIVER_INFO("retimer write to slave_address = 0x%x,\
+				offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+				slave_address, buffer[0], buffer[1], i2c_success?1:0);
 		if (!i2c_success)
 			/* Write failure */
 			ASSERT(i2c_success);
@@ -1666,6 +1747,9 @@ static void write_i2c_retimer_setting(
 		buffer[1] = 0x23;
 		i2c_success = i2c_write(pipe_ctx, slave_address,
 				buffer, sizeof(buffer));
+		RETIMER_REDRIVER_INFO("retimer write to slave_address = 0x%x,\
+			offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+			slave_address, buffer[0], buffer[1], i2c_success?1:0);
 		if (!i2c_success)
 			/* Write failure */
 			ASSERT(i2c_success);
@@ -1675,6 +1759,9 @@ static void write_i2c_retimer_setting(
 		buffer[1] = 0x00;
 		i2c_success = i2c_write(pipe_ctx, slave_address,
 				buffer, sizeof(buffer));
+		RETIMER_REDRIVER_INFO("retimer write to slave_address = 0x%x,\
+			offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+			slave_address, buffer[0], buffer[1], i2c_success?1:0);
 		if (!i2c_success)
 			/* Write failure */
 			ASSERT(i2c_success);
@@ -1690,6 +1777,7 @@ static void write_i2c_default_retimer_setting(
 	uint8_t slave_address = (0xBA >> 1);
 	uint8_t buffer[2];
 	bool i2c_success = false;
+	DC_LOGGER_INIT(pipe_ctx->stream->ctx->logger);
 
 	memset(&buffer, 0, sizeof(buffer));
 
@@ -1699,6 +1787,9 @@ static void write_i2c_default_retimer_setting(
 	buffer[1] = 0x13;
 	i2c_success = i2c_write(pipe_ctx, slave_address,
 			buffer, sizeof(buffer));
+	RETIMER_REDRIVER_INFO("retimer writes default setting to slave_address = 0x%x,\
+		offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+		slave_address, buffer[0], buffer[1], i2c_success?1:0);
 	if (!i2c_success)
 		/* Write failure */
 		ASSERT(i2c_success);
@@ -1708,6 +1799,9 @@ static void write_i2c_default_retimer_setting(
 	buffer[1] = 0x17;
 	i2c_success = i2c_write(pipe_ctx, slave_address,
 			buffer, sizeof(buffer));
+	RETIMER_REDRIVER_INFO("retimer write to slave_addr = 0x%x,\
+		offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+		slave_address, buffer[0], buffer[1], i2c_success?1:0);
 	if (!i2c_success)
 		/* Write failure */
 		ASSERT(i2c_success);
@@ -1717,6 +1811,9 @@ static void write_i2c_default_retimer_setting(
 	buffer[1] = is_over_340mhz ? 0xDA : 0xD8;
 	i2c_success = i2c_write(pipe_ctx, slave_address,
 			buffer, sizeof(buffer));
+	RETIMER_REDRIVER_INFO("retimer write to slave_addr = 0x%x,\
+		offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+		slave_address, buffer[0], buffer[1], i2c_success?1:0);
 	if (!i2c_success)
 		/* Write failure */
 		ASSERT(i2c_success);
@@ -1726,6 +1823,9 @@ static void write_i2c_default_retimer_setting(
 	buffer[1] = 0x17;
 	i2c_success = i2c_write(pipe_ctx, slave_address,
 			buffer, sizeof(buffer));
+	RETIMER_REDRIVER_INFO("retimer write to slave_addr = 0x%x,\
+		offset = 0x%x, reg_val= 0x%x, i2c_success = %d\n",
+		slave_address, buffer[0], buffer[1], i2c_success?1:0);
 	if (!i2c_success)
 		/* Write failure */
 		ASSERT(i2c_success);
@@ -1735,6 +1835,9 @@ static void write_i2c_default_retimer_setting(
 	buffer[1] = is_over_340mhz ? 0x1D : 0x91;
 	i2c_success = i2c_write(pipe_ctx, slave_address,
 			buffer, sizeof(buffer));
+	RETIMER_REDRIVER_INFO("retimer write to slave_addr = 0x%x,\
+		offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+		slave_address, buffer[0], buffer[1], i2c_success?1:0);
 	if (!i2c_success)
 		/* Write failure */
 		ASSERT(i2c_success);
@@ -1744,6 +1847,9 @@ static void write_i2c_default_retimer_setting(
 	buffer[1] = 0x17;
 	i2c_success = i2c_write(pipe_ctx, slave_address,
 			buffer, sizeof(buffer));
+	RETIMER_REDRIVER_INFO("retimer write to slave_addr = 0x%x,\
+		offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+		slave_address, buffer[0], buffer[1], i2c_success?1:0);
 	if (!i2c_success)
 		/* Write failure */
 		ASSERT(i2c_success);
@@ -1757,6 +1863,9 @@ static void write_i2c_default_retimer_setting(
 		buffer[1] = 0x01;
 		i2c_success = i2c_write(pipe_ctx, slave_address,
 				buffer, sizeof(buffer));
+		RETIMER_REDRIVER_INFO("retimer write to slave_addr = 0x%x,\
+			offset = 0x%x, reg_val = 0x%x, i2c_success = %d\n",
+			slave_address, buffer[0], buffer[1], i2c_success?1:0);
 		if (!i2c_success)
 			/* Write failure */
 			ASSERT(i2c_success);
@@ -1766,6 +1875,9 @@ static void write_i2c_default_retimer_setting(
 		buffer[1] = 0x23;
 		i2c_success = i2c_write(pipe_ctx, slave_address,
 				buffer, sizeof(buffer));
+		RETIMER_REDRIVER_INFO("retimer write to slave_addr = 0x%x,\
+			offset = 0x%x, reg_val= 0x%x, i2c_success = %d\n",
+			slave_address, buffer[0], buffer[1], i2c_success?1:0);
 		if (!i2c_success)
 			/* Write failure */
 			ASSERT(i2c_success);
@@ -1775,6 +1887,9 @@ static void write_i2c_default_retimer_setting(
 		buffer[1] = 0x00;
 		i2c_success = i2c_write(pipe_ctx, slave_address,
 				buffer, sizeof(buffer));
+		RETIMER_REDRIVER_INFO("retimer write default setting to slave_addr = 0x%x,\
+			offset = 0x%x, reg_val= 0x%x, i2c_success = %d end here\n",
+			slave_address, buffer[0], buffer[1], i2c_success?1:0);
 		if (!i2c_success)
 			/* Write failure */
 			ASSERT(i2c_success);
@@ -1788,6 +1903,7 @@ static void write_i2c_redriver_setting(
 	uint8_t slave_address = (0xF0 >> 1);
 	uint8_t buffer[16];
 	bool i2c_success = false;
+	DC_LOGGER_INIT(pipe_ctx->stream->ctx->logger);
 
 	memset(&buffer, 0, sizeof(buffer));
 
@@ -1799,6 +1915,11 @@ static void write_i2c_redriver_setting(
 
 	i2c_success = i2c_write(pipe_ctx, slave_address,
 					buffer, sizeof(buffer));
+	RETIMER_REDRIVER_INFO("redriver write 0 to all 16 reg offset expect following:\n\
+		\t slave_addr = 0x%x, offset[3] = 0x%x, offset[4] = 0x%x,\
+		offset[5] = 0x%x,offset[6] is_over_340mhz = 0x%x,\
+		i2c_success = %d\n",
+		slave_address, buffer[3], buffer[4], buffer[5], buffer[6], i2c_success?1:0);
 
 	if (!i2c_success)
 		/* Write failure */
@@ -1865,6 +1986,24 @@ static void enable_link_hdmi(struct pipe_ctx *pipe_ctx)
 		dal_ddc_service_read_scdc_data(link->ddc);
 }
 
+static void enable_link_lvds(struct pipe_ctx *pipe_ctx)
+{
+	struct dc_stream_state *stream = pipe_ctx->stream;
+	struct dc_link *link = stream->sink->link;
+
+	if (stream->phy_pix_clk == 0)
+		stream->phy_pix_clk = stream->timing.pix_clk_khz;
+
+	memset(&stream->sink->link->cur_link_settings, 0,
+			sizeof(struct dc_link_settings));
+
+	link->link_enc->funcs->enable_lvds_output(
+			link->link_enc,
+			pipe_ctx->clock_source->id,
+			stream->phy_pix_clk);
+
+}
+
 /****************************enable_link***********************************/
 static enum dc_status enable_link(
 		struct dc_state *state,
@@ -1886,6 +2025,10 @@ static enum dc_status enable_link(
 	case SIGNAL_TYPE_DVI_DUAL_LINK:
 	case SIGNAL_TYPE_HDMI_TYPE_A:
 		enable_link_hdmi(pipe_ctx);
+		status = DC_OK;
+		break;
+	case SIGNAL_TYPE_LVDS:
+		enable_link_lvds(pipe_ctx);
 		status = DC_OK;
 		break;
 	case SIGNAL_TYPE_VIRTUAL:
@@ -2039,14 +2182,15 @@ int dc_link_get_backlight_level(const struct dc_link *link)
 {
 	struct abm *abm = link->ctx->dc->res_pool->abm;
 
-	if (abm == NULL || abm->funcs->get_current_backlight_8_bit == NULL)
+	if (abm == NULL || abm->funcs->get_current_backlight == NULL)
 		return DC_ERROR_UNEXPECTED;
 
-	return (int) abm->funcs->get_current_backlight_8_bit(abm);
+	return (int) abm->funcs->get_current_backlight(abm);
 }
 
-bool dc_link_set_backlight_level(const struct dc_link *link, uint32_t level,
-		uint32_t frame_ramp, const struct dc_stream_state *stream)
+bool dc_link_set_backlight_level(const struct dc_link *link,
+		uint32_t backlight_pwm_u16_16,
+		uint32_t frame_ramp)
 {
 	struct dc  *core_dc = link->ctx->dc;
 	struct abm *abm = core_dc->res_pool->abm;
@@ -2058,26 +2202,20 @@ bool dc_link_set_backlight_level(const struct dc_link *link, uint32_t level,
 
 	if ((dmcu == NULL) ||
 		(abm == NULL) ||
-		(abm->funcs->set_backlight_level == NULL))
+		(abm->funcs->set_backlight_level_pwm == NULL))
 		return false;
-
-	if (stream) {
-		if (stream->bl_pwm_level == EDP_BACKLIGHT_RAMP_DISABLE_LEVEL)
-			frame_ramp = 0;
-
-		((struct dc_stream_state *)stream)->bl_pwm_level = level;
-	}
 
 	use_smooth_brightness = dmcu->funcs->is_dmcu_initialized(dmcu);
 
-	DC_LOG_BACKLIGHT("New Backlight level: %d (0x%X)\n", level, level);
+	DC_LOG_BACKLIGHT("New Backlight level: %d (0x%X)\n",
+			backlight_pwm_u16_16, backlight_pwm_u16_16);
 
 	if (dc_is_embedded_signal(link->connector_signal)) {
-		if (stream != NULL) {
-			for (i = 0; i < MAX_PIPES; i++) {
+		for (i = 0; i < MAX_PIPES; i++) {
+			if (core_dc->current_state->res_ctx.pipe_ctx[i].stream) {
 				if (core_dc->current_state->res_ctx.
-						pipe_ctx[i].stream
-						== stream)
+						pipe_ctx[i].stream->sink->link
+						== link)
 					/* DMCU -1 for all controller id values,
 					 * therefore +1 here
 					 */
@@ -2087,9 +2225,9 @@ bool dc_link_set_backlight_level(const struct dc_link *link, uint32_t level,
 						1;
 			}
 		}
-		abm->funcs->set_backlight_level(
+		abm->funcs->set_backlight_level_pwm(
 				abm,
-				level,
+				backlight_pwm_u16_16,
 				frame_ramp,
 				controller_id,
 				use_smooth_brightness);
@@ -2103,7 +2241,7 @@ bool dc_link_set_abm_disable(const struct dc_link *link)
 	struct dc  *core_dc = link->ctx->dc;
 	struct abm *abm = core_dc->res_pool->abm;
 
-	if ((abm == NULL) || (abm->funcs->set_backlight_level == NULL))
+	if ((abm == NULL) || (abm->funcs->set_backlight_level_pwm == NULL))
 		return false;
 
 	abm->funcs->set_abm_immediate_disable(abm);
@@ -2116,7 +2254,7 @@ bool dc_link_set_psr_enable(const struct dc_link *link, bool enable, bool wait)
 	struct dc  *core_dc = link->ctx->dc;
 	struct dmcu *dmcu = core_dc->res_pool->dmcu;
 
-	if (dmcu != NULL && link->psr_enabled)
+	if ((dmcu != NULL && dmcu->funcs->is_dmcu_initialized(dmcu)) && link->psr_enabled)
 		dmcu->funcs->set_psr_enable(dmcu, enable, wait);
 
 	return true;
@@ -2403,23 +2541,63 @@ void core_link_enable_stream(
 		struct pipe_ctx *pipe_ctx)
 {
 	struct dc  *core_dc = pipe_ctx->stream->ctx->dc;
+	struct dc_stream_state *stream = pipe_ctx->stream;
 	enum dc_status status;
 	DC_LOGGER_INIT(pipe_ctx->stream->ctx->logger);
 
-	/* eDP lit up by bios already, no need to enable again. */
-	if (pipe_ctx->stream->signal == SIGNAL_TYPE_EDP &&
-		core_dc->apply_edp_fast_boot_optimization) {
-		core_dc->apply_edp_fast_boot_optimization = false;
-		pipe_ctx->stream->dpms_off = false;
-		return;
+	if (pipe_ctx->stream->signal != SIGNAL_TYPE_VIRTUAL) {
+		stream->sink->link->link_enc->funcs->setup(
+			stream->sink->link->link_enc,
+			pipe_ctx->stream->signal);
+		pipe_ctx->stream_res.stream_enc->funcs->setup_stereo_sync(
+			pipe_ctx->stream_res.stream_enc,
+			pipe_ctx->stream_res.tg->inst,
+			stream->timing.timing_3d_format != TIMING_3D_FORMAT_NONE);
 	}
 
-	if (pipe_ctx->stream->dpms_off)
-		return;
+	if (dc_is_dp_signal(pipe_ctx->stream->signal))
+		pipe_ctx->stream_res.stream_enc->funcs->dp_set_stream_attribute(
+			pipe_ctx->stream_res.stream_enc,
+			&stream->timing,
+			stream->output_color_space);
 
-	status = enable_link(state, pipe_ctx);
+	if (dc_is_hdmi_signal(pipe_ctx->stream->signal))
+		pipe_ctx->stream_res.stream_enc->funcs->hdmi_set_stream_attribute(
+			pipe_ctx->stream_res.stream_enc,
+			&stream->timing,
+			stream->phy_pix_clk,
+			pipe_ctx->stream_res.audio != NULL);
 
-	if (status != DC_OK) {
+	if (dc_is_dvi_signal(pipe_ctx->stream->signal))
+		pipe_ctx->stream_res.stream_enc->funcs->dvi_set_stream_attribute(
+			pipe_ctx->stream_res.stream_enc,
+			&stream->timing,
+			(pipe_ctx->stream->signal == SIGNAL_TYPE_DVI_DUAL_LINK) ?
+			true : false);
+
+	if (dc_is_lvds_signal(pipe_ctx->stream->signal))
+		pipe_ctx->stream_res.stream_enc->funcs->lvds_set_stream_attribute(
+			pipe_ctx->stream_res.stream_enc,
+			&stream->timing);
+
+	if (!IS_FPGA_MAXIMUS_DC(core_dc->ctx->dce_environment)) {
+		resource_build_info_frame(pipe_ctx);
+		core_dc->hwss.update_info_frame(pipe_ctx);
+
+		/* eDP lit up by bios already, no need to enable again. */
+		if (pipe_ctx->stream->signal == SIGNAL_TYPE_EDP &&
+				pipe_ctx->stream->apply_edp_fast_boot_optimization) {
+			pipe_ctx->stream->apply_edp_fast_boot_optimization = false;
+			pipe_ctx->stream->dpms_off = false;
+			return;
+		}
+
+		if (pipe_ctx->stream->dpms_off)
+			return;
+
+		status = enable_link(state, pipe_ctx);
+
+		if (status != DC_OK) {
 			DC_LOG_WARNING("enabling link %u failed: %d\n",
 			pipe_ctx->stream->sink->link->link_index,
 			status);
@@ -2434,33 +2612,38 @@ void core_link_enable_stream(
 				BREAK_TO_DEBUGGER();
 				return;
 			}
+		}
+
+		core_dc->hwss.enable_audio_stream(pipe_ctx);
+
+		/* turn off otg test pattern if enable */
+		if (pipe_ctx->stream_res.tg->funcs->set_test_pattern)
+			pipe_ctx->stream_res.tg->funcs->set_test_pattern(pipe_ctx->stream_res.tg,
+					CONTROLLER_DP_TEST_PATTERN_VIDEOMODE,
+					COLOR_DEPTH_UNDEFINED);
+
+		core_dc->hwss.enable_stream(pipe_ctx);
+
+		if (pipe_ctx->stream->signal == SIGNAL_TYPE_DISPLAY_PORT_MST)
+			allocate_mst_payload(pipe_ctx);
+
+		core_dc->hwss.unblank_stream(pipe_ctx,
+			&pipe_ctx->stream->sink->link->cur_link_settings);
+
+		if (dc_is_dp_signal(pipe_ctx->stream->signal))
+			enable_stream_features(pipe_ctx);
 	}
 
-	core_dc->hwss.enable_audio_stream(pipe_ctx);
-
-	/* turn off otg test pattern if enable */
-	if (pipe_ctx->stream_res.tg->funcs->set_test_pattern)
-		pipe_ctx->stream_res.tg->funcs->set_test_pattern(pipe_ctx->stream_res.tg,
-				CONTROLLER_DP_TEST_PATTERN_VIDEOMODE,
-				COLOR_DEPTH_UNDEFINED);
-
-	core_dc->hwss.enable_stream(pipe_ctx);
-
-	if (pipe_ctx->stream->signal == SIGNAL_TYPE_DISPLAY_PORT_MST)
-		allocate_mst_payload(pipe_ctx);
-
-	core_dc->hwss.unblank_stream(pipe_ctx,
-		&pipe_ctx->stream->sink->link->cur_link_settings);
 }
 
 void core_link_disable_stream(struct pipe_ctx *pipe_ctx, int option)
 {
 	struct dc  *core_dc = pipe_ctx->stream->ctx->dc;
 
+	core_dc->hwss.blank_stream(pipe_ctx);
+
 	if (pipe_ctx->stream->signal == SIGNAL_TYPE_DISPLAY_PORT_MST)
 		deallocate_mst_payload(pipe_ctx);
-
-	core_dc->hwss.blank_stream(pipe_ctx);
 
 	core_dc->hwss.disable_stream(pipe_ctx, option);
 

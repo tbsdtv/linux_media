@@ -69,14 +69,21 @@ s32 Get2Comp(s32 a, s32 width)
 **PARAMS OUT::	NONE
 **RETURN	::	2^n
 *****************************************************/
-s32 XtoPowerY(s32 Number, u32 Power)
+u32 XtoPowerY(s32 Number, u32 Power)
 {
 	u32 i;
-	s32 result = 1;
-	
-	for(i=0;i<Power;i++)
+	u32 result = 1;
+	u32 oldresult = 0;
+
+	if(Power>=32){
+		printk("Potentiall unsafe call: Number = %d Power = %d  -- \n",Number,Power);
+	}
+	for(i=0;i<Power;i++){
+		oldresult =  result;
 		result *= Number;
-		
+		if(result<=oldresult)
+			printk("overflow:Number=%d, Power =%d  --\n",Number,Power);
+	}
 	return result;
 }
 

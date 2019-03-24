@@ -1004,9 +1004,7 @@ void redraw_screen(struct vc_data *vc, int is_switch)
 			clear_buffer_attributes(vc);
 		}
 
-		/* Forcibly update if we're panicing */
-		if ((update && vc->vc_mode != KD_GRAPHICS) ||
-		    vt_force_oops_output(vc))
+		if (update && vc->vc_mode != KD_GRAPHICS)
 			do_update_region(vc, vc->vc_origin, vc->vc_screenbuf_size / 2);
 	}
 	set_cursor(vc);
@@ -1046,7 +1044,6 @@ static void visual_init(struct vc_data *vc, int num, int init)
 	vc->vc_hi_font_mask = 0;
 	vc->vc_complement_mask = 0;
 	vc->vc_can_do_color = 0;
-	vc->vc_panic_force_write = false;
 	vc->vc_cur_blink_ms = DEFAULT_CURSOR_BLINK_MS;
 	vc->vc_sw->con_init(vc, init);
 	if (!vc->vc_complement_mask)
@@ -1275,6 +1272,7 @@ static int vc_do_resize(struct tty_struct *tty, struct vc_data *vc,
 	if (con_is_visible(vc))
 		update_screen(vc);
 	vt_event_post(VT_EVENT_RESIZE, vc->vc_num, vc->vc_num);
+	notify_update(vc);
 	return err;
 }
 
@@ -1551,7 +1549,7 @@ static void csi_K(struct vc_data *vc, int vpar)
 	scr_memsetw(start + offset, vc->vc_video_erase_char, 2 * count);
 	vc->vc_need_wrap = 0;
 	if (con_should_update(vc))
-		do_update_region(vc, (unsigned long) start, count);
+		do_update_region(vc, (unsigned long)(start + offset), count);
 }
 
 static void csi_X(struct vc_data *vc, int vpar) /* erase the following vpar positions */
@@ -2767,8 +2765,8 @@ rescan_last_byte:
 	con_flush(vc, draw_from, draw_to, &draw_x);
 	vc_uniscr_debug_check(vc);
 	console_conditional_schedule();
-	console_unlock();
 	notify_update(vc);
+	console_unlock();
 	return n;
 }
 
@@ -2887,8 +2885,7 @@ static void vt_console_print(struct console *co, const char *b, unsigned count)
 	unsigned char c;
 	static DEFINE_SPINLOCK(printing_lock);
 	const ushort *start;
-	ushort cnt = 0;
-	ushort myx;
+	ushort start_x, cnt;
 	int kmsg_console;
 
 	/* console busy or not yet initialized */
@@ -2901,17 +2898,13 @@ static void vt_console_print(struct console *co, const char *b, unsigned count)
 	if (kmsg_console && vc_cons_allocated(kmsg_console - 1))
 		vc = vc_cons[kmsg_console - 1].d;
 
-	/* read `x' only after setting currcons properly (otherwise
-	   the `x' macro will read the x of the foreground console). */
-	myx = vc->vc_x;
-
 	if (!vc_cons_allocated(fg_console)) {
 		/* impossible */
 		/* printk("vt_console_print: tty %d not allocated ??\n", currcons+1); */
 		goto quit;
 	}
 
-	if (vc->vc_mode != KD_TEXT && !vt_force_oops_output(vc))
+	if (vc->vc_mode != KD_TEXT)
 		goto quit;
 
 	/* undraw cursor first */
@@ -2919,53 +2912,41 @@ static void vt_console_print(struct console *co, const char *b, unsigned count)
 		hide_cursor(vc);
 
 	start = (ushort *)vc->vc_pos;
-
-	/* Contrived structure to try to emulate original need_wrap behaviour
-	 * Problems caused when we have need_wrap set on '\n' character */
+	start_x = vc->vc_x;
+	cnt = 0;
 	while (count--) {
 		c = *b++;
 		if (c == 10 || c == 13 || c == 8 || vc->vc_need_wrap) {
-			if (cnt > 0) {
-				if (con_is_visible(vc))
-					vc->vc_sw->con_putcs(vc, start, cnt, vc->vc_y, vc->vc_x);
-				vc->vc_x += cnt;
-				if (vc->vc_need_wrap)
-					vc->vc_x--;
-				cnt = 0;
-			}
+			if (cnt && con_is_visible(vc))
+				vc->vc_sw->con_putcs(vc, start, cnt, vc->vc_y, start_x);
+			cnt = 0;
 			if (c == 8) {		/* backspace */
 				bs(vc);
 				start = (ushort *)vc->vc_pos;
-				myx = vc->vc_x;
+				start_x = vc->vc_x;
 				continue;
 			}
 			if (c != 13)
 				lf(vc);
 			cr(vc);
 			start = (ushort *)vc->vc_pos;
-			myx = vc->vc_x;
+			start_x = vc->vc_x;
 			if (c == 10 || c == 13)
 				continue;
 		}
+		vc_uniscr_putc(vc, c);
 		scr_writew((vc->vc_attr << 8) + c, (unsigned short *)vc->vc_pos);
 		notify_write(vc, c);
 		cnt++;
-		if (myx == vc->vc_cols - 1) {
+		if (vc->vc_x == vc->vc_cols - 1) {
 			vc->vc_need_wrap = 1;
-			continue;
-		}
-		vc->vc_pos += 2;
-		myx++;
-	}
-	if (cnt > 0) {
-		if (con_is_visible(vc))
-			vc->vc_sw->con_putcs(vc, start, cnt, vc->vc_y, vc->vc_x);
-		vc->vc_x += cnt;
-		if (vc->vc_x == vc->vc_cols) {
-			vc->vc_x--;
-			vc->vc_need_wrap = 1;
+		} else {
+			vc->vc_pos += 2;
+			vc->vc_x++;
 		}
 	}
+	if (cnt && con_is_visible(vc))
+		vc->vc_sw->con_putcs(vc, start, cnt, vc->vc_y, start_x);
 	set_cursor(vc);
 	notify_update(vc);
 
@@ -4229,8 +4210,7 @@ void do_unblank_screen(int leaving_gfx)
 		return;
 	}
 	vc = vc_cons[fg_console].d;
-	/* Try to unblank in oops case too */
-	if (vc->vc_mode != KD_TEXT && !vt_force_oops_output(vc))
+	if (vc->vc_mode != KD_TEXT)
 		return; /* but leave console_blanked != 0 */
 
 	if (blankinterval) {
@@ -4239,7 +4219,7 @@ void do_unblank_screen(int leaving_gfx)
 	}
 
 	console_blanked = 0;
-	if (vc->vc_sw->con_blank(vc, 0, leaving_gfx) || vt_force_oops_output(vc))
+	if (vc->vc_sw->con_blank(vc, 0, leaving_gfx))
 		/* Low-level driver cannot restore -> do it ourselves */
 		update_screen(vc);
 	if (console_blank_hook)

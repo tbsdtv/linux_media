@@ -462,7 +462,9 @@ typedef enum
     #define PowOf4(number) (1<<((number)<<1))			/* was: s32 PowOf2(s32 number); */
 	 
 	s32 Get2Comp(s32 a, s32 width);
-	s32 XtoPowerY(s32 Number, u32 Power);
+	
+	u32 XtoPowerY(s32 Number, u32 Power);
+//	#define XtoPowerY(Number,Power)  XtoPowerY( Number,  Power,__FILE__)
 	u32 STLogt(s32 number);
 	unsigned int STLog10(u32 value);
 	u32 Gcdivisor(u32 m, u32 n);

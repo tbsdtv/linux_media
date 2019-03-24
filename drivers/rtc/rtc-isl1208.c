@@ -10,12 +10,11 @@
  *
  */
 
-#include <linux/module.h>
-#include <linux/i2c.h>
 #include <linux/bcd.h>
-#include <linux/rtc.h>
-#include "rtc-core.h"
+#include <linux/i2c.h>
+#include <linux/module.h>
 #include <linux/of_irq.h>
+#include <linux/rtc.h>
 
 /* Register map */
 /* rtc section */
@@ -85,29 +84,13 @@ static int
 isl1208_i2c_read_regs(struct i2c_client *client, u8 reg, u8 buf[],
 		      unsigned len)
 {
-	u8 reg_addr[1] = { reg };
-	struct i2c_msg msgs[2] = {
-		{
-			.addr = client->addr,
-			.len = sizeof(reg_addr),
-			.buf = reg_addr
-		},
-		{
-			.addr = client->addr,
-			.flags = I2C_M_RD,
-			.len = len,
-			.buf = buf
-		}
-	};
 	int ret;
 
 	WARN_ON(reg > ISL1219_REG_YRT);
 	WARN_ON(reg + len > ISL1219_REG_YRT + 1);
 
-	ret = i2c_transfer(client->adapter, msgs, 2);
-	if (ret > 0)
-		ret = 0;
-	return ret;
+	ret = i2c_smbus_read_i2c_block_data(client, reg, len, buf);
+	return (ret < 0) ? ret : 0;
 }
 
 /* block write */
@@ -115,26 +98,13 @@ static int
 isl1208_i2c_set_regs(struct i2c_client *client, u8 reg, u8 const buf[],
 		     unsigned len)
 {
-	u8 i2c_buf[ISL1208_REG_USR2 + 2];
-	struct i2c_msg msgs[1] = {
-		{
-			.addr = client->addr,
-			.len = len + 1,
-			.buf = i2c_buf
-		}
-	};
 	int ret;
 
 	WARN_ON(reg > ISL1219_REG_YRT);
 	WARN_ON(reg + len > ISL1219_REG_YRT + 1);
 
-	i2c_buf[0] = reg;
-	memcpy(&i2c_buf[1], &buf[0], len);
-
-	ret = i2c_transfer(client->adapter, msgs, 1);
-	if (ret > 0)
-		ret = 0;
-	return ret;
+	ret = i2c_smbus_write_i2c_block_data(client, reg, len, buf);
+	return (ret < 0) ? ret : 0;
 }
 
 /* simple check to see whether we have a isl1208 */
@@ -518,7 +488,7 @@ static ssize_t timestamp0_store(struct device *dev,
 				struct device_attribute *attr,
 				const char *buf, size_t count)
 {
-	struct i2c_client *client = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev->parent);
 	int sr;
 
 	sr = isl1208_i2c_get_sr(client);
@@ -540,7 +510,7 @@ static ssize_t timestamp0_store(struct device *dev,
 static ssize_t timestamp0_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
-	struct i2c_client *client = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev->parent);
 	u8 regs[ISL1219_EVT_SECTION_LEN] = { 0, };
 	struct rtc_time tm;
 	int sr;
@@ -650,7 +620,7 @@ static ssize_t
 isl1208_sysfs_show_atrim(struct device *dev,
 			 struct device_attribute *attr, char *buf)
 {
-	int atr = isl1208_i2c_get_atr(to_i2c_client(dev));
+	int atr = isl1208_i2c_get_atr(to_i2c_client(dev->parent));
 	if (atr < 0)
 		return atr;
 
@@ -663,7 +633,7 @@ static ssize_t
 isl1208_sysfs_show_dtrim(struct device *dev,
 			 struct device_attribute *attr, char *buf)
 {
-	int dtr = isl1208_i2c_get_dtr(to_i2c_client(dev));
+	int dtr = isl1208_i2c_get_dtr(to_i2c_client(dev->parent));
 	if (dtr < 0)
 		return dtr;
 
@@ -676,7 +646,7 @@ static ssize_t
 isl1208_sysfs_show_usr(struct device *dev,
 		       struct device_attribute *attr, char *buf)
 {
-	int usr = isl1208_i2c_get_usr(to_i2c_client(dev));
+	int usr = isl1208_i2c_get_usr(to_i2c_client(dev->parent));
 	if (usr < 0)
 		return usr;
 
@@ -701,7 +671,10 @@ isl1208_sysfs_store_usr(struct device *dev,
 	if (usr < 0 || usr > 0xffff)
 		return -EINVAL;
 
-	return isl1208_i2c_set_usr(to_i2c_client(dev), usr) ? -EIO : count;
+	if (isl1208_i2c_set_usr(to_i2c_client(dev->parent), usr))
+		return -EIO;
+
+	return count;
 }
 
 static DEVICE_ATTR(usr, S_IRUGO | S_IWUSR, isl1208_sysfs_show_usr,
@@ -765,7 +738,6 @@ isl1208_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	rtc->ops = &isl1208_rtc_ops;
 
 	i2c_set_clientdata(client, rtc);
-	dev_set_drvdata(&rtc->dev, client);
 
 	rc = isl1208_i2c_get_sr(client);
 	if (rc < 0) {
@@ -804,7 +776,7 @@ isl1208_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		evdet_irq = of_irq_get_byname(np, "evdet");
 	}
 
-	rc = sysfs_create_group(&client->dev.kobj, &isl1208_rtc_sysfs_files);
+	rc = rtc_add_group(rtc, &isl1208_rtc_sysfs_files);
 	if (rc)
 		return rc;
 
@@ -819,14 +791,6 @@ isl1208_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		return rc;
 
 	return rtc_register_device(rtc);
-}
-
-static int
-isl1208_remove(struct i2c_client *client)
-{
-	sysfs_remove_group(&client->dev.kobj, &isl1208_rtc_sysfs_files);
-
-	return 0;
 }
 
 static const struct i2c_device_id isl1208_id[] = {
@@ -851,7 +815,6 @@ static struct i2c_driver isl1208_driver = {
 		.of_match_table = of_match_ptr(isl1208_of_match),
 	},
 	.probe = isl1208_probe,
-	.remove = isl1208_remove,
 	.id_table = isl1208_id,
 };
 

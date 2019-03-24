@@ -54,6 +54,7 @@ source "drivers/media/pci/smipcie/Kconfig"
 source "drivers/media/pci/netup_unidvb/Kconfig"
 source "drivers/media/pci/tbsecp3/Kconfig"
 source "drivers/media/pci/tbscapture/Kconfig"
+source "drivers/media/pci/tbsmod/Kconfig"
 endif
 
 source "drivers/media/pci/intel/ipu3/Kconfig"

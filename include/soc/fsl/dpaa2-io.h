@@ -97,9 +97,13 @@ void dpaa2_io_service_deregister(struct dpaa2_io *service,
 int dpaa2_io_service_rearm(struct dpaa2_io *service,
 			   struct dpaa2_io_notification_ctx *ctx);
 
+int dpaa2_io_service_pull_fq(struct dpaa2_io *d, u32 fqid,
+			     struct dpaa2_io_store *s);
 int dpaa2_io_service_pull_channel(struct dpaa2_io *d, u32 channelid,
 				  struct dpaa2_io_store *s);
 
+int dpaa2_io_service_enqueue_fq(struct dpaa2_io *d, u32 fqid,
+				const struct dpaa2_fd *fd);
 int dpaa2_io_service_enqueue_qd(struct dpaa2_io *d, u32 qdid, u8 prio,
 				u16 qdbin, const struct dpaa2_fd *fd);
 int dpaa2_io_service_release(struct dpaa2_io *d, u32 bpid,
@@ -112,4 +116,8 @@ struct dpaa2_io_store *dpaa2_io_store_create(unsigned int max_frames,
 void dpaa2_io_store_destroy(struct dpaa2_io_store *s);
 struct dpaa2_dq *dpaa2_io_store_next(struct dpaa2_io_store *s, int *is_last);
 
+int dpaa2_io_query_fq_count(struct dpaa2_io *d, u32 fqid,
+			    u32 *fcnt, u32 *bcnt);
+int dpaa2_io_query_bp_count(struct dpaa2_io *d, u16 bpid,
+			    u32 *num);
 #endif /* __FSL_DPAA2_IO_H */

@@ -350,10 +350,7 @@ static struct wc_memory_superblock *sb(struct dm_writecache *wc)
 
 static struct wc_memory_entry *memory_entry(struct dm_writecache *wc, struct wc_entry *e)
 {
-	if (is_power_of_2(sizeof(struct wc_entry)) && 0)
-		return &sb(wc)->entries[e - wc->entries];
-	else
-		return &sb(wc)->entries[e->index];
+	return &sb(wc)->entries[e->index];
 }
 
 static void *memory_data(struct dm_writecache *wc, struct wc_entry *e)
@@ -2064,7 +2061,7 @@ invalid_optional:
 		if (IS_ERR(wc->flush_thread)) {
 			r = PTR_ERR(wc->flush_thread);
 			wc->flush_thread = NULL;
-			ti->error = "Couldn't spawn endio thread";
+			ti->error = "Couldn't spawn flush thread";
 			goto bad;
 		}
 		wake_up_process(wc->flush_thread);

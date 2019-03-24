@@ -31,8 +31,9 @@
 		((psp_master->api_major) >= _maj &&	\
 		 (psp_master->api_minor) >= _min)
 
-#define DEVICE_NAME	"sev"
-#define SEV_FW_FILE	"amd/sev.fw"
+#define DEVICE_NAME		"sev"
+#define SEV_FW_FILE		"amd/sev.fw"
+#define SEV_FW_NAME_SIZE	64
 
 static DEFINE_MUTEX(sev_cmd_mutex);
 static struct sev_misc_dev *misc_dev;
@@ -363,7 +364,7 @@ static int sev_ioctl_do_pek_csr(struct sev_issue_cmd *argp)
 		goto cmd;
 
 	/* allocate a physically contiguous buffer to store the CSR blob */
-	if (!access_ok(VERIFY_WRITE, input.address, input.length) ||
+	if (!access_ok(input.address, input.length) ||
 	    input.length > SEV_FW_BLOB_MAX_SIZE) {
 		ret = -EFAULT;
 		goto e_free;
@@ -423,7 +424,7 @@ EXPORT_SYMBOL_GPL(psp_copy_user_blob);
 static int sev_get_api_version(void)
 {
 	struct sev_user_data_status *status;
-	int error, ret;
+	int error = 0, ret;
 
 	status = &psp_master->status_cmd_buf;
 	ret = sev_platform_status(status, &error);
@@ -440,6 +441,41 @@ static int sev_get_api_version(void)
 	return 0;
 }
 
+static int sev_get_firmware(struct device *dev,
+			    const struct firmware **firmware)
+{
+	char fw_name_specific[SEV_FW_NAME_SIZE];
+	char fw_name_subset[SEV_FW_NAME_SIZE];
+
+	snprintf(fw_name_specific, sizeof(fw_name_specific),
+		 "amd/amd_sev_fam%.2xh_model%.2xh.sbin",
+		 boot_cpu_data.x86, boot_cpu_data.x86_model);
+
+	snprintf(fw_name_subset, sizeof(fw_name_subset),
+		 "amd/amd_sev_fam%.2xh_model%.1xxh.sbin",
+		 boot_cpu_data.x86, (boot_cpu_data.x86_model & 0xf0) >> 4);
+
+	/* Check for SEV FW for a particular model.
+	 * Ex. amd_sev_fam17h_model00h.sbin for Family 17h Model 00h
+	 *
+	 * or
+	 *
+	 * Check for SEV FW common to a subset of models.
+	 * Ex. amd_sev_fam17h_model0xh.sbin for
+	 *     Family 17h Model 00h -- Family 17h Model 0Fh
+	 *
+	 * or
+	 *
+	 * Fall-back to using generic name: sev.fw
+	 */
+	if ((firmware_request_nowarn(firmware, fw_name_specific, dev) >= 0) ||
+	    (firmware_request_nowarn(firmware, fw_name_subset, dev) >= 0) ||
+	    (firmware_request_nowarn(firmware, SEV_FW_FILE, dev) >= 0))
+		return 0;
+
+	return -ENOENT;
+}
+
 /* Don't fail if SEV FW couldn't be updated. Continue with existing SEV FW */
 static int sev_update_firmware(struct device *dev)
 {
@@ -449,9 +485,10 @@ static int sev_update_firmware(struct device *dev)
 	struct page *p;
 	u64 data_size;
 
-	ret = request_firmware(&firmware, SEV_FW_FILE, dev);
-	if (ret < 0)
+	if (sev_get_firmware(dev, &firmware) == -ENOENT) {
+		dev_dbg(dev, "No SEV firmware file present\n");
 		return -1;
+	}
 
 	/*
 	 * SEV FW expects the physical address given to it to be 32
@@ -607,14 +644,14 @@ static int sev_ioctl_do_pdh_export(struct sev_issue_cmd *argp)
 
 	/* Allocate a physically contiguous buffer to store the PDH blob. */
 	if ((input.pdh_cert_len > SEV_FW_BLOB_MAX_SIZE) ||
-	    !access_ok(VERIFY_WRITE, input.pdh_cert_address, input.pdh_cert_len)) {
+	    !access_ok(input.pdh_cert_address, input.pdh_cert_len)) {
 		ret = -EFAULT;
 		goto e_free;
 	}
 
 	/* Allocate a physically contiguous buffer to store the cert chain blob. */
 	if ((input.cert_chain_len > SEV_FW_BLOB_MAX_SIZE) ||
-	    !access_ok(VERIFY_WRITE, input.cert_chain_address, input.cert_chain_len)) {
+	    !access_ok(input.cert_chain_address, input.cert_chain_len)) {
 		ret = -EFAULT;
 		goto e_free;
 	}

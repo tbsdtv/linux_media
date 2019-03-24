@@ -991,17 +991,20 @@ static int stmmac_init_phy(struct net_device *dev)
 	if ((interface == PHY_INTERFACE_MODE_MII) ||
 	    (interface == PHY_INTERFACE_MODE_RMII) ||
 		(max_speed < 1000 && max_speed > 0))
-		phydev->advertising &= ~(SUPPORTED_1000baseT_Half |
-					 SUPPORTED_1000baseT_Full);
+		phy_set_max_speed(phydev, SPEED_100);
 
 	/*
 	 * Half-duplex mode not supported with multiqueue
 	 * half-duplex can only works with single queue
 	 */
-	if (tx_cnt > 1)
-		phydev->supported &= ~(SUPPORTED_1000baseT_Half |
-				       SUPPORTED_100baseT_Half |
-				       SUPPORTED_10baseT_Half);
+	if (tx_cnt > 1) {
+		phy_remove_link_mode(phydev,
+				     ETHTOOL_LINK_MODE_10baseT_Half_BIT);
+		phy_remove_link_mode(phydev,
+				     ETHTOOL_LINK_MODE_100baseT_Half_BIT);
+		phy_remove_link_mode(phydev,
+				     ETHTOOL_LINK_MODE_1000baseT_Half_BIT);
+	}
 
 	/*
 	 * Broken HW is sometimes missing the pull-up resistor on the
@@ -1546,22 +1549,18 @@ static int alloc_dma_rx_desc_resources(struct stmmac_priv *priv)
 			goto err_dma;
 
 		if (priv->extend_desc) {
-			rx_q->dma_erx = dma_zalloc_coherent(priv->device,
-							    DMA_RX_SIZE *
-							    sizeof(struct
-							    dma_extended_desc),
-							    &rx_q->dma_rx_phy,
-							    GFP_KERNEL);
+			rx_q->dma_erx = dma_alloc_coherent(priv->device,
+							   DMA_RX_SIZE * sizeof(struct dma_extended_desc),
+							   &rx_q->dma_rx_phy,
+							   GFP_KERNEL);
 			if (!rx_q->dma_erx)
 				goto err_dma;
 
 		} else {
-			rx_q->dma_rx = dma_zalloc_coherent(priv->device,
-							   DMA_RX_SIZE *
-							   sizeof(struct
-							   dma_desc),
-							   &rx_q->dma_rx_phy,
-							   GFP_KERNEL);
+			rx_q->dma_rx = dma_alloc_coherent(priv->device,
+							  DMA_RX_SIZE * sizeof(struct dma_desc),
+							  &rx_q->dma_rx_phy,
+							  GFP_KERNEL);
 			if (!rx_q->dma_rx)
 				goto err_dma;
 		}
@@ -1609,21 +1608,17 @@ static int alloc_dma_tx_desc_resources(struct stmmac_priv *priv)
 			goto err_dma;
 
 		if (priv->extend_desc) {
-			tx_q->dma_etx = dma_zalloc_coherent(priv->device,
-							    DMA_TX_SIZE *
-							    sizeof(struct
-							    dma_extended_desc),
-							    &tx_q->dma_tx_phy,
-							    GFP_KERNEL);
+			tx_q->dma_etx = dma_alloc_coherent(priv->device,
+							   DMA_TX_SIZE * sizeof(struct dma_extended_desc),
+							   &tx_q->dma_tx_phy,
+							   GFP_KERNEL);
 			if (!tx_q->dma_etx)
 				goto err_dma;
 		} else {
-			tx_q->dma_tx = dma_zalloc_coherent(priv->device,
-							   DMA_TX_SIZE *
-							   sizeof(struct
-								  dma_desc),
-							   &tx_q->dma_tx_phy,
-							   GFP_KERNEL);
+			tx_q->dma_tx = dma_alloc_coherent(priv->device,
+							  DMA_TX_SIZE * sizeof(struct dma_desc),
+							  &tx_q->dma_tx_phy,
+							  GFP_KERNEL);
 			if (!tx_q->dma_tx)
 				goto err_dma;
 		}
@@ -2547,12 +2542,6 @@ static int stmmac_hw_setup(struct net_device *dev, bool init_ptp)
 			netdev_warn(priv->dev, "PTP init failed\n");
 	}
 
-#ifdef CONFIG_DEBUG_FS
-	ret = stmmac_init_fs(dev);
-	if (ret < 0)
-		netdev_warn(priv->dev, "%s: failed debugFS registration\n",
-			    __func__);
-#endif
 	priv->tx_lpi_timer = STMMAC_DEFAULT_TWT_LS;
 
 	if (priv->use_riwt) {
@@ -2752,10 +2741,6 @@ static int stmmac_release(struct net_device *dev)
 	stmmac_mac_set(priv, priv->ioaddr, false);
 
 	netif_carrier_off(dev);
-
-#ifdef CONFIG_DEBUG_FS
-	stmmac_exit_fs(dev);
-#endif
 
 	stmmac_release_ptp(priv);
 
@@ -3038,10 +3023,22 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	tx_q = &priv->tx_queue[queue];
 
+	if (priv->tx_path_in_lpi_mode)
+		stmmac_disable_eee_mode(priv);
+
 	/* Manage oversized TCP frames for GMAC4 device */
 	if (skb_is_gso(skb) && priv->tso) {
-		if (skb_shinfo(skb)->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))
+		if (skb_shinfo(skb)->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6)) {
+			/*
+			 * There is no way to determine the number of TSO
+			 * capable Queues. Let's use always the Queue 0
+			 * because if TSO is supported then at least this
+			 * one will be capable.
+			 */
+			skb_set_queue_mapping(skb, 0);
+
 			return stmmac_tso_xmit(skb, dev);
+		}
 	}
 
 	if (unlikely(stmmac_tx_avail(priv, queue) < nfrags + 1)) {
@@ -3055,9 +3052,6 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 		return NETDEV_TX_BUSY;
 	}
-
-	if (priv->tx_path_in_lpi_mode)
-		stmmac_disable_eee_mode(priv);
 
 	entry = tx_q->cur_tx;
 	first_entry = entry;
@@ -3532,27 +3526,28 @@ static int stmmac_napi_poll(struct napi_struct *napi, int budget)
 	struct stmmac_channel *ch =
 		container_of(napi, struct stmmac_channel, napi);
 	struct stmmac_priv *priv = ch->priv_data;
-	int work_done = 0, work_rem = budget;
+	int work_done, rx_done = 0, tx_done = 0;
 	u32 chan = ch->index;
 
 	priv->xstats.napi_poll++;
 
-	if (ch->has_tx) {
-		int done = stmmac_tx_clean(priv, work_rem, chan);
+	if (ch->has_tx)
+		tx_done = stmmac_tx_clean(priv, budget, chan);
+	if (ch->has_rx)
+		rx_done = stmmac_rx(priv, budget, chan);
 
-		work_done += done;
-		work_rem -= done;
-	}
+	work_done = max(rx_done, tx_done);
+	work_done = min(work_done, budget);
 
-	if (ch->has_rx) {
-		int done = stmmac_rx(priv, work_rem, chan);
+	if (work_done < budget && napi_complete_done(napi, work_done)) {
+		int stat;
 
-		work_done += done;
-		work_rem -= done;
-	}
-
-	if (work_done < budget && napi_complete_done(napi, work_done))
 		stmmac_enable_dma_irq(priv, priv->ioaddr, chan);
+		stat = stmmac_dma_interrupt_status(priv, priv->ioaddr,
+						   &priv->xstats, chan);
+		if (stat && napi_reschedule(napi))
+			stmmac_disable_dma_irq(priv, priv->ioaddr, chan);
+	}
 
 	return work_done;
 }
@@ -3888,13 +3883,16 @@ static void sysfs_display_ring(void *head, int size, int extend_desc,
 	}
 }
 
-static int stmmac_sysfs_ring_read(struct seq_file *seq, void *v)
+static int stmmac_rings_status_show(struct seq_file *seq, void *v)
 {
 	struct net_device *dev = seq->private;
 	struct stmmac_priv *priv = netdev_priv(dev);
 	u32 rx_count = priv->plat->rx_queues_to_use;
 	u32 tx_count = priv->plat->tx_queues_to_use;
 	u32 queue;
+
+	if ((dev->flags & IFF_UP) == 0)
+		return 0;
 
 	for (queue = 0; queue < rx_count; queue++) {
 		struct stmmac_rx_queue *rx_q = &priv->rx_queue[queue];
@@ -3930,23 +3928,9 @@ static int stmmac_sysfs_ring_read(struct seq_file *seq, void *v)
 
 	return 0;
 }
+DEFINE_SHOW_ATTRIBUTE(stmmac_rings_status);
 
-static int stmmac_sysfs_ring_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, stmmac_sysfs_ring_read, inode->i_private);
-}
-
-/* Debugfs files, should appear in /sys/kernel/debug/stmmaceth/eth0 */
-
-static const struct file_operations stmmac_rings_status_fops = {
-	.owner = THIS_MODULE,
-	.open = stmmac_sysfs_ring_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
-
-static int stmmac_sysfs_dma_cap_read(struct seq_file *seq, void *v)
+static int stmmac_dma_cap_show(struct seq_file *seq, void *v)
 {
 	struct net_device *dev = seq->private;
 	struct stmmac_priv *priv = netdev_priv(dev);
@@ -4009,19 +3993,7 @@ static int stmmac_sysfs_dma_cap_read(struct seq_file *seq, void *v)
 
 	return 0;
 }
-
-static int stmmac_sysfs_dma_cap_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, stmmac_sysfs_dma_cap_read, inode->i_private);
-}
-
-static const struct file_operations stmmac_dma_cap_fops = {
-	.owner = THIS_MODULE,
-	.open = stmmac_sysfs_dma_cap_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(stmmac_dma_cap);
 
 static int stmmac_init_fs(struct net_device *dev)
 {
@@ -4105,7 +4077,7 @@ static void stmmac_reset_subtask(struct stmmac_priv *priv)
 
 	set_bit(STMMAC_DOWN, &priv->state);
 	dev_close(priv->dev);
-	dev_open(priv->dev);
+	dev_open(priv->dev, NULL);
 	clear_bit(STMMAC_DOWN, &priv->state);
 	clear_bit(STMMAC_RESETING, &priv->state);
 	rtnl_unlock();
@@ -4198,6 +4170,18 @@ static int stmmac_hw_init(struct stmmac_priv *priv)
 			return ret;
 	}
 
+	/* Rx Watchdog is available in the COREs newer than the 3.40.
+	 * In some case, for example on bugged HW this feature
+	 * has to be disable and this can be done by passing the
+	 * riwt_off field from the platform.
+	 */
+	if (((priv->synopsys_id >= DWMAC_CORE_3_50) ||
+	    (priv->plat->has_xgmac)) && (!priv->plat->riwt_off)) {
+		priv->use_riwt = 1;
+		dev_info(priv->device,
+			 "Enable RX Mitigation via HW Watchdog Timer\n");
+	}
+
 	return 0;
 }
 
@@ -4254,6 +4238,7 @@ int stmmac_dvr_probe(struct device *device,
 	priv->wq = create_singlethread_workqueue("stmmac_wq");
 	if (!priv->wq) {
 		dev_err(priv->device, "failed to create workqueue\n");
+		ret = -ENOMEM;
 		goto error_wq;
 	}
 
@@ -4329,18 +4314,6 @@ int stmmac_dvr_probe(struct device *device,
 	if (flow_ctrl)
 		priv->flow_ctrl = FLOW_AUTO;	/* RX/TX pause on */
 
-	/* Rx Watchdog is available in the COREs newer than the 3.40.
-	 * In some case, for example on bugged HW this feature
-	 * has to be disable and this can be done by passing the
-	 * riwt_off field from the platform.
-	 */
-	if (((priv->synopsys_id >= DWMAC_CORE_3_50) ||
-	    (priv->plat->has_xgmac)) && (!priv->plat->riwt_off)) {
-		priv->use_riwt = 1;
-		dev_info(priv->device,
-			 "Enable RX Mitigation via HW Watchdog Timer\n");
-	}
-
 	/* Setup channels NAPI */
 	maxq = max(priv->plat->rx_queues_to_use, priv->plat->tx_queues_to_use);
 
@@ -4394,6 +4367,13 @@ int stmmac_dvr_probe(struct device *device,
 		goto error_netdev_register;
 	}
 
+#ifdef CONFIG_DEBUG_FS
+	ret = stmmac_init_fs(ndev);
+	if (ret < 0)
+		netdev_warn(priv->dev, "%s: failed debugFS registration\n",
+			    __func__);
+#endif
+
 	return ret;
 
 error_netdev_register:
@@ -4429,6 +4409,9 @@ int stmmac_dvr_remove(struct device *dev)
 
 	netdev_info(priv->dev, "%s: removing driver", __func__);
 
+#ifdef CONFIG_DEBUG_FS
+	stmmac_exit_fs(ndev);
+#endif
 	stmmac_stop_all_dma(priv);
 
 	stmmac_mac_set(priv, priv->ioaddr, false);

@@ -1396,8 +1396,7 @@ static int mtk_qdma_tx_alloc_tx(struct mtk_eth *eth)
 	if (!ring->tx_buf)
 		goto no_tx_mem;
 
-	ring->tx_dma = dma_zalloc_coherent(eth->dev,
-					  ring->tx_ring_size * sz,
+	ring->tx_dma = dma_alloc_coherent(eth->dev, ring->tx_ring_size * sz,
 					  &ring->tx_phys,
 					  GFP_ATOMIC | __GFP_ZERO);
 	if (!ring->tx_dma)
@@ -1688,6 +1687,8 @@ static int mtk_open(struct net_device *dev)
 {
 	struct mtk_mac *mac = netdev_priv(dev);
 	struct mtk_eth *eth = mac->hw;
+
+	dma_coerce_mask_and_coherent(&dev->dev, DMA_BIT_MASK(32));
 
 	if (!atomic_read(&eth->dma_refcnt)) {
 		int err = mtk_start_dma(eth);
@@ -2062,9 +2063,6 @@ static int mtk_probe(struct platform_device *pdev)
 	struct clk *sysclk;
 	int err;
 
-	pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
-	pdev->dev.dma_mask = &pdev->dev.coherent_dma_mask;
-
 	device_reset(&pdev->dev);
 
 	match = of_match_device(of_mtk_match, &pdev->dev);
@@ -2167,7 +2165,6 @@ static struct platform_driver mtk_driver = {
 	.remove = mtk_remove,
 	.driver = {
 		.name = "mtk_soc_eth",
-		.owner = THIS_MODULE,
 		.of_match_table = of_mtk_match,
 	},
 };

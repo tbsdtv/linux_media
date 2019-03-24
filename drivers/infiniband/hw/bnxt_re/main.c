@@ -67,7 +67,7 @@
 #include "hw_counters.h"
 
 static char version[] =
-		BNXT_RE_DESC " v" ROCE_DRV_MODULE_VERSION "\n";
+		BNXT_RE_DESC "\n";
 
 MODULE_AUTHOR("Eddie Wai <eddie.wai@broadcom.com>");
 MODULE_DESCRIPTION(BNXT_RE_DESC " Driver");
@@ -535,10 +535,82 @@ static struct bnxt_en_dev *bnxt_re_dev_probe(struct net_device *netdev)
 	return en_dev;
 }
 
+static ssize_t hw_rev_show(struct device *device, struct device_attribute *attr,
+			   char *buf)
+{
+	struct bnxt_re_dev *rdev = to_bnxt_re_dev(device, ibdev.dev);
+
+	return scnprintf(buf, PAGE_SIZE, "0x%x\n", rdev->en_dev->pdev->vendor);
+}
+static DEVICE_ATTR_RO(hw_rev);
+
+static ssize_t hca_type_show(struct device *device,
+			     struct device_attribute *attr, char *buf)
+{
+	struct bnxt_re_dev *rdev = to_bnxt_re_dev(device, ibdev.dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%s\n", rdev->ibdev.node_desc);
+}
+static DEVICE_ATTR_RO(hca_type);
+
+static struct attribute *bnxt_re_attributes[] = {
+	&dev_attr_hw_rev.attr,
+	&dev_attr_hca_type.attr,
+	NULL
+};
+
+static const struct attribute_group bnxt_re_dev_attr_group = {
+	.attrs = bnxt_re_attributes,
+};
+
 static void bnxt_re_unregister_ib(struct bnxt_re_dev *rdev)
 {
 	ib_unregister_device(&rdev->ibdev);
 }
+
+static const struct ib_device_ops bnxt_re_dev_ops = {
+	.add_gid = bnxt_re_add_gid,
+	.alloc_hw_stats = bnxt_re_ib_alloc_hw_stats,
+	.alloc_mr = bnxt_re_alloc_mr,
+	.alloc_pd = bnxt_re_alloc_pd,
+	.alloc_ucontext = bnxt_re_alloc_ucontext,
+	.create_ah = bnxt_re_create_ah,
+	.create_cq = bnxt_re_create_cq,
+	.create_qp = bnxt_re_create_qp,
+	.create_srq = bnxt_re_create_srq,
+	.dealloc_pd = bnxt_re_dealloc_pd,
+	.dealloc_ucontext = bnxt_re_dealloc_ucontext,
+	.del_gid = bnxt_re_del_gid,
+	.dereg_mr = bnxt_re_dereg_mr,
+	.destroy_ah = bnxt_re_destroy_ah,
+	.destroy_cq = bnxt_re_destroy_cq,
+	.destroy_qp = bnxt_re_destroy_qp,
+	.destroy_srq = bnxt_re_destroy_srq,
+	.get_dev_fw_str = bnxt_re_query_fw_str,
+	.get_dma_mr = bnxt_re_get_dma_mr,
+	.get_hw_stats = bnxt_re_ib_get_hw_stats,
+	.get_link_layer = bnxt_re_get_link_layer,
+	.get_netdev = bnxt_re_get_netdev,
+	.get_port_immutable = bnxt_re_get_port_immutable,
+	.map_mr_sg = bnxt_re_map_mr_sg,
+	.mmap = bnxt_re_mmap,
+	.modify_ah = bnxt_re_modify_ah,
+	.modify_device = bnxt_re_modify_device,
+	.modify_qp = bnxt_re_modify_qp,
+	.modify_srq = bnxt_re_modify_srq,
+	.poll_cq = bnxt_re_poll_cq,
+	.post_recv = bnxt_re_post_recv,
+	.post_send = bnxt_re_post_send,
+	.post_srq_recv = bnxt_re_post_srq_recv,
+	.query_ah = bnxt_re_query_ah,
+	.query_device = bnxt_re_query_device,
+	.query_pkey = bnxt_re_query_pkey,
+	.query_port = bnxt_re_query_port,
+	.query_qp = bnxt_re_query_qp,
+	.query_srq = bnxt_re_query_srq,
+	.reg_user_mr = bnxt_re_reg_user_mr,
+	.req_notify_cq = bnxt_re_req_notify_cq,
+};
 
 static int bnxt_re_register_ib(struct bnxt_re_dev *rdev)
 {
@@ -547,7 +619,6 @@ static int bnxt_re_register_ib(struct bnxt_re_dev *rdev)
 	/* ib device init */
 	ibdev->owner = THIS_MODULE;
 	ibdev->node_type = RDMA_NODE_IB_CA;
-	strlcpy(ibdev->name, "bnxt_re%d", IB_DEVICE_NAME_MAX);
 	strlcpy(ibdev->node_desc, BNXT_RE_DESC " HCA",
 		strlen(BNXT_RE_DESC) + 5);
 	ibdev->phys_port_cnt = 1;
@@ -587,85 +658,12 @@ static int bnxt_re_register_ib(struct bnxt_re_dev *rdev)
 			(1ull << IB_USER_VERBS_CMD_DESTROY_AH);
 	/* POLL_CQ and REQ_NOTIFY_CQ is directly handled in libbnxt_re */
 
-	/* Kernel verbs */
-	ibdev->query_device		= bnxt_re_query_device;
-	ibdev->modify_device		= bnxt_re_modify_device;
 
-	ibdev->query_port		= bnxt_re_query_port;
-	ibdev->get_port_immutable	= bnxt_re_get_port_immutable;
-	ibdev->get_dev_fw_str           = bnxt_re_query_fw_str;
-	ibdev->query_pkey		= bnxt_re_query_pkey;
-	ibdev->get_netdev		= bnxt_re_get_netdev;
-	ibdev->add_gid			= bnxt_re_add_gid;
-	ibdev->del_gid			= bnxt_re_del_gid;
-	ibdev->get_link_layer		= bnxt_re_get_link_layer;
-
-	ibdev->alloc_pd			= bnxt_re_alloc_pd;
-	ibdev->dealloc_pd		= bnxt_re_dealloc_pd;
-
-	ibdev->create_ah		= bnxt_re_create_ah;
-	ibdev->modify_ah		= bnxt_re_modify_ah;
-	ibdev->query_ah			= bnxt_re_query_ah;
-	ibdev->destroy_ah		= bnxt_re_destroy_ah;
-
-	ibdev->create_srq		= bnxt_re_create_srq;
-	ibdev->modify_srq		= bnxt_re_modify_srq;
-	ibdev->query_srq		= bnxt_re_query_srq;
-	ibdev->destroy_srq		= bnxt_re_destroy_srq;
-	ibdev->post_srq_recv		= bnxt_re_post_srq_recv;
-
-	ibdev->create_qp		= bnxt_re_create_qp;
-	ibdev->modify_qp		= bnxt_re_modify_qp;
-	ibdev->query_qp			= bnxt_re_query_qp;
-	ibdev->destroy_qp		= bnxt_re_destroy_qp;
-
-	ibdev->post_send		= bnxt_re_post_send;
-	ibdev->post_recv		= bnxt_re_post_recv;
-
-	ibdev->create_cq		= bnxt_re_create_cq;
-	ibdev->destroy_cq		= bnxt_re_destroy_cq;
-	ibdev->poll_cq			= bnxt_re_poll_cq;
-	ibdev->req_notify_cq		= bnxt_re_req_notify_cq;
-
-	ibdev->get_dma_mr		= bnxt_re_get_dma_mr;
-	ibdev->dereg_mr			= bnxt_re_dereg_mr;
-	ibdev->alloc_mr			= bnxt_re_alloc_mr;
-	ibdev->map_mr_sg		= bnxt_re_map_mr_sg;
-
-	ibdev->reg_user_mr		= bnxt_re_reg_user_mr;
-	ibdev->alloc_ucontext		= bnxt_re_alloc_ucontext;
-	ibdev->dealloc_ucontext		= bnxt_re_dealloc_ucontext;
-	ibdev->mmap			= bnxt_re_mmap;
-	ibdev->get_hw_stats             = bnxt_re_ib_get_hw_stats;
-	ibdev->alloc_hw_stats           = bnxt_re_ib_alloc_hw_stats;
-
+	rdma_set_device_sysfs_group(ibdev, &bnxt_re_dev_attr_group);
 	ibdev->driver_id = RDMA_DRIVER_BNXT_RE;
-	return ib_register_device(ibdev, NULL);
+	ib_set_device_ops(ibdev, &bnxt_re_dev_ops);
+	return ib_register_device(ibdev, "bnxt_re%d", NULL);
 }
-
-static ssize_t show_rev(struct device *device, struct device_attribute *attr,
-			char *buf)
-{
-	struct bnxt_re_dev *rdev = to_bnxt_re_dev(device, ibdev.dev);
-
-	return scnprintf(buf, PAGE_SIZE, "0x%x\n", rdev->en_dev->pdev->vendor);
-}
-
-static ssize_t show_hca(struct device *device, struct device_attribute *attr,
-			char *buf)
-{
-	struct bnxt_re_dev *rdev = to_bnxt_re_dev(device, ibdev.dev);
-
-	return scnprintf(buf, PAGE_SIZE, "%s\n", rdev->ibdev.node_desc);
-}
-
-static DEVICE_ATTR(hw_rev, 0444, show_rev, NULL);
-static DEVICE_ATTR(hca_type, 0444, show_hca, NULL);
-
-static struct device_attribute *bnxt_re_attributes[] = {
-	&dev_attr_hw_rev,
-	&dev_attr_hca_type
-};
 
 static void bnxt_re_dev_remove(struct bnxt_re_dev *rdev)
 {
@@ -864,10 +862,8 @@ static void bnxt_re_cleanup_res(struct bnxt_re_dev *rdev)
 {
 	int i;
 
-	if (rdev->nq[0].hwq.max_elements) {
-		for (i = 1; i < rdev->num_msix; i++)
-			bnxt_qplib_disable_nq(&rdev->nq[i - 1]);
-	}
+	for (i = 1; i < rdev->num_msix; i++)
+		bnxt_qplib_disable_nq(&rdev->nq[i - 1]);
 
 	if (rdev->qplib_res.rcfw)
 		bnxt_qplib_cleanup_res(&rdev->qplib_res);
@@ -876,6 +872,7 @@ static void bnxt_re_cleanup_res(struct bnxt_re_dev *rdev)
 static int bnxt_re_init_res(struct bnxt_re_dev *rdev)
 {
 	int rc = 0, i;
+	int num_vec_enabled = 0;
 
 	bnxt_qplib_init_res(&rdev->qplib_res);
 
@@ -891,9 +888,13 @@ static int bnxt_re_init_res(struct bnxt_re_dev *rdev)
 				"Failed to enable NQ with rc = 0x%x", rc);
 			goto fail;
 		}
+		num_vec_enabled++;
 	}
 	return 0;
 fail:
+	for (i = num_vec_enabled; i >= 0; i--)
+		bnxt_qplib_disable_nq(&rdev->nq[i]);
+
 	return rc;
 }
 
@@ -925,6 +926,7 @@ static void bnxt_re_free_res(struct bnxt_re_dev *rdev)
 static int bnxt_re_alloc_res(struct bnxt_re_dev *rdev)
 {
 	int rc = 0, i;
+	int num_vec_created = 0;
 
 	/* Configure and allocate resources for qplib */
 	rdev->qplib_res.rcfw = &rdev->rcfw;
@@ -951,7 +953,7 @@ static int bnxt_re_alloc_res(struct bnxt_re_dev *rdev)
 		if (rc) {
 			dev_err(rdev_to_dev(rdev), "Alloc Failed NQ%d rc:%#x",
 				i, rc);
-			goto dealloc_dpi;
+			goto free_nq;
 		}
 		rc = bnxt_re_net_ring_alloc
 			(rdev, rdev->nq[i].hwq.pbl[PBL_LVL_0].pg_map_arr,
@@ -964,14 +966,17 @@ static int bnxt_re_alloc_res(struct bnxt_re_dev *rdev)
 			dev_err(rdev_to_dev(rdev),
 				"Failed to allocate NQ fw id with rc = 0x%x",
 				rc);
+			bnxt_qplib_free_nq(&rdev->nq[i]);
 			goto free_nq;
 		}
+		num_vec_created++;
 	}
 	return 0;
 free_nq:
-	for (i = 0; i < rdev->num_msix - 1; i++)
+	for (i = num_vec_created; i >= 0; i--) {
+		bnxt_re_net_ring_free(rdev, rdev->nq[i].ring_id);
 		bnxt_qplib_free_nq(&rdev->nq[i]);
-dealloc_dpi:
+	}
 	bnxt_qplib_dealloc_dpi(&rdev->qplib_res,
 			       &rdev->qplib_res.dpi_tbl,
 			       &rdev->dpi_privileged);
@@ -989,12 +994,17 @@ static void bnxt_re_dispatch_event(struct ib_device *ibdev, struct ib_qp *qp,
 	struct ib_event ib_event;
 
 	ib_event.device = ibdev;
-	if (qp)
+	if (qp) {
 		ib_event.element.qp = qp;
-	else
+		ib_event.event = event;
+		if (qp->event_handler)
+			qp->event_handler(&ib_event, qp->qp_context);
+
+	} else {
 		ib_event.element.port_num = port_num;
-	ib_event.event = event;
-	ib_dispatch_event(&ib_event);
+		ib_event.event = event;
+		ib_dispatch_event(&ib_event);
+	}
 }
 
 #define HWRM_QUEUE_PRI2COS_QCFG_INPUT_FLAGS_IVLAN      0x02
@@ -1187,22 +1197,51 @@ static int bnxt_re_setup_qos(struct bnxt_re_dev *rdev)
 	return 0;
 }
 
+static void bnxt_re_query_hwrm_intf_version(struct bnxt_re_dev *rdev)
+{
+	struct bnxt_en_dev *en_dev = rdev->en_dev;
+	struct hwrm_ver_get_output resp = {0};
+	struct hwrm_ver_get_input req = {0};
+	struct bnxt_fw_msg fw_msg;
+	int rc = 0;
+
+	memset(&fw_msg, 0, sizeof(fw_msg));
+	bnxt_re_init_hwrm_hdr(rdev, (void *)&req,
+			      HWRM_VER_GET, -1, -1);
+	req.hwrm_intf_maj = HWRM_VERSION_MAJOR;
+	req.hwrm_intf_min = HWRM_VERSION_MINOR;
+	req.hwrm_intf_upd = HWRM_VERSION_UPDATE;
+	bnxt_re_fill_fw_msg(&fw_msg, (void *)&req, sizeof(req), (void *)&resp,
+			    sizeof(resp), DFLT_HWRM_CMD_TIMEOUT);
+	rc = en_dev->en_ops->bnxt_send_fw_msg(en_dev, BNXT_ROCE_ULP, &fw_msg);
+	if (rc) {
+		dev_err(rdev_to_dev(rdev),
+			"Failed to query HW version, rc = 0x%x", rc);
+		return;
+	}
+	rdev->qplib_ctx.hwrm_intf_ver =
+		(u64)resp.hwrm_intf_major << 48 |
+		(u64)resp.hwrm_intf_minor << 32 |
+		(u64)resp.hwrm_intf_build << 16 |
+		resp.hwrm_intf_patch;
+}
+
 static void bnxt_re_ib_unreg(struct bnxt_re_dev *rdev)
 {
-	int i, rc;
+	int rc;
 
 	if (test_and_clear_bit(BNXT_RE_FLAG_IBDEV_REGISTERED, &rdev->flags)) {
-		for (i = 0; i < ARRAY_SIZE(bnxt_re_attributes); i++)
-			device_remove_file(&rdev->ibdev.dev,
-					   bnxt_re_attributes[i]);
 		/* Cleanup ib dev */
 		bnxt_re_unregister_ib(rdev);
 	}
 	if (test_and_clear_bit(BNXT_RE_FLAG_QOS_WORK_REG, &rdev->flags))
-		cancel_delayed_work(&rdev->worker);
+		cancel_delayed_work_sync(&rdev->worker);
 
-	bnxt_re_cleanup_res(rdev);
-	bnxt_re_free_res(rdev);
+	if (test_and_clear_bit(BNXT_RE_FLAG_RESOURCES_INITIALIZED,
+			       &rdev->flags))
+		bnxt_re_cleanup_res(rdev);
+	if (test_and_clear_bit(BNXT_RE_FLAG_RESOURCES_ALLOCATED, &rdev->flags))
+		bnxt_re_free_res(rdev);
 
 	if (test_and_clear_bit(BNXT_RE_FLAG_RCFW_CHANNEL_EN, &rdev->flags)) {
 		rc = bnxt_qplib_deinit_rcfw(&rdev->rcfw);
@@ -1241,7 +1280,7 @@ static void bnxt_re_worker(struct work_struct *work)
 
 static int bnxt_re_ib_reg(struct bnxt_re_dev *rdev)
 {
-	int i, j, rc;
+	int rc;
 
 	bool locked;
 
@@ -1252,6 +1291,7 @@ static int bnxt_re_ib_reg(struct bnxt_re_dev *rdev)
 	/* Registered a new RoCE device instance to netdev */
 	rc = bnxt_re_register_netdev(rdev);
 	if (rc) {
+		rtnl_unlock();
 		pr_err("Failed to register with netedev: %#x\n", rc);
 		return -EINVAL;
 	}
@@ -1268,10 +1308,13 @@ static int bnxt_re_ib_reg(struct bnxt_re_dev *rdev)
 	}
 	set_bit(BNXT_RE_FLAG_GOT_MSIX, &rdev->flags);
 
+	bnxt_re_query_hwrm_intf_version(rdev);
+
 	/* Establish RCFW Communication Channel to initialize the context
 	 * memory for the function and all child VFs
 	 */
 	rc = bnxt_qplib_alloc_rcfw_channel(rdev->en_dev->pdev, &rdev->rcfw,
+					   &rdev->qplib_ctx,
 					   BNXT_RE_MAX_QPC_COUNT);
 	if (rc) {
 		pr_err("Failed to allocate RCFW Channel: %#x\n", rc);
@@ -1331,11 +1374,14 @@ static int bnxt_re_ib_reg(struct bnxt_re_dev *rdev)
 		pr_err("Failed to allocate resources: %#x\n", rc);
 		goto fail;
 	}
+	set_bit(BNXT_RE_FLAG_RESOURCES_ALLOCATED, &rdev->flags);
 	rc = bnxt_re_init_res(rdev);
 	if (rc) {
 		pr_err("Failed to initialize resources: %#x\n", rc);
 		goto fail;
 	}
+
+	set_bit(BNXT_RE_FLAG_RESOURCES_INITIALIZED, &rdev->flags);
 
 	if (!rdev->is_virtfn) {
 		rc = bnxt_re_setup_qos(rdev);
@@ -1358,20 +1404,6 @@ static int bnxt_re_ib_reg(struct bnxt_re_dev *rdev)
 	}
 	set_bit(BNXT_RE_FLAG_IBDEV_REGISTERED, &rdev->flags);
 	dev_info(rdev_to_dev(rdev), "Device registered successfully");
-	for (i = 0; i < ARRAY_SIZE(bnxt_re_attributes); i++) {
-		rc = device_create_file(&rdev->ibdev.dev,
-					bnxt_re_attributes[i]);
-		if (rc) {
-			dev_err(rdev_to_dev(rdev),
-				"Failed to create IB sysfs: %#x", rc);
-			/* Must clean up all created device files */
-			for (j = 0; j < i; j++)
-				device_remove_file(&rdev->ibdev.dev,
-						   bnxt_re_attributes[j]);
-			bnxt_re_unregister_ib(rdev);
-			goto fail;
-		}
-	}
 	ib_get_eth_speed(&rdev->ibdev, 1, &rdev->active_speed,
 			 &rdev->active_width);
 	set_bit(BNXT_RE_FLAG_ISSUE_ROCE_STATS, &rdev->flags);
@@ -1461,6 +1493,7 @@ static void bnxt_re_task(struct work_struct *work)
 				"Failed to register with IB: %#x", rc);
 			bnxt_re_remove_one(rdev);
 			bnxt_re_dev_unreg(rdev);
+			goto exit;
 		}
 		break;
 	case NETDEV_UP:
@@ -1484,6 +1517,7 @@ static void bnxt_re_task(struct work_struct *work)
 	}
 	smp_mb__before_atomic();
 	atomic_dec(&rdev->sched_count);
+exit:
 	kfree(re_work);
 }
 

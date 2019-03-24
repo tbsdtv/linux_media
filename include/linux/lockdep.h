@@ -97,15 +97,8 @@ struct lock_class {
 	 * Generation counter, when doing certain classes of graph walking,
 	 * to ensure that we check one node only once:
 	 */
-	unsigned int			version;
-
-	/*
-	 * Statistics counter:
-	 */
-	unsigned long			ops;
-
-	const char			*name;
 	int				name_version;
+	const char			*name;
 
 #ifdef CONFIG_LOCK_STAT
 	unsigned long			contention_point[LOCKSTAT_POINTS];

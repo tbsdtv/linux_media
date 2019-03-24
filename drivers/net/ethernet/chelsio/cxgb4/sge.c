@@ -694,7 +694,7 @@ static void *alloc_ring(struct device *dev, size_t nelem, size_t elem_size,
 {
 	size_t len = nelem * elem_size + stat_size;
 	void *s = NULL;
-	void *p = dma_zalloc_coherent(dev, len, phys, GFP_KERNEL);
+	void *p = dma_alloc_coherent(dev, len, phys, GFP_KERNEL);
 
 	if (!p)
 		return NULL;
@@ -2830,6 +2830,10 @@ int t4_ethrx_handler(struct sge_rspq *q, const __be64 *rsp,
 
 	csum_ok = pkt->csum_calc && !err_vec &&
 		  (q->netdev->features & NETIF_F_RXCSUM);
+
+	if (err_vec)
+		rxq->stats.bad_rx_pkts++;
+
 	if (((pkt->l2info & htonl(RXF_TCP_F)) ||
 	     tnl_hdr_len) &&
 	    (q->netdev->features & NETIF_F_GRO) && csum_ok && !pkt->ip_frag) {

@@ -812,7 +812,7 @@ static struct sk_buff *dequeue_head(struct cake_flow *flow)
 
 	if (skb) {
 		flow->head = skb->next;
-		skb->next = NULL;
+		skb_mark_not_on_list(skb);
 	}
 
 	return skb;
@@ -1252,7 +1252,7 @@ found:
 	else
 		flow->head = elig_ack->next;
 
-	elig_ack->next = NULL;
+	skb_mark_not_on_list(elig_ack);
 
 	return elig_ack;
 }
@@ -1667,7 +1667,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	if (skb_is_gso(skb) && q->rate_flags & CAKE_FLAG_SPLIT_GSO) {
 		struct sk_buff *segs, *nskb;
 		netdev_features_t features = netif_skb_features(skb);
-		unsigned int slen = 0;
+		unsigned int slen = 0, numsegs = 0;
 
 		segs = skb_gso_segment(skb, features & ~NETIF_F_GSO_MASK);
 		if (IS_ERR_OR_NULL(segs))
@@ -1675,7 +1675,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 		while (segs) {
 			nskb = segs->next;
-			segs->next = NULL;
+			skb_mark_not_on_list(segs);
 			qdisc_skb_cb(segs)->pkt_len = segs->len;
 			cobalt_set_enqueue_time(segs, now);
 			get_cobalt_cb(segs)->adjusted_len = cake_overhead(q,
@@ -1683,6 +1683,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			flow_queue_add(flow, segs);
 
 			sch->q.qlen++;
+			numsegs++;
 			slen += segs->len;
 			q->buffer_used += segs->truesize;
 			b->packets++;
@@ -1696,7 +1697,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		sch->qstats.backlog += slen;
 		q->avg_window_bytes += slen;
 
-		qdisc_tree_reduce_backlog(sch, 1, len);
+		qdisc_tree_reduce_backlog(sch, 1-numsegs, len-slen);
 		consume_skb(skb);
 	} else {
 		/* not splitting */

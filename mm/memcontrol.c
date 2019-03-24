@@ -1293,32 +1293,39 @@ static const char *const memcg1_stat_names[] = {
 
 #define K(x) ((x) << (PAGE_SHIFT-10))
 /**
- * mem_cgroup_print_oom_info: Print OOM information relevant to memory controller.
+ * mem_cgroup_print_oom_context: Print OOM information relevant to
+ * memory controller.
  * @memcg: The memory cgroup that went over limit
  * @p: Task that is going to be killed
  *
  * NOTE: @memcg and @p's mem_cgroup can be different when hierarchy is
  * enabled
  */
-void mem_cgroup_print_oom_info(struct mem_cgroup *memcg, struct task_struct *p)
+void mem_cgroup_print_oom_context(struct mem_cgroup *memcg, struct task_struct *p)
+{
+	rcu_read_lock();
+
+	if (memcg) {
+		pr_cont(",oom_memcg=");
+		pr_cont_cgroup_path(memcg->css.cgroup);
+	} else
+		pr_cont(",global_oom");
+	if (p) {
+		pr_cont(",task_memcg=");
+		pr_cont_cgroup_path(task_cgroup(p, memory_cgrp_id));
+	}
+	rcu_read_unlock();
+}
+
+/**
+ * mem_cgroup_print_oom_meminfo: Print OOM memory information relevant to
+ * memory controller.
+ * @memcg: The memory cgroup that went over limit
+ */
+void mem_cgroup_print_oom_meminfo(struct mem_cgroup *memcg)
 {
 	struct mem_cgroup *iter;
 	unsigned int i;
-
-	rcu_read_lock();
-
-	if (p) {
-		pr_info("Task in ");
-		pr_cont_cgroup_path(task_cgroup(p, memory_cgrp_id));
-		pr_cont(" killed as a result of limit of ");
-	} else {
-		pr_info("Memory limit reached of cgroup ");
-	}
-
-	pr_cont_cgroup_path(memcg->css.cgroup);
-	pr_cont("\n");
-
-	rcu_read_unlock();
 
 	pr_info("memory: usage %llukB, limit %llukB, failcnt %lu\n",
 		K((u64)page_counter_read(&memcg->memory)),
@@ -1666,8 +1673,13 @@ enum oom_status {
 
 static enum oom_status mem_cgroup_oom(struct mem_cgroup *memcg, gfp_t mask, int order)
 {
+	enum oom_status ret;
+	bool locked;
+
 	if (order > PAGE_ALLOC_COSTLY_ORDER)
 		return OOM_SKIPPED;
+
+	memcg_memory_event(memcg, MEMCG_OOM);
 
 	/*
 	 * We are in the middle of the charge context here, so we
@@ -1698,10 +1710,23 @@ static enum oom_status mem_cgroup_oom(struct mem_cgroup *memcg, gfp_t mask, int 
 		return OOM_ASYNC;
 	}
 
-	if (mem_cgroup_out_of_memory(memcg, mask, order))
-		return OOM_SUCCESS;
+	mem_cgroup_mark_under_oom(memcg);
 
-	return OOM_FAILED;
+	locked = mem_cgroup_oom_trylock(memcg);
+
+	if (locked)
+		mem_cgroup_oom_notify(memcg);
+
+	mem_cgroup_unmark_under_oom(memcg);
+	if (mem_cgroup_out_of_memory(memcg, mask, order))
+		ret = OOM_SUCCESS;
+	else
+		ret = OOM_FAILED;
+
+	if (locked)
+		mem_cgroup_oom_unlock(memcg);
+
+	return ret;
 }
 
 /**
@@ -2250,8 +2275,6 @@ retry:
 	if (fatal_signal_pending(current))
 		goto force;
 
-	memcg_memory_event(mem_over_limit, MEMCG_OOM);
-
 	/*
 	 * keep retrying as long as the memcg oom killer is able to make
 	 * a forward progress or bypass the charge if the oom killer
@@ -2460,7 +2483,7 @@ static void memcg_kmem_cache_create_func(struct work_struct *w)
 /*
  * Enqueue the creation of a per-memcg kmem_cache.
  */
-static void __memcg_schedule_kmem_cache_create(struct mem_cgroup *memcg,
+static void memcg_schedule_kmem_cache_create(struct mem_cgroup *memcg,
 					       struct kmem_cache *cachep)
 {
 	struct memcg_kmem_cache_create_work *cw;
@@ -2476,25 +2499,6 @@ static void __memcg_schedule_kmem_cache_create(struct mem_cgroup *memcg,
 	INIT_WORK(&cw->work, memcg_kmem_cache_create_func);
 
 	queue_work(memcg_kmem_cache_wq, &cw->work);
-}
-
-static void memcg_schedule_kmem_cache_create(struct mem_cgroup *memcg,
-					     struct kmem_cache *cachep)
-{
-	/*
-	 * We need to stop accounting when we kmalloc, because if the
-	 * corresponding kmalloc cache is not yet created, the first allocation
-	 * in __memcg_schedule_kmem_cache_create will recurse.
-	 *
-	 * However, it is better to enclose the whole function. Depending on
-	 * the debugging options enabled, INIT_WORK(), for instance, can
-	 * trigger an allocation. This too, will make us recurse. Because at
-	 * this point we can't allow ourselves back into memcg_kmem_get_cache,
-	 * the safest choice is to do it like this, wrapping the whole function.
-	 */
-	current->memcg_kmem_skip_account = 1;
-	__memcg_schedule_kmem_cache_create(memcg, cachep);
-	current->memcg_kmem_skip_account = 0;
 }
 
 static inline bool memcg_kmem_bypass(void)
@@ -2529,9 +2533,6 @@ struct kmem_cache *memcg_kmem_get_cache(struct kmem_cache *cachep)
 	VM_BUG_ON(!is_root_cache(cachep));
 
 	if (memcg_kmem_bypass())
-		return cachep;
-
-	if (current->memcg_kmem_skip_account)
 		return cachep;
 
 	memcg = get_mem_cgroup_from_current();
@@ -2615,7 +2616,7 @@ int memcg_kmem_charge(struct page *page, gfp_t gfp, int order)
 	struct mem_cgroup *memcg;
 	int ret = 0;
 
-	if (memcg_kmem_bypass())
+	if (mem_cgroup_disabled() || memcg_kmem_bypass())
 		return 0;
 
 	memcg = get_mem_cgroup_from_current();
@@ -4321,14 +4322,12 @@ static void mem_cgroup_id_remove(struct mem_cgroup *memcg)
 
 static void mem_cgroup_id_get_many(struct mem_cgroup *memcg, unsigned int n)
 {
-	VM_BUG_ON(atomic_read(&memcg->id.ref) <= 0);
-	atomic_add(n, &memcg->id.ref);
+	refcount_add(n, &memcg->id.ref);
 }
 
 static void mem_cgroup_id_put_many(struct mem_cgroup *memcg, unsigned int n)
 {
-	VM_BUG_ON(atomic_read(&memcg->id.ref) < n);
-	if (atomic_sub_and_test(n, &memcg->id.ref)) {
+	if (refcount_sub_and_test(n, &memcg->id.ref)) {
 		mem_cgroup_id_remove(memcg);
 
 		/* Memcg ID pins CSS */
@@ -4545,7 +4544,7 @@ static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 	}
 
 	/* Online state pins memcg ID, memcg ID pins CSS */
-	atomic_set(&memcg->id.ref, 1);
+	refcount_set(&memcg->id.ref, 1);
 	css_get(css);
 	return 0;
 }
@@ -4572,6 +4571,8 @@ static void mem_cgroup_css_offline(struct cgroup_subsys_state *css)
 
 	memcg_offline_kmem(memcg);
 	wb_memcg_offline(memcg);
+
+	drain_all_stock(memcg);
 
 	mem_cgroup_id_put(memcg);
 }
@@ -4750,7 +4751,7 @@ static struct page *mc_handle_file_pte(struct vm_area_struct *vma,
 	/* shmem/tmpfs may report page out on swap: account for that too. */
 	if (shmem_mapping(mapping)) {
 		page = find_get_entry(mapping, pgoff);
-		if (radix_tree_exceptional_entry(page)) {
+		if (xa_is_value(page)) {
 			swp_entry_t swp = radix_to_swp_entry(page);
 			if (do_memsw_account())
 				*entry = swp;
@@ -5595,6 +5596,13 @@ static int memory_stat_show(struct seq_file *m, void *v)
 	seq_printf(m, "pgfault %lu\n", acc.events[PGFAULT]);
 	seq_printf(m, "pgmajfault %lu\n", acc.events[PGMAJFAULT]);
 
+	seq_printf(m, "workingset_refault %lu\n",
+		   acc.stat[WORKINGSET_REFAULT]);
+	seq_printf(m, "workingset_activate %lu\n",
+		   acc.stat[WORKINGSET_ACTIVATE]);
+	seq_printf(m, "workingset_nodereclaim %lu\n",
+		   acc.stat[WORKINGSET_NODERECLAIM]);
+
 	seq_printf(m, "pgrefill %lu\n", acc.events[PGREFILL]);
 	seq_printf(m, "pgscan %lu\n", acc.events[PGSCAN_KSWAPD] +
 		   acc.events[PGSCAN_DIRECT]);
@@ -5604,13 +5612,6 @@ static int memory_stat_show(struct seq_file *m, void *v)
 	seq_printf(m, "pgdeactivate %lu\n", acc.events[PGDEACTIVATE]);
 	seq_printf(m, "pglazyfree %lu\n", acc.events[PGLAZYFREE]);
 	seq_printf(m, "pglazyfreed %lu\n", acc.events[PGLAZYFREED]);
-
-	seq_printf(m, "workingset_refault %lu\n",
-		   acc.stat[WORKINGSET_REFAULT]);
-	seq_printf(m, "workingset_activate %lu\n",
-		   acc.stat[WORKINGSET_ACTIVATE]);
-	seq_printf(m, "workingset_nodereclaim %lu\n",
-		   acc.stat[WORKINGSET_NODERECLAIM]);
 
 	return 0;
 }
@@ -6377,7 +6378,7 @@ subsys_initcall(mem_cgroup_init);
 #ifdef CONFIG_MEMCG_SWAP
 static struct mem_cgroup *mem_cgroup_id_get_online(struct mem_cgroup *memcg)
 {
-	while (!atomic_inc_not_zero(&memcg->id.ref)) {
+	while (!refcount_inc_not_zero(&memcg->id.ref)) {
 		/*
 		 * The root cgroup cannot be destroyed, so it's refcount must
 		 * always be >= 1.

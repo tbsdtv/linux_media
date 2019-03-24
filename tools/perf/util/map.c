@@ -19,8 +19,10 @@
 #include "srcline.h"
 #include "namespaces.h"
 #include "unwind.h"
+#include "srccode.h"
 
 static void __maps__insert(struct maps *maps, struct map *map);
+static void __maps__insert_name(struct maps *maps, struct map *map);
 
 static inline int is_anon_memory(const char *filename, u32 flags)
 {
@@ -320,12 +322,11 @@ int map__load(struct map *map)
 			build_id__sprintf(map->dso->build_id,
 					  sizeof(map->dso->build_id),
 					  sbuild_id);
-			pr_warning("%s with build id %s not found",
-				   name, sbuild_id);
+			pr_debug("%s with build id %s not found", name, sbuild_id);
 		} else
-			pr_warning("Failed to open %s", name);
+			pr_debug("Failed to open %s", name);
 
-		pr_warning(", continuing without symbols\n");
+		pr_debug(", continuing without symbols\n");
 		return -1;
 	} else if (nr == 0) {
 #ifdef HAVE_LIBELF_SUPPORT
@@ -334,12 +335,11 @@ int map__load(struct map *map)
 
 		if (len > sizeof(DSO__DELETED) &&
 		    strcmp(name + real_len + 1, DSO__DELETED) == 0) {
-			pr_warning("%.*s was updated (is prelink enabled?). "
+			pr_debug("%.*s was updated (is prelink enabled?). "
 				"Restart the long running apps that use it!\n",
 				   (int)real_len, name);
 		} else {
-			pr_warning("no symbols found in %s, maybe install "
-				   "a debug package?\n", name);
+			pr_debug("no symbols found in %s, maybe install a debug package?\n", name);
 		}
 #endif
 		return -1;
@@ -422,6 +422,54 @@ int map__fprintf_srcline(struct map *map, u64 addr, const char *prefix,
 	return ret;
 }
 
+int map__fprintf_srccode(struct map *map, u64 addr,
+			 FILE *fp,
+			 struct srccode_state *state)
+{
+	char *srcfile;
+	int ret = 0;
+	unsigned line;
+	int len;
+	char *srccode;
+
+	if (!map || !map->dso)
+		return 0;
+	srcfile = get_srcline_split(map->dso,
+				    map__rip_2objdump(map, addr),
+				    &line);
+	if (!srcfile)
+		return 0;
+
+	/* Avoid redundant printing */
+	if (state &&
+	    state->srcfile &&
+	    !strcmp(state->srcfile, srcfile) &&
+	    state->line == line) {
+		free(srcfile);
+		return 0;
+	}
+
+	srccode = find_sourceline(srcfile, line, &len);
+	if (!srccode)
+		goto out_free_line;
+
+	ret = fprintf(fp, "|%-8d %.*s", line, len, srccode);
+	state->srcfile = srcfile;
+	state->line = line;
+	return ret;
+
+out_free_line:
+	free(srcfile);
+	return ret;
+}
+
+
+void srccode_state_free(struct srccode_state *state)
+{
+	zfree(&state->srcfile);
+	state->line = 0;
+}
+
 /**
  * map__rip_2objdump - convert symbol start address to objdump address.
  * @map: memory map
@@ -498,6 +546,7 @@ u64 map__objdump_2mem(struct map *map, u64 ip)
 static void maps__init(struct maps *maps)
 {
 	maps->entries = RB_ROOT;
+	maps->names = RB_ROOT;
 	init_rwsem(&maps->lock);
 }
 
@@ -666,6 +715,7 @@ size_t map_groups__fprintf(struct map_groups *mg, FILE *fp)
 static void __map_groups__insert(struct map_groups *mg, struct map *map)
 {
 	__maps__insert(&mg->maps, map);
+	__maps__insert_name(&mg->maps, map);
 	map->groups = mg;
 }
 
@@ -712,8 +762,7 @@ static int maps__fixup_overlappings(struct maps *maps, struct map *map, FILE *fp
 		if (verbose >= 2) {
 
 			if (use_browser) {
-				pr_warning("overlapping maps in %s "
-					   "(disable tui for more info)\n",
+				pr_debug("overlapping maps in %s (disable tui for more info)\n",
 					   map->dso->name);
 			} else {
 				fputs("overlapping maps:\n", fp);
@@ -827,10 +876,34 @@ static void __maps__insert(struct maps *maps, struct map *map)
 	map__get(map);
 }
 
+static void __maps__insert_name(struct maps *maps, struct map *map)
+{
+	struct rb_node **p = &maps->names.rb_node;
+	struct rb_node *parent = NULL;
+	struct map *m;
+	int rc;
+
+	while (*p != NULL) {
+		parent = *p;
+		m = rb_entry(parent, struct map, rb_node_name);
+		rc = strcmp(m->dso->short_name, map->dso->short_name);
+		if (rc < 0)
+			p = &(*p)->rb_left;
+		else if (rc  > 0)
+			p = &(*p)->rb_right;
+		else
+			return;
+	}
+	rb_link_node(&map->rb_node_name, parent, p);
+	rb_insert_color(&map->rb_node_name, &maps->names);
+	map__get(map);
+}
+
 void maps__insert(struct maps *maps, struct map *map)
 {
 	down_write(&maps->lock);
 	__maps__insert(maps, map);
+	__maps__insert_name(maps, map);
 	up_write(&maps->lock);
 }
 
@@ -849,19 +922,18 @@ void maps__remove(struct maps *maps, struct map *map)
 
 struct map *maps__find(struct maps *maps, u64 ip)
 {
-	struct rb_node **p, *parent = NULL;
+	struct rb_node *p;
 	struct map *m;
 
 	down_read(&maps->lock);
 
-	p = &maps->entries.rb_node;
-	while (*p != NULL) {
-		parent = *p;
-		m = rb_entry(parent, struct map, rb_node);
+	p = maps->entries.rb_node;
+	while (p != NULL) {
+		m = rb_entry(p, struct map, rb_node);
 		if (ip < m->start)
-			p = &(*p)->rb_left;
+			p = p->rb_left;
 		else if (ip >= m->end)
-			p = &(*p)->rb_right;
+			p = p->rb_right;
 		else
 			goto out;
 	}

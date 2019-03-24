@@ -1,3 +1,4 @@
+generated-y += syscall_table.h
 generic-y += bug.h
 generic-y += compat.h
 generic-y += device.h
@@ -26,5 +27,6 @@ generic-y += rwsem.h
 generic-y += sections.h
 generic-y += topology.h
 generic-y += trace_clock.h
+generic-y += vga.h
 generic-y += word-at-a-time.h
 generic-y += xor.h

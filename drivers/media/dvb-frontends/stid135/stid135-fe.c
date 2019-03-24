@@ -305,7 +305,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	
 	if (p->scrambling_sequence_index) {
 		pls_mode = 1;
-		pls_code = 0;
+		pls_code = p->scrambling_sequence_index;
 	}
 
 	/* Set PLS before search */

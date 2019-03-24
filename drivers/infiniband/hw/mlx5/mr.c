@@ -98,7 +98,7 @@ static bool use_umr_mtt_update(struct mlx5_ib_mr *mr, u64 start, u64 length)
 #ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
 static void update_odp_mr(struct mlx5_ib_mr *mr)
 {
-	if (mr->umem->odp_data) {
+	if (mr->umem->is_odp) {
 		/*
 		 * This barrier prevents the compiler from moving the
 		 * setting of umem->odp_data->private to point to our
@@ -107,7 +107,7 @@ static void update_odp_mr(struct mlx5_ib_mr *mr)
 		 * handle invalidations.
 		 */
 		smp_wmb();
-		mr->umem->odp_data->private = mr;
+		to_ib_umem_odp(mr->umem)->private = mr;
 		/*
 		 * Make sure we will see the new
 		 * umem->odp_data->private value in the invalidation
@@ -691,7 +691,6 @@ int mlx5_mr_cache_init(struct mlx5_ib_dev *dev)
 		init_completion(&ent->compl);
 		INIT_WORK(&ent->work, cache_work_func);
 		INIT_DELAYED_WORK(&ent->dwork, delayed_cache_work_func);
-		queue_work(cache->wq, &ent->work);
 
 		if (i > MR_CACHE_LAST_STD_ENTRY) {
 			mlx5_odp_init_mr_cache_entry(ent);
@@ -711,6 +710,7 @@ int mlx5_mr_cache_init(struct mlx5_ib_dev *dev)
 			ent->limit = dev->mdev->profile->mr_cache[i].limit;
 		else
 			ent->limit = 0;
+		queue_work(cache->wq, &ent->work);
 	}
 
 	err = mlx5_mr_cache_debugfs_init(dev);
@@ -1211,7 +1211,7 @@ err_1:
 	return ERR_PTR(err);
 }
 
-static void set_mr_fileds(struct mlx5_ib_dev *dev, struct mlx5_ib_mr *mr,
+static void set_mr_fields(struct mlx5_ib_dev *dev, struct mlx5_ib_mr *mr,
 			  int npages, u64 length, int access_flags)
 {
 	mr->npages = npages;
@@ -1267,7 +1267,7 @@ static struct ib_mr *mlx5_ib_get_memic_mr(struct ib_pd *pd, u64 memic_addr,
 	kfree(in);
 
 	mr->umem = NULL;
-	set_mr_fileds(dev, mr, 0, length, acc);
+	set_mr_fields(dev, mr, 0, length, acc);
 
 	return &mr->ibmr;
 
@@ -1278,6 +1278,21 @@ err_free:
 	kfree(mr);
 
 	return ERR_PTR(err);
+}
+
+int mlx5_ib_advise_mr(struct ib_pd *pd,
+		      enum ib_uverbs_advise_mr_advice advice,
+		      u32 flags,
+		      struct ib_sge *sg_list,
+		      u32 num_sge,
+		      struct uverbs_attr_bundle *attrs)
+{
+	if (advice != IB_UVERBS_ADVISE_MR_ADVICE_PREFETCH &&
+	    advice != IB_UVERBS_ADVISE_MR_ADVICE_PREFETCH_WRITE)
+		return -EOPNOTSUPP;
+
+	return mlx5_ib_advise_mr_prefetch(pd, advice, flags,
+					 sg_list, num_sge);
 }
 
 struct ib_mr *mlx5_ib_reg_dm_mr(struct ib_pd *pd, struct ib_dm *dm,
@@ -1369,7 +1384,7 @@ struct ib_mr *mlx5_ib_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 	mlx5_ib_dbg(dev, "mkey 0x%x\n", mr->mmkey.key);
 
 	mr->umem = umem;
-	set_mr_fileds(dev, mr, npages, length, access_flags);
+	set_mr_fields(dev, mr, npages, length, access_flags);
 
 #ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
 	update_odp_mr(mr);
@@ -1536,7 +1551,7 @@ int mlx5_ib_rereg_user_mr(struct ib_mr *ib_mr, int flags, u64 start,
 			goto err;
 	}
 
-	set_mr_fileds(dev, mr, npages, len, access_flags);
+	set_mr_fields(dev, mr, npages, len, access_flags);
 
 #ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
 	update_odp_mr(mr);
@@ -1627,14 +1642,16 @@ static void dereg_mr(struct mlx5_ib_dev *dev, struct mlx5_ib_mr *mr)
 	struct ib_umem *umem = mr->umem;
 
 #ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
-	if (umem && umem->odp_data) {
+	if (umem && umem->is_odp) {
+		struct ib_umem_odp *umem_odp = to_ib_umem_odp(umem);
+
 		/* Prevent new page faults from succeeding */
 		mr->live = 0;
 		/* Wait for all running page-fault handlers to finish. */
 		synchronize_srcu(&dev->mr_srcu);
 		/* Destroy all page mappings */
-		if (umem->odp_data->page_list)
-			mlx5_ib_invalidate_range(umem, ib_umem_start(umem),
+		if (umem_odp->page_list)
+			mlx5_ib_invalidate_range(umem_odp, ib_umem_start(umem),
 						 ib_umem_end(umem));
 		else
 			mlx5_ib_free_implicit_mr(mr);

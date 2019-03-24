@@ -85,6 +85,7 @@ struct report {
 	int			socket_filter;
 	DECLARE_BITMAP(cpu_bitmap, MAX_NR_CPUS);
 	struct branch_type_stat	brtype_stat;
+	bool			symbol_ipc;
 };
 
 static int report__config(const char *var, const char *value, void *cb)
@@ -129,7 +130,7 @@ static int hist_iter__report_callback(struct hist_entry_iter *iter,
 	struct mem_info *mi;
 	struct branch_info *bi;
 
-	if (!ui__has_annotation())
+	if (!ui__has_annotation() && !rep->symbol_ipc)
 		return 0;
 
 	hist__account_cycles(sample->branch_stack, al, sample,
@@ -174,7 +175,7 @@ static int hist_iter__branch_callback(struct hist_entry_iter *iter,
 	struct perf_evsel *evsel = iter->evsel;
 	int err;
 
-	if (!ui__has_annotation())
+	if (!ui__has_annotation() && !rep->symbol_ipc)
 		return 0;
 
 	hist__account_cycles(sample->branch_stack, al, sample,
@@ -201,14 +202,13 @@ static void setup_forced_leader(struct report *report,
 		perf_evlist__force_leader(evlist);
 }
 
-static int process_feature_event(struct perf_tool *tool,
-				 union perf_event *event,
-				 struct perf_session *session __maybe_unused)
+static int process_feature_event(struct perf_session *session,
+				 union perf_event *event)
 {
-	struct report *rep = container_of(tool, struct report, tool);
+	struct report *rep = container_of(session->tool, struct report, tool);
 
 	if (event->feat.feat_id < HEADER_LAST_FEATURE)
-		return perf_event__process_feature(tool, event, session);
+		return perf_event__process_feature(session, event);
 
 	if (event->feat.feat_id != HEADER_LAST_FEATURE) {
 		pr_err("failed: wrong feature ID: %" PRIu64 "\n",
@@ -1106,7 +1106,7 @@ int cmd_report(int argc, const char **argv)
 	OPT_CALLBACK(0, "percentage", NULL, "relative|absolute",
 		     "how to display percentage of filtered entries", parse_filter_percentage),
 	OPT_CALLBACK_OPTARG(0, "itrace", &itrace_synth_opts, NULL, "opts",
-			    "Instruction Tracing options",
+			    "Instruction Tracing options\n" ITRACE_HELP,
 			    itrace_parse_synth_opts),
 	OPT_BOOLEAN(0, "full-source-path", &srcline_full_filename,
 			"Show full source file name path for source lines"),
@@ -1134,6 +1134,7 @@ int cmd_report(int argc, const char **argv)
 		.mode  = PERF_DATA_MODE_READ,
 	};
 	int ret = hists__init();
+	char sort_tmp[128];
 
 	if (ret < 0)
 		return ret;
@@ -1285,6 +1286,24 @@ repeat:
 	else
 		use_browser = 0;
 
+	if (sort_order && strstr(sort_order, "ipc")) {
+		parse_options_usage(report_usage, options, "s", 1);
+		goto error;
+	}
+
+	if (sort_order && strstr(sort_order, "symbol")) {
+		if (sort__mode == SORT_MODE__BRANCH) {
+			snprintf(sort_tmp, sizeof(sort_tmp), "%s,%s",
+				 sort_order, "ipc_lbr");
+			report.symbol_ipc = true;
+		} else {
+			snprintf(sort_tmp, sizeof(sort_tmp), "%s,%s",
+				 sort_order, "ipc_null");
+		}
+
+		sort_order = sort_tmp;
+	}
+
 	if (setup_sorting(session->evlist) < 0) {
 		if (sort_order)
 			parse_options_usage(report_usage, options, "s", 1);
@@ -1312,7 +1331,7 @@ repeat:
 	 * so don't allocate extra space that won't be used in the stdio
 	 * implementation.
 	 */
-	if (ui__has_annotation()) {
+	if (ui__has_annotation() || report.symbol_ipc) {
 		ret = symbol__annotation_init();
 		if (ret < 0)
 			goto error;

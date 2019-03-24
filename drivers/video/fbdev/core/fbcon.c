@@ -284,8 +284,7 @@ static inline int fbcon_is_inactive(struct vc_data *vc, struct fb_info *info)
 	struct fbcon_ops *ops = info->fbcon_par;
 
 	return (info->state != FBINFO_STATE_RUNNING ||
-		vc->vc_mode != KD_TEXT || ops->graphics) &&
-		!vt_force_oops_output(vc);
+		vc->vc_mode != KD_TEXT || ops->graphics);
 }
 
 static int get_color(struct vc_data *vc, struct fb_info *info,
@@ -511,6 +510,13 @@ static int __init fb_console_setup(char *this_opt)
 			continue;
 		}
 #endif
+
+		if (!strncmp(options, "logo-pos:", 9)) {
+			options += 9;
+			if (!strcmp(options, "center"))
+				fb_center_logo = true;
+			continue;
+		}
 	}
 	return 1;
 }
@@ -1104,7 +1110,6 @@ static void fbcon_init(struct vc_data *vc, int init)
 	if (p->userfont)
 		charcnt = FNTCHARCNT(p->fontdata);
 
-	vc->vc_panic_force_write = !!(info->flags & FBINFO_CAN_FORCE_OUTPUT);
 	vc->vc_can_do_color = (fb_get_color_depth(&info->var, &info->fix)!=1);
 	vc->vc_complement_mask = vc->vc_can_do_color ? 0x7700 : 0x0800;
 	if (charcnt == 256) {
@@ -3066,7 +3071,7 @@ static int fbcon_fb_unbind(int idx)
 	for (i = first_fb_vc; i <= last_fb_vc; i++) {
 		if (con2fb_map[i] != idx &&
 		    con2fb_map[i] != -1) {
-			new_idx = i;
+			new_idx = con2fb_map[i];
 			break;
 		}
 	}

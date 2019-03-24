@@ -550,7 +550,6 @@ lpfc_debugfs_nodelist_data(struct lpfc_vport *vport, char *buf, int size)
 	struct lpfc_nodelist *ndlp;
 	unsigned char *statep;
 	struct nvme_fc_local_port *localport;
-	struct lpfc_nvmet_tgtport *tgtp;
 	struct nvme_fc_remote_port *nrport = NULL;
 	struct lpfc_nvme_rport *rport;
 
@@ -646,6 +645,8 @@ lpfc_debugfs_nodelist_data(struct lpfc_vport *vport, char *buf, int size)
 					i, ndlp->cmd_qdepth);
 			outio += i;
 		}
+		len += snprintf(buf + len, size - len, "defer:%x ",
+			ndlp->nlp_defer_did);
 		len +=  snprintf(buf+len, size-len, "\n");
 	}
 	spin_unlock_irq(shost->host_lock);
@@ -654,7 +655,6 @@ lpfc_debugfs_nodelist_data(struct lpfc_vport *vport, char *buf, int size)
 			"\nOutstanding IO x%x\n",  outio);
 
 	if (phba->nvmet_support && phba->targetport && (vport == phba->pport)) {
-		tgtp = (struct lpfc_nvmet_tgtport *)phba->targetport->private;
 		len += snprintf(buf + len, size - len,
 				"\nNVME Targetport Entry ...\n");
 
@@ -700,6 +700,8 @@ lpfc_debugfs_nodelist_data(struct lpfc_vport *vport, char *buf, int size)
 		rport = lpfc_ndlp_get_nrport(ndlp);
 		if (rport)
 			nrport = rport->remoteport;
+		else
+			nrport = NULL;
 		spin_unlock(&phba->hbalock);
 		if (!nrport)
 			continue;

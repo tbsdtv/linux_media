@@ -502,12 +502,17 @@ static void remove_dai(struct snd_soc_component *comp,
 {
 	struct snd_soc_dai_driver *dai_drv =
 		container_of(dobj, struct snd_soc_dai_driver, dobj);
+	struct snd_soc_dai *dai;
 
 	if (pass != SOC_TPLG_PASS_PCM_DAI)
 		return;
 
 	if (dobj->ops && dobj->ops->dai_unload)
 		dobj->ops->dai_unload(comp, dobj);
+
+	list_for_each_entry(dai, &comp->dai_list, list)
+		if (dai->driver == dai_drv)
+			dai->driver = NULL;
 
 	kfree(dai_drv->name);
 	list_del(&dobj->list);
@@ -993,7 +998,7 @@ static int soc_tplg_denum_create(struct soc_tplg *tplg, unsigned int count,
 				kfree(se);
 				continue;
 			}
-			/* fall through and create texts */
+			/* fall through */
 		case SND_SOC_TPLG_CTL_ENUM:
 		case SND_SOC_TPLG_DAPM_CTL_ENUM_DOUBLE:
 		case SND_SOC_TPLG_DAPM_CTL_ENUM_VIRT:
@@ -1310,7 +1315,7 @@ static struct snd_kcontrol_new *soc_tplg_dapm_widget_denum_create(
 					ec->hdr.name);
 				goto err_se;
 			}
-			/* fall through to create texts */
+			/* fall through */
 		case SND_SOC_TPLG_CTL_ENUM:
 		case SND_SOC_TPLG_DAPM_CTL_ENUM_DOUBLE:
 		case SND_SOC_TPLG_DAPM_CTL_ENUM_VIRT:
@@ -1565,17 +1570,6 @@ widget:
 		widget = snd_soc_dapm_new_control_unlocked(dapm, &template);
 	if (IS_ERR(widget)) {
 		ret = PTR_ERR(widget);
-		/* Do not nag about probe deferrals */
-		if (ret != -EPROBE_DEFER)
-			dev_err(tplg->dev,
-				"ASoC: failed to create widget %s controls (%d)\n",
-				w->name, ret);
-		goto hdr_err;
-	}
-	if (widget == NULL) {
-		dev_err(tplg->dev, "ASoC: failed to create widget %s controls\n",
-			w->name);
-		ret = -ENOMEM;
 		goto hdr_err;
 	}
 

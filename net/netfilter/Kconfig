@@ -403,21 +403,6 @@ config NF_NAT_NEEDED
 	depends on NF_NAT
 	default y
 
-config NF_NAT_PROTO_DCCP
-	bool
-	depends on NF_NAT && NF_CT_PROTO_DCCP
-	default NF_NAT && NF_CT_PROTO_DCCP
-
-config NF_NAT_PROTO_UDPLITE
-	bool
-	depends on NF_NAT && NF_CT_PROTO_UDPLITE
-	default NF_NAT && NF_CT_PROTO_UDPLITE
-
-config NF_NAT_PROTO_SCTP
-	bool
-	default NF_NAT && NF_CT_PROTO_SCTP
-	depends on NF_NAT && NF_CT_PROTO_SCTP
-
 config NF_NAT_AMANDA
 	tristate
 	depends on NF_CONNTRACK && NF_NAT
@@ -624,6 +609,13 @@ config NFT_FIB_INET
 	  This option allows using the FIB expression from the inet table.
 	  The lookup will be delegated to the IPv4 or IPv6 FIB depending
 	  on the protocol of the packet.
+
+config NFT_XFRM
+	tristate "Netfilter nf_tables xfrm/IPSec security association matching"
+	depends on XFRM
+	help
+	  This option adds an expression that you can use to extract properties
+	  of a packets security association.
 
 config NFT_SOCKET
 	tristate "Netfilter nf_tables socket match support"

@@ -353,6 +353,7 @@ nouveau_accel_init(struct nouveau_drm *drm)
 		case MAXWELL_CHANNEL_GPFIFO_A:
 		case PASCAL_CHANNEL_GPFIFO_A:
 		case VOLTA_CHANNEL_GPFIFO_A:
+		case TURING_CHANNEL_GPFIFO_A:
 			ret = nvc0_fence_create(drm);
 			break;
 		default:
@@ -370,7 +371,7 @@ nouveau_accel_init(struct nouveau_drm *drm)
 	if (device->info.family >= NV_DEVICE_INFO_V0_KEPLER) {
 		ret = nouveau_channel_new(drm, &drm->client.device,
 					  nvif_fifo_runlist_ce(device), 0,
-					  &drm->cechan);
+					  true, &drm->cechan);
 		if (ret)
 			NV_ERROR(drm, "failed to create ce channel, %d\n", ret);
 
@@ -381,7 +382,8 @@ nouveau_accel_init(struct nouveau_drm *drm)
 	    device->info.chipset != 0xaa &&
 	    device->info.chipset != 0xac) {
 		ret = nouveau_channel_new(drm, &drm->client.device,
-					  NvDmaFB, NvDmaTT, &drm->cechan);
+					  NvDmaFB, NvDmaTT, false,
+					  &drm->cechan);
 		if (ret)
 			NV_ERROR(drm, "failed to create ce channel, %d\n", ret);
 
@@ -393,7 +395,7 @@ nouveau_accel_init(struct nouveau_drm *drm)
 	}
 
 	ret = nouveau_channel_new(drm, &drm->client.device,
-				  arg0, arg1, &drm->channel);
+				  arg0, arg1, false, &drm->channel);
 	if (ret) {
 		NV_ERROR(drm, "failed to create kernel channel, %d\n", ret);
 		nouveau_accel_fini(drm);
@@ -458,75 +460,8 @@ nouveau_accel_init(struct nouveau_drm *drm)
 	nouveau_bo_move_init(drm);
 }
 
-static int nouveau_drm_probe(struct pci_dev *pdev,
-			     const struct pci_device_id *pent)
-{
-	struct nvkm_device *device;
-	struct apertures_struct *aper;
-	bool boot = false;
-	int ret;
-
-	if (vga_switcheroo_client_probe_defer(pdev))
-		return -EPROBE_DEFER;
-
-	/* We need to check that the chipset is supported before booting
-	 * fbdev off the hardware, as there's no way to put it back.
-	 */
-	ret = nvkm_device_pci_new(pdev, NULL, "error", true, false, 0, &device);
-	if (ret)
-		return ret;
-
-	nvkm_device_del(&device);
-
-	/* Remove conflicting drivers (vesafb, efifb etc). */
-	aper = alloc_apertures(3);
-	if (!aper)
-		return -ENOMEM;
-
-	aper->ranges[0].base = pci_resource_start(pdev, 1);
-	aper->ranges[0].size = pci_resource_len(pdev, 1);
-	aper->count = 1;
-
-	if (pci_resource_len(pdev, 2)) {
-		aper->ranges[aper->count].base = pci_resource_start(pdev, 2);
-		aper->ranges[aper->count].size = pci_resource_len(pdev, 2);
-		aper->count++;
-	}
-
-	if (pci_resource_len(pdev, 3)) {
-		aper->ranges[aper->count].base = pci_resource_start(pdev, 3);
-		aper->ranges[aper->count].size = pci_resource_len(pdev, 3);
-		aper->count++;
-	}
-
-#ifdef CONFIG_X86
-	boot = pdev->resource[PCI_ROM_RESOURCE].flags & IORESOURCE_ROM_SHADOW;
-#endif
-	if (nouveau_modeset != 2)
-		drm_fb_helper_remove_conflicting_framebuffers(aper, "nouveaufb", boot);
-	kfree(aper);
-
-	ret = nvkm_device_pci_new(pdev, nouveau_config, nouveau_debug,
-				  true, true, ~0ULL, &device);
-	if (ret)
-		return ret;
-
-	pci_set_master(pdev);
-
-	if (nouveau_atomic)
-		driver_pci.driver_features |= DRIVER_ATOMIC;
-
-	ret = drm_get_pci_dev(pdev, pent, &driver_pci);
-	if (ret) {
-		nvkm_device_del(&device);
-		return ret;
-	}
-
-	return 0;
-}
-
 static int
-nouveau_drm_load(struct drm_device *dev, unsigned long flags)
+nouveau_drm_device_init(struct drm_device *dev)
 {
 	struct nouveau_drm *drm;
 	int ret;
@@ -538,11 +473,11 @@ nouveau_drm_load(struct drm_device *dev, unsigned long flags)
 
 	ret = nouveau_cli_init(drm, "DRM-master", &drm->master);
 	if (ret)
-		return ret;
+		goto fail_alloc;
 
 	ret = nouveau_cli_init(drm, "DRM", &drm->client);
 	if (ret)
-		return ret;
+		goto fail_master;
 
 	dev->irq_enabled = true;
 
@@ -605,13 +540,15 @@ fail_bios:
 fail_ttm:
 	nouveau_vga_fini(drm);
 	nouveau_cli_fini(&drm->client);
+fail_master:
 	nouveau_cli_fini(&drm->master);
+fail_alloc:
 	kfree(drm);
 	return ret;
 }
 
 static void
-nouveau_drm_unload(struct drm_device *dev)
+nouveau_drm_device_fini(struct drm_device *dev)
 {
 	struct nouveau_drm *drm = nouveau_drm(dev);
 
@@ -640,18 +577,116 @@ nouveau_drm_unload(struct drm_device *dev)
 	kfree(drm);
 }
 
+static int nouveau_drm_probe(struct pci_dev *pdev,
+			     const struct pci_device_id *pent)
+{
+	struct nvkm_device *device;
+	struct drm_device *drm_dev;
+	struct apertures_struct *aper;
+	bool boot = false;
+	int ret;
+
+	if (vga_switcheroo_client_probe_defer(pdev))
+		return -EPROBE_DEFER;
+
+	/* We need to check that the chipset is supported before booting
+	 * fbdev off the hardware, as there's no way to put it back.
+	 */
+	ret = nvkm_device_pci_new(pdev, NULL, "error", true, false, 0, &device);
+	if (ret)
+		return ret;
+
+	nvkm_device_del(&device);
+
+	/* Remove conflicting drivers (vesafb, efifb etc). */
+	aper = alloc_apertures(3);
+	if (!aper)
+		return -ENOMEM;
+
+	aper->ranges[0].base = pci_resource_start(pdev, 1);
+	aper->ranges[0].size = pci_resource_len(pdev, 1);
+	aper->count = 1;
+
+	if (pci_resource_len(pdev, 2)) {
+		aper->ranges[aper->count].base = pci_resource_start(pdev, 2);
+		aper->ranges[aper->count].size = pci_resource_len(pdev, 2);
+		aper->count++;
+	}
+
+	if (pci_resource_len(pdev, 3)) {
+		aper->ranges[aper->count].base = pci_resource_start(pdev, 3);
+		aper->ranges[aper->count].size = pci_resource_len(pdev, 3);
+		aper->count++;
+	}
+
+#ifdef CONFIG_X86
+	boot = pdev->resource[PCI_ROM_RESOURCE].flags & IORESOURCE_ROM_SHADOW;
+#endif
+	if (nouveau_modeset != 2)
+		drm_fb_helper_remove_conflicting_framebuffers(aper, "nouveaufb", boot);
+	kfree(aper);
+
+	ret = nvkm_device_pci_new(pdev, nouveau_config, nouveau_debug,
+				  true, true, ~0ULL, &device);
+	if (ret)
+		return ret;
+
+	pci_set_master(pdev);
+
+	if (nouveau_atomic)
+		driver_pci.driver_features |= DRIVER_ATOMIC;
+
+	drm_dev = drm_dev_alloc(&driver_pci, &pdev->dev);
+	if (IS_ERR(drm_dev)) {
+		ret = PTR_ERR(drm_dev);
+		goto fail_nvkm;
+	}
+
+	ret = pci_enable_device(pdev);
+	if (ret)
+		goto fail_drm;
+
+	drm_dev->pdev = pdev;
+	pci_set_drvdata(pdev, drm_dev);
+
+	ret = nouveau_drm_device_init(drm_dev);
+	if (ret)
+		goto fail_pci;
+
+	ret = drm_dev_register(drm_dev, pent->driver_data);
+	if (ret)
+		goto fail_drm_dev_init;
+
+	return 0;
+
+fail_drm_dev_init:
+	nouveau_drm_device_fini(drm_dev);
+fail_pci:
+	pci_disable_device(pdev);
+fail_drm:
+	drm_dev_put(drm_dev);
+fail_nvkm:
+	nvkm_device_del(&device);
+	return ret;
+}
+
 void
 nouveau_drm_device_remove(struct drm_device *dev)
 {
+	struct pci_dev *pdev = dev->pdev;
 	struct nouveau_drm *drm = nouveau_drm(dev);
 	struct nvkm_client *client;
 	struct nvkm_device *device;
 
+	drm_dev_unregister(dev);
+
 	dev->irq_enabled = false;
 	client = nvxx_client(&drm->client.base);
 	device = nvkm_device_find(client->device);
-	drm_put_dev(dev);
 
+	nouveau_drm_device_fini(dev);
+	pci_disable_device(pdev);
+	drm_dev_put(dev);
 	nvkm_device_del(&device);
 }
 
@@ -1018,8 +1053,6 @@ driver_stub = {
 		DRIVER_GEM | DRIVER_MODESET | DRIVER_PRIME | DRIVER_RENDER |
 		DRIVER_KMS_LEGACY_CONTEXT,
 
-	.load = nouveau_drm_load,
-	.unload = nouveau_drm_unload,
 	.open = nouveau_drm_open,
 	.postclose = nouveau_drm_postclose,
 	.lastclose = nouveau_vga_lastclose,
@@ -1140,10 +1173,16 @@ nouveau_platform_device_create(const struct nvkm_device_tegra_func *func,
 		goto err_free;
 	}
 
+	err = nouveau_drm_device_init(drm);
+	if (err)
+		goto err_put;
+
 	platform_set_drvdata(pdev, drm);
 
 	return drm;
 
+err_put:
+	drm_dev_put(drm);
 err_free:
 	nvkm_device_del(pdevice);
 

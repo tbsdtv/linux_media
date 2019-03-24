@@ -2601,7 +2601,7 @@ static fe_lla_error_t Estimate_Power_Int(stchip_handle_t Handle,
 	
 	/* check I2c error and demod lock for data coherency                */
 	/* Bit NOSFR must be =0 and POWER_IREF should not be null  */                                                                     
-	if ((NOSFR==0)& (DemodLock==1)& (error==FE_LLA_NO_ERROR) & (POWER_IREF!=0) ) {
+	if ((NOSFR==0) && (DemodLock==1) && (error==FE_LLA_NO_ERROR) && (POWER_IREF!=0) ) {
 		/*************** calculate AGC2 ********************/ 
 		/*  Agc2= (AGC2I1*4 +AGC2I1) *2^XtoPowerY (exp-9)  */
 		/* exp min=5  max=15                               */
@@ -2619,8 +2619,9 @@ static fe_lla_error_t Estimate_Power_Int(stchip_handle_t Handle,
 		/*evaluate exp-9 */
 		exp_s32 = (s32)(exponant - 9);                                                                                                                                                                                                  
 		
-		/*evaluate exp -9 sign */
-		if (exp_s32<0) {
+		if (exp_s32<= -32) {
+			agc2x1000 = 0;
+		}else if(exp_s32<0){
 			/* if exp_s32<0 divide the mantissa  by 2^abs(exp_s32)*/
 			exp_abs_s32= XtoPowerY(2,(u32)(- exp_s32));
 			agc2x1000 = (u32)((1000 * mantisse) / exp_abs_s32);
@@ -4709,7 +4710,15 @@ static fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 
 			/* If TS/GS = 11 (MPEG TS), reset matype force bit and do NOT load frames in MPEG packets */
 			if(((genuine_matype>>6) & 0x3) == 0x3) {
-
+	  			if((genuine_matype >> 3) & 0x3) {
+					/* CCM or ISSYI used */
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSTATE1_TSOUT_NOSYNC(Demod), 0);
+					//error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 0);
+				} else {
+					/* ACM and ISSYI not used */
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSTATE1_TSOUT_NOSYNC(Demod), 1);
+					//error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 2);
+				}
 				/* Unforce HEM mode */
 				error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL0_HEMMODE_SELECT(Demod), 0);
 				/* Go back to reset value settings */
@@ -4723,15 +4732,6 @@ static fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSCFG0_TSFIFO_BITSPEED(Demod), 1);
 					error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE1(Demod), 0x80);
 					error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE0(Demod), 0x00);
-				}
-	  			if((genuine_matype >> 3) & 0x3) {
-					/* CCM or ISSYI used */
-					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSTATE1_TSOUT_NOSYNC(Demod), 0);
-					//error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 0);
-				} else {
-					/* ACM and ISSYI not used */
-					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSTATE1_TSOUT_NOSYNC(Demod), 1);
-					//error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 2);
 				}
 			}
 			/* If TS/GS = 10 (GSE-HEM High Efficiency Mode) reset matype force bit, load frames in MPEG packets and disable latency regulation */

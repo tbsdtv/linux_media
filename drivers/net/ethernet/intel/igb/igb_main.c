@@ -239,7 +239,7 @@ static struct pci_driver igb_driver = {
 
 MODULE_AUTHOR("Intel Corporation, <e1000-devel@lists.sourceforge.net>");
 MODULE_DESCRIPTION("Intel(R) Gigabit Ethernet Network Driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_VERSION(DRV_VERSION);
 
 #define DEFAULT_MSG_ENABLE (NETIF_MSG_DRV|NETIF_MSG_PROBE|NETIF_MSG_LINK)
@@ -1850,13 +1850,12 @@ static void igb_config_tx_modes(struct igb_adapter *adapter, int queue)
 	 * configuration' in respect to these parameters.
 	 */
 
-	netdev_dbg(netdev, "Qav Tx mode: cbs %s, launchtime %s, queue %d \
-			    idleslope %d sendslope %d hiCredit %d \
-			    locredit %d\n",
-		   (ring->cbs_enable) ? "enabled" : "disabled",
-		   (ring->launchtime_enable) ? "enabled" : "disabled", queue,
-		   ring->idleslope, ring->sendslope, ring->hicredit,
-		   ring->locredit);
+	netdev_dbg(netdev, "Qav Tx mode: cbs %s, launchtime %s, queue %d idleslope %d sendslope %d hiCredit %d locredit %d\n",
+		   ring->cbs_enable ? "enabled" : "disabled",
+		   ring->launchtime_enable ? "enabled" : "disabled",
+		   queue,
+		   ring->idleslope, ring->sendslope,
+		   ring->hicredit, ring->locredit);
 }
 
 static int igb_save_txtime_params(struct igb_adapter *adapter, int queue,
@@ -1935,7 +1934,7 @@ static void igb_setup_tx_mode(struct igb_adapter *adapter)
 
 		val = rd32(E1000_RXPBS);
 		val &= ~I210_RXPBSIZE_MASK;
-		val |= I210_RXPBSIZE_PB_32KB;
+		val |= I210_RXPBSIZE_PB_30KB;
 		wr32(E1000_RXPBS, val);
 
 		/* Section 8.12.9 states that MAX_TPKT_SIZE from DTXMXPKTSZ
@@ -6019,6 +6018,8 @@ static int igb_tx_map(struct igb_ring *tx_ring,
 	/* set the timestamp */
 	first->time_stamp = jiffies;
 
+	skb_tx_timestamp(skb);
+
 	/* Force memory writes to complete before letting h/w know there
 	 * are new descriptors to fetch.  (Only applicable for weak-ordered
 	 * memory model archs, such as IA-64).
@@ -6146,8 +6147,6 @@ netdev_tx_t igb_xmit_frame_ring(struct sk_buff *skb,
 		goto out_drop;
 	else if (!tso)
 		igb_tx_csum(tx_ring, first);
-
-	skb_tx_timestamp(skb);
 
 	if (igb_tx_map(tx_ring, first, hdr_len))
 		goto cleanup_tx_tstamp;
@@ -7753,11 +7752,13 @@ static int igb_poll(struct napi_struct *napi, int budget)
 	if (!clean_complete)
 		return budget;
 
-	/* If not enough Rx work done, exit the polling mode */
-	napi_complete_done(napi, work_done);
-	igb_ring_irq_enable(q_vector);
+	/* Exit the polling mode, but don't re-enable interrupts if stack might
+	 * poll us due to busy-polling
+	 */
+	if (likely(napi_complete_done(napi, work_done)))
+		igb_ring_irq_enable(q_vector);
 
-	return 0;
+	return min(work_done, budget - 1);
 }
 
 /**
@@ -8770,9 +8771,11 @@ static int __igb_shutdown(struct pci_dev *pdev, bool *enable_wake,
 	rtnl_unlock();
 
 #ifdef CONFIG_PM
-	retval = pci_save_state(pdev);
-	if (retval)
-		return retval;
+	if (!runtime) {
+		retval = pci_save_state(pdev);
+		if (retval)
+			return retval;
+	}
 #endif
 
 	status = rd32(E1000_STATUS);
@@ -9086,7 +9089,6 @@ static pci_ers_result_t igb_io_slot_reset(struct pci_dev *pdev)
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
 	pci_ers_result_t result;
-	int err;
 
 	if (pci_enable_device_mem(pdev)) {
 		dev_err(&pdev->dev,
@@ -9108,14 +9110,6 @@ static pci_ers_result_t igb_io_slot_reset(struct pci_dev *pdev)
 		igb_reset(adapter);
 		wr32(E1000_WUS, ~0);
 		result = PCI_ERS_RESULT_RECOVERED;
-	}
-
-	err = pci_cleanup_aer_uncorrect_error_status(pdev);
-	if (err) {
-		dev_err(&pdev->dev,
-			"pci_cleanup_aer_uncorrect_error_status failed 0x%0x\n",
-			err);
-		/* non-fatal, continue */
 	}
 
 	return result;

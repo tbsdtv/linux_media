@@ -132,10 +132,10 @@ static int tbsecp3_ca_slot_reset(struct dvb_ca_en50221 *ca, int slot)
 	mutex_lock(&tbsca->lock);
 
 	tbs_write(TBSECP3_CA_BASE(tbsca->nr), 0x04, 1);
-	msleep (5);
+	msleep (10);
 
 	tbs_write(TBSECP3_CA_BASE(tbsca->nr), 0x04, 0);
-	msleep (1400);
+	msleep (2800);
 
 	mutex_unlock (&tbsca->lock);
 	return 0;

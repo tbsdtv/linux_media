@@ -243,11 +243,7 @@ static void mtk_phy_link_adjust(struct net_device *dev)
 		if (dev->phydev->asym_pause)
 			rmt_adv |= LPA_PAUSE_ASYM;
 
-		if (dev->phydev->advertising & ADVERTISED_Pause)
-			lcl_adv |= ADVERTISE_PAUSE_CAP;
-		if (dev->phydev->advertising & ADVERTISED_Asym_Pause)
-			lcl_adv |= ADVERTISE_PAUSE_ASYM;
-
+		lcl_adv = linkmode_adv_to_lcl_adv_t(dev->phydev->advertising);
 		flowctrl = mii_resolve_flowctrl_fdx(lcl_adv, rmt_adv);
 
 		if (flowctrl & FLOW_CTRL_TX)
@@ -261,11 +257,6 @@ static void mtk_phy_link_adjust(struct net_device *dev)
 	}
 
 	mtk_w32(mac->hw, mcr, MTK_MAC_MCR(mac->id));
-
-	if (dev->phydev->link)
-		netif_carrier_on(dev);
-	else
-		netif_carrier_off(dev);
 
 	if (!of_phy_is_fixed_link(mac->of_node))
 		phy_print_status(dev->phydev);
@@ -351,20 +342,6 @@ static int mtk_phy_connect(struct net_device *dev)
 	if (mtk_phy_connect_node(eth, mac, np))
 		goto err_phy;
 
-	dev->phydev->autoneg = AUTONEG_ENABLE;
-	dev->phydev->speed = 0;
-	dev->phydev->duplex = 0;
-
-	if (of_phy_is_fixed_link(mac->of_node))
-		dev->phydev->supported |=
-		SUPPORTED_Pause | SUPPORTED_Asym_Pause;
-
-	dev->phydev->supported &= PHY_GBIT_FEATURES | SUPPORTED_Pause |
-				   SUPPORTED_Asym_Pause;
-	dev->phydev->advertising = dev->phydev->supported |
-				    ADVERTISED_Autoneg;
-	phy_start_aneg(dev->phydev);
-
 	of_node_put(np);
 
 	return 0;
@@ -405,7 +382,7 @@ static int mtk_mdio_init(struct mtk_eth *eth)
 	eth->mii_bus->priv = eth;
 	eth->mii_bus->parent = eth->dev;
 
-	snprintf(eth->mii_bus->id, MII_BUS_ID_SIZE, "%s", mii_np->name);
+	snprintf(eth->mii_bus->id, MII_BUS_ID_SIZE, "%pOFn", mii_np);
 	ret = of_mdiobus_register(eth->mii_bus, mii_np);
 
 err_put_node:
@@ -605,10 +582,10 @@ static int mtk_init_fq_dma(struct mtk_eth *eth)
 	dma_addr_t dma_addr;
 	int i;
 
-	eth->scratch_ring = dma_zalloc_coherent(eth->dev,
-						cnt * sizeof(struct mtk_tx_dma),
-						&eth->phy_scratch_ring,
-						GFP_ATOMIC);
+	eth->scratch_ring = dma_alloc_coherent(eth->dev,
+					       cnt * sizeof(struct mtk_tx_dma),
+					       &eth->phy_scratch_ring,
+					       GFP_ATOMIC);
 	if (unlikely(!eth->scratch_ring))
 		return -ENOMEM;
 
@@ -1220,8 +1197,8 @@ static int mtk_tx_alloc(struct mtk_eth *eth)
 	if (!ring->buf)
 		goto no_tx_mem;
 
-	ring->dma = dma_zalloc_coherent(eth->dev, MTK_DMA_SIZE * sz,
-					&ring->phys, GFP_ATOMIC);
+	ring->dma = dma_alloc_coherent(eth->dev, MTK_DMA_SIZE * sz,
+				       &ring->phys, GFP_ATOMIC);
 	if (!ring->dma)
 		goto no_tx_mem;
 
@@ -1317,9 +1294,9 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 			return -ENOMEM;
 	}
 
-	ring->dma = dma_zalloc_coherent(eth->dev,
-					rx_dma_size * sizeof(*ring->dma),
-					&ring->phys, GFP_ATOMIC);
+	ring->dma = dma_alloc_coherent(eth->dev,
+				       rx_dma_size * sizeof(*ring->dma),
+				       &ring->phys, GFP_ATOMIC);
 	if (!ring->dma)
 		return -ENOMEM;
 
