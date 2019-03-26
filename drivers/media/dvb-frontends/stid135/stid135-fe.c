@@ -320,10 +320,10 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 		dev_err(&state->base->i2c->dev, "%s: fe_stid135_reset_modcodes_filter error %d !\n", __func__, err);
 
 	err |= fe_stid135_search(state->base->handle, state->nr + 1, &search_params, &search_results, 0);
-	mutex_unlock(&state->base->status_lock);
 
 	if (err != FE_LLA_NO_ERROR)
 	{
+		mutex_unlock(&state->base->status_lock);
 		dev_err(&state->base->i2c->dev, "%s: fe_stid135_search error %d !\n", __func__, err);
 		return -1;
 	}
@@ -346,6 +346,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	if (err != FE_LLA_NO_ERROR)
 		dev_err(&state->base->i2c->dev, "%s: fe_stid135_set_mis_filtering error %d !\n", __func__, err);
 
+	mutex_unlock(&state->base->status_lock);
 	return err != FE_LLA_NO_ERROR ? -1 : 0;
 
 }
