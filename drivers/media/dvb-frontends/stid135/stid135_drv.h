@@ -577,9 +577,8 @@ fe_lla_error_t fe_stid135_init_before_bb_flt_calib(fe_stid135_handle_t handle,
 
 fe_lla_error_t fe_stid135_uninit_after_bb_flt_calib(fe_stid135_handle_t handle, FE_OXFORD_TunerPath_t tuner_nb);
 
+fe_lla_error_t fe_stid135_measure_harmonic(fe_stid135_handle_t handle, u32 desired_frequency, u8 harmonic, u32 *val_5bin);
 fe_lla_error_t fe_stid135_bb_flt_calib(fe_stid135_handle_t handle, FE_OXFORD_TunerPath_t tuner_nb);
-
-u32 fe_stid135_measure_harmonic(fe_stid135_handle_t handle, u32 desired_frequency, u8 harmonic);
 
 fe_lla_error_t fe_stid135_set_gold_code(fe_stid135_handle_t handle, enum fe_stid135_demod demod, u32 goldcode);
 fe_lla_error_t fe_stid135_set_goldcold_root(fe_stid135_handle_t handle, enum fe_stid135_demod demod, u32 goldcold_root);
@@ -612,6 +611,9 @@ fe_lla_error_t fe_stid135_set_carrier_frequency_init(fe_stid135_handle_t Handle,
 				s32 frequency_hz, enum fe_stid135_demod demod);
 fe_lla_error_t fe_stid135_set_symbol_rate(stchip_handle_t hchip, u32 master_clock,
 				u32 symbol_rate, enum fe_stid135_demod demod);
+
+fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
+						enum fe_stid135_demod Demod);
 
 #ifdef __cplusplus
     }

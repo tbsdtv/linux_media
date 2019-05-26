@@ -246,7 +246,7 @@ STCHIP_Handle_t ChipOpen(STCHIP_Info_t *hChipOpenParams)
 			
 			if(hChip->pFieldMapImage != NULL)
 			{
-				if((ChipGetHandleFromName(hChipOpenParams->Name)==NULL) && (AppendNode(hChip)!=NULL)) 
+				if(AppendNode(hChip)!=NULL) 
 				{
 					hChip->pI2CHost = hChipOpenParams->pI2CHost;
 					hChip->I2cAddr = hChipOpenParams->I2cAddr;
@@ -407,6 +407,35 @@ STCHIP_Error_t ChipAddField(STCHIP_Handle_t hChip,u16 RegId, u32 FieldId,char * 
 	return hChip->Error;
 }
 
+/* Dichotomy-based search function  */
+int dichotomy_search(STCHIP_Register_t tab[], s32 nbVal, u16 val)
+{
+	/* Declaration of local variables */
+	BOOL found; // equals false while "val" is not yet found
+	u32 start_index;  // start index
+	u32 end_index;  // end index
+	u32 middle_index;  // middle index
+	
+	/* Initialisation of these variables before search loop */
+	found = FALSE;  // value is not yet found
+	start_index = 0;  // search range between 0 and ...
+	end_index = (u32)nbVal;  //... nbVal
+	
+	/* search loop */
+	while(!found && ((end_index - start_index) > 1)) {
+	
+		middle_index = (start_index + end_index)/2;  // we set middle index
+		found = (tab[middle_index].Addr == val);  // we check if searched value is located at this index
+		
+		if(tab[middle_index].Addr > val) end_index = middle_index;  // if value which located at im index is greater to searched value, end index becomes "ifin" middle index, therefore search range is narrower for the next loop
+			else start_index = middle_index;  // otherwise start index becomes middle index and search range is also narrower
+	}
+	
+	/* test conditionnant la valeur que la fonction va renvoyer */
+	if(tab[start_index].Addr == val) return((s32)start_index);  // if we have found the good value, we return index
+	else return(-1);  // other wise we return -1
+}
+
 /*****************************************************
 **FUNCTION	::	ChipGetRegisterIndex
 **ACTION	::	Get the index of a register from the pRegMapImage table
@@ -417,31 +446,23 @@ STCHIP_Error_t ChipAddField(STCHIP_Handle_t hChip,u16 RegId, u32 FieldId,char * 
 *****************************************************/
 s32 ChipGetRegisterIndex(STCHIP_Handle_t hChip, u16 RegId)
 {
-	s32 reg=0,
-		regIndex=-1;
+	s32 regIndex=-1;
  
 	if(hChip)
 	{
 		if(hChip->Abort==FALSE)
 		{
 			if(hChip->pRegMapImage[hChip->LastRegIndex].Addr ==RegId)
-	            regIndex = hChip->LastRegIndex;
-	        else
-	        {
-		while(reg < hChip->NbRegs) 
-		{
-			if(hChip->pRegMapImage[reg].Addr == RegId)
+				regIndex = hChip->LastRegIndex;
+			else
 			{
-				regIndex=reg;
-						hChip->LastRegIndex=reg;
+				/* We assume that reg addresses in STiD135DefVal and STiD135SocDefVal are sorted in the growing order */
+				regIndex = dichotomy_search(hChip->pRegMapImage, hChip->NbRegs, RegId);
+				hChip->LastRegIndex = regIndex;
 			}
-
-			reg++;
-		}
-	}
 		}
 		else
-			regIndex=0;
+		  regIndex=0;
 	}
 	return regIndex;
 }
@@ -450,36 +471,28 @@ s32 ChipGetRegisterIndex(STCHIP_Handle_t hChip, u16 RegId)
 **FUNCTION	::	ChipGetFieldIndex
 **ACTION	::	Get the index of a register from the pRegMapImage table
 **PARAMS IN	::	hChip		==> Handle to the chip
-**				RegId		==> Id of the fileld (adress)
+**				RegId		==> Id of the fileld (address)
 **PARAMS OUT::	None
 **RETURN	::	Index of the register in the register map image
 *****************************************************/
 s32 ChipGetFieldIndex(STCHIP_Handle_t hChip, u32 FieldId)
 {
-	s32 reg=0,
-		regIndex=-1;
+	s32 regIndex=-1;
 	u16 regAddress;
 	
 	if(hChip)
 	{
 		if(hChip->Abort==FALSE) 
 		{
-		regAddress=(u16)((FieldId >> 16)&0xFFFF);
+			regAddress=(u16)((FieldId >> 16)&0xFFFF);
 			if(hChip->pRegMapImage[hChip->LastRegIndex].Addr ==regAddress)
-	            regIndex = hChip->LastRegIndex;
+				regIndex = hChip->LastRegIndex;
 			else
 			{
-		while(reg < hChip->NbRegs)
-		{
-			if(hChip->pRegMapImage[reg].Addr == regAddress)
-			{
-				regIndex=reg;	
-						hChip->LastRegIndex=reg;
+				/* We assume that reg addresses in STiD135DefVal and STiD135SocDefVal are sorted in the growing order */
+				regIndex = dichotomy_search(hChip->pRegMapImage, hChip->NbRegs, regAddress);
+				hChip->LastRegIndex = regIndex;
 			}
-
-			reg++;
-		}
-	}
 		}
 		else
 			regIndex=0;
@@ -580,61 +593,56 @@ STCHIP_Error_t  ChipSetRegisters(STCHIP_Handle_t hChip, u16 FirstReg, s32 NbRegs
 	{
 		if(!hChip->Error)
 		{
-			if(NbRegs < 70)	
+			firstRegIndex =ChipGetRegisterIndex(hChip, FirstReg);
+			if((firstRegIndex >= 0) && ((firstRegIndex + NbRegs - 1) < hChip->NbRegs)) 
 			{
-				firstRegIndex =ChipGetRegisterIndex(hChip, FirstReg);
-				if((firstRegIndex >= 0) && ((firstRegIndex + NbRegs - 1) < hChip->NbRegs)) 
+				switch(hChip->ChipMode)
 				{
-					switch(hChip->ChipMode)
-					{
-						case STCHIP_MODE_I2C2STBUS:        /* fixed 2 addr + 1 data transaction mode 4 I2C to STBus bridge */
-							// 16 Bit special register bug workaround RnDHV00063986 & RnDHV00062932 & BZ#69936
-							if (NbRegs > 1)
-								data[nbdata]  = (U8)(hChip->WrStart + STBUS_STREAM_INCR_1);    
-							else data[nbdata]  = (U8)(hChip->WrStart);
-							nbdata = (u8)(nbdata + 1);
-						    
-							//data[nbdata++]=MSB(hChip->pRegMapImage[FirstReg].Addr);	            /*   Hi sub address        */
-							//data[nbdata++]=LSB(hChip->pRegMapImage[FirstReg].Addr);	            /*   Lo sub address        */
-							data[nbdata++]=(u8)(MSB(hChip->pRegMapImage[firstRegIndex].Addr));	            /*   Hi sub address        */
-							data[nbdata++]=(u8)(LSB(hChip->pRegMapImage[firstRegIndex].Addr));	            /*   Lo sub address        */    
-							
-							for(i=0;i<NbRegs;i++)								            /* register's loop */
-								/* FIXME: new for 32-bit access */
-								for(j=(s32)(hChip->pRegMapImage[firstRegIndex+i].Size - 1); j>=0;j--)	    /* byte's loop     */
-									data[nbdata++]=0xff&(hChip->pRegMapImage[firstRegIndex+i].Value>>(8*j));	/*   fill data buffer (MSB first) */
-							
-						break;
+					case STCHIP_MODE_I2C2STBUS:        /* fixed 2 addr + 1 data transaction mode 4 I2C to STBus bridge */
+						// 16 Bit special register bug workaround RnDHV00063986 & RnDHV00062932 & BZ#69936
+						if (NbRegs > 1)
+							data[nbdata]  = (U8)(hChip->WrStart + STBUS_STREAM_INCR_1);    
+						else data[nbdata]  = (U8)(hChip->WrStart);
+						nbdata = (u8)(nbdata + 1);
+					    
+						//data[nbdata++]=MSB(hChip->pRegMapImage[FirstReg].Addr);	            /*   Hi sub address        */
+						//data[nbdata++]=LSB(hChip->pRegMapImage[FirstReg].Addr);	            /*   Lo sub address        */
+						data[nbdata++]=(u8)(MSB(hChip->pRegMapImage[firstRegIndex].Addr));	            /*   Hi sub address        */
+						data[nbdata++]=(u8)(LSB(hChip->pRegMapImage[firstRegIndex].Addr));	            /*   Lo sub address        */    
+						
+						for(i=0;i<NbRegs;i++)								            /* register's loop */
+							/* FIXME: new for 32-bit access */
+							for(j=(s32)(hChip->pRegMapImage[firstRegIndex+i].Size - 1); j>=0;j--)	    /* byte's loop     */
+								data[nbdata++]=0xff&(hChip->pRegMapImage[firstRegIndex+i].Value>>(8*j));	/*   fill data buffer (MSB first) */
+						
+					break;
 
-						case STCHIP_MODE_SUBADR_16:
-							data[nbdata++]=(u8)(MSB(hChip->pRegMapImage[firstRegIndex].Addr));	/* 16 bits sub addresses */
-						case STCHIP_MODE_SUBADR_8:
-						case STCHIP_MODE_NOSUBADR_RD:
-							data[nbdata++]=(u8)(LSB(hChip->pRegMapImage[firstRegIndex].Addr));	/* 8 bits sub addresses */
-						case STCHIP_MODE_NOSUBADR:
-							for(i=0;i<NbRegs;i++)
-								/* FIXME: new for 32-bit access */
-								for(j=0;j<(s32)(hChip->pRegMapImage[firstRegIndex+i].Size);j++)	/* byte's loop */
-									data[nbdata++]=0xff&(hChip->pRegMapImage[firstRegIndex+i].Value>>(8*j));	/*   fill data buffer (LSB first) */
-						break;
-					}	
-					#ifndef NO_I2C
-						if(hChip->Repeater && hChip->RepeaterHost && hChip->RepeaterFn)
-							hChip->RepeaterFn(hChip->RepeaterHost,TRUE);	/* Set repeater ON */
-							
-						if(I2cReadWrite(hChip->pI2CHost,I2C_WRITE,hChip->I2cAddr,data,nbdata) != I2C_ERR_NONE)	/* write data buffer */
-							hChip->Error = CHIPERR_I2C_NO_ACK;
+					case STCHIP_MODE_SUBADR_16:
+						data[nbdata++]=(u8)(MSB(hChip->pRegMapImage[firstRegIndex].Addr));	/* 16 bits sub addresses */
+					case STCHIP_MODE_SUBADR_8:
+					case STCHIP_MODE_NOSUBADR_RD:
+						data[nbdata++]=(u8)(LSB(hChip->pRegMapImage[firstRegIndex].Addr));	/* 8 bits sub addresses */
+					case STCHIP_MODE_NOSUBADR:
+						for(i=0;i<NbRegs;i++)
+							/* FIXME: new for 32-bit access */
+							for(j=0;j<(s32)(hChip->pRegMapImage[firstRegIndex+i].Size);j++)	/* byte's loop */
+								data[nbdata++]=0xff&(hChip->pRegMapImage[firstRegIndex+i].Value>>(8*j));	/*   fill data buffer (LSB first) */
+					break;
+				}	
+				#ifndef NO_I2C
+					if(hChip->Repeater && hChip->RepeaterHost && hChip->RepeaterFn)
+						hChip->RepeaterFn(hChip->RepeaterHost,TRUE);	/* Set repeater ON */
+						
+					if(I2cReadWrite(hChip->pI2CHost,I2C_WRITE,hChip->I2cAddr,data,nbdata) != I2C_ERR_NONE)	/* write data buffer */
+						hChip->Error = CHIPERR_I2C_NO_ACK;
 
-						if(hChip->Repeater && hChip->RepeaterHost && hChip->RepeaterFn)
-							hChip->RepeaterFn(hChip->RepeaterHost,FALSE);	/* Set repeater OFF */
-					
-					#endif
-				}
-				else
-					hChip->Error = CHIPERR_INVALID_REG_ID;
+					if(hChip->Repeater && hChip->RepeaterHost && hChip->RepeaterFn)
+						hChip->RepeaterFn(hChip->RepeaterHost,FALSE);	/* Set repeater OFF */
+				
+				#endif
 			}
 			else
-				hChip->Error = CHIPERR_I2C_BURST;
+				hChip->Error = CHIPERR_INVALID_REG_ID;
 		}
 		else
 			return hChip->Error;

@@ -27,6 +27,8 @@
 
 #define TEST_SCANCODES	10
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define SYSFS_PATH_MAX 256
+#define DNAME_PATH_MAX 256
 
 static const struct {
 	enum rc_proto proto;
@@ -60,7 +62,7 @@ static const struct {
 int lirc_open(const char *rc)
 {
 	struct dirent *dent;
-	char buf[100];
+	char buf[SYSFS_PATH_MAX + DNAME_PATH_MAX];
 	DIR *d;
 	int fd;
 
@@ -78,7 +80,7 @@ int lirc_open(const char *rc)
 	}
 
 	if (!dent)
-		ksft_exit_fail_msg("cannot find lirc device for %s\n", rc);
+		ksft_exit_skip("cannot find lirc device for %s\n", rc);
 
 	closedir(d);
 

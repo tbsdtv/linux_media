@@ -129,7 +129,7 @@ RETURN     : None
 ******************************************/
 STCHIP_Error_t Oxford_SetFxtalDivider(STCHIP_Handle_t hTuner,U32 Fxtal_MHz)
 {
-	if (Fxtal_MHz>30) 
+	if (Fxtal_MHz>30)
 		return Oxford_SetPLLrefDiv(hTuner,0);   /* %2 for 50MHz*/ 
 	else 
 		return Oxford_SetPLLrefDiv(hTuner,1);	/* %1 for 25, 27, 30MHz */ 
@@ -347,7 +347,17 @@ STCHIP_Error_t Oxford_ClockStartUp(STCHIP_Handle_t hTuner,U32 Fxtal_MHz)
 	ChipWaitOrAbort(hTuner,1);
 	
 	/* set pll wake up and vco cal (chapt 7.1.4)*/
-	error|=ChipSetOneRegister(hTuner, RAFE_PLL_CTRL, 	0x93);
+	switch(Fxtal_MHz) {
+		case 25:
+		case 27:
+			error|=ChipSetOneRegister(hTuner, RAFE_PLL_CTRL, 	0x93);
+		break;
+		case 30:
+		case 50:
+			error|=ChipSetOneRegister(hTuner, RAFE_PLL_CTRL, 	0x91);
+		break;
+	}
+
 	ChipWaitOrAbort(hTuner,6);
 	
 	/*start VCO cal */

@@ -8900,7 +8900,7 @@ STCHIP_Error_t STiD135_Init(Demod_InitParams_t *InitParams,
 	STCHIP_Handle_t hChip = NULL;
 	STCHIP_Error_t error = CHIPERR_NO_ERROR;
 	u32 reg_value;
-	int i;
+	int i,j;
 	u32 real_STiD135_NBREGS;
 	s32 regIndex;
     
@@ -8953,11 +8953,18 @@ STCHIP_Error_t STiD135_Init(Demod_InitParams_t *InitParams,
 			**     ----------------------
 			********************************/
 	
-			for(i=0;i<DEMOD_NBREGS;i++) {
+			for(i=0;i<DEMOD_NBREGS;i++)
 				hChip->pRegMapImage[i].Size = STCHIP_REGSIZE_8;
-				error |= ChipSetOneRegister(hChip,STiD135DefVal[i].Addr,
-								STiD135DefVal[i].Value);
-			}
+
+			for(i=0;i<DEMOD_NBREGS;i++) {
+        			for(j=i+1;j<=DEMOD_NBREGS;j++) {
+            				if((STiD135DefVal[j].Addr != STiD135DefVal[j-1].Addr+1) || (j == DEMOD_NBREGS)) {
+						error |= ChipSetRegisters(hChip,STiD135DefVal[i].Addr, (s32)(j-i));
+                				i=j-1;
+                				break;
+            				}
+        			}
+    			}
 
 			for(i=DEMOD_NBREGS;i<DEMOD_NBREGS+AFE_NBREGS;i++) /* AFE registers */
 				hChip->pRegMapImage[i].Size = STCHIP_REGSIZE_8;
