@@ -17,12 +17,13 @@
 #include "tbsmod.h"
 #include "tbsmod-io.h"
 #include "mod.h"
+#include "dvbmod.h"
 
 #define TRUE 1
 #define FALSE 0
 #define BOOL bool
 
-void spi_ad9789Enable(struct tbs_pcie_dev *dev, int Data)
+static void spi_ad9789Enable(struct tbs_pcie_dev *dev, int Data)
 {
 	unsigned char tmpbuf[4];
 
@@ -31,7 +32,7 @@ void spi_ad9789Enable(struct tbs_pcie_dev *dev, int Data)
 	TBS_PCIE_WRITE(0, SPI_ENABLE, *(u32 *)&tmpbuf[0]);
 }
 
-BOOL AD4351_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
+static BOOL AD4351_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 {
 	unsigned char tmpbuf[4] = {0};
 	int i, j;
@@ -56,7 +57,7 @@ BOOL AD4351_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 	}
 }
 
-BOOL ad9789_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
+static BOOL ad9789_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 {
 	unsigned char tmpbuf[4] = {0};
 	int i, j;
@@ -81,7 +82,7 @@ BOOL ad9789_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 	}
 }
 
-BOOL ad9789_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Wr_buf)
+static BOOL ad9789_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Wr_buf)
 {
 	unsigned char i = 0, tmpdt = 0, tmpbuf[8];
 
@@ -119,7 +120,7 @@ BOOL ad9789_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsign
 	return TRUE;
 }
 
-BOOL ad9789_rd_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Rd_buf)
+static BOOL ad9789_rd_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Rd_buf)
 {
 	unsigned char tmpdt = 0, tmpbuf[4];
 
@@ -157,7 +158,7 @@ BOOL ad9789_rd_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsign
 	return TRUE;
 }
 
-BOOL ad4351_wt_nBytes(struct tbs_pcie_dev *dev, unsigned char *WR_buf, int length)
+static BOOL ad4351_wt_nBytes(struct tbs_pcie_dev *dev, unsigned char *WR_buf, int length)
 {
 	unsigned char tmpbuf[4] = {0}, i;
 
@@ -174,15 +175,144 @@ BOOL ad4351_wt_nBytes(struct tbs_pcie_dev *dev, unsigned char *WR_buf, int lengt
 	return TRUE;
 }
 
-void AD9789_SETMODE(struct tbs_pcie_dev *dev, int MOD)
+static BOOL GS2972_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 {
-	int buf[4] = {0};
-	buf[0] = MOD;
-	TBS_PCIE_WRITE(0, AD9789_MODULATION, *(u32 *)&buf[0]);
-	return;
+	unsigned char tmpbuf[4] = {0};
+	int i, j;
+
+	if (OpbyteNum > 2)
+		j = 100;
+	else
+		j = 50;
+	msleep(1);
+
+	for (i = 0; (i < j) && (tmpbuf[0] != 1); i++)
+	{
+		*(u32 *)tmpbuf = TBS_PCIE_READ(MOD_ASI_BASEADDRESS, ASI_SPI_STATUS);
+		msleep(1);
+	}
+	if (tmpbuf[0] == 1)
+		return TRUE;
+	else
+	{
+		printk(("----------GS2972_CheckFree error, time out! \n"));
+		return FALSE;
+	}
 }
 
-void AD9789_Init_Configration(struct tbs_pcie_dev *dev)
+static BOOL GS2972_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Wr_buf)
+{
+	unsigned char i = 0, tmpdt = 0, tmpbuf[8];
+
+	if (length == 3)
+		tmpdt = 0x40;
+	else if (length == 2)
+		tmpdt = 0x20;
+	else if (length == 1)
+		tmpdt = 0x00;
+	else
+		printk((" GS2972_wt_nBytes error length !\n"));
+
+	//Reg_Addr 12bit;
+	tmpbuf[0] = ((Reg_Addr >> 8) & 0xf);
+	tmpbuf[1] = (Reg_Addr & 0xff);
+	tmpbuf[0] += 0x10; // autoinc set to 1
+	tmpbuf[0] += tmpdt; //3'b0xx; write;
+
+	for (i = 0; i < length; i++)
+		tmpbuf[2 + i] = Wr_buf[i];
+
+	TBS_PCIE_WRITE(MOD_ASI_BASEADDRESS, ASI_SPI_COMMAND, *(u32 *)&tmpbuf[0]);
+	TBS_PCIE_WRITE(MOD_ASI_BASEADDRESS, ASI_SPI_WT_DATA, *(u32 *)&tmpbuf[4]);
+
+	tmpbuf[0] = 0xe0; //cs low,cs high, write, no read;
+	tmpbuf[1] = 0;
+	tmpbuf[1] += (length + 2) * 16; // regadd + length
+	TBS_PCIE_WRITE(MOD_ASI_BASEADDRESS, ASI_SPI_CONFIG, *(u32 *)&tmpbuf[0]);
+
+	if (GS2972_CheckFree(dev, 4) == 0)
+	{
+		printk((" GS2972_wt_nBytes error!	\n"));
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static BOOL GS2972_rd_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Rd_buf)
+{
+	unsigned char tmpdt = 0, tmpbuf[4];
+
+	if (length == 3)
+		tmpdt = 0xc0;
+	else if (length == 2)
+		tmpdt = 0xa0;
+	else if (length == 1)
+		tmpdt = 0x80;
+	else
+		printk((" GS2972_rd_nBytes error length!\n"));
+
+	//Reg_Addr 12bit;
+	tmpbuf[0] = ((Reg_Addr >> 8) & 0xf);
+	tmpbuf[1] = (Reg_Addr & 0xff);
+	tmpbuf[0] += 0x10; // autoinc set to 1
+	tmpbuf[0] += tmpdt; //3'b1xx; read;
+
+	TBS_PCIE_WRITE(MOD_ASI_BASEADDRESS, ASI_SPI_COMMAND, *(u32 *)&tmpbuf[0]);
+
+	tmpbuf[0] = 0xf0;	//cs low,cs high, write, read;
+	tmpbuf[1] = 0x20;	// 2 bytes command for writing;
+	tmpbuf[1] += length; //read n bytes data;
+	TBS_PCIE_WRITE(MOD_ASI_BASEADDRESS, ASI_SPI_CONFIG, *(u32 *)&tmpbuf[0]);
+
+	if (GS2972_CheckFree(dev, 4) == 0)
+	{
+		printk((" GS2972_rd_nBytes error!   \n"));
+		return FALSE;
+	}
+
+	*(u32 *)Rd_buf = TBS_PCIE_READ(MOD_ASI_BASEADDRESS, ASI_SPI_RD_DATA);
+
+	msleep(1);
+
+	return TRUE;
+}
+
+//qam 0~4  to qam16~256
+static void config_QAM(struct tbs_pcie_dev *dev, int qam)
+{
+
+	unsigned char buf[4] = {0};
+	printk("set qam: %d\n", qam);
+	buf[0] = 0x22 + qam;
+	ad9789_wt_nBytes(dev, 1, AD9789_QAM_CONFIG, buf);
+
+	//0:DVB-C 16
+	//1:DVB-C 32
+	//2:DVB-C 64
+	//3:DVB-C 128
+	//4:DVB-C 256
+	buf[0] = qam;
+	TBS_PCIE_WRITE(0, AD9789_MODULATION, *(u32 *)&buf[0]);
+	
+}
+
+//  gain: 5--120
+static void config_gain(struct tbs_pcie_dev *dev, int gain)
+{
+
+	unsigned char buff[4] = {0};
+
+	buff[0] = gain;
+	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_0_GAIN, buff);
+	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_1_GAIN, buff);
+	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_2_GAIN, buff);
+	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_3_GAIN, buff);
+
+
+}
+
+static void AD9789_Configration_dvbc(struct tbs_pcie_dev *dev)
 
 {
 	int i = 0;
@@ -190,189 +320,142 @@ void AD9789_Init_Configration(struct tbs_pcie_dev *dev)
 
 	buff[0] = 0x9E;
 	ad9789_wt_nBytes(dev, 1, AD9789_CLOCK_RECIVER_2, buff); //CLK_DIS=1;PSIGN=0;CLKP_CML=0x0F;NSIGN=0
-	ad9789_rd_nBytes(dev, 1, AD9789_CLOCK_RECIVER_2, buff);
 
 	buff[0] = 0x80;
 	ad9789_wt_nBytes(dev, 1, AD9789_Mu_CONTROL_DUTY_CYCLE, buff);
-	ad9789_rd_nBytes(dev, 1, AD9789_Mu_CONTROL_DUTY_CYCLE, buff);
-
-	buff[0] = 0x00;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff);
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff);
 
 	buff[0] = 0xCE;
 	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_1, buff); //SEARCH_TOL=1;SEARCH_ERR=1;TRACK_ERR=0;GUARDBAND=0x0E
-	ad9789_rd_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_1, buff);
 	buff[0] = 0x42;
 	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff); //MU_CLKDIS=0;SLOPE=1;MODE=0x00;MUSAMP=0;GAIN=0x01;MU_EN=1;
-	ad9789_rd_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff);
 	buff[0] = 0x4E;
 	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_3, buff); //MUDLY=0x00;SEARCH_DIR=0x10;MUPHZ=0x0E;
-	ad9789_rd_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_3, buff);
 	buff[0] = 0x6C;
 	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_4, buff); //MUDLY=0x9F;
-	ad9789_rd_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_4, buff);
 
 	buff[0] = 0x00;
 	ad9789_wt_nBytes(dev, 1, AD9789_INT_ENABLE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_INT_ENABLE, buff);
 
 	buff[0] = 0xFE;
 	ad9789_wt_nBytes(dev, 1, AD9789_INT_STATUS, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_INT_STATUS, buff);
 
 	buff[0] = 0x0C;
 	ad9789_wt_nBytes(dev, 1, AD9789_INT_ENABLE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_INT_ENABLE, buff);
 
 	buff[0] = 0x43;
 	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff); //MU_CLKDIS=0;SLOPE=1;MODE=0x00;MUSAMP=0;GAIN=0x01;MU_EN=1;
-	ad9789_rd_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff);
 
 	buff[0] = 0x01;
 	ad9789_wt_nBytes(dev, 1, AD9789_BYPASS, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_BYPASS, buff);
-
-	buff[0] = 0x26; //0x22~0x26: qam16~256
-	ad9789_wt_nBytes(dev, 1, AD9789_QAM_CONFIG, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_QAM_CONFIG, buff);
 
 	//0:DVB-C 16
 	//1:DVB-C 32
 	//2:DVB-C 64
 	//3:DVB-C 128
 	//4:DVB-C 256
-	AD9789_SETMODE(dev, 4);
+	config_QAM(dev, 4);
 
 	buff[0] = 0x14;
 	ad9789_wt_nBytes(dev, 1, AD9789_SUM_SCALAR, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_SUM_SCALAR, buff);
 
 	buff[0] = 0x20;
 	ad9789_wt_nBytes(dev, 1, AD9789_INPUT_SCALAR, buff);
-	ad9789_rd_nBytes(dev, 1, AD9789_INPUT_SCALAR, buff);
 	
 	//default to 114M,122M,130M,138M
 	buff[2] = 0x5c;//0xC2;
 	buff[1] = 0x8f;//0xF5;
 	buff[0] = 0xc2;//0x28;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_0_FRE, buff); //NCO_0:0x55,0x55,0x55,800Mfreq
-	ad9789_rd_nBytes(dev, 3, AD9789_NCO_0_FRE, buff);
 
 	buff[2] = 0x9d;//0x03;
 	buff[1] = 0x36;//0x9D;
 	buff[0] = 0xd0;//0x36;	
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_1_FRE, buff); //NCO_1:0x62,0xFC,0x96,808Mfreq
-	ad9789_rd_nBytes(dev, 3, AD9789_NCO_1_FRE, buff);
 	buff[2] = 0xdd;//0x44;
 	buff[1] = 0xdd;//0x44;
 	buff[0] = 0xdd;//0x44;	
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_2_FRE, buff); //NCO_2:0x70,0xA3,0xD7,816Mfreq
-	ad9789_rd_nBytes(dev, 3, AD9789_NCO_2_FRE, buff);
 
 	buff[2] = 0x1e;//0x85;
 	buff[1] = 0x85;//0xEB;
 	buff[0] = 0xeb;//0x51;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_3_FRE, buff); //NCO_3:0x7E,0x4B,0x17,808Mfreq
-	ad9789_rd_nBytes(dev, 3, AD9789_NCO_3_FRE, buff);
 
 	buff[2] = 0x00;
 	buff[1] = 0x00;
 	buff[0] = 0x80;
 	ad9789_wt_nBytes(dev, 3, AD9789_RATE_CONVERT_Q, buff); 
-	ad9789_rd_nBytes(dev, 3, AD9789_RATE_CONVERT_Q, buff);
 
 	buff[2] = 0x55;
 	buff[1] = 0x55;
 	buff[0] = 0x53;	
 	ad9789_wt_nBytes(dev, 3, AD9789_RATE_CONVERT_P, buff); 
-	ad9789_rd_nBytes(dev, 3, AD9789_RATE_CONVERT_P, buff);
 
 	buff[1] = 0x70;//0xD7;
 	buff[0] = 0x0d;//0x33;	
 	ad9789_wt_nBytes(dev, 2, AD9789_CENTER_FRE_BPF, buff); 
-	ad9789_rd_nBytes(dev, 2, AD9789_CENTER_FRE_BPF, buff);
 
 	buff[0] = 0x06;
 	ad9789_wt_nBytes(dev, 1, AD9789_INTERFACE_CONFIG, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_INTERFACE_CONFIG, buff);
 
 	buff[0] = 0x61;
 	ad9789_wt_nBytes(dev, 1, AD9789_DATA_CONTROL, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_DATA_CONTROL, buff);
 
 	buff[0] = 0x10;
 	ad9789_wt_nBytes(dev, 1, AD9789_DCO_FRE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_DCO_FRE, buff);
 
 	buff[0] = 0x62;
 	ad9789_wt_nBytes(dev, 1, AD9789_INTERNAL_COLCK_ADJUST, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_INTERNAL_COLCK_ADJUST, buff);
 
-	buff[0] = 60;
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_0_GAIN, buff);
-	ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_0_GAIN, buff);
-
-	buff[0] = 60;
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_1_GAIN, buff);
-	ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_1_GAIN, buff);
-
-	buff[0] = 60;
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_2_GAIN, buff);
-	ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_2_GAIN, buff);
-
-	buff[0] = 60;
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_3_GAIN, buff);
-	ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_3_GAIN, buff);
+	config_gain(dev, 60);
 
 	buff[0] = 0;
 	ad9789_wt_nBytes(dev, 1, AD9789_SPEC_SHAPING, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_SPEC_SHAPING, buff);
 
 	buff[0] = 0x00;
 	ad9789_wt_nBytes(dev, 1, AD9789_FULL_SCALE_CURRENT_1, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_FULL_SCALE_CURRENT_1, buff);
 
 	buff[0] = 0x02;
 	ad9789_wt_nBytes(dev, 1, AD9789_FULL_SCALE_CURRENT_2, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_FULL_SCALE_CURRENT_2, buff);
 
-	ad9789_rd_nBytes(dev, 1, AD9789_INT_STATUS, buff);
-	for (i = 0; i < 10; i++)
-	{
+	for (i = 0; i < 100; i++){
+		ad9789_rd_nBytes(dev, 1, AD9789_INT_STATUS, buff);
 		if (buff[0] == 0x08)
 			break;
-		msleep(5);
+		msleep(10);
 	}
 
 	buff[0] = 0x80;
 	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
 
 	buff[0] = 0x00;
 	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff);
 
 	buff[0] = 0x80;
 	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff);
+	for (i = 0; i < 100; i++) {
+		ad9789_rd_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff);
+		if (buff[0] == 0x80)
+			break;
+		msleep(10);
+	}
+	if (buff[0] != 0x80)
+			dev_err(&dev->pdev->dev, "error updating parameters");
+	
+	buff[0] = 0x00;
+	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
 
-	buff[0] = 0x0F;
+	buff[0] = 0x0; // disable default four channels
 	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff);
 
 	buff[0] = 0x0E;
 	ad9789_wt_nBytes(dev, 1, AD9789_INT_ENABLE, buff); 
-	ad9789_rd_nBytes(dev, 1, AD9789_INT_ENABLE, buff);
 
 	return;
 }
 
 // freq MHZ
-BOOL ad9789_setFre(struct tbs_pcie_dev *dev, unsigned long freq)
+static BOOL ad9789_setFre(struct tbs_pcie_dev *dev, unsigned long freq)
 {
 	unsigned long freq_0, freq_1, freq_2, freq_3;
 	unsigned char buff[4] = {0};
@@ -419,17 +502,12 @@ BOOL ad9789_setFre(struct tbs_pcie_dev *dev, unsigned long freq)
 	//update
 	buff[0] = 0x80;
 	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
-	buff[0] = 0x00;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	msleep(5);
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
 
 	return TRUE;
 }
 
 //srate Ks
-void config_srate(struct tbs_pcie_dev *dev, unsigned long srate)
+static void config_srate(struct tbs_pcie_dev *dev, unsigned long srate)
 {
 	unsigned char buff[4] = {0};
 	//srate = (2400 * 1000 *16384) /srate;
@@ -446,65 +524,11 @@ void config_srate(struct tbs_pcie_dev *dev, unsigned long srate)
 	//update
 	buff[0] = 0x80;
 	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
-	buff[0] = 0x00;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	msleep(5);
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
+
 
 }
 
-//qam 0~4  to qam16~256
-void config_QAM(struct tbs_pcie_dev *dev, int qam)
-{
-
-	unsigned char buff[4] = {0};
-	printk("set qam: %d\n", qam);
-	buff[0] = 0x22 + qam;
-	ad9789_wt_nBytes(dev, 1, AD9789_QAM_CONFIG, buff);
-	ad9789_rd_nBytes(dev, 1, AD9789_QAM_CONFIG, buff);
-
-	//0:DVB-C 16
-	//1:DVB-C 32
-	//2:DVB-C 64
-	//3:DVB-C 128
-	//4:DVB-C 256
-	AD9789_SETMODE(dev, qam);
-
-	//update
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
-	buff[0] = 0x00;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	msleep(5);
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-
-}
-
-//  gain: 5--120
-void config_gain(struct tbs_pcie_dev *dev, int gain)
-{
-
-	unsigned char buff[4] = {0};
-
-	buff[0] = gain;
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_0_GAIN, buff);
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_1_GAIN, buff);
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_2_GAIN, buff);
-	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_3_GAIN, buff);
-
-	//update
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
-	buff[0] = 0x00;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-	msleep(5);
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
-
-}
-BOOL AD4351_Init_Configration(struct tbs_pcie_dev *dev)
+static BOOL AD4351_Configration_dvbc(struct tbs_pcie_dev *dev)
 {
 	unsigned char ret;
 	unsigned char buff[4] = {0};
@@ -568,6 +592,443 @@ BOOL AD4351_Init_Configration(struct tbs_pcie_dev *dev)
 	return TRUE;
 }
 
+
+static BOOL AD4351_Configration_dvbt(struct tbs_pcie_dev *dev)
+{
+	unsigned char ret;
+	unsigned char buff[4] = {0};
+
+	buff[3] = 0x05;
+	buff[2] = 0x00;
+	buff[1] = 0x58;
+	buff[0] = 0x00;
+
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	if(dev->bw == 8)
+	{
+		buff[3] = 0x3C;
+		buff[2] = 0x80;
+		buff[1] = 0x8C;
+		buff[0] = 0x00;
+	}
+	else if(dev->bw == 7)
+	{
+		buff[3] = 0x3C;
+		buff[2] = 0x80;
+		buff[1] = 0x9C;
+		buff[0] = 0x00;
+	}
+	else if(dev->bw == 6)
+	{
+		buff[3] = 0x3C;
+		buff[2] = 0x40;
+		buff[1] = 0x90;
+		buff[0] = 0x00;
+	}
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+
+	buff[3] = 0xB3;
+	buff[2] = 0x04;
+	buff[1] = 0x00;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	if(dev->bw == 8)
+	{
+		buff[3] = 0x42; 
+		buff[2] = 0xCE; 
+		buff[1] = 0x01; 
+		buff[0] = 0x03;
+	}
+	else if(dev->bw == 7)
+	{
+		buff[3] = 0x42; 
+		buff[2] = 0x4E; 
+		buff[1] = 0x00; 
+		buff[0] = 0x00;
+	}
+	else if(dev->bw == 6)
+	{
+		buff[3] = 0x42; 
+		buff[2] = 0xCE; 
+		buff[1] = 0x0D; 
+		buff[0] = 0x00;
+	}
+
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	if(dev->bw == 8 ||dev->bw == 7)
+	{
+		buff[3] = 0xC9; 
+		buff[2] = 0x80; 
+		buff[1] = 0x00; 
+		buff[0] = 0x08;
+	}
+	else if(dev->bw == 6)
+	{
+		buff[3] = 0x19; 
+		buff[2] = 0x01; 
+		buff[1] = 0x00; 
+		buff[0] = 0x08;
+	}
+
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	if(dev->bw == 8)
+	{
+		buff[3] = 0x48; 
+		buff[2] = 0x80; 
+		buff[1] = 0x47; 
+		buff[0] = 0x01;
+	}
+	else if(dev->bw == 7)
+	{
+		buff[3] = 0xA8; 
+		buff[2] = 0x80; 
+		buff[1] = 0x51; 
+		buff[0] = 0x00;
+	}
+	else if(dev->bw == 6)
+	{
+		buff[3] = 0xF8; 
+		buff[2] = 0x80; 
+		buff[1] = 0x15; 
+		buff[0] = 0x0F;
+	}
+
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+
+	//set bw light
+	buff[3] = 0x01; 
+	buff[2] = 0x00; 
+	buff[1] = 0x00; 
+	buff[0] = 0x00;
+	if(dev->bw == 6)
+		buff[2] = 0x01;
+	else if(dev->bw == 7)
+		buff[1] = 0x01;
+	else
+		buff[0] = 0x01;
+	TBS_PCIE_WRITE(0, SPI_BW_LIGHT, *(u32 *)&buff[0]);
+
+	return TRUE;
+}
+
+
+//0:qpsk, 1: 16qam, 2: 64qam . interval : 1/32(0),1/16(1),1/8(2), 1/4(3)
+//sub_carriers 0:2k, 1:8K. fec : 1/2(0),2/3(1),3/4(2),5/6(3),7/8(4)
+static void config_Mod_dvbt(struct tbs_pcie_dev *dev, int qam,int carriers,int fec, int interval)
+{
+	unsigned char buf[4] = {0};
+	//printk("set qam: %d carriers: %d,fec:%d,interval:%d\n", qam,carriers,fec,interval);
+	buf[0] = 0x22;
+	ad9789_wt_nBytes(dev, 1, AD9789_QAM_CONFIG, buf);
+	//0:dvbt qpsk
+	//1:dvbt 16qam
+	//2:dvbt 64qam
+	buf[0] = qam;
+	buf[0]|= carriers <<2; //set sub_carriers
+	buf[0]|= fec <<4; //set fec
+	
+	buf[1] = interval; //set g_interval
+	TBS_PCIE_WRITE(0, AD9789_MODULATION, *(u32 *)&buf[0]);
+	
+}
+
+static void set_Modulation_dvbt(struct tbs_pcie_dev *dev, struct dvb_modulator_parameters *params)
+{
+	
+	int qam,carriers,fec,interval;
+	switch(params->constellation)
+	{
+		case QPSK:
+			qam = 0;
+			break;
+		case QAM_16:
+			qam = 1;
+			break;
+		case QAM_64:
+			qam = 2;
+			break;
+		default:
+			qam = 2;
+			break;	
+	}
+	switch(params->transmission_mode)
+	{
+		case TRANSMISSION_MODE_2K:
+			carriers = 0;
+			break;
+		case TRANSMISSION_MODE_8K:
+			carriers = 1;
+			break;
+		default:
+			carriers = 1;
+			break;	
+	}
+	switch (params->guard_interval)
+	{
+		case GUARD_INTERVAL_1_4:
+			interval = 3;
+			break;
+		case GUARD_INTERVAL_1_8:
+			interval = 2;			
+			break;
+		case GUARD_INTERVAL_1_16:
+			interval = 1;			
+			break;
+		case GUARD_INTERVAL_1_32:
+			interval = 0;
+			break;
+
+		default:
+			interval = 0;
+			break;
+	}
+	switch (params->code_rate_HP)
+	{
+		case FEC_1_2:
+		    	fec = 0;
+		   	break;
+		case FEC_2_3:
+		    	fec = 1;
+		    	break;
+		case FEC_3_4:
+		    	fec = 2;
+		   	 break;
+		case FEC_5_6:
+		    	fec = 3;
+		    	break;
+		case FEC_7_8:
+		    	fec = 4;
+		    	break;
+		default:
+		    	fec = 4;
+		    	break;
+        }
+	config_Mod_dvbt(dev,qam,carriers,fec,interval);
+
+}
+
+
+//bandwidth:Mhz,  freq: kHZ
+static BOOL ad9789_setFre_dvbt (struct tbs_pcie_dev *dev, unsigned long bandwidth, unsigned long freq)
+{
+	unsigned long freq_0, freq_1, freq_2, freq_3;
+	unsigned long fdco;
+	unsigned char buff[4] = {0};
+	//config center freq
+	unsigned long fcenter;
+
+	if(bandwidth ==8)
+		fdco = 146285714; //146.285714;
+	else if(bandwidth ==7)
+		fdco = 128000000;
+	else
+		fdco = 109714285; //109.714285;
+
+	freq = freq / 1000000;
+	//printk("set freq: %ld\n", freq);
+	//freq_0 = (16777216 * freq)/150;
+	freq_0 = div_u64(16777216ULL * freq *1000000, fdco);
+	buff[2] = freq_0 & 0xff;
+	buff[1] = (freq_0 >> 8) & 0xff;
+	buff[0] = (freq_0 >> 16) & 0xff;
+	ad9789_wt_nBytes(dev, 3, AD9789_NCO_0_FRE, buff);
+
+	//freq_1 = (16777216 * (freq+8))/150;
+	freq_1 = div_u64(16777216ULL * (freq + bandwidth *1)*1000000, fdco);
+	buff[2] = freq_1 & 0xff;
+	buff[1] = (freq_1 >> 8) & 0xff;
+	buff[0] = (freq_1 >> 16) & 0xff;
+	ad9789_wt_nBytes(dev, 3, AD9789_NCO_1_FRE, buff);
+
+	//freq_2 = (16777216 * (freq+16))/150;
+	freq_2 = div_u64(16777216ULL * (freq + bandwidth *2)*1000000, fdco);
+	buff[2] = freq_2 & 0xff;
+	buff[1] = (freq_2 >> 8) & 0xff;
+	buff[0] = (freq_2 >> 16) & 0xff;
+	ad9789_wt_nBytes(dev, 3, AD9789_NCO_2_FRE, buff);
+
+	//freq_3 = (16777216 * (freq+24))/150;
+	freq_3 = div_u64(16777216ULL * (freq + bandwidth *3)*1000000, fdco);
+	buff[2] = freq_3 & 0xff;
+	buff[1] = (freq_3 >> 8) & 0xff;
+	buff[0] = (freq_3 >> 16) & 0xff;
+	ad9789_wt_nBytes(dev, 3, AD9789_NCO_3_FRE, buff);
+//test 
+	buff[2] = 0;
+	buff[1] = 0;
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 3, AD9789_RATE_CONVERT_Q, buff);
+
+
+	buff[2] = 0;
+	buff[1] = 0;
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 3, AD9789_RATE_CONVERT_P, buff);
+//~test
+
+	fcenter = freq*1000000 + (bandwidth * 3 *1000000)/2;
+	//fcenter = (fcenter*65536)/2400;
+	fcenter = div_u64(fcenter * 65536ULL, 16 * fdco);
+	buff[1] = fcenter & 0xff;
+	buff[0] = (fcenter >> 8) & 0xff; 
+	ad9789_wt_nBytes(dev, 2, AD9789_CENTER_FRE_BPF, buff); 
+
+	if(bandwidth ==8)
+		buff[0] = 0x7F;
+	else
+		buff[0] = 0x7E;
+	//default 8M, else 0x7E
+	ad9789_wt_nBytes(dev, 1, AD9789_DATA_CONTROL, buff); 
+
+	if(bandwidth ==8)
+		buff[0] = 0x52;
+	else if(bandwidth ==7)
+		buff[0] = 0xF7;
+	else
+		buff[0] = 0xA4;
+ 	//default 8M, else 7M:0xF7, 6M: 0xA4
+	ad9789_wt_nBytes(dev, 1, AD9789_INTERNAL_COLCK_ADJUST, buff); 
+
+	//update
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
+
+	return TRUE;
+}
+
+static void AD9789_Configration_dvbt(struct tbs_pcie_dev *dev)
+
+{
+	int i = 0;
+	unsigned char buff[4] = {0};
+
+	buff[0] = 0x9E;
+	ad9789_wt_nBytes(dev, 1, AD9789_CLOCK_RECIVER_2, buff); //CLK_DIS=1;PSIGN=0;CLKP_CML=0x0F;NSIGN=0
+
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 1, AD9789_Mu_CONTROL_DUTY_CYCLE, buff);
+
+	buff[0] = 0xCE;
+	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_1, buff); //SEARCH_TOL=1;SEARCH_ERR=1;TRACK_ERR=0;GUARDBAND=0x0E
+	buff[0] = 0x42;
+	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff); //MU_CLKDIS=0;SLOPE=1;MODE=0x00;MUSAMP=0;GAIN=0x01;MU_EN=1;
+	buff[0] = 0x4E;
+	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_3, buff); //MUDLY=0x00;SEARCH_DIR=0x10;MUPHZ=0x0E;
+	buff[0] = 0x6C;
+	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_4, buff); //MUDLY=0x9F;
+
+	buff[0] = 0x00;
+	ad9789_wt_nBytes(dev, 1, AD9789_INT_ENABLE, buff); 
+
+	buff[0] = 0xFE;
+	ad9789_wt_nBytes(dev, 1, AD9789_INT_STATUS, buff); 
+
+	buff[0] = 0x0E;
+	ad9789_wt_nBytes(dev, 1, AD9789_INT_ENABLE, buff); 
+
+	buff[0] = 0x43;
+	ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff); //MU_CLKDIS=0;SLOPE=1;MODE=0x00;MUSAMP=0;GAIN=0x01;MU_EN=1;
+	//buff[0] = 0x4B;   need to check here
+	//ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff); //MU_CLKDIS=0;SLOPE=1;MODE=0x00;MUSAMP=0;GAIN=0x01;MU_EN=1;
+	//buff[0] = 0x43;
+	//ad9789_wt_nBytes(dev, 1, AD9789_Mu_DELAY_CONTROL_2, buff); //MU_CLKDIS=0;SLOPE=1;MODE=0x00;MUSAMP=0;GAIN=0x01;MU_EN=1;
+
+	buff[0] = 0xD0;
+	ad9789_wt_nBytes(dev, 1, AD9789_BYPASS, buff); 
+
+	//set qam,fec,interval,sub_carriers
+	config_Mod_dvbt(dev, 2,1,2,3);
+	
+	buff[0] = 0x1A;
+	ad9789_wt_nBytes(dev, 1, AD9789_SUM_SCALAR, buff); 
+
+	buff[0] = 0x32;
+	ad9789_wt_nBytes(dev, 1, AD9789_INPUT_SCALAR, buff);
+	
+	//set freq
+	ad9789_setFre_dvbt(dev, 8,474000000);
+
+	buff[0] = 0x06;
+	ad9789_wt_nBytes(dev, 1, AD9789_INTERFACE_CONFIG, buff); 
+
+	buff[0] = 0x7F;//default 8M, else 0x7E
+	ad9789_wt_nBytes(dev, 1, AD9789_DATA_CONTROL, buff); 
+
+	buff[0] = 0x1F;
+	ad9789_wt_nBytes(dev, 1, AD9789_DCO_FRE, buff); 
+
+	buff[0] = 0x52; //default 8M, else 7M:0xF7, 6M: 0xA4
+	ad9789_wt_nBytes(dev, 1, AD9789_INTERNAL_COLCK_ADJUST, buff); 
+
+	config_gain(dev, 60);
+
+	buff[0] = 0;
+	ad9789_wt_nBytes(dev, 1, AD9789_SPEC_SHAPING, buff); 
+
+	buff[0] = 0x00;
+	ad9789_wt_nBytes(dev, 1, AD9789_FULL_SCALE_CURRENT_1, buff); 
+
+	buff[0] = 0x02;
+	ad9789_wt_nBytes(dev, 1, AD9789_FULL_SCALE_CURRENT_2, buff); 
+
+	for (i = 0; i < 100; i++){
+		ad9789_rd_nBytes(dev, 1, AD9789_INT_STATUS, buff);
+		if (buff[0] == 0x08)
+			break;
+		msleep(10);
+	}
+
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff); 
+
+	buff[0] = 0x00;
+	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
+
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
+	for (i = 0; i < 100; i++) {
+		ad9789_rd_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff);
+		if (buff[0] == 0x80)
+			break;
+		msleep(10);
+	}
+	if (buff[0] != 0x80)
+			dev_err(&dev->pdev->dev, "error updating parameters");
+	
+	buff[0] = 0x00;
+	ad9789_wt_nBytes(dev, 1, AD9789_PARAMETER_UPDATE, buff); 
+
+	buff[0] = 0x0; // disable default four channels
+	ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff); 
+
+	return;
+}
+
+
 u8 tbsmods[10];
 struct tbs_pcie_dev * tbsmodsdev[10];
 struct cdev		mod_cdev;
@@ -620,21 +1081,17 @@ static void start_dma_transfer(struct mod_channel *pchannel)
 	u32 delay;
 	u32 bitrate;
 	u32 speedctrl;
-//	if(dev->cardid == 0x6004)
-//	{
-//		bitrate = getbitrate(dev,pchannel->channel_index);
-//		delay = div_u64(1000000000ULL * BLOCKSIZE, bitrate);
-//	printk("ioctl 0x14 delay: %d \n", delay);
-//		TBS_PCIE_WRITE(Dmaout_adapter0+pchannel->channel_index*0x1000, DMA_DELAY, (delay));
-//	}
-	if(dev->input_bitrate){
-		speedctrl =div_u64(1000000000ULL * BLOCKSIZE,(dev->input_bitrate )*1024*1024 );
+
+	if(pchannel->input_bitrate){
+		speedctrl =div_u64(1000000000ULL * BLOCKSIZE,(pchannel->input_bitrate )*1024*1024 );
 		//printk("ioctl 0x20 speedctrl: %d \n", speedctrl);
 		TBS_PCIE_WRITE(Dmaout_adapter0+pchannel->channel_index*0x1000, DMA_SPEED_CTRL, (speedctrl));
 		TBS_PCIE_WRITE(Dmaout_adapter0+pchannel->channel_index*0x1000, DMA_INT_MONITOR, (2*speedctrl));
 		if(dev->cardid == 0x690b)
 		{
-			speedctrl =div_u64(speedctrl,BLOCKCEEL );	
+			//speedctrl =div_u64(speedctrl,BLOCKCEEL );
+			speedctrl =div_u64(speedctrl*9,BLOCKCEEL*10 );	
+			//printk("ioctl 0x24 frm: %d \n", speedctrl);
 			TBS_PCIE_WRITE(Dmaout_adapter0+pchannel->channel_index*0x1000, DMA_FRAME_CNT, (speedctrl));
 		}
 	}
@@ -650,8 +1107,9 @@ static void start_dma_transfer(struct mod_channel *pchannel)
 static int tbsmod_open(struct inode *inode, struct file *filp)
 {
 	struct tbs_pcie_dev *dev = (struct tbs_pcie_dev * )tbsmodsdev[iminor(inode)>>2];
-	struct mod_channel *pchannel =(struct mod_channel *)&dev->channnel[iminor(inode)&3];
+	struct mod_channel *pchannel =(struct mod_channel *)&dev->channel[iminor(inode)&3];
 	filp->private_data = pchannel;
+	u8 buff[4] = {0,0,0,0};
 	/*
 	printk("%s %p\n", __func__, pchannel);
 	printk("%s devno:%d\n", __func__, pchannel->devno);
@@ -666,6 +1124,14 @@ static int tbsmod_open(struct inode *inode, struct file *filp)
 	*/
 	pchannel->dma_start_flag = 0;
 	kfifo_reset(&pchannel->fifo);
+
+	//enable rf 
+	if((dev->cardid == 0x6004)||(dev->cardid == 0x6104)){
+		ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff);
+		buff[0] |= (1<<pchannel->channel_index);
+		ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff);
+		
+	}
 
 
 	//printk("%s fifo size:%d \n", __func__, kfifo_size(&pchannel->fifo));
@@ -736,11 +1202,13 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct dtv_property prop;
 	struct mcu24cxx_info wrinfo;
 	int ret = 0;
+	struct dvb_modulator_parameters params;
+	struct dvb_frontend_info finfo;
 
 	switch (cmd)
 	{
 	case FE_SET_PROPERTY:
-		printk("%s FE_SET_PROPERTY\n", __func__);
+		//printk("%s FE_SET_PROPERTY\n", __func__);
 		//props = (struct dtv_properties *)arg;
 		copy_from_user(&props , (const char*)arg, sizeof(struct dtv_properties ));
 		if (props.num == 1)
@@ -756,7 +1224,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				//printk("%s FE_SET_PROPERTY not allow set\n", __func__);
 				break;
 				}
-				printk("MODULATOR_MODULATION:%d\n", prop.u.data);
+				printk("%s MODULATOR_MODULATION:%d\n", __func__,prop.u.data);
 				if (prop.u.data < QAM_16 || prop.u.data > QAM_256)
 				{
 					ret = -1;
@@ -773,7 +1241,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				//printk("%s FE_SET_PROPERTY not allow set\n", __func__);
 				break;
 				}
-				printk("MODULATOR_SYMBOL_RATE:%d\n", prop.u.data);
+				printk("%s MODULATOR_SYMBOL_RATE:%d\n", __func__,prop.u.data);
 				if (prop.u.data < 1000000)
 				{
 					ret = EINVAL;
@@ -791,7 +1259,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				//printk("%s FE_SET_PROPERTY not allow set\n", __func__);
 				break;
 				}
-				printk("MODULATOR_FREQUENCY:%d\n", prop.u.data);
+				printk("%s MODULATOR_FREQUENCY:%d\n", __func__,prop.u.data);
 				{
 					u32 frequency = prop.u.data;
 					u32 freq = frequency / 1000000;
@@ -814,7 +1282,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				//printk("%s FE_SET_PROPERTY not allow set\n", __func__);
 				break;
 				}
-				printk("MODULATOR_GAIN:%d\n", prop.u.data);
+				printk("%s MODULATOR_GAIN:%d\n", __func__,prop.u.data);
 				if (prop.u.data > 120)
 				{
 					printk("MODULATOR_GAIN :%d(over 120)\n", prop.u.data);
@@ -824,14 +1292,14 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				config_gain(dev, prop.u.data);
 				break;
 			case MODULATOR_INPUT_BITRATE:
-				printk("MODULATOR_INPUT_BITRATE:%d\n", prop.u.data);
+				printk("%s MOD%d:INPUT_BITRATE:%d\n", __func__,pchannel->channel_index,prop.u.data);
 				if (prop.u.data > 200)
 				{
-					printk("MODULATOR_INPUT_BITRATE :%d(over 200M)\n", prop.u.data);
+					printk("MOD%d:INPUT_BITRATE :%d(over 200M)\n",pchannel->channel_index, prop.u.data);
 					ret = -1;
 					break;
 				}
-				dev->input_bitrate = prop.u.data;
+				pchannel->input_bitrate = prop.u.data;
 				break;
 			default:
 				ret = -EINVAL;
@@ -845,7 +1313,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case FE_GET_PROPERTY:
-		printk("%s FE_GET_PROPERTY\n", __func__);
+		//printk("%s FE_GET_PROPERTY\n", __func__);
 		//props = (struct dtv_properties *)arg;
 		copy_from_user(&props , (const char*)arg, sizeof(struct dtv_properties ));
 		if (props.num == 1)
@@ -856,21 +1324,47 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			{
 			case MODULATOR_MODULATION:
 				prop.u.data = dev->modulation ;
-				printk("MODULATOR_MODULATION:%d\n", prop.u.data);
+				printk("%s MODULATOR_MODULATION:%d\n",__func__, prop.u.data);
 				break;
 
 			case MODULATOR_SYMBOL_RATE:
 				prop.u.data =dev->srate ;
-				printk("MODULATOR_SYMBOL_RATE:%d\n", prop.u.data);
+				printk("%s MODULATOR_SYMBOL_RATE:%d\n", __func__,prop.u.data);
 				break;
 
 			case MODULATOR_FREQUENCY:
 				prop.u.data = dev->frequency;
-				printk("MODULATOR_FREQUENCY:%d\n", prop.u.data);
+				printk("%s MODULATOR_FREQUENCY:%d\n", __func__,prop.u.data);
 				break;
 			}
 		}
 		break;
+		
+
+	case FE_GET_INFO:
+		memset(&finfo, 0, sizeof(struct dvb_frontend_info));
+		snprintf(finfo.name, 16, "TBS-%X:%d", dev->pdev->subsystem_vendor, dev->mod_index);
+		copy_to_user((unsigned long)arg, &finfo, sizeof(struct dvb_frontend_info));
+		break;
+
+	case DVBMOD_SET_PARAMETERS:
+	{
+		if(pchannel->channel_index)
+			break;
+		
+		copy_from_user(&params , (const char*)arg, sizeof(struct dvb_modulator_parameters ));
+		printk("%s fre:%d, bw: %d, \n qam: %d, carriers: %d, fec : %d, interval: %d\n",__func__, params.frequency_khz,params.bandwidth_hz,
+			params.constellation, params.transmission_mode, params.code_rate_HP, params.guard_interval);
+		
+		dev->frequency = params.frequency_khz *1000;
+		dev->bw = params.bandwidth_hz/1000;
+		AD4351_Configration_dvbt(dev);
+		ad9789_setFre_dvbt(dev, dev->bw, dev->frequency);
+		
+		set_Modulation_dvbt(dev,&params);
+		break;
+	}
+
 
 	case FE_ECP3FW_READ:
 		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
@@ -899,9 +1393,19 @@ static int tbsmod_release(struct inode *inode, struct file *file)
 {
 	struct mod_channel *pchannel = (struct mod_channel *)file->private_data;
 	struct tbs_pcie_dev *dev=pchannel->dev;
+	u8 buff[4] = {0,0,0,0};
+	
 	//printk("%s\n", __func__);
 	TBS_PCIE_WRITE(Dmaout_adapter0+pchannel->channel_index*0x1000, DMA_GO, (0));
 	pchannel->dma_start_flag = 0;
+
+	//disable rf 
+	if((dev->cardid == 0x6004)||(dev->cardid == 0x6104)){
+		ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff);
+		buff[0] &= (~(1<<pchannel->channel_index));		
+		ad9789_wt_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff);
+		
+	}
 	return 0;
 }
 
@@ -916,9 +1420,9 @@ static const struct file_operations tbsmod_fops =
 		.release = tbsmod_release,
 };
 
-static void tbs_adapters_init(struct tbs_pcie_dev *dev)
+static void tbs_adapters_init_dvbc(struct tbs_pcie_dev *dev)
 {
-	unsigned char tmpbuf[4];
+	unsigned char tmpbuf[4]={0};
 	int id2;
 	BOOL ret;
 
@@ -930,7 +1434,7 @@ static void tbs_adapters_init(struct tbs_pcie_dev *dev)
 	TBS_PCIE_WRITE(0, SPI_RESET, *(u32 *)&tmpbuf[0]);
 	msleep(100);
 
-	ret = AD4351_Init_Configration(dev);
+	ret = AD4351_Configration_dvbc(dev);
 	if (ret == FALSE)
 		printk("configration ad4351 false! \n");
 
@@ -940,13 +1444,12 @@ static void tbs_adapters_init(struct tbs_pcie_dev *dev)
 	tmpbuf[0] = 0;
 	TBS_PCIE_WRITE(0, SPI_DEVICE, *(u32 *)&tmpbuf[0]);
 
-	AD9789_Init_Configration(dev);
+	AD9789_Configration_dvbc(dev);
 
 	//read id (54425368)
 	id2 = TBS_PCIE_READ(0, SPI_RESET);
 	printk("chip id2: %x\n", __swab32(id2));
 
-	//test
 	tmpbuf[0] = 0;
 	ad9789_rd_nBytes(dev, 1, AD9789_HARDWARE_VERSION, tmpbuf);
 	printk("hardware version: %x !\n", tmpbuf[0]);
@@ -961,23 +1464,68 @@ static void tbs_adapters_init(struct tbs_pcie_dev *dev)
 
 }
 
+static void tbs_adapters_init_dvbt(struct tbs_pcie_dev *dev)
+{
+	unsigned char tmpbuf[4]={0};
+	int id2;
+	BOOL ret;
+
+	//reset 9789
+	tmpbuf[0] = 1;
+	TBS_PCIE_WRITE(0, SPI_RESET, *(u32 *)&tmpbuf[0]);
+	msleep(100);
+	tmpbuf[0] = 0;
+	TBS_PCIE_WRITE(0, SPI_RESET, *(u32 *)&tmpbuf[0]);
+	msleep(100);
+
+	ret = AD4351_Configration_dvbt(dev);
+	if (ret == FALSE)
+		printk("configration ad4351 false! \n");
+
+	spi_ad9789Enable(dev, 1);
+
+	// choose spi device for 9789
+	tmpbuf[0] = 0;
+	TBS_PCIE_WRITE(0, SPI_DEVICE, *(u32 *)&tmpbuf[0]);
+
+	AD9789_Configration_dvbt(dev);
+
+	//read id (54425349)
+	id2 = TBS_PCIE_READ(0, SPI_RESET);
+	printk("chip id2: %x\n", __swab32(id2));
+
+	tmpbuf[0] = 0;
+	ad9789_rd_nBytes(dev, 1, AD9789_HARDWARE_VERSION, tmpbuf);
+	printk("hardware version: %x !\n", tmpbuf[0]);
+	
+	if(tmpbuf[0]==3)
+		printk("TBS6104 DVBT Modulator init OK !\n");
+	else
+		printk("TBS6104 DVBT Modulator init failed !\n");
+	
+	/* disable all interrupts */
+	//	TBS_PCIE_WRITE(TBS_INT_BASE, TBS_INT_ENABLE, 0x00000001);
+
+}
+
+
 static void sdi_chip_reset(struct tbs_pcie_dev *dev,int sdi_base_addr)
 {
-	unsigned char tmpbuf[4];
+	unsigned char tmpbuf[4]={0};
 
 	tmpbuf[0] = 0;
 	TBS_PCIE_WRITE( sdi_base_addr, MOD_ASI_RST, *(u32 *)&tmpbuf[0]);
 
-	msleep(20);
+	msleep(200);
 
 	tmpbuf[0] = 1;
 	TBS_PCIE_WRITE( sdi_base_addr, MOD_ASI_RST, *(u32 *)&tmpbuf[0]);
 	
-	msleep(100);
+	msleep(200);
 }
 
 void channelprocess(struct tbs_pcie_dev *dev,u8 index){
-		struct mod_channel *pchannel = (struct mod_channel *)&dev->channnel[index];
+		struct mod_channel *pchannel = (struct mod_channel *)&dev->channel[index];
 		int count = 0;
 		int ret;
 		u32 delay;
@@ -994,22 +1542,26 @@ void channelprocess(struct tbs_pcie_dev *dev,u8 index){
 			if (pchannel->dma_start_flag == 0){
 				return ;
 			}
-		delay = div_u64(1000000000ULL * BLOCKSIZE, (dev->input_bitrate )*1024*1024*3);
-		//printk("%s 0x14 delayshort: %d \n", __func__,delay);
+		delay = div_u64(1000000000ULL * BLOCKSIZE, (pchannel->input_bitrate )*1024*1024*3);
+		//printk("%s 0x18 delayshort: %d \n", __func__,delay);
 		TBS_PCIE_WRITE(Dmaout_adapter0+pchannel->channel_index*0x1000, DMA_DELAYSHORT, (delay));
-		TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
+		//TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
 		}
 }
 
 static irqreturn_t tbsmod_irq(int irq, void *dev_id)
 {
 	struct tbs_pcie_dev *dev = (struct tbs_pcie_dev *)dev_id;
-	u32 stat;
-
+	u32 stat,tmp;
+	
 	stat = TBS_PCIE_READ(Int_adapter, 0x0c);
+	tmp = TBS_PCIE_READ(Int_adapter, 0); // clear total interrupts.
+	TBS_PCIE_WRITE(Int_adapter, 0, tmp);
+
+	TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
 	//printk("%s %x\n",__func__,stat);
 	if (!(stat & 0xf0)){
-		TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
+		//TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
 		return IRQ_HANDLED;
 	}
 
@@ -1040,11 +1592,11 @@ static void tbsmod_remove(struct pci_dev *pdev)
 	int i;
 
 	for(i=0;i<CHANNELS;i++){
-		kfifo_free(&dev->channnel[i].fifo);
-//		device_destroy(mod_cdev_class, dev->channnel[i].devno);
-		if (!dev->channnel[i].dmavirt){
-			pci_free_consistent(dev->pdev, DMASIZE, dev->channnel[i].dmavirt, dev->channnel[i].dmaphy);
-			dev->channnel[i].dmavirt = NULL;
+		kfifo_free(&dev->channel[i].fifo);
+//		device_destroy(mod_cdev_class, dev->channel[i].devno);
+		if (dev->channel[i].dmavirt){
+			pci_free_consistent(dev->pdev, DMASIZE, dev->channel[i].dmavirt, dev->channel[i].dmaphy);
+			dev->channel[i].dmavirt = NULL;
 		}
 	}
 	tbsmods[dev->mod_index] =0;
@@ -1067,7 +1619,7 @@ static int tbsmod_probe(struct pci_dev *pdev,
 	int err = 0, ret = -ENODEV;
 	u8 index=0;
 	u8 i;
-	u8 mpbuf[4];
+	u8 mpbuf[4]={0};
 	
 	dev = kzalloc(sizeof(struct tbs_pcie_dev), GFP_KERNEL);
 	if (dev == NULL)
@@ -1106,7 +1658,6 @@ static int tbsmod_probe(struct pci_dev *pdev,
 
 	pci_set_drvdata(pdev, dev);
 
-
 //	mutex_init(&dev->ioctl_mutex);
 	for(index=0;index<sizeof(tbsmods);index++){
 		if(tbsmods[index] ==0 ){
@@ -1121,32 +1672,33 @@ static int tbsmod_probe(struct pci_dev *pdev,
 	switch(pdev->subsystem_vendor){
 	case 0x6004:
 		dev->cardid = 0x6004; 
-		//CHANNELS = 4;
 	break;
 	case 0x690b:
 		dev->cardid = 0x690b;
-		//CHANNELS = 1;
+	break;
+	case 0x6104:
+		dev->cardid = 0x6104;
 	break;
 	default:
 		printk("unknow card\n");
 	}
 
 	for(i=0;i<CHANNELS;i++){
-		dev->channnel[i].dmavirt = pci_alloc_consistent(dev->pdev, DMASIZE, &dev->channnel[i].dmaphy);
-		if (!dev->channnel[i].dmavirt)
+		dev->channel[i].dmavirt = pci_alloc_consistent(dev->pdev, DMASIZE, &dev->channel[i].dmaphy);
+		if (!dev->channel[i].dmavirt)
 		{
 			printk(" allocate memory failed\n");
 			goto fail3;
 		}
-		dev->channnel[i].channel_index=i;
-		dev->channnel[i].dev = dev;
-
-		dev->channnel[i].devno = MKDEV(MAJORDEV, (index*CHANNELS+i));
+		dev->channel[i].channel_index=i;
+		dev->channel[i].dev = dev;
+		dev->channel[i].input_bitrate = 30;
+		dev->channel[i].devno = MKDEV(MAJORDEV, (index*CHANNELS+i));
 
 	
-		device_create(mod_cdev_class, NULL, dev->channnel[i].devno, &dev->channnel[i], "tbsmod%d/mod%d",dev->mod_index,i);
+		device_create(mod_cdev_class, NULL, dev->channel[i].devno, &dev->channel[i], "tbsmod%d/mod%d",dev->mod_index,i);
 
-		ret = kfifo_alloc(&dev->channnel[i].fifo, FIFOSIZE, GFP_KERNEL);
+		ret = kfifo_alloc(&dev->channel[i].fifo, FIFOSIZE, GFP_KERNEL);
 		if (ret != 0)
 			goto fail3;
 	}
@@ -1154,24 +1706,35 @@ static int tbsmod_probe(struct pci_dev *pdev,
 	dev->modulation =QAM_256;
 	dev->srate=7200000;
 	dev->frequency=114000000;
-	dev->input_bitrate=50;
+	dev->bw = 8;
+
 	switch(pdev->subsystem_vendor){
 	case 0x6004:
 		printk("tbsmod%d:tbs6004 dvbc card\n", dev->mod_index);	
-		tbs_adapters_init(dev);
+		tbs_adapters_init_dvbc(dev);
 	break;
+	
+	case 0x6104:
+		printk("tbsmod%d:tbs6104 dvbt card\n", dev->mod_index);	
+		tbs_adapters_init_dvbt(dev);
+	break;
+	
 	case 0x690b:
 		
 		printk("tbsmod%d:tbs690b asi card\n", dev->mod_index);
-
-		mpbuf[0] = 0; //0--3 :select value
-		TBS_PCIE_WRITE( MOD_GPIO_BASEADDRESS, 0x34, *(u32 *)&mpbuf[0]);
+		for(i=0;i<4;i++){
+		mpbuf[0] = i; //0--3 :select value
+		TBS_PCIE_WRITE( MOD_ASI_BASEADDRESS, MOD_ASI_DEVICE, *(u32 *)&mpbuf[0]);
 
 		sdi_chip_reset(dev,MOD_ASI_BASEADDRESS);
 
 		mpbuf[0] = 1; //active spi bus from "z"
-		TBS_PCIE_WRITE( MOD_ASI_BASEADDRESS, MOD_SPI_ENABLE, *(u32 *)&mpbuf[0]);
-
+		TBS_PCIE_WRITE( MOD_ASI_BASEADDRESS, ASI_SPI_ENABLE, *(u32 *)&mpbuf[0]);
+		
+		GS2972_rd_nBytes(dev, 2 ,0x08, mpbuf);
+		if(mpbuf[1]==0x01)
+			printk("GS2972 hardware is ok!\n");
+		}
 	break;
 	default:
 		printk("unknow card\n");
@@ -1191,18 +1754,19 @@ fail0:
 	return ret;
 }
 
-#define MAKE_ENTRY(__vend, __chip, __subven, __subdev, __configptr) \
+#define MAKE_ENTRY(__vend, __chip, __subven, __subdev, name) \
 	{                                                               \
 		.vendor = (__vend),                                         \
 		.device = (__chip),                                         \
 		.subvendor = (__subven),                                    \
 		.subdevice = (__subdev),                                    \
-		.driver_data = (unsigned long)(__configptr)                 \
+		.driver_data = (unsigned long)(name)                 \
 	}
 
 static const struct pci_device_id tbsmod_id_table[] = {
-	MAKE_ENTRY(0x544d, 0x6178, 0x6004, 0x0001, NULL),
-	MAKE_ENTRY(0x544d, 0x6178, 0x690b, 0x0001, NULL),
+	MAKE_ENTRY(0x544d, 0x6178, 0x6004, 0x0001, "tbs6004 dvbc card"),
+	MAKE_ENTRY(0x544d, 0x6178, 0x690b, 0x0001, "tbs690b asi card"),
+	MAKE_ENTRY(0x544d, 0x6178, 0x6104, 0x0001, "tbs6104 dvbt card"),
 	{}};
 MODULE_DEVICE_TABLE(pci, tbsmod_id_table);
 

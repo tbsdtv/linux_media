@@ -1,24 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *
  * Copyright (C) STMicroelectronics SA 2017
  * Author(s): M'boumba Cedric Madianga <cedric.madianga@gmail.com>
  *            Pierre-Yves Mordret <pierre-yves.mordret@st.com>
  *
- * License terms: GPL V2.0.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
- * details.
- *
  * Driver for STM32 MDMA controller
  *
  * Inspired by stm32-dma.c and dma-jz4780.c
- *
  */
 
 #include <linux/clk.h>
@@ -1578,11 +1567,9 @@ static int stm32_mdma_probe(struct platform_device *pdev)
 
 	dmadev->nr_channels = nr_channels;
 	dmadev->nr_requests = nr_requests;
-	ret = device_property_read_u32_array(&pdev->dev, "st,ahb-addr-masks",
+	device_property_read_u32_array(&pdev->dev, "st,ahb-addr-masks",
 				       dmadev->ahb_addr_masks,
 				       count);
-	if (ret)
-		return ret;
 	dmadev->nr_ahb_addr_masks = count;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Marvell 88E6xxx Switch Port Registers support
  *
@@ -5,11 +6,6 @@
  *
  * Copyright (c) 2016-2017 Savoir-faire Linux Inc.
  *	Vivien Didelot <vivien.didelot@savoirfairelinux.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/bitfield.h>
@@ -427,18 +423,22 @@ int mv88e6390x_port_set_cmode(struct mv88e6xxx_chip *chip, int port,
 		return 0;
 
 	lane = mv88e6390x_serdes_get_lane(chip, port);
-	if (lane < 0)
+	if (lane < 0 && lane != -ENODEV)
 		return lane;
 
-	if (chip->ports[port].serdes_irq) {
-		err = mv88e6390_serdes_irq_disable(chip, port, lane);
+	if (lane >= 0) {
+		if (chip->ports[port].serdes_irq) {
+			err = mv88e6390_serdes_irq_disable(chip, port, lane);
+			if (err)
+				return err;
+		}
+
+		err = mv88e6390x_serdes_power(chip, port, false);
 		if (err)
 			return err;
 	}
 
-	err = mv88e6390x_serdes_power(chip, port, false);
-	if (err)
-		return err;
+	chip->ports[port].cmode = 0;
 
 	if (cmode) {
 		err = mv88e6xxx_port_read(chip, port, MV88E6XXX_PORT_STS, &reg);
@@ -452,6 +452,12 @@ int mv88e6390x_port_set_cmode(struct mv88e6xxx_chip *chip, int port,
 		if (err)
 			return err;
 
+		chip->ports[port].cmode = cmode;
+
+		lane = mv88e6390x_serdes_get_lane(chip, port);
+		if (lane < 0)
+			return lane;
+
 		err = mv88e6390x_serdes_power(chip, port, true);
 		if (err)
 			return err;
@@ -462,8 +468,6 @@ int mv88e6390x_port_set_cmode(struct mv88e6xxx_chip *chip, int port,
 				return err;
 		}
 	}
-
-	chip->ports[port].cmode = cmode;
 
 	return 0;
 }

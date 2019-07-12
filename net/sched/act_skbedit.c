@@ -1,17 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2008, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Author: Alexander Duyck <alexander.h.duyck@intel.com>
  */
@@ -26,6 +15,7 @@
 #include <net/ip.h>
 #include <net/ipv6.h>
 #include <net/dsfield.h>
+#include <net/pkt_cls.h>
 
 #include <linux/tc_act/tc_skbedit.h>
 #include <net/tc_act/tc_skbedit.h>
@@ -96,11 +86,13 @@ static const struct nla_policy skbedit_policy[TCA_SKBEDIT_MAX + 1] = {
 static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 			    struct nlattr *est, struct tc_action **a,
 			    int ovr, int bind, bool rtnl_held,
+			    struct tcf_proto *tp,
 			    struct netlink_ext_ack *extack)
 {
 	struct tc_action_net *tn = net_generic(net, skbedit_net_id);
 	struct tcf_skbedit_params *params_new;
 	struct nlattr *tb[TCA_SKBEDIT_MAX + 1];
+	struct tcf_chain *goto_ch = NULL;
 	struct tc_skbedit *parm;
 	struct tcf_skbedit *d;
 	u32 flags = 0, *priority = NULL, *mark = NULL, *mask = NULL;
@@ -111,7 +103,8 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 	if (nla == NULL)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_SKBEDIT_MAX, nla, skbedit_policy, NULL);
+	err = nla_parse_nested_deprecated(tb, TCA_SKBEDIT_MAX, nla,
+					  skbedit_policy, NULL);
 	if (err < 0)
 		return err;
 
@@ -186,11 +179,14 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 			return -EEXIST;
 		}
 	}
+	err = tcf_action_check_ctrlact(parm->action, tp, &goto_ch, extack);
+	if (err < 0)
+		goto release_idr;
 
 	params_new = kzalloc(sizeof(*params_new), GFP_KERNEL);
 	if (unlikely(!params_new)) {
-		tcf_idr_release(*a, bind);
-		return -ENOMEM;
+		err = -ENOMEM;
+		goto put_chain;
 	}
 
 	params_new->flags = flags;
@@ -208,16 +204,24 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 		params_new->mask = *mask;
 
 	spin_lock_bh(&d->tcf_lock);
-	d->tcf_action = parm->action;
+	goto_ch = tcf_action_set_ctrlact(*a, parm->action, goto_ch);
 	rcu_swap_protected(d->params, params_new,
 			   lockdep_is_held(&d->tcf_lock));
 	spin_unlock_bh(&d->tcf_lock);
 	if (params_new)
 		kfree_rcu(params_new, rcu);
+	if (goto_ch)
+		tcf_chain_put_by_act(goto_ch);
 
 	if (ret == ACT_P_CREATED)
 		tcf_idr_insert(tn, *a);
 	return ret;
+put_chain:
+	if (goto_ch)
+		tcf_chain_put_by_act(goto_ch);
+release_idr:
+	tcf_idr_release(*a, bind);
+	return err;
 }
 
 static int tcf_skbedit_dump(struct sk_buff *skb, struct tc_action *a,

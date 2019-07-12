@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Filesystem parameter parser.
  *
  * Copyright (C) 2018 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public Licence
- * as published by the Free Software Foundation; either version
- * 2 of the Licence, or (at your option) any later version.
  */
 
 #include <linux/export.h>
@@ -410,7 +406,7 @@ bool fs_validate_description(const struct fs_parameter_description *desc)
 			for (param = desc->specs; param->name; param++) {
 				if (param->opt == e->opt &&
 				    param->type != fs_param_is_enum) {
-					pr_err("VALIDATE %s: e[%lu] enum val for %s\n",
+					pr_err("VALIDATE %s: e[%tu] enum val for %s\n",
 					       name, e - desc->enums, param->name);
 					good = false;
 				}

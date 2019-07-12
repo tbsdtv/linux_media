@@ -1,24 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* ------------------------------------------------------------
  * ibmvscsi.c
  * (C) Copyright IBM Corporation 1994, 2004
  * Authors: Colin DeVilbiss (devilbis@us.ibm.com)
  *          Santiago Leon (santil@us.ibm.com)
  *          Dave Boutcher (sleddog@us.ibm.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
- * USA
  *
  * ------------------------------------------------------------
  * Emulation of a SCSI host adapter for Virtual I/O devices
@@ -96,6 +82,7 @@ static int client_reserve = 1;
 static char partition_name[96] = "UNKNOWN";
 static unsigned int partition_number = -1;
 static LIST_HEAD(ibmvscsi_head);
+static DEFINE_SPINLOCK(ibmvscsi_driver_lock);
 
 static struct scsi_transport_template *ibmvscsi_transport_template;
 
@@ -2270,7 +2257,9 @@ static int ibmvscsi_probe(struct vio_dev *vdev, const struct vio_device_id *id)
 	}
 
 	dev_set_drvdata(&vdev->dev, hostdata);
+	spin_lock(&ibmvscsi_driver_lock);
 	list_add_tail(&hostdata->host_list, &ibmvscsi_head);
+	spin_unlock(&ibmvscsi_driver_lock);
 	return 0;
 
       add_srp_port_failed:
@@ -2292,15 +2281,27 @@ static int ibmvscsi_probe(struct vio_dev *vdev, const struct vio_device_id *id)
 static int ibmvscsi_remove(struct vio_dev *vdev)
 {
 	struct ibmvscsi_host_data *hostdata = dev_get_drvdata(&vdev->dev);
-	list_del(&hostdata->host_list);
-	unmap_persist_bufs(hostdata);
+	unsigned long flags;
+
+	srp_remove_host(hostdata->host);
+	scsi_remove_host(hostdata->host);
+
+	purge_requests(hostdata, DID_ERROR);
+
+	spin_lock_irqsave(hostdata->host->host_lock, flags);
 	release_event_pool(&hostdata->pool, hostdata);
+	spin_unlock_irqrestore(hostdata->host->host_lock, flags);
+
 	ibmvscsi_release_crq_queue(&hostdata->queue, hostdata,
 					max_events);
 
 	kthread_stop(hostdata->work_thread);
-	srp_remove_host(hostdata->host);
-	scsi_remove_host(hostdata->host);
+	unmap_persist_bufs(hostdata);
+
+	spin_lock(&ibmvscsi_driver_lock);
+	list_del(&hostdata->host_list);
+	spin_unlock(&ibmvscsi_driver_lock);
+
 	scsi_host_put(hostdata->host);
 
 	return 0;

@@ -1,14 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * bpf_jit32.h: BPF JIT compiler for PPC
  *
  * Copyright 2011 Matt Evans <matt@ozlabs.org>, IBM Corporation
  *
  * Split from bpf_jit.h
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2
- * of the License.
  */
 #ifndef _BPF_JIT32_H
 #define _BPF_JIT32_H
@@ -121,6 +117,10 @@ DECLARE_LOAD_FUNC(sk_load_byte_msh);
 #else
 #define PPC_NTOHS_OFFS(r, base, i)	PPC_LHZ_OFFS(r, base, i)
 #endif
+
+#define PPC_BPF_LL(r, base, i) do { PPC_LWZ(r, base, i); } while(0)
+#define PPC_BPF_STL(r, base, i) do { PPC_STW(r, base, i); } while(0)
+#define PPC_BPF_STLU(r, base, i) do { PPC_STWU(r, base, i); } while(0)
 
 #define SEEN_DATAREF 0x10000 /* might call external helpers */
 #define SEEN_XREG    0x20000 /* X reg is used */

@@ -3,6 +3,7 @@
 
 #include <linux/kernel.h>
 #include <linux/err.h>
+#include <linux/sfp.h>
 
 #include "core.h"
 #include "core_env.h"
@@ -113,7 +114,7 @@ int mlxsw_env_module_temp_thresholds_get(struct mlxsw_core *core, int module,
 		return 0;
 	default:
 		/* Do not consider thresholds for zero temperature. */
-		if (!MLXSW_REG_MTMP_TEMP_TO_MC(module_temp)) {
+		if (MLXSW_REG_MTMP_TEMP_TO_MC(module_temp) == 0) {
 			*temp = 0;
 			return 0;
 		}
@@ -162,7 +163,7 @@ int mlxsw_env_get_module_info(struct mlxsw_core *mlxsw_core, int module,
 {
 	u8 module_info[MLXSW_REG_MCIA_EEPROM_MODULE_INFO_SIZE];
 	u16 offset = MLXSW_REG_MCIA_EEPROM_MODULE_INFO_SIZE;
-	u8 module_rev_id, module_id;
+	u8 module_rev_id, module_id, diag_mon;
 	unsigned int read_size;
 	int err;
 
@@ -195,8 +196,21 @@ int mlxsw_env_get_module_info(struct mlxsw_core *mlxsw_core, int module,
 		}
 		break;
 	case MLXSW_REG_MCIA_EEPROM_MODULE_INFO_ID_SFP:
+		/* Verify if transceiver provides diagnostic monitoring page */
+		err = mlxsw_env_query_module_eeprom(mlxsw_core, module,
+						    SFP_DIAGMON, 1, &diag_mon,
+						    &read_size);
+		if (err)
+			return err;
+
+		if (read_size < 1)
+			return -EIO;
+
 		modinfo->type       = ETH_MODULE_SFF_8472;
-		modinfo->eeprom_len = ETH_MODULE_SFF_8472_LEN;
+		if (diag_mon)
+			modinfo->eeprom_len = ETH_MODULE_SFF_8472_LEN;
+		else
+			modinfo->eeprom_len = ETH_MODULE_SFF_8472_LEN / 2;
 		break;
 	default:
 		return -EINVAL;

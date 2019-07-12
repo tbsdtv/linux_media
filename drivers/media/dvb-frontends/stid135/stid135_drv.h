@@ -270,6 +270,8 @@ struct fe_stid135_internal_param {
 	struct gse_ram_byte		gse_flt[8];
 	struct modcod_data		mc_flt[NB_SAT_MODCOD];
 	BOOL 				mis_mode[8]; /* Memorisation of MIS mode */
+
+	struct mutex *master_lock;
 };
 
 
@@ -415,6 +417,10 @@ fe_lla_error_t FE_STiD135_WaitForLock(fe_stid135_handle_t Handle,enum fe_stid135
 
 
 /* ---------------- Exported functions (API) ---------------------- */
+fe_lla_error_t fe_stid135_get_signal_quality(fe_stid135_handle_t Handle,
+					enum fe_stid135_demod demod,
+					struct fe_sat_signal_info *pInfo,
+					int mc_auto);
 
 fe_lla_error_t fe_stid135_get_signal_info(fe_stid135_handle_t Handle,  
 	enum fe_stid135_demod Demod, struct fe_sat_signal_info *pInfo, 

@@ -116,7 +116,7 @@ static int user_set_domain;
 static struct bus_type ap_bus_type;
 
 /* Adapter interrupt definitions */
-static void ap_interrupt_handler(struct airq_struct *airq);
+static void ap_interrupt_handler(struct airq_struct *airq, bool floating);
 
 static int ap_airq_flag;
 
@@ -254,19 +254,37 @@ static inline int ap_test_config_card_id(unsigned int id)
 }
 
 /*
- * ap_test_config_domain(): Test, whether an AP usage domain is configured.
+ * ap_test_config_usage_domain(): Test, whether an AP usage domain
+ * is configured.
  * @domain AP usage domain ID
  *
  * Returns 0 if the usage domain is not configured
  *	   1 if the usage domain is configured or
  *	     if the configuration information is not available
  */
-static inline int ap_test_config_domain(unsigned int domain)
+int ap_test_config_usage_domain(unsigned int domain)
 {
 	if (!ap_configuration)	/* QCI not supported */
 		return domain < 16;
 	return ap_test_config(ap_configuration->aqm, domain);
 }
+EXPORT_SYMBOL(ap_test_config_usage_domain);
+
+/*
+ * ap_test_config_ctrl_domain(): Test, whether an AP control domain
+ * is configured.
+ * @domain AP control domain ID
+ *
+ * Returns 1 if the control domain is configured
+ *	   0 in all other cases
+ */
+int ap_test_config_ctrl_domain(unsigned int domain)
+{
+	if (!ap_configuration)	/* QCI not supported */
+		return 0;
+	return ap_test_config(ap_configuration->adm, domain);
+}
+EXPORT_SYMBOL(ap_test_config_ctrl_domain);
 
 /**
  * ap_query_queue(): Check if an AP queue is available.
@@ -393,7 +411,7 @@ static enum hrtimer_restart ap_poll_timeout(struct hrtimer *unused)
  * ap_interrupt_handler() - Schedule ap_tasklet on interrupt
  * @airq: pointer to adapter interrupt descriptor
  */
-static void ap_interrupt_handler(struct airq_struct *airq)
+static void ap_interrupt_handler(struct airq_struct *airq, bool floating)
 {
 	inc_irq_stat(IRQIO_APB);
 	if (!ap_suspend_flag)
@@ -810,10 +828,17 @@ static int ap_device_remove(struct device *dev)
 	struct ap_device *ap_dev = to_ap_dev(dev);
 	struct ap_driver *ap_drv = ap_dev->drv;
 
+	/* prepare ap queue device removal */
 	if (is_queue_dev(dev))
-		ap_queue_remove(to_ap_queue(dev));
+		ap_queue_prepare_remove(to_ap_queue(dev));
+
+	/* driver's chance to clean up gracefully */
 	if (ap_drv->remove)
 		ap_drv->remove(ap_dev);
+
+	/* now do the ap queue device remove */
+	if (is_queue_dev(dev))
+		ap_queue_remove(to_ap_queue(dev));
 
 	/* Remove queue/card from list of active queues/cards */
 	spin_lock_bh(&ap_list_lock);
@@ -859,6 +884,16 @@ void ap_bus_force_rescan(void)
 	flush_work(&ap_scan_work);
 }
 EXPORT_SYMBOL(ap_bus_force_rescan);
+
+/*
+* A config change has happened, force an ap bus rescan.
+*/
+void ap_bus_cfg_chg(void)
+{
+	AP_DBF(DBF_INFO, "%s config change, forcing bus rescan\n", __func__);
+
+	ap_bus_force_rescan();
+}
 
 /*
  * hex2bitmap() - parse hex mask string and set bitmap.
@@ -1250,7 +1285,7 @@ static void ap_select_domain(void)
 	best_domain = -1;
 	max_count = 0;
 	for (i = 0; i < AP_DOMAINS; i++) {
-		if (!ap_test_config_domain(i) ||
+		if (!ap_test_config_usage_domain(i) ||
 		    !test_bit_inv(i, ap_perms.aqm))
 			continue;
 		count = 0;
@@ -1425,7 +1460,7 @@ static void _ap_scan_bus_adapter(int id)
 				      (void *)(long) qid,
 				      __match_queue_device_with_qid);
 		aq = dev ? to_ap_queue(dev) : NULL;
-		if (!ap_test_config_domain(dom)) {
+		if (!ap_test_config_usage_domain(dom)) {
 			if (dev) {
 				/* Queue device exists but has been
 				 * removed from configuration.

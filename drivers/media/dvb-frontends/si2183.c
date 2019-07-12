@@ -69,7 +69,6 @@ struct si2183_dev {
 	enum fe_status fe_status;
 	u8 stat_resp;
 	u16 snr;
-	bool active;
 	bool fw_loaded;
 	u8 ts_mode;
 	bool ts_clock_inv;
@@ -237,7 +236,7 @@ static int si2183_read_status(struct dvb_frontend *fe, enum fe_status *status)
 
 	*status = 0;
 
-	if (!dev->active) {
+	if (!dev->active_fe) {
 		ret = -EAGAIN;
 		goto err;
 	}
@@ -787,7 +786,7 @@ static int si2183_set_frontend(struct dvb_frontend *fe)
 			c->bandwidth_hz, c->symbol_rate, c->inversion,
 			c->stream_id);
 
-	if (!dev->active) {
+	if (!dev->active_fe) {
 		ret = -EAGAIN;
 		goto err;
 	}
@@ -1091,7 +1090,6 @@ static int si2183_init(struct dvb_frontend *fe)
 
 	dev->fw_loaded = true;
 warm:
-	dev->active = true;
 	dev->active_fe |= (1 << fe->id);
 	return 0;
 
@@ -1112,8 +1110,6 @@ static int si2183_sleep(struct dvb_frontend *fe)
 	dev->active_fe &= ~(1 << fe->id);
 	if (dev->active_fe)
 		return 0;
-
-	dev->active = false;
 
 	memcpy(cmd.args, "\x13", 1);
 	cmd.wlen = 1;
@@ -1535,6 +1531,7 @@ static int si2183_probe(struct i2c_client *client,
 	dev->RF_switch = config->RF_switch;
 	dev->rf_in  = config->rf_in;
 	dev->fw_loaded = false;
+	dev->delivery_system = 0;
 	dev->snr = 0;
 	dev->stat_resp = 0;
 	dev->active_fe = 0;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * HD-audio core bus driver
  */
@@ -38,6 +39,8 @@ int snd_hdac_bus_init(struct hdac_bus *bus, struct device *dev,
 	INIT_WORK(&bus->unsol_work, snd_hdac_bus_process_unsol_events);
 	spin_lock_init(&bus->reg_lock);
 	mutex_init(&bus->cmd_mutex);
+	mutex_init(&bus->lock);
+	INIT_LIST_HEAD(&bus->hlink_list);
 	bus->irq = -1;
 	return 0;
 }

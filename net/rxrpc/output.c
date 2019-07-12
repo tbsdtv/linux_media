@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* RxRPC packet transmission
  *
  * Copyright (C) 2007 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -335,7 +331,6 @@ int rxrpc_send_data_packet(struct rxrpc_call *call, struct sk_buff *skb,
 	struct kvec iov[2];
 	rxrpc_serial_t serial;
 	size_t len;
-	bool lost = false;
 	int ret, opt;
 
 	_enter(",{%d}", skb->len);
@@ -393,14 +388,14 @@ int rxrpc_send_data_packet(struct rxrpc_call *call, struct sk_buff *skb,
 		static int lose;
 		if ((lose++ & 7) == 7) {
 			ret = 0;
-			lost = true;
+			trace_rxrpc_tx_data(call, sp->hdr.seq, serial,
+					    whdr.flags, retrans, true);
+			goto done;
 		}
 	}
 
-	trace_rxrpc_tx_data(call, sp->hdr.seq, serial, whdr.flags,
-			    retrans, lost);
-	if (lost)
-		goto done;
+	trace_rxrpc_tx_data(call, sp->hdr.seq, serial, whdr.flags, retrans,
+			    false);
 
 	/* send the packet with the don't fragment bit set if we currently
 	 * think it's small enough */

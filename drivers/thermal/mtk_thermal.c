@@ -1,18 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015 MediaTek Inc.
  * Author: Hanyi Wu <hanyi.wu@mediatek.com>
  *         Sascha Hauer <s.hauer@pengutronix.de>
  *         Dawei Chien <dawei.chien@mediatek.com>
  *         Louis Yu <louis.yu@mediatek.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -199,6 +191,9 @@ enum {
 #define MT7622_TS1	0
 #define MT7622_NUM_CONTROLLER		1
 
+/* The maximum number of banks */
+#define MAX_NUM_ZONES		8
+
 /* The calibration coefficient of sensor  */
 #define MT7622_CALIBRATION	165
 
@@ -249,7 +244,7 @@ struct mtk_thermal_data {
 	const int num_controller;
 	const int *controller_offset;
 	bool need_switch_bank;
-	struct thermal_bank_cfg bank_data[];
+	struct thermal_bank_cfg bank_data[MAX_NUM_ZONES];
 };
 
 struct mtk_thermal {
@@ -268,7 +263,7 @@ struct mtk_thermal {
 	s32 vts[MAX_NUM_VTS];
 
 	const struct mtk_thermal_data *conf;
-	struct mtk_thermal_bank banks[];
+	struct mtk_thermal_bank banks[MAX_NUM_ZONES];
 };
 
 /* MT8183 thermal sensor data */

@@ -1,2 +1,2 @@
-generic-y += kvm_para.h
+# SPDX-License-Identifier: GPL-2.0
 generic-y += ucontext.h

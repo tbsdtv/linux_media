@@ -10,6 +10,5 @@ obj-$(CONFIG_VIDEO_CX231XX_ALSA) += cx231xx-alsa.o
 obj-$(CONFIG_VIDEO_CX231XX_DVB) += cx231xx-dvb-ci.o
 cx231xx-dvb-ci-objs += cx231xx-dvb.o tbscxci.o
 
-ccflags-y += -Idrivers/media/tuners
-ccflags-y += -Idrivers/media/dvb-frontends
-ccflags-y += -Idrivers/media/usb/dvb-usb
+ccflags-y += -I $(srctree)/drivers/media/tuners
+ccflags-y += -I $(srctree)/drivers/media/dvb-frontends

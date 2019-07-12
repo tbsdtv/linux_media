@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Regents of the University of California
- *
- *   This program is free software; you can redistribute it and/or
- *   modify it under the terms of the GNU General Public License
- *   as published by the Free Software Foundation, version 2.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
  */
 
 #include <linux/init.h>
@@ -24,6 +16,10 @@
 #include <asm/sections.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
+
+unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)]
+							__page_aligned_bss;
+EXPORT_SYMBOL(empty_zero_page);
 
 static void __init zone_sizes_init(void)
 {
@@ -60,11 +56,6 @@ void __init mem_init(void)
 	memblock_free_all();
 
 	mem_init_print_info(NULL);
-}
-
-void free_initmem(void)
-{
-	free_initmem_default(0);
 }
 
 #ifdef CONFIG_BLK_DEV_INITRD
@@ -117,6 +108,14 @@ void __init setup_bootmem(void)
 			 */
 			memblock_reserve(reg->base, vmlinux_end - reg->base);
 			mem_size = min(reg->size, (phys_addr_t)-PAGE_OFFSET);
+
+			/*
+			 * Remove memblock from the end of usable area to the
+			 * end of region
+			 */
+			if (reg->base + mem_size < end)
+				memblock_remove(reg->base + mem_size,
+						end - reg->base - mem_size);
 		}
 	}
 	BUG_ON(mem_size == 0);
@@ -142,6 +141,11 @@ void __init setup_bootmem(void)
 				  &memblock.memory, 0);
 	}
 }
+
+unsigned long va_pa_offset;
+EXPORT_SYMBOL(va_pa_offset);
+unsigned long pfn_base;
+EXPORT_SYMBOL(pfn_base);
 
 pgd_t swapper_pg_dir[PTRS_PER_PGD] __page_aligned_bss;
 pgd_t trampoline_pg_dir[PTRS_PER_PGD] __initdata __aligned(PAGE_SIZE);
@@ -171,6 +175,25 @@ void __set_fixmap(enum fixed_addresses idx, phys_addr_t phys, pgprot_t prot)
 		local_flush_tlb_page(addr);
 	}
 }
+
+/*
+ * setup_vm() is called from head.S with MMU-off.
+ *
+ * Following requirements should be honoured for setup_vm() to work
+ * correctly:
+ * 1) It should use PC-relative addressing for accessing kernel symbols.
+ *    To achieve this we always use GCC cmodel=medany.
+ * 2) The compiler instrumentation for FTRACE will not work for setup_vm()
+ *    so disable compiler instrumentation when FTRACE is enabled.
+ *
+ * Currently, the above requirements are honoured by using custom CFLAGS
+ * for init.o in mm/Makefile.
+ */
+
+#ifndef __riscv_cmodel_medany
+#error "setup_vm() is called from head.S before relocate so it should "
+	"not use absolute addressing."
+#endif
 
 asmlinkage void __init setup_vm(void)
 {

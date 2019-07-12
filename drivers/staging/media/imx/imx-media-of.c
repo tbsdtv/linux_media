@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Media driver for Freescale i.MX5/6 SOC
  *
  * Open Firmware parsing.
  *
  * Copyright (c) 2016 Mentor Graphics Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 #include <linux/of_platform.h>
 #include <media/v4l2-ctrls.h>
@@ -23,6 +19,9 @@
 int imx_media_of_add_csi(struct imx_media_dev *imxmd,
 			 struct device_node *csi_np)
 {
+	struct v4l2_async_subdev *asd;
+	int ret = 0;
+
 	if (!of_device_is_available(csi_np)) {
 		dev_dbg(imxmd->md.dev, "%s: %pOFn not enabled\n", __func__,
 			csi_np);
@@ -30,18 +29,25 @@ int imx_media_of_add_csi(struct imx_media_dev *imxmd,
 	}
 
 	/* add CSI fwnode to async notifier */
-	return imx_media_add_async_subdev(imxmd, of_fwnode_handle(csi_np),
-					  NULL);
+	asd = v4l2_async_notifier_add_fwnode_subdev(&imxmd->notifier,
+						    of_fwnode_handle(csi_np),
+						    sizeof(*asd));
+	if (IS_ERR(asd)) {
+		ret = PTR_ERR(asd);
+		if (ret == -EEXIST)
+			dev_dbg(imxmd->md.dev, "%s: already added %pOFn\n",
+				__func__, csi_np);
+	}
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(imx_media_of_add_csi);
 
 int imx_media_add_of_subdevs(struct imx_media_dev *imxmd,
 			     struct device_node *np)
 {
-	bool ipu_found[2] = {false, false};
 	struct device_node *csi_np;
 	int i, ret;
-	u32 ipu_id;
 
 	for (i = 0; ; i++) {
 		csi_np = of_parse_phandle(np, "ports", i);
@@ -59,34 +65,15 @@ int imx_media_add_of_subdevs(struct imx_media_dev *imxmd,
 			/* other error, can't continue */
 			goto err_out;
 		}
-
-		ret = of_alias_get_id(csi_np->parent, "ipu");
-		if (ret < 0)
-			goto err_out;
-		if (ret > 1) {
-			ret = -EINVAL;
-			goto err_out;
-		}
-
-		ipu_id = ret;
-
-		if (!ipu_found[ipu_id]) {
-			ret = imx_media_add_ipu_internal_subdevs(imxmd,
-								 ipu_id);
-			if (ret)
-				goto err_out;
-		}
-
-		ipu_found[ipu_id] = true;
 	}
 
 	return 0;
 
 err_out:
-	imx_media_remove_ipu_internal_subdevs(imxmd);
 	of_node_put(csi_np);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(imx_media_add_of_subdevs);
 
 /*
  * Create a single media link to/from sd using a fwnode link.
@@ -156,6 +143,7 @@ int imx_media_create_of_links(struct imx_media_dev *imxmd,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(imx_media_create_of_links);
 
 /*
  * Create media links to the given CSI subdevice's sink pads,
@@ -199,3 +187,4 @@ int imx_media_create_csi_of_links(struct imx_media_dev *imxmd,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(imx_media_create_csi_of_links);

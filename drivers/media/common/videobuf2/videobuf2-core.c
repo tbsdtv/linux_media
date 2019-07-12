@@ -205,7 +205,12 @@ static int __vb2_buf_mem_alloc(struct vb2_buffer *vb)
 	 * NOTE: mmapped areas should be page aligned
 	 */
 	for (plane = 0; plane < vb->num_planes; ++plane) {
+		/* Memops alloc requires size to be page aligned. */
 		unsigned long size = PAGE_ALIGN(vb->planes[plane].length);
+
+		/* Did it wrap around? */
+		if (size < vb->planes[plane].length)
+			goto free;
 
 		mem_priv = call_ptr_memop(vb, alloc,
 				q->alloc_devs[plane] ? : q->dev,
@@ -2200,6 +2205,13 @@ int vb2_mmap(struct vb2_queue *q, struct vm_area_struct *vma)
 		ret = -EINVAL;
 		goto unlock;
 	}
+
+	/*
+	 * vm_pgoff is treated in V4L2 API as a 'cookie' to select a buffer,
+	 * not as a in-buffer offset. We always want to mmap a whole buffer
+	 * from its beginning.
+	 */
+	vma->vm_pgoff = 0;
 
 	ret = call_memop(vb, mmap, vb->planes[plane].mem_priv, vma);
 

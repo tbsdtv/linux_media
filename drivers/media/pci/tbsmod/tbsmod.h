@@ -22,6 +22,7 @@ struct mod_channel
 	u8 						dma_start_flag;
 	struct kfifo 			fifo; 
 	u8						channel_index;
+	u32						input_bitrate;
 	
 };
 
@@ -36,15 +37,16 @@ struct tbs_pcie_dev {
 	u8 						modulation;
 	u32						frequency;
 	u32						srate;
-	u32						input_bitrate;
-	struct mod_channel		channnel[CHANNELS];
+	//u32						input_bitrate;
+	struct mod_channel		channel[CHANNELS];
 	u8						mod_index;
-	u32				cardid;
+	u32						cardid;
+
+	u8						bw;  //dvbt
+	
 
 };
 
-
-
-static void tbs_adapters_init(struct tbs_pcie_dev *dev);
+static void tbs_adapters_init_dvbc(struct tbs_pcie_dev *dev);
 
 #endif

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Add configfs and memory store: Kyungchan Koh <kkc6196@fb.com> and
  * Shaohua Li <shli@fb.com>
@@ -1746,6 +1747,11 @@ static int __init null_init(void)
 	if (!is_power_of_2(g_zone_size)) {
 		pr_err("null_blk: zone_size must be power-of-two\n");
 		return -EINVAL;
+	}
+
+	if (g_home_node != NUMA_NO_NODE && g_home_node >= nr_online_nodes) {
+		pr_err("null_blk: invalid home_node value\n");
+		g_home_node = NUMA_NO_NODE;
 	}
 
 	if (g_queue_mode == NULL_Q_RQ) {
