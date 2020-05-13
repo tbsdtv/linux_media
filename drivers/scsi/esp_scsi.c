@@ -243,8 +243,6 @@ static void esp_set_all_config3(struct esp *esp, u8 val)
 /* Reset the ESP chip, _not_ the SCSI bus. */
 static void esp_reset_esp(struct esp *esp)
 {
-	u8 family_code, version;
-
 	/* Now reset the ESP chip */
 	scsi_esp_cmd(esp, ESP_CMD_RC);
 	scsi_esp_cmd(esp, ESP_CMD_NULL | ESP_CMD_DMA);
@@ -257,14 +255,19 @@ static void esp_reset_esp(struct esp *esp)
 	 */
 	esp->max_period = ((35 * esp->ccycle) / 1000);
 	if (esp->rev == FAST) {
-		version = esp_read8(ESP_UID);
-		family_code = (version & 0xf8) >> 3;
-		if (family_code == 0x02)
+		u8 family_code = ESP_FAMILY(esp_read8(ESP_UID));
+
+		if (family_code == ESP_UID_F236) {
 			esp->rev = FAS236;
-		else if (family_code == 0x0a)
+		} else if (family_code == ESP_UID_HME) {
 			esp->rev = FASHME; /* Version is usually '5'. */
-		else
+		} else if (family_code == ESP_UID_FSC) {
+			esp->rev = FSC;
+			/* Enable Active Negation */
+			esp_write8(ESP_CONFIG4_RADE, ESP_CFG4);
+		} else {
 			esp->rev = FAS100A;
+		}
 		esp->min_period = ((4 * esp->ccycle) / 1000);
 	} else {
 		esp->min_period = ((5 * esp->ccycle) / 1000);
@@ -308,7 +311,7 @@ static void esp_reset_esp(struct esp *esp)
 
 	case FAS236:
 	case PCSCSI:
-		/* Fast 236, AM53c974 or HME */
+	case FSC:
 		esp_write8(esp->config2, ESP_CFG2);
 		if (esp->rev == FASHME) {
 			u8 cfg3 = esp->target[0].esp_config3;
@@ -371,6 +374,7 @@ static void esp_map_dma(struct esp *esp, struct scsi_cmnd *cmd)
 	struct esp_cmd_priv *spriv = ESP_CMD_PRIV(cmd);
 	struct scatterlist *sg = scsi_sglist(cmd);
 	int total = 0, i;
+	struct scatterlist *s;
 
 	if (cmd->sc_data_direction == DMA_NONE)
 		return;
@@ -381,16 +385,18 @@ static void esp_map_dma(struct esp *esp, struct scsi_cmnd *cmd)
 		 * a dma address, so perform an identity mapping.
 		 */
 		spriv->num_sg = scsi_sg_count(cmd);
-		for (i = 0; i < spriv->num_sg; i++) {
-			sg[i].dma_address = (uintptr_t)sg_virt(&sg[i]);
-			total += sg_dma_len(&sg[i]);
+
+		scsi_for_each_sg(cmd, s, spriv->num_sg, i) {
+			s->dma_address = (uintptr_t)sg_virt(s);
+			total += sg_dma_len(s);
 		}
 	} else {
 		spriv->num_sg = scsi_dma_map(cmd);
-		for (i = 0; i < spriv->num_sg; i++)
-			total += sg_dma_len(&sg[i]);
+		scsi_for_each_sg(cmd, s, spriv->num_sg, i)
+			total += sg_dma_len(s);
 	}
 	spriv->cur_residue = sg_dma_len(sg);
+	spriv->prv_sg = NULL;
 	spriv->cur_sg = sg;
 	spriv->tot_residue = total;
 }
@@ -444,7 +450,8 @@ static void esp_advance_dma(struct esp *esp, struct esp_cmd_entry *ent,
 		p->tot_residue = 0;
 	}
 	if (!p->cur_residue && p->tot_residue) {
-		p->cur_sg++;
+		p->prv_sg = p->cur_sg;
+		p->cur_sg = sg_next(p->cur_sg);
 		p->cur_residue = sg_dma_len(p->cur_sg);
 	}
 }
@@ -465,6 +472,7 @@ static void esp_save_pointers(struct esp *esp, struct esp_cmd_entry *ent)
 		return;
 	}
 	ent->saved_cur_residue = spriv->cur_residue;
+	ent->saved_prv_sg = spriv->prv_sg;
 	ent->saved_cur_sg = spriv->cur_sg;
 	ent->saved_tot_residue = spriv->tot_residue;
 }
@@ -479,6 +487,7 @@ static void esp_restore_pointers(struct esp *esp, struct esp_cmd_entry *ent)
 		return;
 	}
 	spriv->cur_residue = ent->saved_cur_residue;
+	spriv->prv_sg = ent->saved_prv_sg;
 	spriv->cur_sg = ent->saved_cur_sg;
 	spriv->tot_residue = ent->saved_tot_residue;
 }
@@ -1647,7 +1656,7 @@ static int esp_msgin_process(struct esp *esp)
 		spriv = ESP_CMD_PRIV(ent->cmd);
 
 		if (spriv->cur_residue == sg_dma_len(spriv->cur_sg)) {
-			spriv->cur_sg--;
+			spriv->cur_sg = spriv->prv_sg;
 			spriv->cur_residue = 1;
 		} else
 			spriv->cur_residue++;
@@ -2367,10 +2376,11 @@ static const char *esp_chip_names[] = {
 	"ESP100A",
 	"ESP236",
 	"FAS236",
+	"AM53C974",
+	"53CF9x-2",
 	"FAS100A",
 	"FAST",
 	"FASHME",
-	"AM53C974",
 };
 
 static struct scsi_transport_template *esp_transport_template;

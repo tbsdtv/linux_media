@@ -458,16 +458,16 @@ static int ath10k_ahb_resource_init(struct ath10k *ar)
 
 	ar_ahb->mem_len = resource_size(res);
 
-	ar_ahb->gcc_mem = ioremap_nocache(ATH10K_GCC_REG_BASE,
-					  ATH10K_GCC_REG_SIZE);
+	ar_ahb->gcc_mem = ioremap(ATH10K_GCC_REG_BASE,
+				  ATH10K_GCC_REG_SIZE);
 	if (!ar_ahb->gcc_mem) {
 		ath10k_err(ar, "gcc mem ioremap error\n");
 		ret = -ENOMEM;
 		goto err_mem_unmap;
 	}
 
-	ar_ahb->tcsr_mem = ioremap_nocache(ATH10K_TCSR_REG_BASE,
-					   ATH10K_TCSR_REG_SIZE);
+	ar_ahb->tcsr_mem = ioremap(ATH10K_TCSR_REG_BASE,
+				   ATH10K_TCSR_REG_SIZE);
 	if (!ar_ahb->tcsr_mem) {
 		ath10k_err(ar, "tcsr mem ioremap error\n");
 		ret = -ENOMEM;
@@ -740,7 +740,7 @@ static int ath10k_ahb_probe(struct platform_device *pdev)
 	enum ath10k_hw_rev hw_rev;
 	size_t size;
 	int ret;
-	struct ath10k_bus_params bus_params;
+	struct ath10k_bus_params bus_params = {};
 
 	of_id = of_match_device(ath10k_ahb_of_match, &pdev->dev);
 	if (!of_id) {

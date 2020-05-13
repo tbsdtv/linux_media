@@ -9,9 +9,9 @@
 #include "xfs_shared.h"
 #include "xfs_format.h"
 #include "xfs_log_format.h"
+#include "xfs_log_priv.h"
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
-#include "xfs_inode.h"
 #include "xfs_extent_busy.h"
 #include "xfs_quota.h"
 #include "xfs_trans.h"
@@ -72,7 +72,7 @@ xfs_trans_free(
 	if (!(tp->t_flags & XFS_TRANS_NO_WRITECOUNT))
 		sb_end_intwrite(tp->t_mountp->m_super);
 	xfs_trans_free_dqinfo(tp);
-	kmem_zone_free(xfs_trans_zone, tp);
+	kmem_cache_free(xfs_trans_zone, tp);
 }
 
 /*
@@ -91,7 +91,7 @@ xfs_trans_dup(
 
 	trace_xfs_trans_dup(tp, _RET_IP_);
 
-	ntp = kmem_zone_zalloc(xfs_trans_zone, KM_SLEEP);
+	ntp = kmem_zone_zalloc(xfs_trans_zone, 0);
 
 	/*
 	 * Initialize the new transaction structure.
@@ -151,8 +151,9 @@ xfs_trans_reserve(
 	uint			blocks,
 	uint			rtextents)
 {
-	int		error = 0;
-	bool		rsvd = (tp->t_flags & XFS_TRANS_RESERVE) != 0;
+	struct xfs_mount	*mp = tp->t_mountp;
+	int			error = 0;
+	bool			rsvd = (tp->t_flags & XFS_TRANS_RESERVE) != 0;
 
 	/* Mark this thread as being in a transaction */
 	current_set_flags_nested(&tp->t_pflags, PF_MEMALLOC_NOFS);
@@ -163,7 +164,7 @@ xfs_trans_reserve(
 	 * fail if the count would go below zero.
 	 */
 	if (blocks > 0) {
-		error = xfs_mod_fdblocks(tp->t_mountp, -((int64_t)blocks), rsvd);
+		error = xfs_mod_fdblocks(mp, -((int64_t)blocks), rsvd);
 		if (error != 0) {
 			current_restore_flags_nested(&tp->t_pflags, PF_MEMALLOC_NOFS);
 			return -ENOSPC;
@@ -192,9 +193,9 @@ xfs_trans_reserve(
 
 		if (tp->t_ticket != NULL) {
 			ASSERT(resp->tr_logflags & XFS_TRANS_PERM_LOG_RES);
-			error = xfs_log_regrant(tp->t_mountp, tp->t_ticket);
+			error = xfs_log_regrant(mp, tp->t_ticket);
 		} else {
-			error = xfs_log_reserve(tp->t_mountp,
+			error = xfs_log_reserve(mp,
 						resp->tr_logres,
 						resp->tr_logcount,
 						&tp->t_ticket, XFS_TRANSACTION,
@@ -214,7 +215,7 @@ xfs_trans_reserve(
 	 * fail if the count would go below zero.
 	 */
 	if (rtextents > 0) {
-		error = xfs_mod_frextents(tp->t_mountp, -((int64_t)rtextents));
+		error = xfs_mod_frextents(mp, -((int64_t)rtextents));
 		if (error) {
 			error = -ENOSPC;
 			goto undo_log;
@@ -230,7 +231,7 @@ xfs_trans_reserve(
 	 */
 undo_log:
 	if (resp->tr_logres > 0) {
-		xfs_log_done(tp->t_mountp, tp->t_ticket, NULL, false);
+		xfs_log_ticket_ungrant(mp->m_log, tp->t_ticket);
 		tp->t_ticket = NULL;
 		tp->t_log_res = 0;
 		tp->t_flags &= ~XFS_TRANS_PERM_LOG_RES;
@@ -238,7 +239,7 @@ undo_log:
 
 undo_blocks:
 	if (blocks > 0) {
-		xfs_mod_fdblocks(tp->t_mountp, (int64_t)blocks, rsvd);
+		xfs_mod_fdblocks(mp, (int64_t)blocks, rsvd);
 		tp->t_blk_res = 0;
 	}
 
@@ -264,9 +265,7 @@ xfs_trans_alloc(
 	 * GFP_NOFS allocation context so that we avoid lockdep false positives
 	 * by doing GFP_KERNEL allocations inside sb_start_intwrite().
 	 */
-	tp = kmem_zone_zalloc(xfs_trans_zone,
-		(flags & XFS_TRANS_NOFS) ? KM_NOFS : KM_SLEEP);
-
+	tp = kmem_zone_zalloc(xfs_trans_zone, 0);
 	if (!(flags & XFS_TRANS_NO_WRITECOUNT))
 		sb_start_intwrite(mp->m_super);
 
@@ -309,6 +308,11 @@ xfs_trans_alloc(
  *
  * Note the zero-length reservation; this transaction MUST be cancelled
  * without any dirty data.
+ *
+ * Callers should obtain freeze protection to avoid two conflicts with fs
+ * freezing: (1) having active transactions trip the m_active_trans ASSERTs;
+ * and (2) grabbing buffers at the same time that freeze is trying to drain
+ * the buffer LRU list.
  */
 int
 xfs_trans_alloc_empty(
@@ -452,8 +456,8 @@ xfs_trans_apply_sb_deltas(
 	xfs_buf_t	*bp;
 	int		whole = 0;
 
-	bp = xfs_trans_getsb(tp, tp->t_mountp, 0);
-	sbp = XFS_BUF_TO_SBP(bp);
+	bp = xfs_trans_getsb(tp, tp->t_mountp);
+	sbp = bp->b_addr;
 
 	/*
 	 * Check that superblock mods match the mods made to AGF counters.
@@ -767,10 +771,9 @@ xfs_trans_del_item(
 }
 
 /* Detach and unlock all of the items in a transaction */
-void
+static void
 xfs_trans_free_items(
 	struct xfs_trans	*tp,
-	xfs_lsn_t		commit_lsn,
 	bool			abort)
 {
 	struct xfs_log_item	*lip, *next;
@@ -779,11 +782,10 @@ xfs_trans_free_items(
 
 	list_for_each_entry_safe(lip, next, &tp->t_items, li_trans) {
 		xfs_trans_del_item(lip);
-		if (commit_lsn != NULLCOMMITLSN)
-			lip->li_ops->iop_committing(lip, commit_lsn);
 		if (abort)
 			set_bit(XFS_LI_ABORTED, &lip->li_flags);
-		lip->li_ops->iop_unlock(lip);
+		if (lip->li_ops->iop_release)
+			lip->li_ops->iop_release(lip);
 	}
 }
 
@@ -804,7 +806,8 @@ xfs_log_item_batch_insert(
 	for (i = 0; i < nr_items; i++) {
 		struct xfs_log_item *lip = log_items[i];
 
-		lip->li_ops->iop_unpin(lip, 0);
+		if (lip->li_ops->iop_unpin)
+			lip->li_ops->iop_unpin(lip, 0);
 	}
 }
 
@@ -815,7 +818,7 @@ xfs_log_item_batch_insert(
  *
  * If we are called with the aborted flag set, it is because a log write during
  * a CIL checkpoint commit has failed. In this case, all the items in the
- * checkpoint have already gone through iop_commited and iop_unlock, which
+ * checkpoint have already gone through iop_committed and iop_committing, which
  * means that checkpoint commit abort handling is treated exactly the same
  * as an iclog write error even though we haven't started any IO yet. Hence in
  * this case all we need to do is iop_committed processing, followed by an
@@ -833,7 +836,7 @@ xfs_trans_committed_bulk(
 	struct xfs_ail		*ailp,
 	struct xfs_log_vec	*log_vector,
 	xfs_lsn_t		commit_lsn,
-	int			aborted)
+	bool			aborted)
 {
 #define LOG_ITEM_BATCH_SIZE	32
 	struct xfs_log_item	*log_items[LOG_ITEM_BATCH_SIZE];
@@ -852,7 +855,16 @@ xfs_trans_committed_bulk(
 
 		if (aborted)
 			set_bit(XFS_LI_ABORTED, &lip->li_flags);
-		item_lsn = lip->li_ops->iop_committed(lip, commit_lsn);
+
+		if (lip->li_ops->flags & XFS_ITEM_RELEASE_WHEN_COMMITTED) {
+			lip->li_ops->iop_release(lip);
+			continue;
+		}
+
+		if (lip->li_ops->iop_committed)
+			item_lsn = lip->li_ops->iop_committed(lip, commit_lsn);
+		else
+			item_lsn = commit_lsn;
 
 		/* item_lsn of -1 means the item needs no further processing */
 		if (XFS_LSN_CMP(item_lsn, (xfs_lsn_t)-1) == 0)
@@ -864,7 +876,8 @@ xfs_trans_committed_bulk(
 		 */
 		if (aborted) {
 			ASSERT(XFS_FORCED_SHUTDOWN(ailp->ail_mount));
-			lip->li_ops->iop_unpin(lip, 1);
+			if (lip->li_ops->iop_unpin)
+				lip->li_ops->iop_unpin(lip, 1);
 			continue;
 		}
 
@@ -882,7 +895,8 @@ xfs_trans_committed_bulk(
 				xfs_trans_ail_update(ailp, lip, item_lsn);
 			else
 				spin_unlock(&ailp->ail_lock);
-			lip->li_ops->iop_unpin(lip, 0);
+			if (lip->li_ops->iop_unpin)
+				lip->li_ops->iop_unpin(lip, 0);
 			continue;
 		}
 
@@ -992,13 +1006,14 @@ out_unreserve:
 	 */
 	xfs_trans_unreserve_and_mod_dquots(tp);
 	if (tp->t_ticket) {
-		commit_lsn = xfs_log_done(mp, tp->t_ticket, NULL, regrant);
-		if (commit_lsn == -1 && !error)
-			error = -EIO;
+		if (regrant && !XLOG_FORCED_SHUTDOWN(mp->m_log))
+			xfs_log_ticket_regrant(mp->m_log, tp->t_ticket);
+		else
+			xfs_log_ticket_ungrant(mp->m_log, tp->t_ticket);
 		tp->t_ticket = NULL;
 	}
 	current_restore_flags_nested(&tp->t_pflags, PF_MEMALLOC_NOFS);
-	xfs_trans_free_items(tp, NULLCOMMITLSN, !!error);
+	xfs_trans_free_items(tp, !!error);
 	xfs_trans_free(tp);
 
 	XFS_STATS_INC(mp, xs_trans_empty);
@@ -1053,14 +1068,14 @@ xfs_trans_cancel(
 	xfs_trans_unreserve_and_mod_dquots(tp);
 
 	if (tp->t_ticket) {
-		xfs_log_done(mp, tp->t_ticket, NULL, false);
+		xfs_log_ticket_ungrant(mp->m_log, tp->t_ticket);
 		tp->t_ticket = NULL;
 	}
 
 	/* mark this thread as no longer being in a transaction */
 	current_restore_flags_nested(&tp->t_pflags, PF_MEMALLOC_NOFS);
 
-	xfs_trans_free_items(tp, NULLCOMMITLSN, dirty);
+	xfs_trans_free_items(tp, dirty);
 	xfs_trans_free(tp);
 }
 

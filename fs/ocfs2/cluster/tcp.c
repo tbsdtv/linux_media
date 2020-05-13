@@ -1570,15 +1570,13 @@ static void o2net_start_connect(struct work_struct *work)
 	struct sockaddr_in myaddr = {0, }, remoteaddr = {0, };
 	int ret = 0, stop;
 	unsigned int timeout;
-	unsigned int noio_flag;
+	unsigned int nofs_flag;
 
 	/*
-	 * sock_create allocates the sock with GFP_KERNEL. We must set
-	 * per-process flag PF_MEMALLOC_NOIO so that all allocations done
-	 * by this process are done as if GFP_NOIO was specified. So we
-	 * are not reentering filesystem while doing memory reclaim.
+	 * sock_create allocates the sock with GFP_KERNEL. We must
+	 * prevent the filesystem from being reentered by memory reclaim.
 	 */
-	noio_flag = memalloc_noio_save();
+	nofs_flag = memalloc_nofs_save();
 	/* if we're greater we initiate tx, otherwise we accept */
 	if (o2nm_this_node() <= o2net_num_from_nn(nn))
 		goto out;
@@ -1683,7 +1681,7 @@ out:
 	if (mynode)
 		o2nm_node_put(mynode);
 
-	memalloc_noio_restore(noio_flag);
+	memalloc_nofs_restore(nofs_flag);
 	return;
 }
 
@@ -1762,7 +1760,7 @@ static void o2net_hb_node_up_cb(struct o2nm_node *node, int node_num,
 		(msecs_to_jiffies(o2net_reconnect_delay()) + 1);
 
 	if (node_num != o2nm_this_node()) {
-		/* believe it or not, accept and node hearbeating testing
+		/* believe it or not, accept and node heartbeating testing
 		 * can succeed for this node before we got here.. so
 		 * only use set_nn_state to clear the persistent error
 		 * if that hasn't already happened */
@@ -1810,15 +1808,13 @@ static int o2net_accept_one(struct socket *sock, int *more)
 	struct o2nm_node *local_node = NULL;
 	struct o2net_sock_container *sc = NULL;
 	struct o2net_node *nn;
-	unsigned int noio_flag;
+	unsigned int nofs_flag;
 
 	/*
-	 * sock_create_lite allocates the sock with GFP_KERNEL. We must set
-	 * per-process flag PF_MEMALLOC_NOIO so that all allocations done
-	 * by this process are done as if GFP_NOIO was specified. So we
-	 * are not reentering filesystem while doing memory reclaim.
+	 * sock_create_lite allocates the sock with GFP_KERNEL. We must
+	 * prevent the filesystem from being reentered by memory reclaim.
 	 */
-	noio_flag = memalloc_noio_save();
+	nofs_flag = memalloc_nofs_save();
 
 	BUG_ON(sock == NULL);
 	*more = 0;
@@ -1934,7 +1930,7 @@ out:
 	if (sc)
 		sc_put(sc);
 
-	memalloc_noio_restore(noio_flag);
+	memalloc_nofs_restore(nofs_flag);
 	return ret;
 }
 
@@ -1948,7 +1944,6 @@ static void o2net_accept_many(struct work_struct *work)
 {
 	struct socket *sock = o2net_listen_sock;
 	int	more;
-	int	err;
 
 	/*
 	 * It is critical to note that due to interrupt moderation
@@ -1963,7 +1958,7 @@ static void o2net_accept_many(struct work_struct *work)
 	 */
 
 	for (;;) {
-		err = o2net_accept_one(sock, &more);
+		o2net_accept_one(sock, &more);
 		if (!more)
 			break;
 		cond_resched();
@@ -2129,8 +2124,7 @@ int o2net_init(void)
 
 	o2quo_init();
 
-	if (o2net_debugfs_init())
-		goto out;
+	o2net_debugfs_init();
 
 	o2net_hand = kzalloc(sizeof(struct o2net_handshake), GFP_KERNEL);
 	o2net_keep_req = kzalloc(sizeof(struct o2net_msg), GFP_KERNEL);

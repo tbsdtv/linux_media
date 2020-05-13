@@ -190,8 +190,7 @@ static int __sk_msg_free(struct sock *sk, struct sk_msg *msg, u32 i,
 		sk_msg_check_to_free(msg, i, msg->sg.size);
 		sge = sk_msg_elem(msg, i);
 	}
-	if (msg->skb)
-		consume_skb(msg->skb);
+	consume_skb(msg->skb);
 	sk_msg_init(msg);
 	return freed;
 }
@@ -271,18 +270,28 @@ void sk_msg_trim(struct sock *sk, struct sk_msg *msg, int len)
 
 	msg->sg.data[i].length -= trim;
 	sk_mem_uncharge(sk, trim);
+	/* Adjust copybreak if it falls into the trimmed part of last buf */
+	if (msg->sg.curr == i && msg->sg.copybreak > msg->sg.data[i].length)
+		msg->sg.copybreak = msg->sg.data[i].length;
 out:
-	/* If we trim data before curr pointer update copybreak and current
-	 * so that any future copy operations start at new copy location.
+	sk_msg_iter_var_next(i);
+	msg->sg.end = i;
+
+	/* If we trim data a full sg elem before curr pointer update
+	 * copybreak and current so that any future copy operations
+	 * start at new copy location.
 	 * However trimed data that has not yet been used in a copy op
 	 * does not require an update.
 	 */
-	if (msg->sg.curr >= i) {
+	if (!msg->sg.size) {
+		msg->sg.curr = msg->sg.start;
+		msg->sg.copybreak = 0;
+	} else if (sk_msg_iter_dist(msg->sg.start, msg->sg.curr) >=
+		   sk_msg_iter_dist(msg->sg.start, msg->sg.end)) {
+		sk_msg_iter_var_prev(i);
 		msg->sg.curr = i;
 		msg->sg.copybreak = msg->sg.data[i].length;
 	}
-	sk_msg_iter_var_next(i);
-	msg->sg.end = i;
 }
 EXPORT_SYMBOL_GPL(sk_msg_trim);
 
@@ -412,7 +421,7 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb)
 	copied = skb->len;
 	msg->sg.start = 0;
 	msg->sg.size = copied;
-	msg->sg.end = num_sge == MAX_MSG_FRAGS ? 0 : num_sge;
+	msg->sg.end = num_sge;
 	msg->skb = skb;
 
 	sk_psock_queue_msg(psock, msg);
@@ -503,7 +512,7 @@ struct sk_psock *sk_psock_init(struct sock *sk, int node)
 	sk_psock_set_state(psock, SK_PSOCK_TX_ENABLED);
 	refcount_set(&psock->refcnt, 1);
 
-	rcu_assign_sk_user_data(sk, psock);
+	rcu_assign_sk_user_data_nocopy(sk, psock);
 	sock_hold(sk);
 
 	return psock;
@@ -585,12 +594,12 @@ EXPORT_SYMBOL_GPL(sk_psock_destroy);
 
 void sk_psock_drop(struct sock *sk, struct sk_psock *psock)
 {
-	rcu_assign_sk_user_data(sk, NULL);
 	sk_psock_cork_free(psock);
 	sk_psock_zap_ingress(psock);
-	sk_psock_restore_proto(sk, psock);
 
 	write_lock_bh(&sk->sk_callback_lock);
+	sk_psock_restore_proto(sk, psock);
+	rcu_assign_sk_user_data(sk, NULL);
 	if (psock->progs.skb_parser)
 		sk_psock_stop_strp(sk, psock);
 	write_unlock_bh(&sk->sk_callback_lock);
@@ -619,7 +628,6 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 	struct bpf_prog *prog;
 	int ret;
 
-	preempt_disable();
 	rcu_read_lock();
 	prog = READ_ONCE(psock->progs.msg_parser);
 	if (unlikely(!prog)) {
@@ -629,7 +637,7 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 
 	sk_msg_compute_data_pointers(msg);
 	msg->sk = sk;
-	ret = BPF_PROG_RUN(prog, msg);
+	ret = bpf_prog_run_pin_on_cpu(prog, msg);
 	ret = sk_psock_map_verd(ret, msg->sk_redir);
 	psock->apply_bytes = msg->apply_bytes;
 	if (ret == __SK_REDIRECT) {
@@ -644,7 +652,6 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 	}
 out:
 	rcu_read_unlock();
-	preempt_enable();
 	return ret;
 }
 EXPORT_SYMBOL_GPL(sk_psock_msg_verdict);
@@ -656,9 +663,7 @@ static int sk_psock_bpf_run(struct sk_psock *psock, struct bpf_prog *prog,
 
 	skb->sk = psock->sk;
 	bpf_compute_data_end_sk_skb(skb);
-	preempt_disable();
-	ret = BPF_PROG_RUN(prog, skb);
-	preempt_enable();
+	ret = bpf_prog_run_pin_on_cpu(prog, skb);
 	/* strparser clones the skb before handing it to a upper layer,
 	 * meaning skb_orphan has been called. We NULL sk on the way out
 	 * to ensure we don't trigger a BUG_ON() in skb/sk operations
@@ -784,15 +789,18 @@ static void sk_psock_strp_data_ready(struct sock *sk)
 static void sk_psock_write_space(struct sock *sk)
 {
 	struct sk_psock *psock;
-	void (*write_space)(struct sock *sk);
+	void (*write_space)(struct sock *sk) = NULL;
 
 	rcu_read_lock();
 	psock = sk_psock(sk);
-	if (likely(psock && sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED)))
-		schedule_work(&psock->work);
-	write_space = psock->saved_write_space;
+	if (likely(psock)) {
+		if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
+			schedule_work(&psock->work);
+		write_space = psock->saved_write_space;
+	}
 	rcu_read_unlock();
-	write_space(sk);
+	if (write_space)
+		write_space(sk);
 }
 
 int sk_psock_init_strp(struct sock *sk, struct sk_psock *psock)

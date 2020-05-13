@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TM2 touchkey device driver
  *
@@ -6,10 +7,6 @@
  *
  * Author: Beomho Seo <beomho.seo@samsung.com>
  * Author: Jaechul Lee <jcsing.lee@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/bitops.h>
@@ -76,6 +73,14 @@ static struct touchkey_variant aries_touchkey_variant = {
 	.fixed_regulator = true,
 	.cmd_led_on = ARIES_TOUCHKEY_CMD_LED_ON,
 	.cmd_led_off = ARIES_TOUCHKEY_CMD_LED_OFF,
+};
+
+static const struct touchkey_variant tc360_touchkey_variant = {
+	.keycode_reg = 0x00,
+	.base_reg = 0x00,
+	.fixed_regulator = true,
+	.cmd_led_on = TM2_TOUCHKEY_CMD_LED_ON,
+	.cmd_led_off = TM2_TOUCHKEY_CMD_LED_OFF,
 };
 
 static int tm2_touchkey_led_brightness_set(struct led_classdev *led_dev,
@@ -330,6 +335,9 @@ static const struct of_device_id tm2_touchkey_of_match[] = {
 	}, {
 		.compatible = "cypress,aries-touchkey",
 		.data = &aries_touchkey_variant,
+	}, {
+		.compatible = "coreriver,tc360-touchkey",
+		.data = &tc360_touchkey_variant,
 	},
 	{ },
 };

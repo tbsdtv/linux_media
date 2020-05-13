@@ -276,6 +276,7 @@ static const struct block_device_operations pf_fops = {
 	.open		= pf_open,
 	.release	= pf_release,
 	.ioctl		= pf_ioctl,
+	.compat_ioctl	= pf_ioctl,
 	.getgeo		= pf_getgeo,
 	.check_events	= pf_check_events,
 };
@@ -300,8 +301,8 @@ static void __init pf_init_units(void)
 		disk->queue = blk_mq_init_sq_queue(&pf->tag_set, &pf_mq_ops,
 							1, BLK_MQ_F_SHOULD_MERGE);
 		if (IS_ERR(disk->queue)) {
-			put_disk(disk);
 			disk->queue = NULL;
+			put_disk(disk);
 			continue;
 		}
 

@@ -273,6 +273,15 @@ config HID_CP2112
 	and gpiochip to expose these functions of the CP2112. The
 	customizable USB descriptor fields are exposed as sysfs attributes.
 
+config HID_CREATIVE_SB0540
+	tristate "Creative SB0540 infrared receiver"
+	depends on USB_HID
+	help
+	Support for Creative infrared SB0540-compatible remote controls, such
+	as the RM-1500 and RM-1800 remotes.
+
+	Say Y here if you want support for Creative SB0540 infrared receiver.
+
 config HID_CYPRESS
 	tristate "Cypress mouse and barcode readers"
 	depends on HID
@@ -353,6 +362,13 @@ config HID_GFRM
 	---help---
 	Support for Google Fiber TV Box remote controls
 
+config HID_GLORIOUS
+	tristate "Glorious PC Gaming Race mice"
+	depends on HID
+	help
+	  Support for Glorious PC Gaming Race mice such as
+	  the Glorious Model O, O- and D.
+
 config HID_HOLTEK
 	tristate "Holtek HID devices"
 	depends on USB_HID
@@ -376,7 +392,7 @@ config HOLTEK_FF
 
 config HID_GOOGLE_HAMMER
 	tristate "Google Hammer Keyboard"
-	depends on USB_HID && LEDS_CLASS && MFD_CROS_EC
+	depends on USB_HID && LEDS_CLASS && CROS_EC
 	---help---
 	Say Y here if you have a Google Hammer device.
 
@@ -516,6 +532,7 @@ config HID_LENOVO
 config HID_LOGITECH
 	tristate "Logitech devices"
 	depends on HID
+	depends on LEDS_CLASS
 	default !EXPERT
 	---help---
 	Support for Logitech devices that are not fully compliant with HID standard.
@@ -1029,7 +1046,7 @@ config HID_U2FZERO
 
 	  U2F Zero only supports blinking its LED, so this driver doesn't
 	  allow setting the brightness to anything but 1, which will
-	  trigger a single blink and immediately reset to back 0.
+	  trigger a single blink and immediately reset back to 0.
 
 config HID_WACOM
 	tristate "Wacom Intuos/Graphire tablet support (USB)"
@@ -1134,6 +1151,16 @@ config HID_ALPS
 	Support for Alps I2C HID touchpads and StickPointer.
 	Say Y here if you have a Alps touchpads over i2c-hid or usbhid
 	and want support for its special functionalities.
+
+config HID_MCP2221
+	tristate "Microchip MCP2221 HID USB-to-I2C/SMbus host support"
+	depends on USB_HID && I2C
+	---help---
+	Provides I2C and SMBUS host adapter functionality over USB-HID
+	through MCP2221 device.
+
+	To compile this driver as a module, choose M here: the module
+	will be called hid-mcp2221.ko.
 
 endmenu
 

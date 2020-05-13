@@ -18,10 +18,8 @@
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/io.h>
-#include <linux/log2.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/pwm.h>
 #include <linux/slab.h>
@@ -89,7 +87,7 @@ to_imx_tpm_pwm_chip(struct pwm_chip *chip)
 static int pwm_imx_tpm_round_state(struct pwm_chip *chip,
 				   struct imx_tpm_pwm_param *p,
 				   struct pwm_state *real_state,
-				   struct pwm_state *state)
+				   const struct pwm_state *state)
 {
 	struct imx_tpm_pwm_chip *tpm = to_imx_tpm_pwm_chip(chip);
 	u32 rate, prescale, period_count, clock_unit;
@@ -289,7 +287,7 @@ static int pwm_imx_tpm_apply_hw(struct pwm_chip *chip,
 
 static int pwm_imx_tpm_apply(struct pwm_chip *chip,
 			     struct pwm_device *pwm,
-			     struct pwm_state *state)
+			     const struct pwm_state *state)
 {
 	struct imx_tpm_pwm_chip *tpm = to_imx_tpm_pwm_chip(chip);
 	struct imx_tpm_pwm_param param;

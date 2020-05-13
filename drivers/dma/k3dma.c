@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013 - 2015 Linaro Ltd.
  * Copyright (c) 2013 Hisilicon Limited.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/sched.h>
 #include <linux/device.h>
@@ -232,9 +229,11 @@ static irqreturn_t k3_dma_int_handler(int irq, void *dev_id)
 			c = p->vchan;
 			if (c && (tc1 & BIT(i))) {
 				spin_lock_irqsave(&c->vc.lock, flags);
-				vchan_cookie_complete(&p->ds_run->vd);
-				p->ds_done = p->ds_run;
-				p->ds_run = NULL;
+				if (p->ds_run != NULL) {
+					vchan_cookie_complete(&p->ds_run->vd);
+					p->ds_done = p->ds_run;
+					p->ds_run = NULL;
+				}
 				spin_unlock_irqrestore(&c->vc.lock, flags);
 			}
 			if (c && (tc2 & BIT(i))) {
@@ -272,6 +271,10 @@ static int k3_dma_start_txd(struct k3_dma_chan *c)
 		return -EAGAIN;
 
 	if (BIT(c->phy->idx) & k3_dma_get_chan_stat(d))
+		return -EAGAIN;
+
+	/* Avoid losing track of  ds_run if a transaction is in flight */
+	if (c->phy->ds_run)
 		return -EAGAIN;
 
 	if (vd) {
@@ -838,12 +841,7 @@ static int k3_dma_probe(struct platform_device *op)
 	const struct k3dma_soc_data *soc_data;
 	struct k3_dma_dev *d;
 	const struct of_device_id *of_id;
-	struct resource *iores;
 	int i, ret, irq = 0;
-
-	iores = platform_get_resource(op, IORESOURCE_MEM, 0);
-	if (!iores)
-		return -EINVAL;
 
 	d = devm_kzalloc(&op->dev, sizeof(*d), GFP_KERNEL);
 	if (!d)
@@ -853,7 +851,7 @@ static int k3_dma_probe(struct platform_device *op)
 	if (!soc_data)
 		return -EINVAL;
 
-	d->base = devm_ioremap_resource(&op->dev, iores);
+	d->base = devm_platform_ioremap_resource(op, 0);
 	if (IS_ERR(d->base))
 		return PTR_ERR(d->base);
 

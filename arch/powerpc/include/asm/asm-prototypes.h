@@ -15,6 +15,7 @@
 #include <asm/epapr_hcalls.h>
 #include <asm/dcr.h>
 #include <asm/mmu_context.h>
+#include <asm/ultravisor-api.h>
 
 #include <uapi/asm/ucontext.h>
 
@@ -33,6 +34,16 @@ void kexec_copy_flush(struct kimage *image);
 extern struct static_key hcall_tracepoint_key;
 void __trace_hcall_entry(unsigned long opcode, unsigned long *args);
 void __trace_hcall_exit(long opcode, long retval, unsigned long *retbuf);
+
+/* Ultravisor */
+#if defined(CONFIG_PPC_POWERNV) || defined(CONFIG_PPC_SVM)
+long ucall_norets(unsigned long opcode, ...);
+#else
+static inline long ucall_norets(unsigned long opcode, ...)
+{
+	return U_NOT_AVAILABLE;
+}
+#endif
 
 /* OPAL */
 int64_t __opal_call(int64_t a0, int64_t a1, int64_t a2, int64_t a3,
@@ -81,24 +92,21 @@ long sys_swapcontext(struct ucontext __user *old_ctx,
 long sys_debug_setcontext(struct ucontext __user *ctx,
 			  int ndbg, struct sig_dbg_op __user *dbg);
 int
-ppc_select(int n, fd_set __user *inp, fd_set __user *outp, fd_set __user *exp, struct timeval __user *tvp);
+ppc_select(int n, fd_set __user *inp, fd_set __user *outp, fd_set __user *exp,
+	   struct __kernel_old_timeval __user *tvp);
 unsigned long __init early_init(unsigned long dt_ptr);
 void __init machine_init(u64 dt_ptr);
 #endif
+long system_call_exception(long r3, long r4, long r5, long r6, long r7, long r8, unsigned long r0, struct pt_regs *regs);
+notrace unsigned long syscall_exit_prepare(unsigned long r3, struct pt_regs *regs);
+notrace unsigned long interrupt_exit_user_prepare(struct pt_regs *regs, unsigned long msr);
+notrace unsigned long interrupt_exit_kernel_prepare(struct pt_regs *regs, unsigned long msr);
 
 long ppc_fadvise64_64(int fd, int advice, u32 offset_high, u32 offset_low,
 		      u32 len_high, u32 len_low);
 long sys_switch_endian(void);
 notrace unsigned int __check_irq_replay(void);
 void notrace restore_interrupts(void);
-
-/* ptrace */
-long do_syscall_trace_enter(struct pt_regs *regs);
-void do_syscall_trace_leave(struct pt_regs *regs);
-
-/* process */
-void restore_math(struct pt_regs *regs);
-void restore_tm_state(struct pt_regs *regs);
 
 /* prom_init (OpenFirmware) */
 unsigned long __init prom_init(unsigned long r3, unsigned long r4,
@@ -110,9 +118,6 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 void __init early_setup(unsigned long dt_ptr);
 void early_setup_secondary(void);
 
-/* time */
-void accumulate_stolen_time(void);
-
 /* misc runtime */
 extern u64 __bswapdi2(u64);
 extern s64 __lshrdi3(s64, int);
@@ -123,7 +128,8 @@ extern int __ucmpdi2(u64, u64);
 
 /* tracing */
 void _mcount(void);
-unsigned long prepare_ftrace_return(unsigned long parent, unsigned long ip);
+unsigned long prepare_ftrace_return(unsigned long parent, unsigned long ip,
+						unsigned long sp);
 
 void pnv_power9_force_smt4_catch(void);
 void pnv_power9_force_smt4_release(void);
@@ -140,9 +146,12 @@ void _kvmppc_save_tm_pr(struct kvm_vcpu *vcpu, u64 guest_msr);
 /* Patch sites */
 extern s32 patch__call_flush_count_cache;
 extern s32 patch__flush_count_cache_return;
+extern s32 patch__flush_link_stack_return;
+extern s32 patch__call_kvm_flush_link_stack;
 extern s32 patch__memset_nocache, patch__memcpy_nocache;
 
 extern long flush_count_cache;
+extern long kvm_flush_link_stack;
 
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
 void kvmppc_save_tm_hv(struct kvm_vcpu *vcpu, u64 msr, bool preserve_nv);

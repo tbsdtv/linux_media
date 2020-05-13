@@ -96,7 +96,7 @@ found:
 		nvram_len = size;
 	}
 	if (nvram_len >= NVRAM_SPACE) {
-		pr_err("nvram on flash (%i bytes) is bigger than the reserved space in memory, will just copy the first %i bytes\n",
+		pr_err("nvram on flash (%zu bytes) is bigger than the reserved space in memory, will just copy the first %i bytes\n",
 		       nvram_len, NVRAM_SPACE - 1);
 		nvram_len = NVRAM_SPACE - 1;
 	}
@@ -120,7 +120,7 @@ int bcm47xx_nvram_init_from_mem(u32 base, u32 lim)
 	void __iomem *iobase;
 	int err;
 
-	iobase = ioremap_nocache(base, lim);
+	iobase = ioremap(base, lim);
 	if (!iobase)
 		return -ENOMEM;
 
@@ -148,8 +148,8 @@ static int nvram_init(void)
 	    header.len > sizeof(header)) {
 		nvram_len = header.len;
 		if (nvram_len >= NVRAM_SPACE) {
-			pr_err("nvram on flash (%i bytes) is bigger than the reserved space in memory, will just copy the first %i bytes\n",
-				header.len, NVRAM_SPACE);
+			pr_err("nvram on flash (%zu bytes) is bigger than the reserved space in memory, will just copy the first %i bytes\n",
+				nvram_len, NVRAM_SPACE);
 			nvram_len = NVRAM_SPACE - 1;
 		}
 

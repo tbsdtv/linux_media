@@ -352,7 +352,7 @@ static void check_unit_address_vs_reg(struct check *c, struct dt_info *dti,
 			FAIL(c, dti, node, "node has a reg or ranges property, but no unit name");
 	} else {
 		if (unitname[0])
-			FAIL(c, dti, node, "node has a unit name, but no reg property");
+			FAIL(c, dti, node, "node has a unit name, but no reg or ranges property");
 	}
 }
 WARNING(unit_address_vs_reg, check_unit_address_vs_reg, NULL);
@@ -645,6 +645,8 @@ ERROR(path_references, fixup_path_references, NULL, &duplicate_node_names);
 static void fixup_omit_unused_nodes(struct check *c, struct dt_info *dti,
 				    struct node *node)
 {
+	if (generate_symbols && node->labels)
+		return;
 	if (node->omit_if_unused && !node->is_referenced)
 		delete_node(node);
 }
@@ -689,6 +691,11 @@ static void check_alias_paths(struct check *c, struct dt_info *dti,
 		return;
 
 	for_each_property(node, prop) {
+		if (streq(prop->name, "phandle")
+		    || streq(prop->name, "linux,phandle")) {
+			continue;
+		}
+
 		if (!prop->val.val || !get_node_by_path(dti->dt, prop->val.val)) {
 			FAIL_PROP(c, dti, node, prop, "aliases property is not a valid node (%s)",
 				  prop->val.val);
@@ -758,13 +765,15 @@ static void check_ranges_format(struct check *c, struct dt_info *dti,
 {
 	struct property *prop;
 	int c_addr_cells, p_addr_cells, c_size_cells, p_size_cells, entrylen;
+	const char *ranges = c->data;
 
-	prop = get_property(node, "ranges");
+	prop = get_property(node, ranges);
 	if (!prop)
 		return;
 
 	if (!node->parent) {
-		FAIL_PROP(c, dti, node, prop, "Root node has a \"ranges\" property");
+		FAIL_PROP(c, dti, node, prop, "Root node has a \"%s\" property",
+			  ranges);
 		return;
 	}
 
@@ -776,23 +785,24 @@ static void check_ranges_format(struct check *c, struct dt_info *dti,
 
 	if (prop->val.len == 0) {
 		if (p_addr_cells != c_addr_cells)
-			FAIL_PROP(c, dti, node, prop, "empty \"ranges\" property but its "
+			FAIL_PROP(c, dti, node, prop, "empty \"%s\" property but its "
 				  "#address-cells (%d) differs from %s (%d)",
-				  c_addr_cells, node->parent->fullpath,
+				  ranges, c_addr_cells, node->parent->fullpath,
 				  p_addr_cells);
 		if (p_size_cells != c_size_cells)
-			FAIL_PROP(c, dti, node, prop, "empty \"ranges\" property but its "
+			FAIL_PROP(c, dti, node, prop, "empty \"%s\" property but its "
 				  "#size-cells (%d) differs from %s (%d)",
-				  c_size_cells, node->parent->fullpath,
+				  ranges, c_size_cells, node->parent->fullpath,
 				  p_size_cells);
 	} else if ((prop->val.len % entrylen) != 0) {
-		FAIL_PROP(c, dti, node, prop, "\"ranges\" property has invalid length (%d bytes) "
+		FAIL_PROP(c, dti, node, prop, "\"%s\" property has invalid length (%d bytes) "
 			  "(parent #address-cells == %d, child #address-cells == %d, "
-			  "#size-cells == %d)", prop->val.len,
+			  "#size-cells == %d)", ranges, prop->val.len,
 			  p_addr_cells, c_addr_cells, c_size_cells);
 	}
 }
-WARNING(ranges_format, check_ranges_format, NULL, &addr_size_cells);
+WARNING(ranges_format, check_ranges_format, "ranges", &addr_size_cells);
+WARNING(dma_ranges_format, check_ranges_format, "dma-ranges", &addr_size_cells);
 
 static const struct bus_type pci_bus = {
 	.name = "PCI",
@@ -1197,8 +1207,24 @@ static void check_avoid_unnecessary_addr_size(struct check *c, struct dt_info *d
 }
 WARNING(avoid_unnecessary_addr_size, check_avoid_unnecessary_addr_size, NULL, &avoid_default_addr_size);
 
-static void check_unique_unit_address(struct check *c, struct dt_info *dti,
-					      struct node *node)
+static bool node_is_disabled(struct node *node)
+{
+	struct property *prop;
+
+	prop = get_property(node, "status");
+	if (prop) {
+		char *str = prop->val.val;
+		if (streq("disabled", str))
+			return true;
+	}
+
+	return false;
+}
+
+static void check_unique_unit_address_common(struct check *c,
+						struct dt_info *dti,
+						struct node *node,
+						bool disable_check)
 {
 	struct node *childa;
 
@@ -1215,17 +1241,37 @@ static void check_unique_unit_address(struct check *c, struct dt_info *dti,
 		if (!strlen(addr_a))
 			continue;
 
+		if (disable_check && node_is_disabled(childa))
+			continue;
+
 		for_each_child(node, childb) {
 			const char *addr_b = get_unitname(childb);
 			if (childa == childb)
 				break;
+
+			if (disable_check && node_is_disabled(childb))
+				continue;
 
 			if (streq(addr_a, addr_b))
 				FAIL(c, dti, childb, "duplicate unit-address (also used in node %s)", childa->fullpath);
 		}
 	}
 }
+
+static void check_unique_unit_address(struct check *c, struct dt_info *dti,
+					      struct node *node)
+{
+	check_unique_unit_address_common(c, dti, node, false);
+}
 WARNING(unique_unit_address, check_unique_unit_address, NULL, &avoid_default_addr_size);
+
+static void check_unique_unit_address_if_enabled(struct check *c, struct dt_info *dti,
+					      struct node *node)
+{
+	check_unique_unit_address_common(c, dti, node, true);
+}
+CHECK_ENTRY(unique_unit_address_if_enabled, check_unique_unit_address_if_enabled,
+	    NULL, false, false, &avoid_default_addr_size);
 
 static void check_obsolete_chosen_interrupt_controller(struct check *c,
 						       struct dt_info *dti,
@@ -1527,10 +1573,14 @@ static void check_interrupts_property(struct check *c,
 		prop = get_property(parent, "interrupt-parent");
 		if (prop) {
 			phandle = propval_cell(prop);
-			/* Give up if this is an overlay with external references */
-			if ((phandle == 0 || phandle == -1) &&
-			    (dti->dtsflags & DTSF_PLUGIN))
+			if ((phandle == 0) || (phandle == -1)) {
+				/* Give up if this is an overlay with
+				 * external references */
+				if (dti->dtsflags & DTSF_PLUGIN)
 					return;
+				FAIL_PROP(c, dti, parent, prop, "Invalid phandle");
+				continue;
+			}
 
 			irq_node = get_node_by_phandle(root, phandle);
 			if (!irq_node) {
@@ -1699,7 +1749,7 @@ static void check_graph_endpoint(struct check *c, struct dt_info *dti,
 		return;
 
 	if (!strprefixeq(node->name, node->basenamelen, "endpoint"))
-		FAIL(c, dti, node, "graph endpont node name should be 'endpoint'");
+		FAIL(c, dti, node, "graph endpoint node name should be 'endpoint'");
 
 	check_graph_reg(c, dti, node);
 
@@ -1733,7 +1783,7 @@ static struct check *check_table[] = {
 	&property_name_chars_strict,
 	&node_name_chars_strict,
 
-	&addr_size_cells, &reg_format, &ranges_format,
+	&addr_size_cells, &reg_format, &ranges_format, &dma_ranges_format,
 
 	&unit_address_vs_reg,
 	&unit_address_format,
@@ -1754,6 +1804,7 @@ static struct check *check_table[] = {
 	&avoid_default_addr_size,
 	&avoid_unnecessary_addr_size,
 	&unique_unit_address,
+	&unique_unit_address_if_enabled,
 	&obsolete_chosen_interrupt_controller,
 	&chosen_node_is_root, &chosen_node_bootargs, &chosen_node_stdout_path,
 

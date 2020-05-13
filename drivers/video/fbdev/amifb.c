@@ -3493,7 +3493,7 @@ static irqreturn_t amifb_interrupt(int irq, void *dev_id)
 }
 
 
-static struct fb_ops amifb_ops = {
+static const struct fb_ops amifb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= amifb_check_var,
 	.fb_set_par	= amifb_set_par,
@@ -3554,10 +3554,8 @@ static int __init amifb_probe(struct platform_device *pdev)
 	custom.dmacon = DMAF_ALL | DMAF_MASTER;
 
 	info = framebuffer_alloc(sizeof(struct amifb_par), &pdev->dev);
-	if (!info) {
-		dev_err(&pdev->dev, "framebuffer_alloc failed\n");
+	if (!info)
 		return -ENOMEM;
-	}
 
 	strcpy(info->fix.id, "Amiga ");
 	info->fix.visual = FB_VISUAL_PSEUDOCOLOR;

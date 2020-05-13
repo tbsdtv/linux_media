@@ -34,7 +34,16 @@
 
 #include "head_32.h"
 
-/* 601 only have IBAT; cr0.eq is set on 601 when using this macro */
+/* 601 only have IBAT */
+#ifdef CONFIG_PPC_BOOK3S_601
+#define LOAD_BAT(n, reg, RA, RB)	\
+	li	RA,0;			\
+	mtspr	SPRN_IBAT##n##U,RA;	\
+	lwz	RA,(n*16)+0(reg);	\
+	lwz	RB,(n*16)+4(reg);	\
+	mtspr	SPRN_IBAT##n##U,RA;	\
+	mtspr	SPRN_IBAT##n##L,RB
+#else
 #define LOAD_BAT(n, reg, RA, RB)	\
 	/* see the comment for clear_bats() -- Cort */ \
 	li	RA,0;			\
@@ -44,12 +53,11 @@
 	lwz	RB,(n*16)+4(reg);	\
 	mtspr	SPRN_IBAT##n##U,RA;	\
 	mtspr	SPRN_IBAT##n##L,RB;	\
-	beq	1f;			\
 	lwz	RA,(n*16)+8(reg);	\
 	lwz	RB,(n*16)+12(reg);	\
 	mtspr	SPRN_DBAT##n##U,RA;	\
-	mtspr	SPRN_DBAT##n##L,RB;	\
-1:
+	mtspr	SPRN_DBAT##n##L,RB
+#endif
 
 	__HEAD
 	.stabs	"arch/powerpc/kernel/",N_SO,0,0,0f
@@ -264,53 +272,114 @@ __secondary_hold_acknowledge:
  */
 	. = 0x200
 	DO_KVM  0x200
-	mtspr	SPRN_SPRG_SCRATCH0,r10
-	mtspr	SPRN_SPRG_SCRATCH1,r11
-	mfcr	r10
+MachineCheck:
+	EXCEPTION_PROLOG_0
+#ifdef CONFIG_VMAP_STACK
+	li	r11, MSR_KERNEL & ~(MSR_IR | MSR_RI) /* can take DTLB miss */
+	mtmsr	r11
+	isync
+#endif
 #ifdef CONFIG_PPC_CHRP
 	mfspr	r11, SPRN_SPRG_THREAD
+	tovirt_vmstack r11, r11
 	lwz	r11, RTAS_SP(r11)
 	cmpwi	cr1, r11, 0
 	bne	cr1, 7f
 #endif /* CONFIG_PPC_CHRP */
-	EXCEPTION_PROLOG_1
+	EXCEPTION_PROLOG_1 for_rtas=1
 7:	EXCEPTION_PROLOG_2
 	addi	r3,r1,STACK_FRAME_OVERHEAD
 #ifdef CONFIG_PPC_CHRP
-	bne	cr1,1f
+#ifdef CONFIG_VMAP_STACK
+	mfspr	r4, SPRN_SPRG_THREAD
+	tovirt(r4, r4)
+	lwz	r4, RTAS_SP(r4)
+	cmpwi	cr1, r4, 0
 #endif
-	EXC_XFER_STD(0x200, machine_check_exception)
-#ifdef CONFIG_PPC_CHRP
-1:	b	machine_check_in_rtas
+	beq	cr1, machine_check_tramp
+	b	machine_check_in_rtas
+#else
+	b	machine_check_tramp
 #endif
 
 /* Data access exception. */
 	. = 0x300
 	DO_KVM  0x300
 DataAccess:
-	EXCEPTION_PROLOG
-	mfspr	r10,SPRN_DSISR
-	stw	r10,_DSISR(r11)
-#ifdef CONFIG_PPC_KUAP
-	andis.	r0,r10,(DSISR_BAD_FAULT_32S | DSISR_DABRMATCH | DSISR_PROTFAULT)@h
-#else
-	andis.	r0,r10,(DSISR_BAD_FAULT_32S|DSISR_DABRMATCH)@h
-#endif
-	bne	1f			/* if not, try to put a PTE */
-	mfspr	r4,SPRN_DAR		/* into the hash table */
-	rlwinm	r3,r10,32-15,21,21	/* DSISR_STORE -> _PAGE_RW */
+#ifdef CONFIG_VMAP_STACK
+	mtspr	SPRN_SPRG_SCRATCH0,r10
+	mfspr	r10, SPRN_SPRG_THREAD
 BEGIN_MMU_FTR_SECTION
-	bl	hash_page
+	stw	r11, THR11(r10)
+	mfspr	r10, SPRN_DSISR
+	mfcr	r11
+#ifdef CONFIG_PPC_KUAP
+	andis.	r10, r10, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH | DSISR_PROTFAULT)@h
+#else
+	andis.	r10, r10, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH)@h
+#endif
+	mfspr	r10, SPRN_SPRG_THREAD
+	beq	hash_page_dsi
+.Lhash_page_dsi_cont:
+	mtcr	r11
+	lwz	r11, THR11(r10)
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
-1:	lwz	r5,_DSISR(r11)		/* get DSISR value */
-	mfspr	r4,SPRN_DAR
-	EXC_XFER_LITE(0x300, handle_page_fault)
+	mtspr	SPRN_SPRG_SCRATCH1,r11
+	mfspr	r11, SPRN_DAR
+	stw	r11, DAR(r10)
+	mfspr	r11, SPRN_DSISR
+	stw	r11, DSISR(r10)
+	mfspr	r11, SPRN_SRR0
+	stw	r11, SRR0(r10)
+	mfspr	r11, SPRN_SRR1		/* check whether user or kernel */
+	stw	r11, SRR1(r10)
+	mfcr	r10
+	andi.	r11, r11, MSR_PR
 
+	EXCEPTION_PROLOG_1
+	b	handle_page_fault_tramp_1
+#else	/* CONFIG_VMAP_STACK */
+	EXCEPTION_PROLOG handle_dar_dsisr=1
+	get_and_save_dar_dsisr_on_stack	r4, r5, r11
+BEGIN_MMU_FTR_SECTION
+#ifdef CONFIG_PPC_KUAP
+	andis.	r0, r5, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH | DSISR_PROTFAULT)@h
+#else
+	andis.	r0, r5, (DSISR_BAD_FAULT_32S | DSISR_DABRMATCH)@h
+#endif
+	bne	handle_page_fault_tramp_2	/* if not, try to put a PTE */
+	rlwinm	r3, r5, 32 - 24, 30, 30		/* DSISR_STORE -> _PAGE_RW */
+	bl	hash_page
+	b	handle_page_fault_tramp_1
+FTR_SECTION_ELSE
+	b	handle_page_fault_tramp_2
+ALT_MMU_FTR_SECTION_END_IFSET(MMU_FTR_HPTE_TABLE)
+#endif	/* CONFIG_VMAP_STACK */
 
 /* Instruction access exception. */
 	. = 0x400
 	DO_KVM  0x400
 InstructionAccess:
+#ifdef CONFIG_VMAP_STACK
+	mtspr	SPRN_SPRG_SCRATCH0,r10
+	mtspr	SPRN_SPRG_SCRATCH1,r11
+	mfspr	r10, SPRN_SPRG_THREAD
+	mfspr	r11, SPRN_SRR0
+	stw	r11, SRR0(r10)
+	mfspr	r11, SPRN_SRR1		/* check whether user or kernel */
+	stw	r11, SRR1(r10)
+	mfcr	r10
+BEGIN_MMU_FTR_SECTION
+	andis.	r11, r11, SRR1_ISI_NOPT@h	/* no pte found? */
+	bne	hash_page_isi
+.Lhash_page_isi_cont:
+	mfspr	r11, SPRN_SRR1		/* check whether user or kernel */
+END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
+	andi.	r11, r11, MSR_PR
+
+	EXCEPTION_PROLOG_1
+	EXCEPTION_PROLOG_2
+#else	/* CONFIG_VMAP_STACK */
 	EXCEPTION_PROLOG
 	andis.	r0,r9,SRR1_ISI_NOPT@h	/* no pte found? */
 	beq	1f			/* if so, try to put a PTE */
@@ -319,8 +388,10 @@ InstructionAccess:
 BEGIN_MMU_FTR_SECTION
 	bl	hash_page
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
+#endif	/* CONFIG_VMAP_STACK */
 1:	mr	r4,r12
 	andis.	r5,r9,DSISR_SRR1_MATCH_32S@h /* Filter relevant SRR1 bits */
+	stw	r4, _DAR(r11)
 	EXC_XFER_LITE(0x400, handle_page_fault)
 
 /* External interrupt */
@@ -330,13 +401,10 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
 	. = 0x600
 	DO_KVM  0x600
 Alignment:
-	EXCEPTION_PROLOG
-	mfspr	r4,SPRN_DAR
-	stw	r4,_DAR(r11)
-	mfspr	r5,SPRN_DSISR
-	stw	r5,_DSISR(r11)
+	EXCEPTION_PROLOG handle_dar_dsisr=1
+	save_dar_dsisr_on_stack r4, r5, r11
 	addi	r3,r1,STACK_FRAME_OVERHEAD
-	EXC_XFER_STD(0x600, alignment_exception)
+	b	alignment_exception_tramp
 
 /* Program check exception */
 	EXCEPTION(0x700, ProgramCheck, program_check_exception, EXC_XFER_STD)
@@ -429,7 +497,6 @@ InstructionTLBMiss:
 	andc.	r1,r1,r0		/* check access & ~permission */
 	bne-	InstructionAddressInvalid /* return if access not permitted */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
-	rlwimi	r0,r0,32-2,31,31	/* _PAGE_USER -> PP lsb */
 	ori	r1, r1, 0xe06		/* clear out reserved bits */
 	andc	r1, r0, r1		/* PP = user? 1 : 0 */
 BEGIN_FTR_SECTION
@@ -497,9 +564,8 @@ DataLoadTLBMiss:
 	 * we would need to update the pte atomically with lwarx/stwcx.
 	 */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
-	rlwinm	r1,r0,32-9,30,30	/* _PAGE_RW -> PP msb */
-	rlwimi	r0,r0,32-1,30,30	/* _PAGE_USER -> PP msb */
-	rlwimi	r0,r0,32-1,31,31	/* _PAGE_USER -> PP lsb */
+	rlwinm	r1,r0,0,30,30		/* _PAGE_RW -> PP msb */
+	rlwimi	r0,r0,1,30,30		/* _PAGE_USER -> PP msb */
 	ori	r1,r1,0xe04		/* clear out reserved bits */
 	andc	r1,r0,r1		/* PP = user? rw? 1: 3: 0 */
 BEGIN_FTR_SECTION
@@ -557,9 +623,9 @@ DataStoreTLBMiss:
 	cmplw	0,r1,r3
 	mfspr	r2, SPRN_SPRG_PGDIR
 #ifdef CONFIG_SWAP
-	li	r1, _PAGE_RW | _PAGE_PRESENT | _PAGE_ACCESSED
+	li	r1, _PAGE_RW | _PAGE_DIRTY | _PAGE_PRESENT | _PAGE_ACCESSED
 #else
-	li	r1, _PAGE_RW | _PAGE_PRESENT
+	li	r1, _PAGE_RW | _PAGE_DIRTY | _PAGE_PRESENT
 #endif
 	bge-	112f
 	lis	r2, (swapper_pg_dir - PAGE_OFFSET)@ha	/* if kernel address, use */
@@ -577,7 +643,6 @@ DataStoreTLBMiss:
 	 * we would need to update the pte atomically with lwarx/stwcx.
 	 */
 	/* Convert linux-style PTE to low word of PPC-style PTE */
-	rlwimi	r0,r0,32-2,31,31	/* _PAGE_USER -> PP lsb */
 	li	r1,0xe06		/* clear out reserved bits & PP msb */
 	andc	r1,r0,r1		/* PP = user? 1: 0 */
 BEGIN_FTR_SECTION
@@ -636,6 +701,101 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_NEED_DTLB_SW_LRU)
 	EXCEPTION(0x2f00, Trap_2f, unknown_exception, EXC_XFER_STD)
 
 	. = 0x3000
+
+machine_check_tramp:
+	EXC_XFER_STD(0x200, machine_check_exception)
+
+alignment_exception_tramp:
+	EXC_XFER_STD(0x600, alignment_exception)
+
+handle_page_fault_tramp_1:
+#ifdef CONFIG_VMAP_STACK
+	EXCEPTION_PROLOG_2 handle_dar_dsisr=1
+#endif
+	lwz	r4, _DAR(r11)
+	lwz	r5, _DSISR(r11)
+	/* fall through */
+handle_page_fault_tramp_2:
+	EXC_XFER_LITE(0x300, handle_page_fault)
+
+#ifdef CONFIG_VMAP_STACK
+.macro save_regs_thread		thread
+	stw	r0, THR0(\thread)
+	stw	r3, THR3(\thread)
+	stw	r4, THR4(\thread)
+	stw	r5, THR5(\thread)
+	stw	r6, THR6(\thread)
+	stw	r8, THR8(\thread)
+	stw	r9, THR9(\thread)
+	mflr	r0
+	stw	r0, THLR(\thread)
+	mfctr	r0
+	stw	r0, THCTR(\thread)
+.endm
+
+.macro restore_regs_thread	thread
+	lwz	r0, THLR(\thread)
+	mtlr	r0
+	lwz	r0, THCTR(\thread)
+	mtctr	r0
+	lwz	r0, THR0(\thread)
+	lwz	r3, THR3(\thread)
+	lwz	r4, THR4(\thread)
+	lwz	r5, THR5(\thread)
+	lwz	r6, THR6(\thread)
+	lwz	r8, THR8(\thread)
+	lwz	r9, THR9(\thread)
+.endm
+
+hash_page_dsi:
+	save_regs_thread	r10
+	mfdsisr	r3
+	mfdar	r4
+	mfsrr0	r5
+	mfsrr1	r9
+	rlwinm	r3, r3, 32 - 15, _PAGE_RW	/* DSISR_STORE -> _PAGE_RW */
+	bl	hash_page
+	mfspr	r10, SPRN_SPRG_THREAD
+	restore_regs_thread r10
+	b	.Lhash_page_dsi_cont
+
+hash_page_isi:
+	mr	r11, r10
+	mfspr	r10, SPRN_SPRG_THREAD
+	save_regs_thread	r10
+	li	r3, 0
+	lwz	r4, SRR0(r10)
+	lwz	r9, SRR1(r10)
+	bl	hash_page
+	mfspr	r10, SPRN_SPRG_THREAD
+	restore_regs_thread r10
+	mr	r10, r11
+	b	.Lhash_page_isi_cont
+
+	.globl fast_hash_page_return
+fast_hash_page_return:
+	andis.	r10, r9, SRR1_ISI_NOPT@h	/* Set on ISI, cleared on DSI */
+	mfspr	r10, SPRN_SPRG_THREAD
+	restore_regs_thread r10
+	bne	1f
+
+	/* DSI */
+	mtcr	r11
+	lwz	r11, THR11(r10)
+	mfspr	r10, SPRN_SPRG_SCRATCH0
+	SYNC
+	RFI
+
+1:	/* ISI */
+	mtcr	r11
+	mfspr	r11, SPRN_SPRG_SCRATCH1
+	mfspr	r10, SPRN_SPRG_SCRATCH0
+	SYNC
+	RFI
+
+stack_overflow:
+	vmap_stack_overflow_exception
+#endif
 
 AltiVecUnavailable:
 	EXCEPTION_PROLOG
@@ -752,6 +912,7 @@ __secondary_start:
 	stw	r0,0(r3)
 
 	/* load up the MMU */
+	bl	load_segment_registers
 	bl	load_up_mmu
 
 	/* ptr to phys current thread */
@@ -819,9 +980,6 @@ load_up_mmu:
 
 /* Load the BAT registers with the values set up by MMU_init.
    MMU_init takes care of whether we're on a 601 or not. */
-	mfpvr	r3
-	srwi	r3,r3,16
-	cmpwi	r3,1
 	lis	r3,BATS@ha
 	addi	r3,r3,BATS@l
 	tophys(r3,r3)
@@ -896,9 +1054,11 @@ start_here:
 	bl	machine_init
 	bl	__save_cpu_setup
 	bl	MMU_init
+#ifdef CONFIG_KASAN
 BEGIN_MMU_FTR_SECTION
 	bl	MMU_init_hw_patch
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
+#endif
 
 /*
  * Go back to running unmapped so we can load up new values
@@ -909,6 +1069,8 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_HPTE_TABLE)
 	ori	r4,r4,2f@l
 	tophys(r4,r4)
 	li	r3,MSR_KERNEL & ~(MSR_IR|MSR_DR)
+
+	.align	4
 	mtspr	SPRN_SRR0,r4
 	mtspr	SPRN_SRR1,r3
 	SYNC
@@ -995,11 +1157,8 @@ EXPORT_SYMBOL(switch_mmu_context)
  */
 clear_bats:
 	li	r10,0
-	mfspr	r9,SPRN_PVR
-	rlwinm	r9,r9,16,16,31		/* r9 = 1 for 601, 4 for 604 */
-	cmpwi	r9, 1
-	beq	1f
 
+#ifndef CONFIG_PPC_BOOK3S_601
 	mtspr	SPRN_DBAT0U,r10
 	mtspr	SPRN_DBAT0L,r10
 	mtspr	SPRN_DBAT1U,r10
@@ -1008,7 +1167,7 @@ clear_bats:
 	mtspr	SPRN_DBAT2L,r10
 	mtspr	SPRN_DBAT3U,r10
 	mtspr	SPRN_DBAT3L,r10
-1:
+#endif
 	mtspr	SPRN_IBAT0U,r10
 	mtspr	SPRN_IBAT0L,r10
 	mtspr	SPRN_IBAT1U,r10
@@ -1053,6 +1212,8 @@ _ENTRY(update_bats)
 	rlwinm	r0, r6, 0, ~MSR_RI
 	rlwinm	r0, r0, 0, ~MSR_EE
 	mtmsr	r0
+
+	.align	4
 	mtspr	SPRN_SRR0, r4
 	mtspr	SPRN_SRR1, r3
 	SYNC
@@ -1092,6 +1253,8 @@ mmu_off:
 	andi.	r0,r3,MSR_DR|MSR_IR		/* MMU enabled? */
 	beqlr
 	andc	r3,r3,r0
+
+	.align	4
 	mtspr	SPRN_SRR0,r4
 	mtspr	SPRN_SRR1,r3
 	sync
@@ -1103,10 +1266,7 @@ mmu_off:
  */
 initial_bats:
 	lis	r11,PAGE_OFFSET@h
-	mfspr	r9,SPRN_PVR
-	rlwinm	r9,r9,16,16,31		/* r9 = 1 for 601, 4 for 604 */
-	cmpwi	0,r9,1
-	bne	4f
+#ifdef CONFIG_PPC_BOOK3S_601
 	ori	r11,r11,4		/* set up BAT registers for 601 */
 	li	r8,0x7f			/* valid, block length = 8MB */
 	mtspr	SPRN_IBAT0U,r11		/* N.B. 601 has valid bit in */
@@ -1119,10 +1279,8 @@ initial_bats:
 	addis	r8,r8,0x800000@h
 	mtspr	SPRN_IBAT2U,r11
 	mtspr	SPRN_IBAT2L,r8
-	isync
-	blr
-
-4:	tophys(r8,r11)
+#else
+	tophys(r8,r11)
 #ifdef CONFIG_SMP
 	ori	r8,r8,0x12		/* R/W access, M=1 */
 #else
@@ -1134,9 +1292,9 @@ initial_bats:
 	mtspr	SPRN_DBAT0U,r11		/* bit in upper BAT register */
 	mtspr	SPRN_IBAT0L,r8
 	mtspr	SPRN_IBAT0U,r11
+#endif
 	isync
 	blr
-
 
 #ifdef CONFIG_BOOTX_TEXT
 setup_disp_bat:
@@ -1152,15 +1310,13 @@ setup_disp_bat:
 	beqlr
 	lwz	r11,0(r8)
 	lwz	r8,4(r8)
-	mfspr	r9,SPRN_PVR
-	rlwinm	r9,r9,16,16,31		/* r9 = 1 for 601, 4 for 604 */
-	cmpwi	0,r9,1
-	beq	1f
+#ifndef CONFIG_PPC_BOOK3S_601
 	mtspr	SPRN_DBAT3L,r8
 	mtspr	SPRN_DBAT3U,r11
-	blr
-1:	mtspr	SPRN_IBAT3L,r8
+#else
+	mtspr	SPRN_IBAT3L,r8
 	mtspr	SPRN_IBAT3U,r11
+#endif
 	blr
 #endif /* CONFIG_BOOTX_TEXT */
 

@@ -101,9 +101,6 @@ _config_display_some_debug(struct MPT3SAS_ADAPTER *ioc, u16 smid,
 	Mpi2ConfigRequest_t *mpi_request;
 	char *desc = NULL;
 
-	if (!(ioc->logging_level & MPT_DEBUG_CONFIG))
-		return;
-
 	mpi_request = mpt3sas_base_get_msg_frame(ioc, smid);
 	switch (mpi_request->Header.PageType & MPI2_CONFIG_PAGETYPE_MASK) {
 	case MPI2_CONFIG_PAGETYPE_IO_UNIT:
@@ -269,7 +266,8 @@ mpt3sas_config_done(struct MPT3SAS_ADAPTER *ioc, u16 smid, u8 msix_index,
 		    mpi_reply->MsgLength*4);
 	}
 	ioc->config_cmds.status &= ~MPT3_CMD_PENDING;
-	_config_display_some_debug(ioc, smid, "config_done", mpi_reply);
+	if (ioc->logging_level & MPT_DEBUG_CONFIG)
+		_config_display_some_debug(ioc, smid, "config_done", mpi_reply);
 	ioc->config_cmds.smid = USHRT_MAX;
 	complete(&ioc->config_cmds.done);
 	return 1;
@@ -305,6 +303,7 @@ _config_request(struct MPT3SAS_ADAPTER *ioc, Mpi2ConfigRequest_t
 	u8 retry_count, issue_host_reset = 0;
 	struct config_request mem;
 	u32 ioc_status = UINT_MAX;
+	u8 issue_reset = 0;
 
 	mutex_lock(&ioc->config_cmds.mutex);
 	if (ioc->config_cmds.status != MPT3_CMD_NOT_USED) {
@@ -378,14 +377,18 @@ _config_request(struct MPT3SAS_ADAPTER *ioc, Mpi2ConfigRequest_t
 	config_request = mpt3sas_base_get_msg_frame(ioc, smid);
 	ioc->config_cmds.smid = smid;
 	memcpy(config_request, mpi_request, sizeof(Mpi2ConfigRequest_t));
-	_config_display_some_debug(ioc, smid, "config_request", NULL);
+	if (ioc->logging_level & MPT_DEBUG_CONFIG)
+		_config_display_some_debug(ioc, smid, "config_request", NULL);
 	init_completion(&ioc->config_cmds.done);
-	mpt3sas_base_put_smid_default(ioc, smid);
+	ioc->put_smid_default(ioc, smid);
 	wait_for_completion_timeout(&ioc->config_cmds.done, timeout*HZ);
 	if (!(ioc->config_cmds.status & MPT3_CMD_COMPLETE)) {
-		mpt3sas_base_check_cmd_timeout(ioc,
-			ioc->config_cmds.status, mpi_request,
-			sizeof(Mpi2ConfigRequest_t)/4);
+		if (!(ioc->logging_level & MPT_DEBUG_CONFIG))
+			_config_display_some_debug(ioc,
+			    smid, "config_request", NULL);
+		mpt3sas_check_cmd_timeout(ioc,
+		    ioc->config_cmds.status, mpi_request,
+		    sizeof(Mpi2ConfigRequest_t)/4, issue_reset);
 		retry_count++;
 		if (ioc->config_cmds.smid == smid)
 			mpt3sas_base_free_smid(ioc, smid);
@@ -404,8 +407,11 @@ _config_request(struct MPT3SAS_ADAPTER *ioc, Mpi2ConfigRequest_t
 		/* Reply Frame Sanity Checks to workaround FW issues */
 		if ((mpi_request->Header.PageType & 0xF) !=
 		    (mpi_reply->Header.PageType & 0xF)) {
+			if (!(ioc->logging_level & MPT_DEBUG_CONFIG))
+				_config_display_some_debug(ioc,
+				    smid, "config_request", NULL);
 			_debug_dump_mf(mpi_request, ioc->request_sz/4);
-			_debug_dump_reply(mpi_reply, ioc->request_sz/4);
+			_debug_dump_reply(mpi_reply, ioc->reply_sz/4);
 			panic("%s: %s: Firmware BUG: mpi_reply mismatch: Requested PageType(0x%02x) Reply PageType(0x%02x)\n",
 			      ioc->name, __func__,
 			      mpi_request->Header.PageType & 0xF,
@@ -415,8 +421,11 @@ _config_request(struct MPT3SAS_ADAPTER *ioc, Mpi2ConfigRequest_t
 		if (((mpi_request->Header.PageType & 0xF) ==
 		    MPI2_CONFIG_PAGETYPE_EXTENDED) &&
 		    mpi_request->ExtPageType != mpi_reply->ExtPageType) {
+			if (!(ioc->logging_level & MPT_DEBUG_CONFIG))
+				_config_display_some_debug(ioc,
+				    smid, "config_request", NULL);
 			_debug_dump_mf(mpi_request, ioc->request_sz/4);
-			_debug_dump_reply(mpi_reply, ioc->request_sz/4);
+			_debug_dump_reply(mpi_reply, ioc->reply_sz/4);
 			panic("%s: %s: Firmware BUG: mpi_reply mismatch: Requested ExtPageType(0x%02x) Reply ExtPageType(0x%02x)\n",
 			      ioc->name, __func__,
 			      mpi_request->ExtPageType,
@@ -439,8 +448,11 @@ _config_request(struct MPT3SAS_ADAPTER *ioc, Mpi2ConfigRequest_t
 		if (p) {
 			if ((mpi_request->Header.PageType & 0xF) !=
 			    (p[3] & 0xF)) {
+				if (!(ioc->logging_level & MPT_DEBUG_CONFIG))
+					_config_display_some_debug(ioc,
+					    smid, "config_request", NULL);
 				_debug_dump_mf(mpi_request, ioc->request_sz/4);
-				_debug_dump_reply(mpi_reply, ioc->request_sz/4);
+				_debug_dump_reply(mpi_reply, ioc->reply_sz/4);
 				_debug_dump_config(p, min_t(u16, mem.sz,
 				    config_page_sz)/4);
 				panic("%s: %s: Firmware BUG: config page mismatch: Requested PageType(0x%02x) Reply PageType(0x%02x)\n",
@@ -452,8 +464,11 @@ _config_request(struct MPT3SAS_ADAPTER *ioc, Mpi2ConfigRequest_t
 			if (((mpi_request->Header.PageType & 0xF) ==
 			    MPI2_CONFIG_PAGETYPE_EXTENDED) &&
 			    (mpi_request->ExtPageType != p[6])) {
+				if (!(ioc->logging_level & MPT_DEBUG_CONFIG))
+					_config_display_some_debug(ioc,
+					    smid, "config_request", NULL);
 				_debug_dump_mf(mpi_request, ioc->request_sz/4);
-				_debug_dump_reply(mpi_reply, ioc->request_sz/4);
+				_debug_dump_reply(mpi_reply, ioc->reply_sz/4);
 				_debug_dump_config(p, min_t(u16, mem.sz,
 				    config_page_sz)/4);
 				panic("%s: %s: Firmware BUG: config page mismatch: Requested ExtPageType(0x%02x) Reply ExtPageType(0x%02x)\n",
@@ -943,6 +958,77 @@ mpt3sas_config_get_ioc_pg8(struct MPT3SAS_ADAPTER *ioc,
 		goto out;
 
 	mpi_request.Action = MPI2_CONFIG_ACTION_PAGE_READ_CURRENT;
+	r = _config_request(ioc, &mpi_request, mpi_reply,
+	    MPT3_CONFIG_PAGE_DEFAULT_TIMEOUT, config_page,
+	    sizeof(*config_page));
+ out:
+	return r;
+}
+/**
+ * mpt3sas_config_get_ioc_pg1 - obtain ioc page 1
+ * @ioc: per adapter object
+ * @mpi_reply: reply mf payload returned from firmware
+ * @config_page: contents of the config page
+ * Context: sleep.
+ *
+ * Return: 0 for success, non-zero for failure.
+ */
+int
+mpt3sas_config_get_ioc_pg1(struct MPT3SAS_ADAPTER *ioc,
+	Mpi2ConfigReply_t *mpi_reply, Mpi2IOCPage1_t *config_page)
+{
+	Mpi2ConfigRequest_t mpi_request;
+	int r;
+
+	memset(&mpi_request, 0, sizeof(Mpi2ConfigRequest_t));
+	mpi_request.Function = MPI2_FUNCTION_CONFIG;
+	mpi_request.Action = MPI2_CONFIG_ACTION_PAGE_HEADER;
+	mpi_request.Header.PageType = MPI2_CONFIG_PAGETYPE_IOC;
+	mpi_request.Header.PageNumber = 1;
+	mpi_request.Header.PageVersion = MPI2_IOCPAGE8_PAGEVERSION;
+	ioc->build_zero_len_sge_mpi(ioc, &mpi_request.PageBufferSGE);
+	r = _config_request(ioc, &mpi_request, mpi_reply,
+	    MPT3_CONFIG_PAGE_DEFAULT_TIMEOUT, NULL, 0);
+	if (r)
+		goto out;
+
+	mpi_request.Action = MPI2_CONFIG_ACTION_PAGE_READ_CURRENT;
+	r = _config_request(ioc, &mpi_request, mpi_reply,
+	    MPT3_CONFIG_PAGE_DEFAULT_TIMEOUT, config_page,
+	    sizeof(*config_page));
+ out:
+	return r;
+}
+
+/**
+ * mpt3sas_config_set_ioc_pg1 - modify ioc page 1
+ * @ioc: per adapter object
+ * @mpi_reply: reply mf payload returned from firmware
+ * @config_page: contents of the config page
+ * Context: sleep.
+ *
+ * Return: 0 for success, non-zero for failure.
+ */
+int
+mpt3sas_config_set_ioc_pg1(struct MPT3SAS_ADAPTER *ioc,
+	Mpi2ConfigReply_t *mpi_reply, Mpi2IOCPage1_t *config_page)
+{
+	Mpi2ConfigRequest_t mpi_request;
+	int r;
+
+	memset(&mpi_request, 0, sizeof(Mpi2ConfigRequest_t));
+	mpi_request.Function = MPI2_FUNCTION_CONFIG;
+	mpi_request.Action = MPI2_CONFIG_ACTION_PAGE_HEADER;
+	mpi_request.Header.PageType = MPI2_CONFIG_PAGETYPE_IOC;
+	mpi_request.Header.PageNumber = 1;
+	mpi_request.Header.PageVersion = MPI2_IOCPAGE8_PAGEVERSION;
+	ioc->build_zero_len_sge_mpi(ioc, &mpi_request.PageBufferSGE);
+	r = _config_request(ioc, &mpi_request, mpi_reply,
+	    MPT3_CONFIG_PAGE_DEFAULT_TIMEOUT, NULL, 0);
+	if (r)
+		goto out;
+
+	mpi_request.Action = MPI2_CONFIG_ACTION_PAGE_WRITE_CURRENT;
 	r = _config_request(ioc, &mpi_request, mpi_reply,
 	    MPT3_CONFIG_PAGE_DEFAULT_TIMEOUT, config_page,
 	    sizeof(*config_page));

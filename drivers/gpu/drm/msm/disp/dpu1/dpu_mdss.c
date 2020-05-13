@@ -3,25 +3,114 @@
  * Copyright (c) 2018, The Linux Foundation
  */
 
+#include <linux/irq.h>
+#include <linux/irqchip.h>
+#include <linux/irqdesc.h>
+#include <linux/irqchip/chained_irq.h>
 #include "dpu_kms.h"
+#include <linux/interconnect.h>
 
 #define to_dpu_mdss(x) container_of(x, struct dpu_mdss, base)
 
+#define HW_REV				0x0
 #define HW_INTR_STATUS			0x0010
+
+/* Max BW defined in KBps */
+#define MAX_BW				6800000
 
 struct dpu_irq_controller {
 	unsigned long enabled_mask;
 	struct irq_domain *domain;
 };
 
+struct dpu_hw_cfg {
+	u32 val;
+	u32 offset;
+};
+
+struct dpu_mdss_hw_init_handler {
+	u32 hw_rev;
+	u32 hw_reg_count;
+	struct dpu_hw_cfg* hw_cfg;
+};
+
 struct dpu_mdss {
 	struct msm_mdss base;
 	void __iomem *mmio;
 	unsigned long mmio_len;
-	u32 hwversion;
 	struct dss_module_power mp;
 	struct dpu_irq_controller irq_controller;
+	struct icc_path *path[2];
+	u32 num_paths;
 };
+
+static struct dpu_hw_cfg hw_cfg[] = {
+    {
+	/* UBWC global settings */
+	.val = 0x1E,
+	.offset = 0x144,
+    }
+};
+
+static struct dpu_mdss_hw_init_handler cfg_handler[] = {
+    { .hw_rev = DPU_HW_VER_620,
+      .hw_reg_count = ARRAY_SIZE(hw_cfg),
+      .hw_cfg = hw_cfg
+    },
+};
+
+static void dpu_mdss_hw_init(struct dpu_mdss *dpu_mdss, u32 hw_rev)
+{
+	int i;
+	u32 count = 0;
+	struct dpu_hw_cfg *hw_cfg = NULL;
+
+	for (i = 0; i < ARRAY_SIZE(cfg_handler); i++) {
+		if (cfg_handler[i].hw_rev == hw_rev) {
+			hw_cfg = cfg_handler[i].hw_cfg;
+			count = cfg_handler[i].hw_reg_count;
+			break;
+	    }
+	}
+
+	for (i = 0; i < count; i++ ) {
+		writel_relaxed(hw_cfg->val,
+			dpu_mdss->mmio + hw_cfg->offset);
+		hw_cfg++;
+	}
+
+    return;
+}
+
+static int dpu_mdss_parse_data_bus_icc_path(struct drm_device *dev,
+						struct dpu_mdss *dpu_mdss)
+{
+	struct icc_path *path0 = of_icc_get(dev->dev, "mdp0-mem");
+	struct icc_path *path1 = of_icc_get(dev->dev, "mdp1-mem");
+
+	if (IS_ERR_OR_NULL(path0))
+		return PTR_ERR_OR_ZERO(path0);
+
+	dpu_mdss->path[0] = path0;
+	dpu_mdss->num_paths = 1;
+
+	if (!IS_ERR_OR_NULL(path1)) {
+		dpu_mdss->path[1] = path1;
+		dpu_mdss->num_paths++;
+	}
+
+	return 0;
+}
+
+static void dpu_mdss_icc_request_bw(struct msm_mdss *mdss)
+{
+	struct dpu_mdss *dpu_mdss = to_dpu_mdss(mdss);
+	int i;
+	u64 avg_bw = dpu_mdss->num_paths ? MAX_BW / dpu_mdss->num_paths : 0;
+
+	for (i = 0; i < dpu_mdss->num_paths; i++)
+		icc_set_bw(dpu_mdss->path[i], avg_bw, kBps_to_icc(MAX_BW));
+}
 
 static void dpu_mdss_irq(struct irq_desc *desc)
 {
@@ -135,10 +224,18 @@ static int dpu_mdss_enable(struct msm_mdss *mdss)
 	struct dpu_mdss *dpu_mdss = to_dpu_mdss(mdss);
 	struct dss_module_power *mp = &dpu_mdss->mp;
 	int ret;
+	u32 mdss_rev;
+
+	dpu_mdss_icc_request_bw(mdss);
 
 	ret = msm_dss_enable_clk(mp->clk_config, mp->num_clk, true);
-	if (ret)
+	if (ret) {
 		DPU_ERROR("clock enable failed, ret:%d\n", ret);
+		return ret;
+	}
+
+	mdss_rev = readl_relaxed(dpu_mdss->mmio + HW_REV);
+	dpu_mdss_hw_init(dpu_mdss, mdss_rev);
 
 	return ret;
 }
@@ -147,11 +244,14 @@ static int dpu_mdss_disable(struct msm_mdss *mdss)
 {
 	struct dpu_mdss *dpu_mdss = to_dpu_mdss(mdss);
 	struct dss_module_power *mp = &dpu_mdss->mp;
-	int ret;
+	int ret, i;
 
 	ret = msm_dss_enable_clk(mp->clk_config, mp->num_clk, false);
 	if (ret)
 		DPU_ERROR("clock disable failed, ret:%d\n", ret);
+
+	for (i = 0; i < dpu_mdss->num_paths; i++)
+		icc_set_bw(dpu_mdss->path[i], 0, 0);
 
 	return ret;
 }
@@ -163,6 +263,7 @@ static void dpu_mdss_destroy(struct drm_device *dev)
 	struct dpu_mdss *dpu_mdss = to_dpu_mdss(priv->mdss);
 	struct dss_module_power *mp = &dpu_mdss->mp;
 	int irq;
+	int i;
 
 	pm_runtime_suspend(dev->dev);
 	pm_runtime_disable(dev->dev);
@@ -171,6 +272,9 @@ static void dpu_mdss_destroy(struct drm_device *dev)
 	irq_set_chained_handler_and_data(irq, NULL, NULL);
 	msm_dss_put_clk(mp->clk_config, mp->num_clk);
 	devm_kfree(&pdev->dev, mp->clk_config);
+
+	for (i = 0; i < dpu_mdss->num_paths; i++)
+		icc_put(dpu_mdss->path[i]);
 
 	if (dpu_mdss->mmio)
 		devm_iounmap(&pdev->dev, dpu_mdss->mmio);
@@ -211,6 +315,10 @@ int dpu_mdss_init(struct drm_device *dev)
 	}
 	dpu_mdss->mmio_len = resource_size(res);
 
+	ret = dpu_mdss_parse_data_bus_icc_path(dev, dpu_mdss);
+	if (ret)
+		return ret;
+
 	mp = &dpu_mdss->mp;
 	ret = msm_dss_parse_clock(pdev, mp);
 	if (ret) {
@@ -232,13 +340,11 @@ int dpu_mdss_init(struct drm_device *dev)
 	irq_set_chained_handler_and_data(irq, dpu_mdss_irq,
 					 dpu_mdss);
 
+	priv->mdss = &dpu_mdss->base;
+
 	pm_runtime_enable(dev->dev);
 
-	pm_runtime_get_sync(dev->dev);
-	dpu_mdss->hwversion = readl_relaxed(dpu_mdss->mmio);
-	pm_runtime_put_sync(dev->dev);
-
-	priv->mdss = &dpu_mdss->base;
+	dpu_mdss_icc_request_bw(priv->mdss);
 
 	return ret;
 

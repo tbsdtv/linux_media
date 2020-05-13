@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-pxa/zylonite.c
  *
@@ -7,10 +8,6 @@
  *
  * 2007-09-04: eric miao <eric.miao@marvell.com>
  *             rewrite to align with latest kernel
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -120,7 +117,6 @@ static struct pwm_lookup zylonite_pwm_lookup[] = {
 static struct platform_pwm_backlight_data zylonite_backlight_data = {
 	.max_brightness	= 100,
 	.dft_brightness	= 100,
-	.enable_gpio	= -1,
 };
 
 static struct platform_device zylonite_backlight_device = {

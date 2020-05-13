@@ -19,15 +19,16 @@
  *   Host -> LVDS|--(STDP4028)--|DP -> DP|--(STDP2690)--|DP++ -> Video output
  */
 
-#include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/of.h>
+
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_bridge.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
-#include <drm/drmP.h>
 
 #define EDID_EXT_BLOCK_CNT 0x7E
 
@@ -205,12 +206,18 @@ static irqreturn_t ge_b850v3_lvds_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int ge_b850v3_lvds_attach(struct drm_bridge *bridge)
+static int ge_b850v3_lvds_attach(struct drm_bridge *bridge,
+				 enum drm_bridge_attach_flags flags)
 {
 	struct drm_connector *connector = &ge_b850v3_lvds_ptr->connector;
 	struct i2c_client *stdp4028_i2c
 			= ge_b850v3_lvds_ptr->stdp4028_i2c;
 	int ret;
+
+	if (flags & DRM_BRIDGE_ATTACH_NO_CONNECTOR) {
+		DRM_ERROR("Fix bridge driver to make connector optional!");
+		return -EINVAL;
+	}
 
 	if (!bridge->encoder) {
 		DRM_ERROR("Parent encoder object not found");

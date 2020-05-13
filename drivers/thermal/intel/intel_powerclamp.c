@@ -430,7 +430,7 @@ static void clamp_idle_injection_func(struct kthread_work *work)
 	if (should_skip)
 		goto balance;
 
-	play_idle(jiffies_to_msecs(w_data->duration_jiffies));
+	play_idle(jiffies_to_usecs(w_data->duration_jiffies));
 
 balance:
 	if (clamping && w_data->clamping && cpu_online(w_data->cpu))
@@ -651,7 +651,7 @@ static struct thermal_cooling_device_ops powerclamp_cooling_ops = {
 };
 
 static const struct x86_cpu_id __initconst intel_powerclamp_ids[] = {
-	{ X86_VENDOR_INTEL, X86_FAMILY_ANY, X86_MODEL_ANY, X86_FEATURE_MWAIT },
+	X86_MATCH_VENDOR_FEATURE(INTEL, X86_FEATURE_MWAIT, NULL),
 	{}
 };
 MODULE_DEVICE_TABLE(x86cpu, intel_powerclamp_ids);
@@ -698,17 +698,9 @@ DEFINE_SHOW_ATTRIBUTE(powerclamp_debug);
 static inline void powerclamp_create_debug_files(void)
 {
 	debug_dir = debugfs_create_dir("intel_powerclamp", NULL);
-	if (!debug_dir)
-		return;
 
-	if (!debugfs_create_file("powerclamp_calib", S_IRUGO, debug_dir,
-					cal_data, &powerclamp_debug_fops))
-		goto file_error;
-
-	return;
-
-file_error:
-	debugfs_remove_recursive(debug_dir);
+	debugfs_create_file("powerclamp_calib", S_IRUGO, debug_dir, cal_data,
+			    &powerclamp_debug_fops);
 }
 
 static enum cpuhp_state hp_state;

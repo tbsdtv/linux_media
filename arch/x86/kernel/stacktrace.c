@@ -96,16 +96,18 @@ struct stack_frame_user {
 };
 
 static int
-copy_stack_frame(const void __user *fp, struct stack_frame_user *frame)
+copy_stack_frame(const struct stack_frame_user __user *fp,
+		 struct stack_frame_user *frame)
 {
 	int ret;
 
-	if (!access_ok(fp, sizeof(*frame)))
+	if (__range_not_ok(fp, sizeof(*frame), TASK_SIZE))
 		return 0;
 
 	ret = 1;
 	pagefault_disable();
-	if (__copy_from_user_inatomic(frame, fp, sizeof(*frame)))
+	if (__get_user(frame->next_fp, &fp->next_fp) ||
+	    __get_user(frame->ret_addr, &fp->ret_addr))
 		ret = 0;
 	pagefault_enable();
 
@@ -129,11 +131,9 @@ void arch_stack_walk_user(stack_trace_consume_fn consume_entry, void *cookie,
 			break;
 		if ((unsigned long)fp < regs->sp)
 			break;
-		if (frame.ret_addr) {
-			if (!consume_entry(cookie, frame.ret_addr, false))
-				return;
-		}
-		if (fp == frame.next_fp)
+		if (!frame.ret_addr)
+			break;
+		if (!consume_entry(cookie, frame.ret_addr, false))
 			break;
 		fp = frame.next_fp;
 	}

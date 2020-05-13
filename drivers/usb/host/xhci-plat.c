@@ -66,12 +66,14 @@ static int xhci_priv_resume_quirk(struct usb_hcd *hcd)
 
 static void xhci_plat_quirks(struct device *dev, struct xhci_hcd *xhci)
 {
+	struct xhci_plat_priv *priv = xhci_to_priv(xhci);
+
 	/*
 	 * As of now platform drivers don't provide MSI support so we ensure
 	 * here that the generic code does not try to make a pci_dev from our
 	 * dev struct in order to setup MSI
 	 */
-	xhci->quirks |= XHCI_PLAT;
+	xhci->quirks |= XHCI_PLAT | priv->quirks;
 }
 
 /* called during probe() after chip reset completes */
@@ -103,17 +105,11 @@ static const struct xhci_plat_priv xhci_plat_marvell_armada3700 = {
 };
 
 static const struct xhci_plat_priv xhci_plat_renesas_rcar_gen2 = {
-	.firmware_name = XHCI_RCAR_FIRMWARE_NAME_V1,
-	.init_quirk = xhci_rcar_init_quirk,
-	.plat_start = xhci_rcar_start,
-	.resume_quirk = xhci_rcar_resume_quirk,
+	SET_XHCI_PLAT_PRIV_FOR_RCAR(XHCI_RCAR_FIRMWARE_NAME_V1)
 };
 
 static const struct xhci_plat_priv xhci_plat_renesas_rcar_gen3 = {
-	.firmware_name = XHCI_RCAR_FIRMWARE_NAME_V3,
-	.init_quirk = xhci_rcar_init_quirk,
-	.plat_start = xhci_rcar_start,
-	.resume_quirk = xhci_rcar_resume_quirk,
+	SET_XHCI_PLAT_PRIV_FOR_RCAR(XHCI_RCAR_FIRMWARE_NAME_V3)
 };
 
 static const struct of_device_id usb_xhci_of_match[] = {
@@ -223,8 +219,7 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		goto disable_runtime;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	hcd->regs = devm_ioremap_resource(&pdev->dev, res);
+	hcd->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(hcd->regs)) {
 		ret = PTR_ERR(hcd->regs);
 		goto put_hcd;
@@ -307,7 +302,6 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		ret = usb_phy_init(hcd->usb_phy);
 		if (ret)
 			goto put_usb3_hcd;
-		hcd->skip_phy_initialization = 1;
 	}
 
 	hcd->tpl_support = of_usb_host_tpl_support(sysdev->of_node);
@@ -450,6 +444,7 @@ MODULE_DEVICE_TABLE(acpi, usb_xhci_acpi_match);
 static struct platform_driver usb_xhci_driver = {
 	.probe	= xhci_plat_probe,
 	.remove	= xhci_plat_remove,
+	.shutdown = usb_hcd_platform_shutdown,
 	.driver	= {
 		.name = "xhci-hcd",
 		.pm = &xhci_plat_pm_ops,

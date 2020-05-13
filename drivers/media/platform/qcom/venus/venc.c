@@ -20,6 +20,7 @@
 #include "core.h"
 #include "helpers.h"
 #include "venc.h"
+#include "pm_helpers.h"
 
 #define NUM_B_FRAMES_MAX	4
 
@@ -294,6 +295,7 @@ venc_try_fmt_common(struct venus_inst *inst, struct v4l2_format *f)
 	struct v4l2_pix_format_mplane *pixmp = &f->fmt.pix_mp;
 	struct v4l2_plane_pix_format *pfmt = pixmp->plane_fmt;
 	const struct venus_format *fmt;
+	u32 sizeimage;
 
 	memset(pfmt[0].reserved, 0, sizeof(pfmt[0].reserved));
 	memset(pixmp->reserved, 0, sizeof(pixmp->reserved));
@@ -325,9 +327,10 @@ venc_try_fmt_common(struct venus_inst *inst, struct v4l2_format *f)
 	pixmp->num_planes = fmt->num_planes;
 	pixmp->flags = 0;
 
-	pfmt[0].sizeimage = venus_helper_get_framesz(pixmp->pixelformat,
-						     pixmp->width,
-						     pixmp->height);
+	sizeimage = venus_helper_get_framesz(pixmp->pixelformat,
+					     pixmp->width,
+					     pixmp->height);
+	pfmt[0].sizeimage = max(ALIGN(pfmt[0].sizeimage, SZ_4K), sizeimage);
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		pfmt[0].bytesperline = ALIGN(pixmp->width, 128);
@@ -354,6 +357,14 @@ static int venc_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	const struct venus_format *fmt;
 	struct v4l2_format format;
 	u32 pixfmt_out = 0, pixfmt_cap = 0;
+	struct vb2_queue *q;
+
+	q = v4l2_m2m_get_vq(inst->m2m_ctx, f->type);
+	if (!q)
+		return -EINVAL;
+
+	if (vb2_is_busy(q))
+		return -EBUSY;
 
 	orig_pixmp = *pixmp;
 
@@ -399,8 +410,10 @@ static int venc_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 
 	if (f->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		inst->fmt_out = fmt;
-	else if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+	else if (f->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
 		inst->fmt_cap = fmt;
+		inst->output_buf_size = pixmp->plane_fmt[0].sizeimage;
+	}
 
 	return 0;
 }
@@ -651,10 +664,6 @@ static int venc_set_properties(struct venus_inst *inst)
 	if (ret)
 		return ret;
 
-	ret = venus_helper_set_core_usage(inst, VIDC_CORE_ID_2);
-	if (ret)
-		return ret;
-
 	ptype = HFI_PROPERTY_CONFIG_FRAME_RATE;
 	frate.buffer_type = HFI_BUFFER_OUTPUT;
 	frate.framerate = inst->fps * (1 << 16);
@@ -727,7 +736,9 @@ static int venc_set_properties(struct venus_inst *inst)
 	if (ret)
 		return ret;
 
-	if (ctr->bitrate_mode == V4L2_MPEG_VIDEO_BITRATE_MODE_VBR)
+	if (!ctr->rc_enable)
+		rate_control = HFI_RATE_CONTROL_OFF;
+	else if (ctr->bitrate_mode == V4L2_MPEG_VIDEO_BITRATE_MODE_VBR)
 		rate_control = HFI_RATE_CONTROL_VBR_CFR;
 	else
 		rate_control = HFI_RATE_CONTROL_CBR_CFR;
@@ -838,6 +849,10 @@ static int venc_init_session(struct venus_inst *inst)
 	if (ret)
 		goto deinit;
 
+	ret = venus_helper_init_codec_freq_data(inst);
+	if (ret)
+		goto deinit;
+
 	ret = venc_set_properties(inst);
 	if (ret)
 		goto deinit;
@@ -918,6 +933,7 @@ static int venc_queue_setup(struct vb2_queue *q,
 		sizes[0] = venus_helper_get_framesz(inst->fmt_cap->pixfmt,
 						    inst->width,
 						    inst->height);
+		sizes[0] = max(sizes[0], inst->output_buf_size);
 		inst->output_buf_size = sizes[0];
 		break;
 	default:
@@ -982,6 +998,10 @@ static int venc_start_streaming(struct vb2_queue *q, unsigned int count)
 	if (ret)
 		goto bufs_done;
 
+	ret = venus_pm_acquire_core(inst);
+	if (ret)
+		goto deinit_sess;
+
 	ret = venc_set_properties(inst);
 	if (ret)
 		goto deinit_sess;
@@ -1006,7 +1026,7 @@ static int venc_start_streaming(struct vb2_queue *q, unsigned int count)
 deinit_sess:
 	hfi_session_deinit(inst);
 bufs_done:
-	venus_helper_buffers_done(inst, VB2_BUF_STATE_QUEUED);
+	venus_helper_buffers_done(inst, q->type, VB2_BUF_STATE_QUEUED);
 	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
 		inst->streamon_out = 0;
 	else
@@ -1150,6 +1170,8 @@ static int venc_open(struct file *file)
 
 	inst->core = core;
 	inst->session_type = VIDC_SESSION_TYPE_ENC;
+	inst->clk_data.core_id = VIDC_CORE_ID_DEFAULT;
+	inst->core_acquired = false;
 
 	venus_helper_init_instance(inst);
 
@@ -1230,9 +1252,6 @@ static const struct v4l2_file_operations venc_fops = {
 	.unlocked_ioctl = video_ioctl2,
 	.poll = v4l2_m2m_fop_poll,
 	.mmap = v4l2_m2m_fop_mmap,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl32 = v4l2_compat_ioctl32,
-#endif
 };
 
 static int venc_probe(struct platform_device *pdev)
@@ -1249,19 +1268,13 @@ static int venc_probe(struct platform_device *pdev)
 	if (!core)
 		return -EPROBE_DEFER;
 
-	if (IS_V3(core) || IS_V4(core)) {
-		core->core1_clk = devm_clk_get(dev, "core");
-		if (IS_ERR(core->core1_clk))
-			return PTR_ERR(core->core1_clk);
-	}
-
-	if (IS_V4(core)) {
-		core->core1_bus_clk = devm_clk_get(dev, "bus");
-		if (IS_ERR(core->core1_bus_clk))
-			return PTR_ERR(core->core1_bus_clk);
-	}
-
 	platform_set_drvdata(pdev, core);
+
+	if (core->pm_ops->venc_get) {
+		ret = core->pm_ops->venc_get(dev);
+		if (ret)
+			return ret;
+	}
 
 	vdev = video_device_alloc();
 	if (!vdev)
@@ -1275,7 +1288,7 @@ static int venc_probe(struct platform_device *pdev)
 	vdev->v4l2_dev = &core->v4l2_dev;
 	vdev->device_caps = V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
 
-	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
 	if (ret)
 		goto err_vdev_release;
 
@@ -1299,57 +1312,33 @@ static int venc_remove(struct platform_device *pdev)
 	video_unregister_device(core->vdev_enc);
 	pm_runtime_disable(core->dev_enc);
 
+	if (core->pm_ops->venc_put)
+		core->pm_ops->venc_put(core->dev_enc);
+
 	return 0;
 }
 
 static __maybe_unused int venc_runtime_suspend(struct device *dev)
 {
 	struct venus_core *core = dev_get_drvdata(dev);
-	int ret;
+	const struct venus_pm_ops *pm_ops = core->pm_ops;
+	int ret = 0;
 
-	if (IS_V1(core))
-		return 0;
+	if (pm_ops->venc_power)
+		ret = pm_ops->venc_power(dev, POWER_OFF);
 
-	ret = venus_helper_power_enable(core, VIDC_SESSION_TYPE_ENC, true);
-	if (ret)
-		return ret;
-
-	if (IS_V4(core))
-		clk_disable_unprepare(core->core1_bus_clk);
-
-	clk_disable_unprepare(core->core1_clk);
-
-	return venus_helper_power_enable(core, VIDC_SESSION_TYPE_ENC, false);
+	return ret;
 }
 
 static __maybe_unused int venc_runtime_resume(struct device *dev)
 {
 	struct venus_core *core = dev_get_drvdata(dev);
-	int ret;
+	const struct venus_pm_ops *pm_ops = core->pm_ops;
+	int ret = 0;
 
-	if (IS_V1(core))
-		return 0;
+	if (pm_ops->venc_power)
+		ret = pm_ops->venc_power(dev, POWER_ON);
 
-	ret = venus_helper_power_enable(core, VIDC_SESSION_TYPE_ENC, true);
-	if (ret)
-		return ret;
-
-	ret = clk_prepare_enable(core->core1_clk);
-	if (ret)
-		goto err_power_disable;
-
-	if (IS_V4(core))
-		ret = clk_prepare_enable(core->core1_bus_clk);
-
-	if (ret)
-		goto err_unprepare_core1;
-
-	return venus_helper_power_enable(core, VIDC_SESSION_TYPE_ENC, false);
-
-err_unprepare_core1:
-	clk_disable_unprepare(core->core1_clk);
-err_power_disable:
-	venus_helper_power_enable(core, VIDC_SESSION_TYPE_ENC, false);
 	return ret;
 }
 

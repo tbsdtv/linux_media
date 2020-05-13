@@ -22,7 +22,6 @@
 #include "bcm63xx_enet.h"
 
 static char bcm_enet_driver_name[] = "bcm63xx_enet";
-static char bcm_enet_driver_version[] = "1.0";
 
 static int copybreak __read_mostly = 128;
 module_param(copybreak, int, 0);
@@ -1304,9 +1303,6 @@ static void bcm_enet_get_drvinfo(struct net_device *netdev,
 				 struct ethtool_drvinfo *drvinfo)
 {
 	strlcpy(drvinfo->driver, bcm_enet_driver_name, sizeof(drvinfo->driver));
-	strlcpy(drvinfo->version, bcm_enet_driver_version,
-		sizeof(drvinfo->version));
-	strlcpy(drvinfo->fw_version, "N/A", sizeof(drvinfo->fw_version));
 	strlcpy(drvinfo->bus_info, "bcm63xx", sizeof(drvinfo->bus_info));
 }
 
@@ -1693,7 +1689,7 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	struct bcm_enet_priv *priv;
 	struct net_device *dev;
 	struct bcm63xx_enet_platform_data *pd;
-	struct resource *res_mem, *res_irq, *res_irq_rx, *res_irq_tx;
+	struct resource *res_irq, *res_irq_rx, *res_irq_tx;
 	struct mii_bus *bus;
 	int i, ret;
 
@@ -1706,7 +1702,6 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	if (!res_irq || !res_irq_rx || !res_irq_tx)
 		return -ENODEV;
 
-	ret = 0;
 	dev = alloc_etherdev(sizeof(*priv));
 	if (!dev)
 		return -ENOMEM;
@@ -1719,8 +1714,7 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	if (ret)
 		goto out;
 
-	res_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	priv->base = devm_ioremap_resource(&pdev->dev, res_mem);
+	priv->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv->base)) {
 		ret = PTR_ERR(priv->base);
 		goto out;
@@ -2530,10 +2524,8 @@ static int bcm_enetsw_get_sset_count(struct net_device *netdev,
 static void bcm_enetsw_get_drvinfo(struct net_device *netdev,
 				   struct ethtool_drvinfo *drvinfo)
 {
-	strncpy(drvinfo->driver, bcm_enet_driver_name, 32);
-	strncpy(drvinfo->version, bcm_enet_driver_version, 32);
-	strncpy(drvinfo->fw_version, "N/A", 32);
-	strncpy(drvinfo->bus_info, "bcm63xx", 32);
+	strncpy(drvinfo->driver, bcm_enet_driver_name, sizeof(drvinfo->driver));
+	strncpy(drvinfo->bus_info, "bcm63xx", sizeof(drvinfo->bus_info));
 }
 
 static void bcm_enetsw_get_ethtool_stats(struct net_device *netdev,
@@ -2659,7 +2651,6 @@ static int bcm_enetsw_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 	priv = netdev_priv(dev);
-	memset(priv, 0, sizeof(*priv));
 
 	/* initialize default and fetch platform data */
 	priv->enet_is_sw = true;
@@ -2763,15 +2754,13 @@ struct platform_driver bcm63xx_enetsw_driver = {
 /* reserve & remap memory space shared between all macs */
 static int bcm_enet_shared_probe(struct platform_device *pdev)
 {
-	struct resource *res;
 	void __iomem *p[3];
 	unsigned int i;
 
 	memset(bcm_enet_shared_base, 0, sizeof(bcm_enet_shared_base));
 
 	for (i = 0; i < 3; i++) {
-		res = platform_get_resource(pdev, IORESOURCE_MEM, i);
-		p[i] = devm_ioremap_resource(&pdev->dev, res);
+		p[i] = devm_platform_ioremap_resource(pdev, i);
 		if (IS_ERR(p[i]))
 			return PTR_ERR(p[i]);
 	}

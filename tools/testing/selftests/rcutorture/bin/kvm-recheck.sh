@@ -7,9 +7,14 @@
 #
 # Usage: kvm-recheck.sh resdir ...
 #
+# Returns status reflecting the success or not of the last run specified.
+#
 # Copyright (C) IBM Corporation, 2011
 #
 # Authors: Paul E. McKenney <paulmck@linux.ibm.com>
+
+T=/tmp/kvm-recheck.sh.$$
+trap 'rm -f $T' 0 2
 
 PATH=`pwd`/tools/testing/selftests/rcutorture/bin:$PATH; export PATH
 . functions.sh
@@ -28,8 +33,16 @@ do
 		TORTURE_SUITE="`cat $i/../TORTURE_SUITE`"
 		rm -f $i/console.log.*.diags
 		kvm-recheck-${TORTURE_SUITE}.sh $i
-		if test -f "$i/console.log"
+		if test -f "$i/qemu-retval" && test "`cat $i/qemu-retval`" -ne 0 && test "`cat $i/qemu-retval`" -ne 137
 		then
+			echo QEMU error, output:
+			cat $i/qemu-output
+		elif test -f "$i/console.log"
+		then
+			if test -f "$i/qemu-retval" && test "`cat $i/qemu-retval`" -eq 137
+			then
+				echo QEMU killed
+			fi
 			configcheck.sh $i/.config $i/ConfigFragment
 			if test -r $i/Make.oldconfig.err
 			then
@@ -58,3 +71,16 @@ do
 		fi
 	done
 done
+EDITOR=echo kvm-find-errors.sh "${@: -1}" > $T 2>&1
+ret=$?
+builderrors="`tr ' ' '\012' < $T | grep -c '/Make.out.diags'`"
+if test "$builderrors" -gt 0
+then
+	echo $builderrors runs with build errors.
+fi
+runerrors="`tr ' ' '\012' < $T | grep -c '/console.log.diags'`"
+if test "$runerrors" -gt 0
+then
+	echo $runerrors runs with runtime errors.
+fi
+exit $ret

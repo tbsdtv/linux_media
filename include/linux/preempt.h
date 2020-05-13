@@ -182,7 +182,7 @@ do { \
 
 #define preemptible()	(preempt_count() == 0 && !irqs_disabled())
 
-#ifdef CONFIG_PREEMPT
+#ifdef CONFIG_PREEMPTION
 #define preempt_enable() \
 do { \
 	barrier(); \
@@ -203,7 +203,7 @@ do { \
 		__preempt_schedule(); \
 } while (0)
 
-#else /* !CONFIG_PREEMPT */
+#else /* !CONFIG_PREEMPTION */
 #define preempt_enable() \
 do { \
 	barrier(); \
@@ -217,7 +217,7 @@ do { \
 } while (0)
 
 #define preempt_check_resched() do { } while (0)
-#endif /* CONFIG_PREEMPT */
+#endif /* CONFIG_PREEMPTION */
 
 #define preempt_disable_notrace() \
 do { \
@@ -321,5 +321,35 @@ static inline void preempt_notifier_init(struct preempt_notifier *notifier,
 }
 
 #endif
+
+/**
+ * migrate_disable - Prevent migration of the current task
+ *
+ * Maps to preempt_disable() which also disables preemption. Use
+ * migrate_disable() to annotate that the intent is to prevent migration,
+ * but not necessarily preemption.
+ *
+ * Can be invoked nested like preempt_disable() and needs the corresponding
+ * number of migrate_enable() invocations.
+ */
+static __always_inline void migrate_disable(void)
+{
+	preempt_disable();
+}
+
+/**
+ * migrate_enable - Allow migration of the current task
+ *
+ * Counterpart to migrate_disable().
+ *
+ * As migrate_disable() can be invoked nested, only the outermost invocation
+ * reenables migration.
+ *
+ * Currently mapped to preempt_enable().
+ */
+static __always_inline void migrate_enable(void)
+{
+	preempt_enable();
+}
 
 #endif /* __LINUX_PREEMPT_H */

@@ -87,7 +87,7 @@ struct intel_vgpu_gm {
 
 /* Fences owned by a vGPU */
 struct intel_vgpu_fence {
-	struct drm_i915_fence_reg *regs[INTEL_GVT_MAX_NUM_FENCES];
+	struct i915_fence_reg *regs[INTEL_GVT_MAX_NUM_FENCES];
 	u32 base;
 	u32 size;
 };
@@ -149,9 +149,9 @@ struct intel_vgpu_submission_ops {
 struct intel_vgpu_submission {
 	struct intel_vgpu_execlist execlist[I915_NUM_ENGINES];
 	struct list_head workload_q_head[I915_NUM_ENGINES];
+	struct intel_context *shadow[I915_NUM_ENGINES];
 	struct kmem_cache *workloads;
 	atomic_t running_workload_num;
-	struct i915_gem_context *shadow_ctx;
 	union {
 		u64 i915_context_pml4;
 		u64 i915_context_pdps[GEN8_3LVL_PDPES];
@@ -196,40 +196,20 @@ struct intel_vgpu {
 
 	struct dentry *debugfs;
 
-#if IS_ENABLED(CONFIG_DRM_I915_GVT_KVMGT)
-	struct {
-		struct mdev_device *mdev;
-		struct vfio_region *region;
-		int num_regions;
-		struct eventfd_ctx *intx_trigger;
-		struct eventfd_ctx *msi_trigger;
-
-		/*
-		 * Two caches are used to avoid mapping duplicated pages (eg.
-		 * scratch pages). This help to reduce dma setup overhead.
-		 */
-		struct rb_root gfn_cache;
-		struct rb_root dma_addr_cache;
-		unsigned long nr_cache_entries;
-		struct mutex cache_lock;
-
-		struct notifier_block iommu_notifier;
-		struct notifier_block group_notifier;
-		struct kvm *kvm;
-		struct work_struct release_work;
-		atomic_t released;
-		struct vfio_device *vfio_device;
-	} vdev;
-#endif
+	/* Hypervisor-specific device state. */
+	void *vdev;
 
 	struct list_head dmabuf_obj_list_head;
 	struct mutex dmabuf_lock;
 	struct idr object_idr;
 
-	struct completion vblank_done;
-
 	u32 scan_nonprivbb;
 };
+
+static inline void *intel_vgpu_vdev(struct intel_vgpu *vgpu)
+{
+	return vgpu->vdev;
+}
 
 /* validating GM healthy status*/
 #define vgpu_is_vm_unhealthy(ret_val) \
@@ -306,7 +286,7 @@ struct intel_gvt {
 	/* scheduler scope lock, protect gvt and vgpu schedule related data */
 	struct mutex sched_lock;
 
-	struct drm_i915_private *dev_priv;
+	struct intel_gt *gt;
 	struct idr vgpu_idr;	/* vGPU IDR pool */
 
 	struct intel_gvt_device_info device_info;
@@ -334,6 +314,10 @@ struct intel_gvt {
 	struct {
 		struct engine_mmio *mmio;
 		int ctx_mmio_count[I915_NUM_ENGINES];
+		u32 *tlb_mmio_offset_list;
+		u32 tlb_mmio_offset_list_cnt;
+		u32 *mocs_mmio_offset_list;
+		u32 mocs_mmio_offset_list_cnt;
 	} engine_mmio_list;
 
 	struct dentry *debugfs_root;
@@ -372,14 +356,15 @@ int intel_gvt_load_firmware(struct intel_gvt *gvt);
 #define HOST_HIGH_GM_SIZE MB_TO_BYTES(384)
 #define HOST_FENCE 4
 
-/* Aperture/GM space definitions for GVT device */
-#define gvt_aperture_sz(gvt)	  (gvt->dev_priv->ggtt.mappable_end)
-#define gvt_aperture_pa_base(gvt) (gvt->dev_priv->ggtt.gmadr.start)
+#define gvt_to_ggtt(gvt)	((gvt)->gt->ggtt)
 
-#define gvt_ggtt_gm_sz(gvt)	  (gvt->dev_priv->ggtt.vm.total)
-#define gvt_ggtt_sz(gvt) \
-	((gvt->dev_priv->ggtt.vm.total >> PAGE_SHIFT) << 3)
-#define gvt_hidden_sz(gvt)	  (gvt_ggtt_gm_sz(gvt) - gvt_aperture_sz(gvt))
+/* Aperture/GM space definitions for GVT device */
+#define gvt_aperture_sz(gvt)	  gvt_to_ggtt(gvt)->mappable_end
+#define gvt_aperture_pa_base(gvt) gvt_to_ggtt(gvt)->gmadr.start
+
+#define gvt_ggtt_gm_sz(gvt)	gvt_to_ggtt(gvt)->vm.total
+#define gvt_ggtt_sz(gvt)	(gvt_to_ggtt(gvt)->vm.total >> PAGE_SHIFT << 3)
+#define gvt_hidden_sz(gvt)	(gvt_ggtt_gm_sz(gvt) - gvt_aperture_sz(gvt))
 
 #define gvt_aperture_gmadr_base(gvt) (0)
 #define gvt_aperture_gmadr_end(gvt) (gvt_aperture_gmadr_base(gvt) \
@@ -390,7 +375,7 @@ int intel_gvt_load_firmware(struct intel_gvt *gvt);
 #define gvt_hidden_gmadr_end(gvt) (gvt_hidden_gmadr_base(gvt) \
 				   + gvt_hidden_sz(gvt) - 1)
 
-#define gvt_fence_sz(gvt) (gvt->dev_priv->num_fence_regs)
+#define gvt_fence_sz(gvt) (gvt_to_ggtt(gvt)->num_fences)
 
 /* Aperture/GM space definitions for vGPU */
 #define vgpu_aperture_offset(vgpu)	((vgpu)->gm.low_gm_node.start)
@@ -566,8 +551,7 @@ struct intel_gvt_ops {
 	void (*vgpu_deactivate)(struct intel_vgpu *);
 	struct intel_vgpu_type *(*gvt_find_vgpu_type)(struct intel_gvt *gvt,
 			const char *name);
-	bool (*get_gvt_attrs)(struct attribute ***type_attrs,
-			struct attribute_group ***intel_vgpu_type_groups);
+	bool (*get_gvt_attrs)(struct attribute_group ***intel_vgpu_type_groups);
 	int (*vgpu_query_plane)(struct intel_vgpu *vgpu, void *);
 	int (*vgpu_get_dmabuf)(struct intel_vgpu *vgpu, unsigned int);
 	int (*write_protect_handler)(struct intel_vgpu *, u64, void *,
@@ -582,14 +566,14 @@ enum {
 	GVT_FAILSAFE_GUEST_ERR,
 };
 
-static inline void mmio_hw_access_pre(struct drm_i915_private *dev_priv)
+static inline void mmio_hw_access_pre(struct intel_gt *gt)
 {
-	intel_runtime_pm_get(dev_priv);
+	intel_runtime_pm_get(gt->uncore->rpm);
 }
 
-static inline void mmio_hw_access_post(struct drm_i915_private *dev_priv)
+static inline void mmio_hw_access_post(struct intel_gt *gt)
 {
-	intel_runtime_pm_put_unchecked(dev_priv);
+	intel_runtime_pm_put_unchecked(gt->uncore->rpm);
 }
 
 /**
@@ -682,9 +666,9 @@ static inline void intel_gvt_mmio_set_in_ctx(
 	gvt->mmio.mmio_attribute[offset >> 2] |= F_IN_CTX;
 }
 
-int intel_gvt_debugfs_add_vgpu(struct intel_vgpu *vgpu);
+void intel_gvt_debugfs_add_vgpu(struct intel_vgpu *vgpu);
 void intel_gvt_debugfs_remove_vgpu(struct intel_vgpu *vgpu);
-int intel_gvt_debugfs_init(struct intel_gvt *gvt);
+void intel_gvt_debugfs_init(struct intel_gvt *gvt);
 void intel_gvt_debugfs_clean(struct intel_gvt *gvt);
 
 

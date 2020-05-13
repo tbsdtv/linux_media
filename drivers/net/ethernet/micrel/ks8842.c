@@ -580,9 +580,7 @@ out:
 		dma_unmap_single(adapter->dev, sg_dma_address(sg),
 			DMA_BUFFER_SIZE, DMA_FROM_DEVICE);
 	sg_dma_address(sg) = 0;
-	if (ctl->skb)
-		dev_kfree_skb(ctl->skb);
-
+	dev_kfree_skb(ctl->skb);
 	ctl->skb = NULL;
 
 	printk(KERN_ERR DRV_NAME": Failed to start RX DMA: %d\n", err);
@@ -1105,7 +1103,7 @@ static void ks8842_tx_timeout_work(struct work_struct *work)
 		__ks8842_start_new_rx_dma(netdev);
 }
 
-static void ks8842_tx_timeout(struct net_device *netdev)
+static void ks8842_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 {
 	struct ks8842_adapter *adapter = netdev_priv(netdev);
 

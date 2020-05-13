@@ -322,7 +322,7 @@ static u32 audit_to_op(u32 op)
 /* check if an audit field is valid */
 static int audit_field_valid(struct audit_entry *entry, struct audit_field *f)
 {
-	switch(f->type) {
+	switch (f->type) {
 	case AUDIT_MSGTYPE:
 		if (entry->rule.listnr != AUDIT_FILTER_EXCLUDE &&
 		    entry->rule.listnr != AUDIT_FILTER_USER)
@@ -334,7 +334,7 @@ static int audit_field_valid(struct audit_entry *entry, struct audit_field *f)
 		break;
 	}
 
-	switch(entry->rule.listnr) {
+	switch (entry->rule.listnr) {
 	case AUDIT_FILTER_FS:
 		switch(f->type) {
 		case AUDIT_FSTYPE:
@@ -345,9 +345,16 @@ static int audit_field_valid(struct audit_entry *entry, struct audit_field *f)
 		}
 	}
 
-	switch(f->type) {
-	default:
-		return -EINVAL;
+	/* Check for valid field type and op */
+	switch (f->type) {
+	case AUDIT_ARG0:
+	case AUDIT_ARG1:
+	case AUDIT_ARG2:
+	case AUDIT_ARG3:
+	case AUDIT_PERS: /* <uapi/linux/personality.h> */
+	case AUDIT_DEVMINOR:
+		/* all ops are valid */
+		break;
 	case AUDIT_UID:
 	case AUDIT_EUID:
 	case AUDIT_SUID:
@@ -360,44 +367,51 @@ static int audit_field_valid(struct audit_entry *entry, struct audit_field *f)
 	case AUDIT_FSGID:
 	case AUDIT_OBJ_GID:
 	case AUDIT_PID:
-	case AUDIT_PERS:
 	case AUDIT_MSGTYPE:
 	case AUDIT_PPID:
 	case AUDIT_DEVMAJOR:
-	case AUDIT_DEVMINOR:
 	case AUDIT_EXIT:
 	case AUDIT_SUCCESS:
 	case AUDIT_INODE:
 	case AUDIT_SESSIONID:
+	case AUDIT_SUBJ_SEN:
+	case AUDIT_SUBJ_CLR:
+	case AUDIT_OBJ_LEV_LOW:
+	case AUDIT_OBJ_LEV_HIGH:
+	case AUDIT_SADDR_FAM:
 		/* bit ops are only useful on syscall args */
 		if (f->op == Audit_bitmask || f->op == Audit_bittest)
 			return -EINVAL;
 		break;
-	case AUDIT_ARG0:
-	case AUDIT_ARG1:
-	case AUDIT_ARG2:
-	case AUDIT_ARG3:
 	case AUDIT_SUBJ_USER:
 	case AUDIT_SUBJ_ROLE:
 	case AUDIT_SUBJ_TYPE:
-	case AUDIT_SUBJ_SEN:
-	case AUDIT_SUBJ_CLR:
 	case AUDIT_OBJ_USER:
 	case AUDIT_OBJ_ROLE:
 	case AUDIT_OBJ_TYPE:
-	case AUDIT_OBJ_LEV_LOW:
-	case AUDIT_OBJ_LEV_HIGH:
 	case AUDIT_WATCH:
 	case AUDIT_DIR:
 	case AUDIT_FILTERKEY:
-		break;
 	case AUDIT_LOGINUID_SET:
-		if ((f->val != 0) && (f->val != 1))
-			return -EINVAL;
-	/* FALL THROUGH */
 	case AUDIT_ARCH:
 	case AUDIT_FSTYPE:
+	case AUDIT_PERM:
+	case AUDIT_FILETYPE:
+	case AUDIT_FIELD_COMPARE:
+	case AUDIT_EXE:
+		/* only equal and not equal valid ops */
 		if (f->op != Audit_not_equal && f->op != Audit_equal)
+			return -EINVAL;
+		break;
+	default:
+		/* field not recognized */
+		return -EINVAL;
+	}
+
+	/* Check for select valid field values */
+	switch (f->type) {
+	case AUDIT_LOGINUID_SET:
+		if ((f->val != 0) && (f->val != 1))
 			return -EINVAL;
 		break;
 	case AUDIT_PERM:
@@ -412,11 +426,14 @@ static int audit_field_valid(struct audit_entry *entry, struct audit_field *f)
 		if (f->val > AUDIT_MAX_FIELD_COMPARE)
 			return -EINVAL;
 		break;
-	case AUDIT_EXE:
-		if (f->op != Audit_not_equal && f->op != Audit_equal)
+	case AUDIT_SADDR_FAM:
+		if (f->val >= AF_MAX)
 			return -EINVAL;
 		break;
+	default:
+		break;
 	}
+
 	return 0;
 }
 
@@ -439,6 +456,7 @@ static struct audit_entry *audit_data_to_entry(struct audit_rule_data *data,
 	bufp = data->buf;
 	for (i = 0; i < data->field_count; i++) {
 		struct audit_field *f = &entry->rule.fields[i];
+		u32 f_val;
 
 		err = -EINVAL;
 
@@ -447,12 +465,12 @@ static struct audit_entry *audit_data_to_entry(struct audit_rule_data *data,
 			goto exit_free;
 
 		f->type = data->fields[i];
-		f->val = data->values[i];
+		f_val = data->values[i];
 
 		/* Support legacy tests for a valid loginuid */
-		if ((f->type == AUDIT_LOGINUID) && (f->val == AUDIT_UID_UNSET)) {
+		if ((f->type == AUDIT_LOGINUID) && (f_val == AUDIT_UID_UNSET)) {
 			f->type = AUDIT_LOGINUID_SET;
-			f->val = 0;
+			f_val = 0;
 			entry->rule.pflags |= AUDIT_LOGINUID_LEGACY;
 		}
 
@@ -468,7 +486,7 @@ static struct audit_entry *audit_data_to_entry(struct audit_rule_data *data,
 		case AUDIT_SUID:
 		case AUDIT_FSUID:
 		case AUDIT_OBJ_UID:
-			f->uid = make_kuid(current_user_ns(), f->val);
+			f->uid = make_kuid(current_user_ns(), f_val);
 			if (!uid_valid(f->uid))
 				goto exit_free;
 			break;
@@ -477,11 +495,12 @@ static struct audit_entry *audit_data_to_entry(struct audit_rule_data *data,
 		case AUDIT_SGID:
 		case AUDIT_FSGID:
 		case AUDIT_OBJ_GID:
-			f->gid = make_kgid(current_user_ns(), f->val);
+			f->gid = make_kgid(current_user_ns(), f_val);
 			if (!gid_valid(f->gid))
 				goto exit_free;
 			break;
 		case AUDIT_ARCH:
+			f->val = f_val;
 			entry->rule.arch_f = f;
 			break;
 		case AUDIT_SUBJ_USER:
@@ -494,11 +513,13 @@ static struct audit_entry *audit_data_to_entry(struct audit_rule_data *data,
 		case AUDIT_OBJ_TYPE:
 		case AUDIT_OBJ_LEV_LOW:
 		case AUDIT_OBJ_LEV_HIGH:
-			str = audit_unpack_string(&bufp, &remain, f->val);
-			if (IS_ERR(str))
+			str = audit_unpack_string(&bufp, &remain, f_val);
+			if (IS_ERR(str)) {
+				err = PTR_ERR(str);
 				goto exit_free;
-			entry->rule.buflen += f->val;
-
+			}
+			entry->rule.buflen += f_val;
+			f->lsm_str = str;
 			err = security_audit_rule_init(f->type, f->op, str,
 						       (void **)&f->lsm_rule);
 			/* Keep currently invalid fields around in case they
@@ -507,67 +528,70 @@ static struct audit_entry *audit_data_to_entry(struct audit_rule_data *data,
 				pr_warn("audit rule for LSM \'%s\' is invalid\n",
 					str);
 				err = 0;
-			}
-			if (err) {
-				kfree(str);
+			} else if (err)
 				goto exit_free;
-			} else
-				f->lsm_str = str;
 			break;
 		case AUDIT_WATCH:
-			str = audit_unpack_string(&bufp, &remain, f->val);
-			if (IS_ERR(str))
+			str = audit_unpack_string(&bufp, &remain, f_val);
+			if (IS_ERR(str)) {
+				err = PTR_ERR(str);
 				goto exit_free;
-			entry->rule.buflen += f->val;
-
-			err = audit_to_watch(&entry->rule, str, f->val, f->op);
+			}
+			err = audit_to_watch(&entry->rule, str, f_val, f->op);
 			if (err) {
 				kfree(str);
 				goto exit_free;
 			}
+			entry->rule.buflen += f_val;
 			break;
 		case AUDIT_DIR:
-			str = audit_unpack_string(&bufp, &remain, f->val);
-			if (IS_ERR(str))
+			str = audit_unpack_string(&bufp, &remain, f_val);
+			if (IS_ERR(str)) {
+				err = PTR_ERR(str);
 				goto exit_free;
-			entry->rule.buflen += f->val;
-
+			}
 			err = audit_make_tree(&entry->rule, str, f->op);
 			kfree(str);
 			if (err)
 				goto exit_free;
+			entry->rule.buflen += f_val;
 			break;
 		case AUDIT_INODE:
+			f->val = f_val;
 			err = audit_to_inode(&entry->rule, f);
 			if (err)
 				goto exit_free;
 			break;
 		case AUDIT_FILTERKEY:
-			if (entry->rule.filterkey || f->val > AUDIT_MAX_KEY_LEN)
+			if (entry->rule.filterkey || f_val > AUDIT_MAX_KEY_LEN)
 				goto exit_free;
-			str = audit_unpack_string(&bufp, &remain, f->val);
-			if (IS_ERR(str))
-				goto exit_free;
-			entry->rule.buflen += f->val;
-			entry->rule.filterkey = str;
-			break;
-		case AUDIT_EXE:
-			if (entry->rule.exe || f->val > PATH_MAX)
-				goto exit_free;
-			str = audit_unpack_string(&bufp, &remain, f->val);
+			str = audit_unpack_string(&bufp, &remain, f_val);
 			if (IS_ERR(str)) {
 				err = PTR_ERR(str);
 				goto exit_free;
 			}
-			entry->rule.buflen += f->val;
-
-			audit_mark = audit_alloc_mark(&entry->rule, str, f->val);
+			entry->rule.buflen += f_val;
+			entry->rule.filterkey = str;
+			break;
+		case AUDIT_EXE:
+			if (entry->rule.exe || f_val > PATH_MAX)
+				goto exit_free;
+			str = audit_unpack_string(&bufp, &remain, f_val);
+			if (IS_ERR(str)) {
+				err = PTR_ERR(str);
+				goto exit_free;
+			}
+			audit_mark = audit_alloc_mark(&entry->rule, str, f_val);
 			if (IS_ERR(audit_mark)) {
 				kfree(str);
 				err = PTR_ERR(audit_mark);
 				goto exit_free;
 			}
+			entry->rule.buflen += f_val;
 			entry->rule.exe = audit_mark;
+			break;
+		default:
+			f->val = f_val;
 			break;
 		}
 	}
@@ -1190,7 +1214,6 @@ int audit_comparator(u32 left, u32 op, u32 right)
 	case Audit_bittest:
 		return ((left & right) == right);
 	default:
-		BUG();
 		return 0;
 	}
 }
@@ -1213,7 +1236,6 @@ int audit_uid_comparator(kuid_t left, u32 op, kuid_t right)
 	case Audit_bitmask:
 	case Audit_bittest:
 	default:
-		BUG();
 		return 0;
 	}
 }
@@ -1236,7 +1258,6 @@ int audit_gid_comparator(kgid_t left, u32 op, kgid_t right)
 	case Audit_bitmask:
 	case Audit_bittest:
 	default:
-		BUG();
 		return 0;
 	}
 }

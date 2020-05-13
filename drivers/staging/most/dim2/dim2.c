@@ -20,8 +20,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/sched.h>
 #include <linux/kthread.h>
-
-#include "most/core.h"
+#include <linux/most.h>
 #include "hal.h"
 #include "errors.h"
 #include "sysfs.h"
@@ -126,25 +125,6 @@ bool dim2_sysfs_get_state_cb(void)
 	spin_unlock_irqrestore(&dim_lock, flags);
 
 	return state;
-}
-
-/**
- * dimcb_io_read - callback from HAL to read an I/O register
- * @ptr32: register address
- */
-u32 dimcb_io_read(u32 __iomem *ptr32)
-{
-	return readl(ptr32);
-}
-
-/**
- * dimcb_io_write - callback from HAL to write value to an I/O register
- * @ptr32: register address
- * @value: value to write
- */
-void dimcb_io_write(u32 __iomem *ptr32, u32 value)
-{
-	writel(value, ptr32);
 }
 
 /**
@@ -797,7 +777,6 @@ static int dim2_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, AHB0_INT_IDX);
 	if (irq < 0) {
-		dev_err(&pdev->dev, "failed to get ahb0_int irq: %d\n", irq);
 		ret = irq;
 		goto err_shutdown_dim;
 	}
@@ -811,7 +790,6 @@ static int dim2_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, MLB_INT_IDX);
 	if (irq < 0) {
-		dev_err(&pdev->dev, "failed to get mlb_int irq: %d\n", irq);
 		ret = irq;
 		goto err_shutdown_dim;
 	}
@@ -875,8 +853,9 @@ static int dim2_probe(struct platform_device *pdev)
 	dev->most_iface.poison_channel = poison_channel;
 	dev->most_iface.request_netinfo = request_netinfo;
 	dev->most_iface.driver_dev = &pdev->dev;
+	dev->most_iface.dev = &dev->dev;
 	dev->dev.init_name = "dim2_state";
-	dev->dev.parent = &dev->most_iface.dev;
+	dev->dev.parent = &pdev->dev;
 
 	ret = most_register_interface(&dev->most_iface);
 	if (ret) {

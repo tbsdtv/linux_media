@@ -118,7 +118,7 @@ static ssize_t freeze_store(struct gfs2_sbd *sdp, const char *buf, size_t len)
 
 static ssize_t withdraw_show(struct gfs2_sbd *sdp, char *buf)
 {
-	unsigned int b = test_bit(SDF_SHUTDOWN, &sdp->sd_flags);
+	unsigned int b = gfs2_withdrawn(sdp);
 	return snprintf(buf, PAGE_SIZE, "%u\n", b);
 }
 
@@ -136,7 +136,8 @@ static ssize_t withdraw_store(struct gfs2_sbd *sdp, const char *buf, size_t len)
 	if (val != 1)
 		return -EINVAL;
 
-	gfs2_lm_withdraw(sdp, "withdrawing from cluster at user's request\n");
+	gfs2_lm(sdp, "withdrawing from cluster at user's request\n");
+	gfs2_withdraw(sdp);
 
 	return len;
 }
@@ -296,17 +297,18 @@ static struct attribute *gfs2_attrs[] = {
 	&gfs2_attr_demote_rq.attr,
 	NULL,
 };
+ATTRIBUTE_GROUPS(gfs2);
 
 static void gfs2_sbd_release(struct kobject *kobj)
 {
 	struct gfs2_sbd *sdp = container_of(kobj, struct gfs2_sbd, sd_kobj);
 
-	kfree(sdp);
+	free_sbd(sdp);
 }
 
 static struct kobj_type gfs2_ktype = {
 	.release = gfs2_sbd_release,
-	.default_attrs = gfs2_attrs,
+	.default_groups = gfs2_groups,
 	.sysfs_ops     = &gfs2_attr_ops,
 };
 
@@ -433,6 +435,8 @@ int gfs2_recover_set(struct gfs2_sbd *sdp, unsigned jid)
 	 * never clear the DFL_BLOCK_LOCKS flag, so all our locks would
 	 * permanently stop working.
 	 */
+	if (!sdp->sd_jdesc)
+		goto out;
 	if (sdp->sd_jdesc->jd_jid == jid && !sdp->sd_args.ar_spectator)
 		goto out;
 	rv = -ENOENT;
@@ -679,7 +683,6 @@ fail_lock_module:
 fail_tune:
 	sysfs_remove_group(&sdp->sd_kobj, &tune_group);
 fail_reg:
-	free_percpu(sdp->sd_lkstats);
 	fs_err(sdp, "error %d adding sysfs files\n", error);
 	kobject_put(&sdp->sd_kobj);
 	sb->s_fs_info = NULL;

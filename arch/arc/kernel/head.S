@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * ARC CPU startup Code
  *
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Vineetg: Dec 2007
  *  -Check if we are running on Simulator or on real hardware
@@ -17,6 +14,7 @@
 #include <asm/entry.h>
 #include <asm/arcregs.h>
 #include <asm/cache.h>
+#include <asm/dsp-impl.h>
 #include <asm/irqflags.h>
 
 .macro CPU_EARLY_SETUP
@@ -62,6 +60,9 @@
 #endif
 	kflag	r5
 #endif
+	; Config DSP_CTRL properly, so kernel may use integer multiply,
+	; multiply-accumulate, and divide operations
+	DSP_EARLY_INIT
 .endm
 
 	.section .init.text, "ax",@progbits

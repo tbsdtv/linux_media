@@ -1,9 +1,5 @@
-/* Copyright (C) 2013 Jozsef Kadlecsik <kadlec@blackhole.kfki.hu>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- */
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* Copyright (C) 2013 Jozsef Kadlecsik <kadlec@netfilter.org> */
 
 #ifndef __IP_SET_BITMAP_IP_GEN_H
 #define __IP_SET_BITMAP_IP_GEN_H
@@ -64,9 +60,9 @@ mtype_destroy(struct ip_set *set)
 	if (SET_WITH_TIMEOUT(set))
 		del_timer_sync(&map->gc);
 
-	ip_set_free(map->members);
 	if (set->dsize && set->extensions & IPSET_EXT_DESTROY)
 		mtype_ext_cleanup(set);
+	ip_set_free(map->members);
 	ip_set_free(map);
 
 	set->data = NULL;
@@ -79,7 +75,7 @@ mtype_flush(struct ip_set *set)
 
 	if (set->extensions & IPSET_EXT_DESTROY)
 		mtype_ext_cleanup(set);
-	memset(map->members, 0, map->memsize);
+	bitmap_zero(map->members, map->elements);
 	set->elements = 0;
 	set->ext_size = 0;
 }
@@ -196,7 +192,7 @@ mtype_del(struct ip_set *set, void *value, const struct ip_set_ext *ext,
 }
 
 #ifndef IP_SET_BITMAP_STORED_TIMEOUT
-static inline bool
+static bool
 mtype_is_filled(const struct mtype_elem *x)
 {
 	return true;

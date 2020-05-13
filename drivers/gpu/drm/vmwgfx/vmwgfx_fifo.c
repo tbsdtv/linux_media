@@ -25,9 +25,11 @@
  *
  **************************************************************************/
 
-#include "vmwgfx_drv.h"
-#include <drm/drmP.h>
+#include <linux/sched/signal.h>
+
 #include <drm/ttm/ttm_placement.h>
+
+#include "vmwgfx_drv.h"
 
 struct vmw_temp_set_context {
 	SVGA3dCmdHeader header;
@@ -167,10 +169,8 @@ void vmw_fifo_ping_host(struct vmw_private *dev_priv, uint32_t reason)
 {
 	u32 *fifo_mem = dev_priv->mmio_virt;
 
-	preempt_disable();
 	if (cmpxchg(fifo_mem + SVGA_FIFO_BUSY, 0, 1) == 0)
 		vmw_write(dev_priv, SVGA_REG_SYNC, reason);
-	preempt_enable();
 }
 
 void vmw_fifo_release(struct vmw_private *dev_priv, struct vmw_fifo_state *fifo)

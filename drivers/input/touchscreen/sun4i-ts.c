@@ -22,7 +22,7 @@
  * in the kernel). So this driver offers straight forward, reliable single
  * touch functionality only.
  *
- * s.a. A20 User Manual "1.15 TP" (Documentation/arm/sunxi/README)
+ * s.a. A20 User Manual "1.15 TP" (Documentation/arm/sunxi.rst)
  * (looks like the description in the A20 User Manual v1.3 is better
  * than the one in the A10 User Manual v.1.5)
  */
@@ -237,6 +237,7 @@ static int sun4i_ts_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
 	struct device *hwmon;
+	struct thermal_zone_device *thermal;
 	int error;
 	u32 reg;
 	bool ts_attached;
@@ -300,8 +301,7 @@ static int sun4i_ts_probe(struct platform_device *pdev)
 		input_set_drvdata(ts->input, ts);
 	}
 
-	ts->base = devm_ioremap_resource(dev,
-			      platform_get_resource(pdev, IORESOURCE_MEM, 0));
+	ts->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(ts->base))
 		return PTR_ERR(ts->base);
 
@@ -356,7 +356,10 @@ static int sun4i_ts_probe(struct platform_device *pdev)
 	if (IS_ERR(hwmon))
 		return PTR_ERR(hwmon);
 
-	devm_thermal_zone_of_sensor_register(ts->dev, 0, ts, &sun4i_ts_tz_ops);
+	thermal = devm_thermal_zone_of_sensor_register(ts->dev, 0, ts,
+						       &sun4i_ts_tz_ops);
+	if (IS_ERR(thermal))
+		return PTR_ERR(thermal);
 
 	writel(TEMP_IRQ_EN(1), ts->base + TP_INT_FIFOC);
 

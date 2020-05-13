@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Samsung EXYNOS4x12 FIMC-IS (Imaging Subsystem) driver
  *
@@ -8,10 +9,6 @@
  *
  * The hardware handling code derived from a driver written by
  * Younghwan Joo <yhwan.joo@samsung.com>.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/bitops.h>
@@ -316,7 +313,7 @@ static int isp_video_release(struct file *file)
 		ivc->streaming = 0;
 	}
 
-	vb2_fop_release(file);
+	_vb2_fop_release(file, NULL);
 
 	if (v4l2_fh_is_singular_file(file)) {
 		fimc_pipeline_call(&ivc->ve, close);
@@ -365,7 +362,6 @@ static int isp_video_enum_fmt(struct file *file, void *priv,
 	if (WARN_ON(fmt == NULL))
 		return -EINVAL;
 
-	strscpy(f->description, fmt->name, sizeof(f->description));
 	f->pixelformat = fmt->fourcc;
 
 	return 0;
@@ -623,7 +619,7 @@ int fimc_isp_video_device_register(struct fimc_isp *isp,
 
 	video_set_drvdata(vdev, isp);
 
-	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
 	if (ret < 0) {
 		media_entity_cleanup(&vdev->entity);
 		return ret;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TXx9 ACLC AC97 driver
  *
@@ -5,10 +6,6 @@
  *
  * Based on RBTX49xx patch from CELF patch archive.
  * (C) Copyright TOSHIBA CORPORATION 2004-2006
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/init.h>
@@ -151,7 +148,6 @@ static int txx9aclc_ac97_remove(struct snd_soc_dai *dai)
 }
 
 static struct snd_soc_dai_driver txx9aclc_ac97_dai = {
-	.bus_control		= true,
 	.probe			= txx9aclc_ac97_probe,
 	.remove			= txx9aclc_ac97_remove,
 	.playback = {

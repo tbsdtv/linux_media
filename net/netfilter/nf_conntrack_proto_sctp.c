@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Connection tracking protocol helper module for SCTP.
  *
@@ -6,10 +7,6 @@
  *
  * SCTP is defined in RFC 2960. References to various sections in this code
  * are to this RFC.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/types.h>
@@ -117,7 +114,7 @@ static const u8 sctp_conntracks[2][11][SCTP_CONNTRACK_MAX] = {
 	{
 /*	ORIGINAL	*/
 /*                  sNO, sCL, sCW, sCE, sES, sSS, sSR, sSA, sHS, sHA */
-/* init         */ {sCW, sCW, sCW, sCE, sES, sSS, sSR, sSA, sCW, sHA},
+/* init         */ {sCL, sCL, sCW, sCE, sES, sSS, sSR, sSA, sCW, sHA},
 /* init_ack     */ {sCL, sCL, sCW, sCE, sES, sSS, sSR, sSA, sCL, sHA},
 /* abort        */ {sCL, sCL, sCL, sCL, sCL, sCL, sCL, sCL, sCL, sCL},
 /* shutdown     */ {sCL, sCL, sCW, sCE, sSS, sSS, sSR, sSA, sCL, sSS},
@@ -133,7 +130,7 @@ static const u8 sctp_conntracks[2][11][SCTP_CONNTRACK_MAX] = {
 /*	REPLY	*/
 /*                  sNO, sCL, sCW, sCE, sES, sSS, sSR, sSA, sHS, sHA */
 /* init         */ {sIV, sCL, sCW, sCE, sES, sSS, sSR, sSA, sIV, sHA},/* INIT in sCL Big TODO */
-/* init_ack     */ {sIV, sCL, sCW, sCE, sES, sSS, sSR, sSA, sIV, sHA},
+/* init_ack     */ {sIV, sCW, sCW, sCE, sES, sSS, sSR, sSA, sIV, sHA},
 /* abort        */ {sIV, sCL, sCL, sCL, sCL, sCL, sCL, sCL, sIV, sCL},
 /* shutdown     */ {sIV, sCL, sCW, sCE, sSR, sSS, sSR, sSA, sIV, sSR},
 /* shutdown_ack */ {sIV, sCL, sCW, sCE, sES, sSA, sSA, sSA, sIV, sHA},
@@ -319,7 +316,7 @@ sctp_new(struct nf_conn *ct, const struct sk_buff *skb,
 			ct->proto.sctp.vtag[IP_CT_DIR_REPLY] = sh->vtag;
 		}
 
-		ct->proto.sctp.state = new_state;
+		ct->proto.sctp.state = SCTP_CONNTRACK_NONE;
 	}
 
 	return true;
@@ -339,7 +336,7 @@ static bool sctp_error(struct sk_buff *skb,
 	if (state->hook == NF_INET_PRE_ROUTING &&
 	    state->net->ct.sysctl_checksum &&
 	    skb->ip_summed == CHECKSUM_NONE) {
-		if (!skb_make_writable(skb, dataoff + sizeof(struct sctphdr))) {
+		if (skb_ensure_writable(skb, dataoff + sizeof(*sh))) {
 			logmsg = "nf_ct_sctp: failed to read header ";
 			goto out_invalid;
 		}
@@ -596,6 +593,9 @@ static int sctp_timeout_nlattr_to_obj(struct nlattr *tb[],
 	unsigned int *timeouts = data;
 	struct nf_sctp_net *sn = nf_sctp_pernet(net);
 	int i;
+
+	if (!timeouts)
+		timeouts = sn->timeouts;
 
 	/* set default SCTP timeouts. */
 	for (i=0; i<SCTP_CONNTRACK_MAX; i++)

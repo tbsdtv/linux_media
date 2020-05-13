@@ -288,7 +288,7 @@ static int silead_ts_load_fw(struct i2c_client *client)
 
 	dev_dbg(dev, "Firmware file name: %s", data->fw_name);
 
-	error = request_firmware(&fw, data->fw_name, dev);
+	error = firmware_request_platform(&fw, data->fw_name, dev);
 	if (error) {
 		dev_err(dev, "Firmware request error %d\n", error);
 		return error;
@@ -609,6 +609,7 @@ static const struct acpi_device_id silead_ts_acpi_match[] = {
 	{ "MSSL1680", 0 },
 	{ "MSSL0001", 0 },
 	{ "MSSL0002", 0 },
+	{ "MSSL0017", 0 },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, silead_ts_acpi_match);

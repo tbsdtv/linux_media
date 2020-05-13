@@ -55,13 +55,6 @@ void show_stack(struct task_struct *task, unsigned long *esp)
 	unwind_stack(NULL, esp, print_trace);
 }
 
-void show_trace_task(struct task_struct *tsk)
-{
-	/*
-	 * TODO: SysRq-T trace dump...
-	 */
-}
-
 void show_registers(struct pt_regs *regs)
 {
 	int i;
@@ -244,7 +237,7 @@ void __init trap_init(void)
 
 asmlinkage void do_trap(struct pt_regs *regs, unsigned long address)
 {
-	force_sig_fault(SIGTRAP, TRAP_TRACE, (void __user *)address, current);
+	force_sig_fault(SIGTRAP, TRAP_TRACE, (void __user *)address);
 
 	regs->pc += 4;
 }
@@ -253,7 +246,7 @@ asmlinkage void do_unaligned_access(struct pt_regs *regs, unsigned long address)
 {
 	if (user_mode(regs)) {
 		/* Send a SIGBUS */
-		force_sig_fault(SIGBUS, BUS_ADRALN, (void __user *)address, current);
+		force_sig_fault(SIGBUS, BUS_ADRALN, (void __user *)address);
 	} else {
 		printk("KERNEL: Unaligned Access 0x%.8lx\n", address);
 		show_registers(regs);
@@ -266,7 +259,7 @@ asmlinkage void do_bus_fault(struct pt_regs *regs, unsigned long address)
 {
 	if (user_mode(regs)) {
 		/* Send a SIGBUS */
-		force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address, current);
+		force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Bus error (SIGBUS) 0x%.8lx\n", address);
 		show_registers(regs);
@@ -371,7 +364,7 @@ static inline void simulate_lwa(struct pt_regs *regs, unsigned long address,
 
 	if (get_user(value, lwa_addr)) {
 		if (user_mode(regs)) {
-			force_sig(SIGSEGV, current);
+			force_sig(SIGSEGV);
 			return;
 		}
 
@@ -418,7 +411,7 @@ static inline void simulate_swa(struct pt_regs *regs, unsigned long address,
 
 	if (put_user(regs->gpr[rb], vaddr)) {
 		if (user_mode(regs)) {
-			force_sig(SIGSEGV, current);
+			force_sig(SIGSEGV);
 			return;
 		}
 
@@ -461,7 +454,7 @@ asmlinkage void do_illegal_instruction(struct pt_regs *regs,
 
 	if (user_mode(regs)) {
 		/* Send a SIGILL */
-		force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)address, current);
+		force_sig_fault(SIGILL, ILL_ILLOPC, (void __user *)address);
 	} else {		/* Kernel mode */
 		printk("KERNEL: Illegal instruction (SIGILL) 0x%.8lx\n",
 		       address);

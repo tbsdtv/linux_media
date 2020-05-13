@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/plat-pxa/gpio.c
  *
@@ -6,10 +7,6 @@
  *  Author:	Nicolas Pitre
  *  Created:	Jun 15, 2001
  *  Copyright:	MontaVista Software Inc.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 #include <linux/module.h>
 #include <linux/clk.h>
@@ -364,11 +361,8 @@ static int pxa_init_gpio_chip(struct pxa_gpio_chip *pchip, int ngpio,
 	pchip->chip.set = pxa_gpio_set;
 	pchip->chip.to_irq = pxa_gpio_to_irq;
 	pchip->chip.ngpio = ngpio;
-
-	if (pxa_gpio_has_pinctrl()) {
-		pchip->chip.request = gpiochip_generic_request;
-		pchip->chip.free = gpiochip_generic_free;
-	}
+	pchip->chip.request = gpiochip_generic_request;
+	pchip->chip.free = gpiochip_generic_free;
 
 #ifdef CONFIG_OF_GPIO
 	pchip->chip.of_node = np;
@@ -655,8 +649,8 @@ static int pxa_gpio_probe(struct platform_device *pdev)
 	if (!pchip->irqdomain)
 		return -ENOMEM;
 
-	irq0 = platform_get_irq_byname(pdev, "gpio0");
-	irq1 = platform_get_irq_byname(pdev, "gpio1");
+	irq0 = platform_get_irq_byname_optional(pdev, "gpio0");
+	irq1 = platform_get_irq_byname_optional(pdev, "gpio1");
 	irq_mux = platform_get_irq_byname(pdev, "gpio_mux");
 	if ((irq0 > 0 && irq1 <= 0) || (irq0 <= 0 && irq1 > 0)
 		|| (irq_mux <= 0))

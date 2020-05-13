@@ -1,16 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Russell King
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
+
 #include <linux/dma-buf.h>
 #include <linux/dma-mapping.h>
+#include <linux/mman.h>
 #include <linux/shmem_fs.h>
+
+#include <drm/armada_drm.h>
+#include <drm/drm_prime.h>
+
 #include "armada_drm.h"
 #include "armada_gem.h"
-#include <drm/armada_drm.h>
 #include "armada_ioctlP.h"
 
 static vm_fault_t armada_gem_vm_fault(struct vm_fault *vmf)
@@ -459,16 +461,6 @@ static void armada_gem_prime_unmap_dma_buf(struct dma_buf_attachment *attach,
 	kfree(sgt);
 }
 
-static void *armada_gem_dmabuf_no_kmap(struct dma_buf *buf, unsigned long n)
-{
-	return NULL;
-}
-
-static void
-armada_gem_dmabuf_no_kunmap(struct dma_buf *buf, unsigned long n, void *addr)
-{
-}
-
 static int
 armada_gem_dmabuf_mmap(struct dma_buf *buf, struct vm_area_struct *vma)
 {
@@ -479,14 +471,11 @@ static const struct dma_buf_ops armada_gem_prime_dmabuf_ops = {
 	.map_dma_buf	= armada_gem_prime_map_dma_buf,
 	.unmap_dma_buf	= armada_gem_prime_unmap_dma_buf,
 	.release	= drm_gem_dmabuf_release,
-	.map		= armada_gem_dmabuf_no_kmap,
-	.unmap		= armada_gem_dmabuf_no_kunmap,
 	.mmap		= armada_gem_dmabuf_mmap,
 };
 
 struct dma_buf *
-armada_gem_prime_export(struct drm_device *dev, struct drm_gem_object *obj,
-	int flags)
+armada_gem_prime_export(struct drm_gem_object *obj, int flags)
 {
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
 
@@ -495,7 +484,7 @@ armada_gem_prime_export(struct drm_device *dev, struct drm_gem_object *obj,
 	exp_info.flags = O_RDWR;
 	exp_info.priv = obj;
 
-	return drm_gem_dmabuf_export(dev, &exp_info);
+	return drm_gem_dmabuf_export(obj->dev, &exp_info);
 }
 
 struct drm_gem_object *

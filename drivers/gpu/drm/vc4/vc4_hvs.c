@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 Broadcom
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 /**
@@ -22,8 +19,11 @@
  * each CRTC.
  */
 
-#include <drm/drm_atomic_helper.h>
 #include <linux/component.h>
+#include <linux/platform_device.h>
+
+#include <drm/drm_atomic_helper.h>
+
 #include "vc4_drv.h"
 #include "vc4_regs.h"
 
@@ -315,7 +315,7 @@ static void vc4_hvs_unbind(struct device *dev, struct device *master,
 	struct drm_device *drm = dev_get_drvdata(master);
 	struct vc4_dev *vc4 = drm->dev_private;
 
-	if (vc4->hvs->mitchell_netravali_filter.allocated)
+	if (drm_mm_node_allocated(&vc4->hvs->mitchell_netravali_filter))
 		drm_mm_remove_node(&vc4->hvs->mitchell_netravali_filter);
 
 	drm_mm_takedown(&vc4->hvs->dlist_mm);

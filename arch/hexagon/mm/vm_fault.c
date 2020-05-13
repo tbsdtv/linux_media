@@ -41,7 +41,7 @@ void do_page_fault(unsigned long address, long cause, struct pt_regs *regs)
 	int si_code = SEGV_MAPERR;
 	vm_fault_t fault;
 	const struct exception_table_entry *fixup;
-	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
+	unsigned int flags = FAULT_FLAG_DEFAULT;
 
 	/*
 	 * If we're in an interrupt or have no user context,
@@ -91,7 +91,7 @@ good_area:
 
 	fault = handle_mm_fault(vma, address, flags);
 
-	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current))
+	if (fault_signal_pending(fault, regs))
 		return;
 
 	/* The most common case -- we are done. */
@@ -102,7 +102,6 @@ good_area:
 			else
 				current->min_flt++;
 			if (fault & VM_FAULT_RETRY) {
-				flags &= ~FAULT_FLAG_ALLOW_RETRY;
 				flags |= FAULT_FLAG_TRIED;
 				goto retry;
 			}
@@ -135,14 +134,14 @@ good_area:
 		si_signo = SIGSEGV;
 		si_code  = SEGV_ACCERR;
 	}
-	force_sig_fault(si_signo, si_code, (void __user *)address, current);
+	force_sig_fault(si_signo, si_code, (void __user *)address);
 	return;
 
 bad_area:
 	up_read(&mm->mmap_sem);
 
 	if (user_mode(regs)) {
-		force_sig_fault(SIGSEGV, si_code, (void __user *)address, current);
+		force_sig_fault(SIGSEGV, si_code, (void __user *)address);
 		return;
 	}
 	/* Kernel-mode fault falls through */

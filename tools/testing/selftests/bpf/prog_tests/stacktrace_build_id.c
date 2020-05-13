@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
+#include "test_stacktrace_build_id.skel.h"
 
 void test_stacktrace_build_id(void)
 {
+
 	int control_map_fd, stackid_hmap_fd, stackmap_fd, stack_amap_fd;
-	const char *file = "./test_stacktrace_build_id.o";
-	int bytes, efd, err, pmu_fd, prog_fd, stack_trace_len;
-	struct perf_event_attr attr = {};
+	struct test_stacktrace_build_id *skel;
+	int err, stack_trace_len;
 	__u32 key, previous_key, val, duration = 0;
-	struct bpf_object *obj;
 	char buf[256];
 	int i, j;
 	struct bpf_stack_build_id id_offs[PERF_MAX_STACK_DEPTH];
@@ -16,70 +16,24 @@ void test_stacktrace_build_id(void)
 	int retry = 1;
 
 retry:
-	err = bpf_prog_load(file, BPF_PROG_TYPE_TRACEPOINT, &obj, &prog_fd);
-	if (CHECK(err, "prog_load", "err %d errno %d\n", err, errno))
-		goto out;
+	skel = test_stacktrace_build_id__open_and_load();
+	if (CHECK(!skel, "skel_open_and_load", "skeleton open/load failed\n"))
+		return;
 
-	/* Get the ID for the sched/sched_switch tracepoint */
-	snprintf(buf, sizeof(buf),
-		 "/sys/kernel/debug/tracing/events/random/urandom_read/id");
-	efd = open(buf, O_RDONLY, 0);
-	if (CHECK(efd < 0, "open", "err %d errno %d\n", efd, errno))
-		goto close_prog;
-
-	bytes = read(efd, buf, sizeof(buf));
-	close(efd);
-	if (CHECK(bytes <= 0 || bytes >= sizeof(buf),
-		  "read", "bytes %d errno %d\n", bytes, errno))
-		goto close_prog;
-
-	/* Open the perf event and attach bpf progrram */
-	attr.config = strtol(buf, NULL, 0);
-	attr.type = PERF_TYPE_TRACEPOINT;
-	attr.sample_type = PERF_SAMPLE_RAW | PERF_SAMPLE_CALLCHAIN;
-	attr.sample_period = 1;
-	attr.wakeup_events = 1;
-	pmu_fd = syscall(__NR_perf_event_open, &attr, -1 /* pid */,
-			 0 /* cpu 0 */, -1 /* group id */,
-			 0 /* flags */);
-	if (CHECK(pmu_fd < 0, "perf_event_open", "err %d errno %d\n",
-		  pmu_fd, errno))
-		goto close_prog;
-
-	err = ioctl(pmu_fd, PERF_EVENT_IOC_ENABLE, 0);
-	if (CHECK(err, "perf_event_ioc_enable", "err %d errno %d\n",
-		  err, errno))
-		goto close_pmu;
-
-	err = ioctl(pmu_fd, PERF_EVENT_IOC_SET_BPF, prog_fd);
-	if (CHECK(err, "perf_event_ioc_set_bpf", "err %d errno %d\n",
-		  err, errno))
-		goto disable_pmu;
+	err = test_stacktrace_build_id__attach(skel);
+	if (CHECK(err, "attach_tp", "err %d\n", err))
+		goto cleanup;
 
 	/* find map fds */
-	control_map_fd = bpf_find_map(__func__, obj, "control_map");
-	if (CHECK(control_map_fd < 0, "bpf_find_map control_map",
-		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
+	control_map_fd = bpf_map__fd(skel->maps.control_map);
+	stackid_hmap_fd = bpf_map__fd(skel->maps.stackid_hmap);
+	stackmap_fd = bpf_map__fd(skel->maps.stackmap);
+	stack_amap_fd = bpf_map__fd(skel->maps.stack_amap);
 
-	stackid_hmap_fd = bpf_find_map(__func__, obj, "stackid_hmap");
-	if (CHECK(stackid_hmap_fd < 0, "bpf_find_map stackid_hmap",
-		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
-
-	stackmap_fd = bpf_find_map(__func__, obj, "stackmap");
-	if (CHECK(stackmap_fd < 0, "bpf_find_map stackmap", "err %d errno %d\n",
-		  err, errno))
-		goto disable_pmu;
-
-	stack_amap_fd = bpf_find_map(__func__, obj, "stack_amap");
-	if (CHECK(stack_amap_fd < 0, "bpf_find_map stack_amap",
-		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
-
-	assert(system("dd if=/dev/urandom of=/dev/zero count=4 2> /dev/null")
-	       == 0);
-	assert(system("./urandom_read") == 0);
+	if (CHECK_FAIL(system("dd if=/dev/urandom of=/dev/zero count=4 2> /dev/null")))
+		goto cleanup;
+	if (CHECK_FAIL(system("./urandom_read")))
+		goto cleanup;
 	/* disable stack trace collection */
 	key = 0;
 	val = 1;
@@ -91,23 +45,23 @@ retry:
 	err = compare_map_keys(stackid_hmap_fd, stackmap_fd);
 	if (CHECK(err, "compare_map_keys stackid_hmap vs. stackmap",
 		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
+		goto cleanup;
 
 	err = compare_map_keys(stackmap_fd, stackid_hmap_fd);
 	if (CHECK(err, "compare_map_keys stackmap vs. stackid_hmap",
 		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
+		goto cleanup;
 
 	err = extract_build_id(buf, 256);
 
 	if (CHECK(err, "get build_id with readelf",
 		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
+		goto cleanup;
 
 	err = bpf_map_get_next_key(stackmap_fd, NULL, &key);
 	if (CHECK(err, "get_next_key from stackmap",
 		  "err %d, errno %d\n", err, errno))
-		goto disable_pmu;
+		goto cleanup;
 
 	do {
 		char build_id[64];
@@ -115,7 +69,7 @@ retry:
 		err = bpf_map_lookup_elem(stackmap_fd, &key, id_offs);
 		if (CHECK(err, "lookup_elem from stackmap",
 			  "err %d, errno %d\n", err, errno))
-			goto disable_pmu;
+			goto cleanup;
 		for (i = 0; i < PERF_MAX_STACK_DEPTH; ++i)
 			if (id_offs[i].status == BPF_STACK_BUILD_ID_VALID &&
 			    id_offs[i].offset != 0) {
@@ -133,9 +87,7 @@ retry:
 	 * try it one more time.
 	 */
 	if (build_id_matches < 1 && retry--) {
-		ioctl(pmu_fd, PERF_EVENT_IOC_DISABLE);
-		close(pmu_fd);
-		bpf_object__close(obj);
+		test_stacktrace_build_id__destroy(skel);
 		printf("%s:WARN:Didn't find expected build ID from the map, retrying\n",
 		       __func__);
 		goto retry;
@@ -143,23 +95,14 @@ retry:
 
 	if (CHECK(build_id_matches < 1, "build id match",
 		  "Didn't find expected build ID from the map\n"))
-		goto disable_pmu;
+		goto cleanup;
 
-	stack_trace_len = PERF_MAX_STACK_DEPTH
-		* sizeof(struct bpf_stack_build_id);
+	stack_trace_len = PERF_MAX_STACK_DEPTH *
+			  sizeof(struct bpf_stack_build_id);
 	err = compare_stack_ips(stackmap_fd, stack_amap_fd, stack_trace_len);
 	CHECK(err, "compare_stack_ips stackmap vs. stack_amap",
 	      "err %d errno %d\n", err, errno);
 
-disable_pmu:
-	ioctl(pmu_fd, PERF_EVENT_IOC_DISABLE);
-
-close_pmu:
-	close(pmu_fd);
-
-close_prog:
-	bpf_object__close(obj);
-
-out:
-	return;
+cleanup:
+	test_stacktrace_build_id__destroy(skel);
 }

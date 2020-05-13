@@ -749,6 +749,17 @@ static int adv7180_set_pad_format(struct v4l2_subdev *sd,
 	return ret;
 }
 
+static int adv7180_init_cfg(struct v4l2_subdev *sd,
+			    struct v4l2_subdev_pad_config *cfg)
+{
+	struct v4l2_subdev_format fmt = {
+		.which = cfg ? V4L2_SUBDEV_FORMAT_TRY
+			: V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
+
+	return adv7180_set_pad_format(sd, cfg, &fmt);
+}
+
 static int adv7180_g_mbus_config(struct v4l2_subdev *sd,
 				 struct v4l2_mbus_config *cfg)
 {
@@ -854,6 +865,7 @@ static const struct v4l2_subdev_core_ops adv7180_core_ops = {
 };
 
 static const struct v4l2_subdev_pad_ops adv7180_pad_ops = {
+	.init_cfg = adv7180_init_cfg,
 	.enum_mbus_code = adv7180_enum_mbus_code,
 	.set_fmt = adv7180_set_pad_format,
 	.get_fmt = adv7180_get_pad_format,
@@ -1309,9 +1321,6 @@ static int adv7180_probe(struct i2c_client *client,
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -EIO;
 
-	v4l_info(client, "chip found @ 0x%02x (%s)\n",
-		 client->addr, client->adapter->name);
-
 	state = devm_kzalloc(&client->dev, sizeof(*state), GFP_KERNEL);
 	if (state == NULL)
 		return -ENOMEM;
@@ -1329,17 +1338,17 @@ static int adv7180_probe(struct i2c_client *client,
 	}
 
 	if (state->chip_info->flags & ADV7180_FLAG_MIPI_CSI2) {
-		state->csi_client = i2c_new_dummy(client->adapter,
+		state->csi_client = i2c_new_dummy_device(client->adapter,
 				ADV7180_DEFAULT_CSI_I2C_ADDR);
-		if (!state->csi_client)
-			return -ENOMEM;
+		if (IS_ERR(state->csi_client))
+			return PTR_ERR(state->csi_client);
 	}
 
 	if (state->chip_info->flags & ADV7180_FLAG_I2P) {
-		state->vpp_client = i2c_new_dummy(client->adapter,
+		state->vpp_client = i2c_new_dummy_device(client->adapter,
 				ADV7180_DEFAULT_VPP_I2C_ADDR);
-		if (!state->vpp_client) {
-			ret = -ENOMEM;
+		if (IS_ERR(state->vpp_client)) {
+			ret = PTR_ERR(state->vpp_client);
 			goto err_unregister_csi_client;
 		}
 	}
@@ -1381,6 +1390,9 @@ static int adv7180_probe(struct i2c_client *client,
 	ret = v4l2_async_register_subdev(sd);
 	if (ret)
 		goto err_free_irq;
+
+	v4l_info(client, "chip found @ 0x%02x (%s)\n",
+		 client->addr, client->adapter->name);
 
 	return 0;
 

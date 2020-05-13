@@ -357,10 +357,6 @@
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_tcq.h>
 
-#if defined(CONFIG_IA64_GENERIC) || defined(CONFIG_IA64_SGI_SN2)
-#include <asm/sn/io.h>
-#endif
-
 
 /*
  * Compile time Options:
@@ -379,11 +375,6 @@
 #endif
 
 #define NVRAM_DELAY()			udelay(500)	/* 2 microseconds */
-
-#if defined(__ia64__) && !defined(ia64_platform_is)
-#define ia64_platform_is(foo)		(!strcmp(x, platform_name))
-#endif
-
 
 #define IS_ISP1040(ha) (ha->pdev->device == PCI_DEVICE_ID_QLOGIC_ISP1020)
 #define IS_ISP1x40(ha) (ha->pdev->device == PCI_DEVICE_ID_QLOGIC_ISP1020 || \
@@ -1427,15 +1418,6 @@ qla1280_initialize_adapter(struct scsi_qla_host *ha)
 	ha->flags.reset_active = 0;
 	ha->flags.abort_isp_active = 0;
 
-#if defined(CONFIG_IA64_GENERIC) || defined(CONFIG_IA64_SGI_SN2)
-	if (ia64_platform_is("sn2")) {
-		printk(KERN_INFO "scsi(%li): Enabling SN2 PCI DMA "
-		       "dual channel lockup workaround\n", ha->host_no);
-		ha->flags.use_pci_vchannel = 1;
-		driver_setup.no_nvram = 1;
-	}
-#endif
-
 	/* TODO: implement support for the 1040 nvram format */
 	if (IS_ISP1040(ha))
 		driver_setup.no_nvram = 1;
@@ -1717,6 +1699,16 @@ qla1280_load_firmware_pio(struct scsi_qla_host *ha)
 	return err;
 }
 
+#ifdef QLA_64BIT_PTR
+#define LOAD_CMD	MBC_LOAD_RAM_A64_ROM
+#define DUMP_CMD	MBC_DUMP_RAM_A64_ROM
+#define CMD_ARGS	(BIT_7 | BIT_6 | BIT_4 | BIT_3 | BIT_2 | BIT_1 | BIT_0)
+#else
+#define LOAD_CMD	MBC_LOAD_RAM
+#define DUMP_CMD	MBC_DUMP_RAM
+#define CMD_ARGS	(BIT_4 | BIT_3 | BIT_2 | BIT_1 | BIT_0)
+#endif
+
 #define DUMP_IT_BACK 0		/* for debug of RISC loading */
 static int
 qla1280_load_firmware_dma(struct scsi_qla_host *ha)
@@ -1766,7 +1758,7 @@ qla1280_load_firmware_dma(struct scsi_qla_host *ha)
 		for(i = 0; i < cnt; i++)
 			((__le16 *)ha->request_ring)[i] = fw_data[i];
 
-		mb[0] = MBC_LOAD_RAM;
+		mb[0] = LOAD_CMD;
 		mb[1] = risc_address;
 		mb[4] = cnt;
 		mb[3] = ha->request_dma & 0xffff;
@@ -1777,8 +1769,7 @@ qla1280_load_firmware_dma(struct scsi_qla_host *ha)
 				__func__, mb[0],
 				(void *)(long)ha->request_dma,
 				mb[6], mb[7], mb[2], mb[3]);
-		err = qla1280_mailbox_command(ha, BIT_4 | BIT_3 | BIT_2 |
-				BIT_1 | BIT_0, mb);
+		err = qla1280_mailbox_command(ha, CMD_ARGS, mb);
 		if (err) {
 			printk(KERN_ERR "scsi(%li): Failed to load partial "
 			       "segment of f\n", ha->host_no);
@@ -1786,7 +1777,7 @@ qla1280_load_firmware_dma(struct scsi_qla_host *ha)
 		}
 
 #if DUMP_IT_BACK
-		mb[0] = MBC_DUMP_RAM;
+		mb[0] = DUMP_CMD;
 		mb[1] = risc_address;
 		mb[4] = cnt;
 		mb[3] = p_tbuf & 0xffff;
@@ -1794,8 +1785,7 @@ qla1280_load_firmware_dma(struct scsi_qla_host *ha)
 		mb[7] = upper_32_bits(p_tbuf) & 0xffff;
 		mb[6] = upper_32_bits(p_tbuf) >> 16;
 
-		err = qla1280_mailbox_command(ha, BIT_4 | BIT_3 | BIT_2 |
-				BIT_1 | BIT_0, mb);
+		err = qla1280_mailbox_command(ha, CMD_ARGS, mb);
 		if (err) {
 			printk(KERN_ERR
 			       "Failed to dump partial segment of f/w\n");
@@ -2251,13 +2241,6 @@ qla1280_nvram_config(struct scsi_qla_host *ha)
 	mb[1] = nv->firmware_feature.f.enable_fast_posting;
 	mb[1] |= nv->firmware_feature.f.report_lvd_bus_transition << 1;
 	mb[1] |= nv->firmware_feature.f.disable_synchronous_backoff << 5;
-#if defined(CONFIG_IA64_GENERIC) || defined (CONFIG_IA64_SGI_SN2)
-	if (ia64_platform_is("sn2")) {
-		printk(KERN_INFO "scsi(%li): Enabling SN2 PCI DMA "
-		       "workaround\n", ha->host_no);
-		mb[1] |= nv->firmware_feature.f.unused_9 << 9; /* XXX */
-	}
-#endif
 	status |= qla1280_mailbox_command(ha, BIT_1 | BIT_0, mb);
 
 	/* Retry count and delay. */
@@ -2888,12 +2871,6 @@ qla1280_64bit_start_scsi(struct scsi_qla_host *ha, struct srb * sp)
 				break;
 
 			dma_handle = sg_dma_address(s);
-#if defined(CONFIG_IA64_GENERIC) || defined(CONFIG_IA64_SGI_SN2)
-			if (ha->flags.use_pci_vchannel)
-				sn_pci_set_vchan(ha->pdev,
-						 (unsigned long *)&dma_handle,
-						 SCSI_BUS_32(cmd));
-#endif
 			*dword_ptr++ =
 				cpu_to_le32(lower_32_bits(dma_handle));
 			*dword_ptr++ =
@@ -2950,12 +2927,6 @@ qla1280_64bit_start_scsi(struct scsi_qla_host *ha, struct srb * sp)
 				if (cnt == 5)
 					break;
 				dma_handle = sg_dma_address(s);
-#if defined(CONFIG_IA64_GENERIC) || defined(CONFIG_IA64_SGI_SN2)
-				if (ha->flags.use_pci_vchannel)
-					sn_pci_set_vchan(ha->pdev,
-							 (unsigned long *)&dma_handle,
-							 SCSI_BUS_32(cmd));
-#endif
 				*dword_ptr++ =
 					cpu_to_le32(lower_32_bits(dma_handle));
 				*dword_ptr++ =

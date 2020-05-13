@@ -301,7 +301,7 @@ struct ctrl_dl {
 	unsigned int DCD:1;
 	unsigned int RI:1;
 	unsigned int CTS:1;
-	unsigned int reserverd:4;
+	unsigned int reserved:4;
 	u8 port;
 } __attribute__ ((packed));
 
@@ -839,40 +839,39 @@ static char *interrupt2str(u16 interrupt)
 	static char buf[TMP_BUF_MAX];
 	char *p = buf;
 
-	interrupt & MDM_DL1 ? p += snprintf(p, TMP_BUF_MAX, "MDM_DL1 ") : NULL;
-	interrupt & MDM_DL2 ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"MDM_DL2 ") : NULL;
+	if (interrupt & MDM_DL1)
+		p += scnprintf(p, TMP_BUF_MAX, "MDM_DL1 ");
+	if (interrupt & MDM_DL2)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "MDM_DL2 ");
+	if (interrupt & MDM_UL1)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "MDM_UL1 ");
+	if (interrupt & MDM_UL2)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "MDM_UL2 ");
+	if (interrupt & DIAG_DL1)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "DIAG_DL1 ");
+	if (interrupt & DIAG_DL2)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "DIAG_DL2 ");
 
-	interrupt & MDM_UL1 ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"MDM_UL1 ") : NULL;
-	interrupt & MDM_UL2 ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"MDM_UL2 ") : NULL;
+	if (interrupt & DIAG_UL)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "DIAG_UL ");
 
-	interrupt & DIAG_DL1 ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"DIAG_DL1 ") : NULL;
-	interrupt & DIAG_DL2 ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"DIAG_DL2 ") : NULL;
+	if (interrupt & APP1_DL)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "APP1_DL ");
+	if (interrupt & APP2_DL)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "APP2_DL ");
 
-	interrupt & DIAG_UL ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"DIAG_UL ") : NULL;
+	if (interrupt & APP1_UL)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "APP1_UL ");
+	if (interrupt & APP2_UL)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "APP2_UL ");
 
-	interrupt & APP1_DL ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"APP1_DL ") : NULL;
-	interrupt & APP2_DL ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"APP2_DL ") : NULL;
+	if (interrupt & CTRL_DL)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "CTRL_DL ");
+	if (interrupt & CTRL_UL)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "CTRL_UL ");
 
-	interrupt & APP1_UL ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"APP1_UL ") : NULL;
-	interrupt & APP2_UL ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"APP2_UL ") : NULL;
-
-	interrupt & CTRL_DL ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"CTRL_DL ") : NULL;
-	interrupt & CTRL_UL ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"CTRL_UL ") : NULL;
-
-	interrupt & RESET ? p += snprintf(p, TMP_BUF_MAX - (p - buf),
-					"RESET ") : NULL;
+	if (interrupt & RESET)
+		p += scnprintf(p, TMP_BUF_MAX - (p - buf), "RESET ");
 
 	return buf;
 }
@@ -1282,7 +1281,7 @@ static void nozomi_setup_private_data(struct nozomi *dc)
 static ssize_t card_type_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
-	const struct nozomi *dc = pci_get_drvdata(to_pci_dev(dev));
+	const struct nozomi *dc = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%d\n", dc->card_type);
 }
@@ -1291,7 +1290,7 @@ static DEVICE_ATTR_RO(card_type);
 static ssize_t open_ttys_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
-	const struct nozomi *dc = pci_get_drvdata(to_pci_dev(dev));
+	const struct nozomi *dc = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%u\n", dc->open_ttys);
 }

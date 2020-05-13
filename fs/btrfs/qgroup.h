@@ -408,11 +408,12 @@ void btrfs_qgroup_init_swapped_blocks(
 void btrfs_qgroup_clean_swapped_blocks(struct btrfs_root *root);
 int btrfs_qgroup_add_swapped_blocks(struct btrfs_trans_handle *trans,
 		struct btrfs_root *subvol_root,
-		struct btrfs_block_group_cache *bg,
+		struct btrfs_block_group *bg,
 		struct extent_buffer *subvol_parent, int subvol_slot,
 		struct extent_buffer *reloc_parent, int reloc_slot,
 		u64 last_snapshot);
 int btrfs_qgroup_trace_subtree_after_cow(struct btrfs_trans_handle *trans,
 		struct btrfs_root *root, struct extent_buffer *eb);
+void btrfs_qgroup_destroy_extent_records(struct btrfs_transaction *trans);
 
 #endif

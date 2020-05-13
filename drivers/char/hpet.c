@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Intel & MS High Precision Event Timer Implementation.
  *
@@ -5,10 +6,6 @@
  *	Venki Pallipadi
  * (c) Copyright 2004 Hewlett-Packard Development Company, L.P.
  *	Bob Picco <robert.picco@hp.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/interrupt.h>
@@ -113,7 +110,7 @@ struct hpets {
 	unsigned long hp_delta;
 	unsigned int hp_ntimer;
 	unsigned int hp_which;
-	struct hpet_dev hp_dev[1];
+	struct hpet_dev hp_dev[];
 };
 
 static struct hpets *hpets;
@@ -570,8 +567,7 @@ static inline unsigned long hpet_time_div(struct hpets *hpets,
 	unsigned long long m;
 
 	m = hpets->hp_tick_freq + (dis >> 1);
-	do_div(m, dis);
-	return (unsigned long)m;
+	return div64_ul(m, dis);
 }
 
 static int
@@ -859,7 +855,7 @@ int hpet_alloc(struct hpet_data *hdp)
 		return 0;
 	}
 
-	hpetp = kzalloc(struct_size(hpetp, hp_dev, hdp->hd_nirqs - 1),
+	hpetp = kzalloc(struct_size(hpetp, hp_dev, hdp->hd_nirqs),
 			GFP_KERNEL);
 
 	if (!hpetp)

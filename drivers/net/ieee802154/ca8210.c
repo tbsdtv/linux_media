@@ -946,7 +946,8 @@ static int ca8210_spi_transfer(
 	cas_ctl->transfer.bits_per_word = 0; /* Use device setting */
 	cas_ctl->transfer.tx_buf = cas_ctl->tx_buf;
 	cas_ctl->transfer.rx_buf = cas_ctl->tx_in_buf;
-	cas_ctl->transfer.delay_usecs = 0;
+	cas_ctl->transfer.delay.value = 0;
+	cas_ctl->transfer.delay.unit = SPI_DELAY_UNIT_USECS;
 	cas_ctl->transfer.cs_change = 0;
 	cas_ctl->transfer.len = sizeof(struct mac_message);
 	cas_ctl->msg.complete = ca8210_spi_transfer_complete;
@@ -3019,14 +3020,7 @@ static int ca8210_test_interface_init(struct ca8210_priv *priv)
 		priv,
 		&test_int_fops
 	);
-	if (IS_ERR(test->ca8210_dfs_spi_int)) {
-		dev_err(
-			&priv->spi->dev,
-			"Error %ld when creating debugfs node\n",
-			PTR_ERR(test->ca8210_dfs_spi_int)
-		);
-		return PTR_ERR(test->ca8210_dfs_spi_int);
-	}
+
 	debugfs_create_symlink("ca8210", NULL, node_name);
 	init_waitqueue_head(&test->readq);
 	return kfifo_alloc(
@@ -3152,12 +3146,12 @@ static int ca8210_probe(struct spi_device *spi_device)
 		goto error;
 	}
 
+	priv->spi->dev.platform_data = pdata;
 	ret = ca8210_get_platform_data(priv->spi, pdata);
 	if (ret) {
 		dev_crit(&spi_device->dev, "ca8210_get_platform_data failed\n");
 		goto error;
 	}
-	priv->spi->dev.platform_data = pdata;
 
 	ret = ca8210_dev_com_init(priv);
 	if (ret) {

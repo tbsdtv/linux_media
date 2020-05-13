@@ -4042,6 +4042,11 @@ static void call_ledtrig_micmute(struct hda_codec *codec)
  *
  * Note that this fixup has to be called after other fixup that sets
  * cap_sync_hook.  Otherwise the chaining wouldn't work.
+ *
+ * @codec: the HDA codec
+ * @fix: fixup pointer
+ * @action: only supports HDA_FIXUP_ACT_PROBE value
+ *
  */
 void snd_hda_gen_fixup_micmute_led(struct hda_codec *codec,
 				   const struct hda_fixup *fix, int action)
@@ -4401,7 +4406,7 @@ EXPORT_SYMBOL_GPL(snd_hda_gen_fix_pin_power);
  */
 
 /* check each pin in the given array; returns true if any of them is plugged */
-static bool detect_jacks(struct hda_codec *codec, int num_pins, hda_nid_t *pins)
+static bool detect_jacks(struct hda_codec *codec, int num_pins, const hda_nid_t *pins)
 {
 	int i;
 	bool present = false;
@@ -4420,7 +4425,7 @@ static bool detect_jacks(struct hda_codec *codec, int num_pins, hda_nid_t *pins)
 }
 
 /* standard HP/line-out auto-mute helper */
-static void do_automute(struct hda_codec *codec, int num_pins, hda_nid_t *pins,
+static void do_automute(struct hda_codec *codec, int num_pins, const hda_nid_t *pins,
 			int *paths, bool mute)
 {
 	struct hda_gen_spec *spec = codec->spec;
@@ -6009,7 +6014,8 @@ int snd_hda_gen_init(struct hda_codec *codec)
 	if (spec->init_hook)
 		spec->init_hook(codec);
 
-	snd_hda_apply_verbs(codec);
+	if (!spec->skip_verbs)
+		snd_hda_apply_verbs(codec);
 
 	init_multi_out(codec);
 	init_extra_out(codec);
@@ -6026,7 +6032,7 @@ int snd_hda_gen_init(struct hda_codec *codec)
 	/* call init functions of standard auto-mute helpers */
 	update_automute_all(codec);
 
-	regcache_sync(codec->core.regmap);
+	snd_hda_regmap_sync(codec);
 
 	if (spec->vmaster_mute.sw_kctl && spec->vmaster_mute.hook)
 		snd_hda_sync_vmaster_hook(&spec->vmaster_mute);
@@ -6050,6 +6056,24 @@ void snd_hda_gen_free(struct hda_codec *codec)
 	codec->spec = NULL;
 }
 EXPORT_SYMBOL_GPL(snd_hda_gen_free);
+
+/**
+ * snd_hda_gen_reboot_notify - Make codec enter D3 before rebooting
+ * @codec: the HDA codec
+ *
+ * This can be put as patch_ops reboot_notify function.
+ */
+void snd_hda_gen_reboot_notify(struct hda_codec *codec)
+{
+	/* Make the codec enter D3 to avoid spurious noises from the internal
+	 * speaker during (and after) reboot
+	 */
+	snd_hda_codec_set_power_to_all(codec, codec->core.afg, AC_PWRST_D3);
+	snd_hda_codec_write(codec, codec->core.afg, 0,
+			    AC_VERB_SET_POWER_STATE, AC_PWRST_D3);
+	msleep(10);
+}
+EXPORT_SYMBOL_GPL(snd_hda_gen_reboot_notify);
 
 #ifdef CONFIG_PM
 /**
@@ -6078,6 +6102,7 @@ static const struct hda_codec_ops generic_patch_ops = {
 	.init = snd_hda_gen_init,
 	.free = snd_hda_gen_free,
 	.unsol_event = snd_hda_jack_unsol_event,
+	.reboot_notify = snd_hda_gen_reboot_notify,
 #ifdef CONFIG_PM
 	.check_power_status = snd_hda_gen_check_power_status,
 #endif
@@ -6100,7 +6125,7 @@ static int snd_hda_parse_generic_codec(struct hda_codec *codec)
 
 	err = snd_hda_parse_pin_defcfg(codec, &spec->autocfg, NULL, 0);
 	if (err < 0)
-		return err;
+		goto error;
 
 	err = snd_hda_gen_parse_auto_config(codec, &spec->autocfg);
 	if (err < 0)

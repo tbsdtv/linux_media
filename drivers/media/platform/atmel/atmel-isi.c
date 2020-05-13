@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011 Atmel Corporation
  * Josh Wu, <josh.wu@atmel.com>
@@ -5,10 +6,6 @@
  * Based on previous work by Lars Haring, <lars.haring@atmel.com>
  * and Sedji Gaouaou
  * Based on the bttv driver for Bt848 with respective copyright holders
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -151,7 +148,8 @@ static void configure_geometry(struct atmel_isi *isi)
 	u32 fourcc = isi->current_fmt->fourcc;
 
 	isi->enable_preview_path = fourcc == V4L2_PIX_FMT_RGB565 ||
-				   fourcc == V4L2_PIX_FMT_RGB32;
+				   fourcc == V4L2_PIX_FMT_RGB32 ||
+				   fourcc == V4L2_PIX_FMT_Y16;
 
 	/* According to sensor's output format to set cfg2 */
 	cfg2 = isi->current_fmt->swap;
@@ -496,7 +494,7 @@ static void stop_streaming(struct vb2_queue *vq)
 	spin_unlock_irq(&isi->irqlock);
 
 	if (!isi->enable_preview_path) {
-		timeout = jiffies + FRAME_INTERVAL_MILLI_SEC * HZ;
+		timeout = jiffies + (FRAME_INTERVAL_MILLI_SEC * HZ) / 1000;
 		/* Wait until the end of the current frame. */
 		while ((isi_readl(isi, ISI_STATUS) & ISI_CTRL_CDC) &&
 				time_before(jiffies, timeout))
@@ -557,12 +555,36 @@ static const struct isi_format *find_format_by_fourcc(struct atmel_isi *isi,
 	return NULL;
 }
 
+static void isi_try_fse(struct atmel_isi *isi, const struct isi_format *isi_fmt,
+			struct v4l2_subdev_pad_config *pad_cfg)
+{
+	int ret;
+	struct v4l2_subdev_frame_size_enum fse = {
+		.code = isi_fmt->mbus_code,
+		.which = V4L2_SUBDEV_FORMAT_TRY,
+	};
+
+	ret = v4l2_subdev_call(isi->entity.subdev, pad, enum_frame_size,
+			       pad_cfg, &fse);
+	/*
+	 * Attempt to obtain format size from subdev. If not available,
+	 * just use the maximum ISI can receive.
+	 */
+	if (ret) {
+		pad_cfg->try_crop.width = MAX_SUPPORT_WIDTH;
+		pad_cfg->try_crop.height = MAX_SUPPORT_HEIGHT;
+	} else {
+		pad_cfg->try_crop.width = fse.max_width;
+		pad_cfg->try_crop.height = fse.max_height;
+	}
+}
+
 static int isi_try_fmt(struct atmel_isi *isi, struct v4l2_format *f,
 		       const struct isi_format **current_fmt)
 {
 	const struct isi_format *isi_fmt;
 	struct v4l2_pix_format *pixfmt = &f->fmt.pix;
-	struct v4l2_subdev_pad_config pad_cfg;
+	struct v4l2_subdev_pad_config pad_cfg = {};
 	struct v4l2_subdev_format format = {
 		.which = V4L2_SUBDEV_FORMAT_TRY,
 	};
@@ -579,6 +601,9 @@ static int isi_try_fmt(struct atmel_isi *isi, struct v4l2_format *f,
 	pixfmt->height = clamp(pixfmt->height, 0U, MAX_SUPPORT_HEIGHT);
 
 	v4l2_fill_mbus_format(&format.format, pixfmt, isi_fmt->mbus_code);
+
+	isi_try_fse(isi, isi_fmt, &pad_cfg);
+
 	ret = v4l2_subdev_call(isi->entity.subdev, pad, set_fmt,
 			       &pad_cfg, &format);
 	if (ret < 0)
@@ -993,6 +1018,16 @@ static const struct isi_format isi_formats[] = {
 		.mbus_code = MEDIA_BUS_FMT_VYUY8_2X8,
 		.bpp = 2,
 		.swap = ISI_CFG2_YCC_SWAP_MODE_1,
+	}, {
+		.fourcc = V4L2_PIX_FMT_GREY,
+		.mbus_code = MEDIA_BUS_FMT_Y10_1X10,
+		.bpp = 1,
+		.swap = ISI_CFG2_GS_MODE_2_PIXEL | ISI_CFG2_GRAYSCALE,
+	}, {
+		.fourcc = V4L2_PIX_FMT_Y16,
+		.mbus_code = MEDIA_BUS_FMT_Y10_1X10,
+		.bpp = 2,
+		.swap = ISI_CFG2_GS_MODE_2_PIXEL | ISI_CFG2_GRAYSCALE,
 	},
 };
 
@@ -1059,7 +1094,7 @@ static int isi_graph_notify_complete(struct v4l2_async_notifier *notifier)
 		return ret;
 	}
 
-	ret = video_register_device(isi->vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(isi->vdev, VFL_TYPE_VIDEO, -1);
 	if (ret) {
 		dev_err(isi->dev, "Failed to register video device\n");
 		return ret;

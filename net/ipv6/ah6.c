@@ -36,7 +36,7 @@ struct tmp_ext {
 		struct in6_addr saddr;
 #endif
 		struct in6_addr daddr;
-		char hdrs[0];
+		char hdrs[];
 };
 
 struct ah_skb_cb {
@@ -259,7 +259,7 @@ static int ipv6_clear_mutable_options(struct ipv6hdr *iph, int len, int dir)
 		case NEXTHDR_DEST:
 			if (dir == XFRM_POLICY_OUT)
 				ipv6_rearrange_destopt(iph, exthdr.opth);
-			/* fall through */
+			fallthrough;
 		case NEXTHDR_HOP:
 			if (!zero_out_mutable_opts(exthdr.opth)) {
 				net_dbg_ratelimited("overrun %sopts\n",
@@ -464,7 +464,7 @@ static void ah6_input_done(struct crypto_async_request *base, int err)
 	struct ah_data *ahp = x->data;
 	struct ip_auth_hdr *ah = ip_auth_hdr(skb);
 	int hdr_len = skb_network_header_len(skb);
-	int ah_hlen = (ah->hdrlen + 2) << 2;
+	int ah_hlen = ipv6_authlen(ah);
 
 	if (err)
 		goto out;
@@ -546,7 +546,7 @@ static int ah6_input(struct xfrm_state *x, struct sk_buff *skb)
 	ahash = ahp->ahash;
 
 	nexthdr = ah->nexthdr;
-	ah_hlen = (ah->hdrlen + 2) << 2;
+	ah_hlen = ipv6_authlen(ah);
 
 	if (ah_hlen != XFRM_ALIGN8(sizeof(*ah) + ahp->icv_full_len) &&
 	    ah_hlen != XFRM_ALIGN8(sizeof(*ah) + ahp->icv_trunc_len))
@@ -793,9 +793,7 @@ static void __exit ah6_fini(void)
 	if (xfrm6_protocol_deregister(&ah6_protocol, IPPROTO_AH) < 0)
 		pr_info("%s: can't remove protocol\n", __func__);
 
-	if (xfrm_unregister_type(&ah6_type, AF_INET6) < 0)
-		pr_info("%s: can't remove xfrm type\n", __func__);
-
+	xfrm_unregister_type(&ah6_type, AF_INET6);
 }
 
 module_init(ah6_init);

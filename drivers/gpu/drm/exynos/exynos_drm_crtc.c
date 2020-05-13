@@ -8,11 +8,11 @@
  *	Seung-Woo Kim <sw0312.kim@samsung.com>
  */
 
-#include <drm/drmP.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_vblank.h>
 
 #include "exynos_drm_crtc.h"
 #include "exynos_drm_drv.h"
@@ -23,8 +23,8 @@ static void exynos_drm_crtc_atomic_enable(struct drm_crtc *crtc,
 {
 	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(crtc);
 
-	if (exynos_crtc->ops->enable)
-		exynos_crtc->ops->enable(exynos_crtc);
+	if (exynos_crtc->ops->atomic_enable)
+		exynos_crtc->ops->atomic_enable(exynos_crtc);
 
 	drm_crtc_vblank_on(crtc);
 }
@@ -36,8 +36,8 @@ static void exynos_drm_crtc_atomic_disable(struct drm_crtc *crtc,
 
 	drm_crtc_vblank_off(crtc);
 
-	if (exynos_crtc->ops->disable)
-		exynos_crtc->ops->disable(exynos_crtc);
+	if (exynos_crtc->ops->atomic_disable)
+		exynos_crtc->ops->atomic_disable(exynos_crtc);
 
 	if (crtc->state->event && !crtc->state->active) {
 		spin_lock_irq(&crtc->dev->event_lock);

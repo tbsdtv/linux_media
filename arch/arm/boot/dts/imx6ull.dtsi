@@ -12,6 +12,7 @@
 /delete-node/ &crypto;
 
 &cpu0 {
+	clock-frequency = <900000000>;
 	operating-points = <
 		/* kHz	uV */
 		900000	1275000
@@ -34,6 +35,12 @@
 	compatible = "fsl,imx6ull-ocotp", "syscon";
 };
 
+&pxp {
+	compatible = "fsl,imx6ull-pxp";
+	interrupts = <GIC_SPI 8 IRQ_TYPE_LEVEL_HIGH>,
+		     <GIC_SPI 18 IRQ_TYPE_LEVEL_HIGH>;
+};
+
 &usdhc1 {
 	compatible = "fsl,imx6ull-usdhc", "fsl,imx6sx-usdhc";
 };
@@ -44,7 +51,7 @@
 
 / {
 	soc {
-		aips3: aips-bus@2200000 {
+		aips3: bus@2200000 {
 			compatible = "fsl,aips-bus", "simple-bus";
 			#address-cells = <1>;
 			#size-cells = <1>;

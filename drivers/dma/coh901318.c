@@ -1378,10 +1378,8 @@ static int __init init_coh901318_debugfs(void)
 
 	dma_dentry = debugfs_create_dir("dma", NULL);
 
-	(void) debugfs_create_file("status",
-				   S_IFREG | S_IRUGO,
-				   dma_dentry, NULL,
-				   &coh901318_debugfs_status_operations);
+	debugfs_create_file("status", S_IFREG | S_IRUGO, dma_dentry, NULL,
+			    &coh901318_debugfs_status_operations);
 	return 0;
 }
 
@@ -1949,8 +1947,6 @@ static void dma_tc_handle(struct coh901318_chan *cohc)
 		return;
 	}
 
-	spin_lock(&cohc->lock);
-
 	/*
 	 * When we reach this point, at least one queue item
 	 * should have been moved over from cohc->queue to
@@ -1970,8 +1966,6 @@ static void dma_tc_handle(struct coh901318_chan *cohc)
 	 */
 	if (coh901318_queue_start(cohc) == NULL)
 		cohc->busy = 0;
-
-	spin_unlock(&cohc->lock);
 
 	/*
 	 * This tasklet will remove items from cohc->active

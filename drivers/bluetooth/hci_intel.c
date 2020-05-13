@@ -49,7 +49,7 @@
 struct hci_lpm_pkt {
 	__u8 opcode;
 	__u8 dlen;
-	__u8 data[0];
+	__u8 data[];
 } __packed;
 
 struct intel_device {
@@ -390,6 +390,9 @@ static int intel_open(struct hci_uart *hu)
 	struct intel_data *intel;
 
 	BT_DBG("hu %p", hu);
+
+	if (!hci_uart_has_flow_control(hu))
+		return -EOPNOTSUPP;
 
 	intel = kzalloc(sizeof(*intel), GFP_KERNEL);
 	if (!intel)

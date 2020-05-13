@@ -30,32 +30,6 @@ static struct ion_device *internal_dev;
 static int heap_id;
 
 /* this function should only be called while dev->lock is held */
-static void ion_buffer_add(struct ion_device *dev,
-			   struct ion_buffer *buffer)
-{
-	struct rb_node **p = &dev->buffers.rb_node;
-	struct rb_node *parent = NULL;
-	struct ion_buffer *entry;
-
-	while (*p) {
-		parent = *p;
-		entry = rb_entry(parent, struct ion_buffer, node);
-
-		if (buffer < entry) {
-			p = &(*p)->rb_left;
-		} else if (buffer > entry) {
-			p = &(*p)->rb_right;
-		} else {
-			pr_err("%s: buffer already found.", __func__);
-			BUG();
-		}
-	}
-
-	rb_link_node(&buffer->node, parent, p);
-	rb_insert_color(&buffer->node, &dev->buffers);
-}
-
-/* this function should only be called while dev->lock is held */
 static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 					    struct ion_device *dev,
 					    unsigned long len,
@@ -100,9 +74,6 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 
 	INIT_LIST_HEAD(&buffer->attachments);
 	mutex_init(&buffer->lock);
-	mutex_lock(&dev->buffer_lock);
-	ion_buffer_add(dev, buffer);
-	mutex_unlock(&dev->buffer_lock);
 	return buffer;
 
 err1:
@@ -131,11 +102,6 @@ void ion_buffer_destroy(struct ion_buffer *buffer)
 static void _ion_buffer_destroy(struct ion_buffer *buffer)
 {
 	struct ion_heap *heap = buffer->heap;
-	struct ion_device *dev = buffer->dev;
-
-	mutex_lock(&dev->buffer_lock);
-	rb_erase(&buffer->node, &dev->buffers);
-	mutex_unlock(&dev->buffer_lock);
 
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
 		ion_heap_freelist_add(heap, buffer);
@@ -308,18 +274,6 @@ static void ion_dma_buf_release(struct dma_buf *dmabuf)
 	_ion_buffer_destroy(buffer);
 }
 
-static void *ion_dma_buf_kmap(struct dma_buf *dmabuf, unsigned long offset)
-{
-	struct ion_buffer *buffer = dmabuf->priv;
-
-	return buffer->vaddr + offset * PAGE_SIZE;
-}
-
-static void ion_dma_buf_kunmap(struct dma_buf *dmabuf, unsigned long offset,
-			       void *ptr)
-{
-}
-
 static int ion_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
 					enum dma_data_direction direction)
 {
@@ -383,8 +337,6 @@ static const struct dma_buf_ops dma_buf_ops = {
 	.detach = ion_dma_buf_detatch,
 	.begin_cpu_access = ion_dma_buf_begin_cpu_access,
 	.end_cpu_access = ion_dma_buf_end_cpu_access,
-	.map = ion_dma_buf_kmap,
-	.unmap = ion_dma_buf_kunmap,
 };
 
 static int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags)
@@ -567,9 +519,7 @@ static long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 static const struct file_operations ion_fops = {
 	.owner          = THIS_MODULE,
 	.unlocked_ioctl = ion_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl	= ion_ioctl,
-#endif
+	.compat_ioctl	= compat_ptr_ioctl,
 };
 
 static int debug_shrink_set(void *data, u64 val)
@@ -694,8 +644,6 @@ static int ion_device_create(void)
 	}
 
 	idev->debug_root = debugfs_create_dir("ion", NULL);
-	idev->buffers = RB_ROOT;
-	mutex_init(&idev->buffer_lock);
 	init_rwsem(&idev->lock);
 	plist_head_init(&idev->heaps);
 	internal_dev = idev;

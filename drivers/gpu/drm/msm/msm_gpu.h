@@ -1,18 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __MSM_GPU_H__
@@ -122,7 +111,14 @@ struct msm_gpu {
 	struct clk *ebi1_clk, *core_clk, *rbbmtimer_clk;
 	uint32_t fast_rate;
 
+	/* The gfx-mem interconnect path that's used by all GPU types. */
 	struct icc_path *icc_path;
+
+	/*
+	 * Second interconnect path for some A3xx and all A4xx GPUs to the
+	 * On Chip MEMory (OCMEM).
+	 */
+	struct icc_path *ocmem_icc_path;
 
 	/* Hang and Inactivity Detection:
 	 */

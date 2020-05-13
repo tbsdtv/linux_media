@@ -101,21 +101,8 @@ static void check_if_tm_restore_required(struct task_struct *tsk)
 	}
 }
 
-static bool tm_active_with_fp(struct task_struct *tsk)
-{
-	return MSR_TM_ACTIVE(tsk->thread.regs->msr) &&
-		(tsk->thread.ckpt_regs.msr & MSR_FP);
-}
-
-static bool tm_active_with_altivec(struct task_struct *tsk)
-{
-	return MSR_TM_ACTIVE(tsk->thread.regs->msr) &&
-		(tsk->thread.ckpt_regs.msr & MSR_VEC);
-}
 #else
 static inline void check_if_tm_restore_required(struct task_struct *tsk) { }
-static inline bool tm_active_with_fp(struct task_struct *tsk) { return false; }
-static inline bool tm_active_with_altivec(struct task_struct *tsk) { return false; }
 #endif /* CONFIG_PPC_TRANSACTIONAL_MEM */
 
 bool strict_msr_control;
@@ -249,23 +236,9 @@ void enable_kernel_fp(void)
 	}
 }
 EXPORT_SYMBOL(enable_kernel_fp);
-
-static int restore_fp(struct task_struct *tsk)
-{
-	if (tsk->thread.load_fp || tm_active_with_fp(tsk)) {
-		load_fp_state(&current->thread.fp_state);
-		current->thread.load_fp++;
-		return 1;
-	}
-	return 0;
-}
-#else
-static int restore_fp(struct task_struct *tsk) { return 0; }
 #endif /* CONFIG_PPC_FPU */
 
 #ifdef CONFIG_ALTIVEC
-#define loadvec(thr) ((thr).load_vec)
-
 static void __giveup_altivec(struct task_struct *tsk)
 {
 	unsigned long msr;
@@ -331,22 +304,6 @@ void flush_altivec_to_thread(struct task_struct *tsk)
 	}
 }
 EXPORT_SYMBOL_GPL(flush_altivec_to_thread);
-
-static int restore_altivec(struct task_struct *tsk)
-{
-	if (cpu_has_feature(CPU_FTR_ALTIVEC) &&
-		(tsk->thread.load_vec || tm_active_with_altivec(tsk))) {
-		load_vr_state(&tsk->thread.vr_state);
-		tsk->thread.used_vr = 1;
-		tsk->thread.load_vec++;
-
-		return 1;
-	}
-	return 0;
-}
-#else
-#define loadvec(thr) 0
-static inline int restore_altivec(struct task_struct *tsk) { return 0; }
 #endif /* CONFIG_ALTIVEC */
 
 #ifdef CONFIG_VSX
@@ -414,18 +371,6 @@ void flush_vsx_to_thread(struct task_struct *tsk)
 	}
 }
 EXPORT_SYMBOL_GPL(flush_vsx_to_thread);
-
-static int restore_vsx(struct task_struct *tsk)
-{
-	if (cpu_has_feature(CPU_FTR_VSX)) {
-		tsk->thread.used_vsr = 1;
-		return 1;
-	}
-
-	return 0;
-}
-#else
-static inline int restore_vsx(struct task_struct *tsk) { return 0; }
 #endif /* CONFIG_VSX */
 
 #ifdef CONFIG_SPE
@@ -497,13 +442,14 @@ void giveup_all(struct task_struct *tsk)
 	if (!tsk->thread.regs)
 		return;
 
+	check_if_tm_restore_required(tsk);
+
 	usermsr = tsk->thread.regs->msr;
 
 	if ((usermsr & msr_all_available) == 0)
 		return;
 
 	msr_check_and_set(msr_all_available);
-	check_if_tm_restore_required(tsk);
 
 	WARN_ON((usermsr & MSR_VSX) && !((usermsr & MSR_FP) && (usermsr & MSR_VEC)));
 
@@ -523,6 +469,53 @@ void giveup_all(struct task_struct *tsk)
 	msr_check_and_clear(msr_all_available);
 }
 EXPORT_SYMBOL(giveup_all);
+
+#ifdef CONFIG_PPC_BOOK3S_64
+#ifdef CONFIG_PPC_FPU
+static int restore_fp(struct task_struct *tsk)
+{
+	if (tsk->thread.load_fp) {
+		load_fp_state(&current->thread.fp_state);
+		current->thread.load_fp++;
+		return 1;
+	}
+	return 0;
+}
+#else
+static int restore_fp(struct task_struct *tsk) { return 0; }
+#endif /* CONFIG_PPC_FPU */
+
+#ifdef CONFIG_ALTIVEC
+#define loadvec(thr) ((thr).load_vec)
+static int restore_altivec(struct task_struct *tsk)
+{
+	if (cpu_has_feature(CPU_FTR_ALTIVEC) && (tsk->thread.load_vec)) {
+		load_vr_state(&tsk->thread.vr_state);
+		tsk->thread.used_vr = 1;
+		tsk->thread.load_vec++;
+
+		return 1;
+	}
+	return 0;
+}
+#else
+#define loadvec(thr) 0
+static inline int restore_altivec(struct task_struct *tsk) { return 0; }
+#endif /* CONFIG_ALTIVEC */
+
+#ifdef CONFIG_VSX
+static int restore_vsx(struct task_struct *tsk)
+{
+	if (cpu_has_feature(CPU_FTR_VSX)) {
+		tsk->thread.used_vsr = 1;
+		return 1;
+	}
+
+	return 0;
+}
+#else
+static inline int restore_vsx(struct task_struct *tsk) { return 0; }
+#endif /* CONFIG_VSX */
 
 /*
  * The exception exit path calls restore_math() with interrupts hard disabled
@@ -564,6 +557,7 @@ void notrace restore_math(struct pt_regs *regs)
 
 	regs->msr = msr;
 }
+#endif
 
 static void save_all(struct task_struct *tsk)
 {
@@ -639,7 +633,7 @@ void do_break (struct pt_regs *regs, unsigned long address,
 	hw_breakpoint_disable();
 
 	/* Deliver the signal to userspace */
-	force_sig_fault(SIGTRAP, TRAP_HWBKPT, (void __user *)address, current);
+	force_sig_fault(SIGTRAP, TRAP_HWBKPT, (void __user *)address);
 }
 #endif	/* CONFIG_PPC_ADV_DEBUG_REGS */
 
@@ -728,6 +722,8 @@ static void set_debug_reg_defaults(struct thread_struct *thread)
 {
 	thread->hw_brk.address = 0;
 	thread->hw_brk.type = 0;
+	thread->hw_brk.len = 0;
+	thread->hw_brk.hw_len = 0;
 	if (ppc_breakpoint_available())
 		set_breakpoint(&thread->hw_brk);
 }
@@ -751,28 +747,6 @@ static inline int __set_dabr(unsigned long dabr, unsigned long dabrx)
 		mtspr(SPRN_DABRX, dabrx);
 	return 0;
 }
-#elif defined(CONFIG_PPC_8xx)
-static inline int __set_dabr(unsigned long dabr, unsigned long dabrx)
-{
-	unsigned long addr = dabr & ~HW_BRK_TYPE_DABR;
-	unsigned long lctrl1 = 0x90000000; /* compare type: equal on E & F */
-	unsigned long lctrl2 = 0x8e000002; /* watchpoint 1 on cmp E | F */
-
-	if ((dabr & HW_BRK_TYPE_RDWR) == HW_BRK_TYPE_READ)
-		lctrl1 |= 0xa0000;
-	else if ((dabr & HW_BRK_TYPE_RDWR) == HW_BRK_TYPE_WRITE)
-		lctrl1 |= 0xf0000;
-	else if ((dabr & HW_BRK_TYPE_RDWR) == 0)
-		lctrl2 = 0;
-
-	mtspr(SPRN_LCTRL2, 0);
-	mtspr(SPRN_CMPE, addr);
-	mtspr(SPRN_CMPF, addr + 4);
-	mtspr(SPRN_LCTRL1, lctrl1);
-	mtspr(SPRN_LCTRL2, lctrl2);
-
-	return 0;
-}
 #else
 static inline int __set_dabr(unsigned long dabr, unsigned long dabrx)
 {
@@ -793,31 +767,36 @@ static inline int set_dabr(struct arch_hw_breakpoint *brk)
 	return __set_dabr(dabr, dabrx);
 }
 
-int set_dawr(struct arch_hw_breakpoint *brk)
+static inline int set_breakpoint_8xx(struct arch_hw_breakpoint *brk)
 {
-	unsigned long dawr, dawrx, mrd;
+	unsigned long lctrl1 = LCTRL1_CTE_GT | LCTRL1_CTF_LT | LCTRL1_CRWE_RW |
+			       LCTRL1_CRWF_RW;
+	unsigned long lctrl2 = LCTRL2_LW0EN | LCTRL2_LW0LADC | LCTRL2_SLW0EN;
+	unsigned long start_addr = brk->address & ~HW_BREAKPOINT_ALIGN;
+	unsigned long end_addr = (brk->address + brk->len - 1) | HW_BREAKPOINT_ALIGN;
 
-	dawr = brk->address;
+	if (start_addr == 0)
+		lctrl2 |= LCTRL2_LW0LA_F;
+	else if (end_addr == ~0U)
+		lctrl2 |= LCTRL2_LW0LA_E;
+	else
+		lctrl2 |= LCTRL2_LW0LA_EandF;
 
-	dawrx  = (brk->type & (HW_BRK_TYPE_READ | HW_BRK_TYPE_WRITE)) \
-		                   << (63 - 58); //* read/write bits */
-	dawrx |= ((brk->type & (HW_BRK_TYPE_TRANSLATE)) >> 2) \
-		                   << (63 - 59); //* translate */
-	dawrx |= (brk->type & (HW_BRK_TYPE_PRIV_ALL)) \
-		                   >> 3; //* PRIM bits */
-	/* dawr length is stored in field MDR bits 48:53.  Matches range in
-	   doublewords (64 bits) baised by -1 eg. 0b000000=1DW and
-	   0b111111=64DW.
-	   brk->len is in bytes.
-	   This aligns up to double word size, shifts and does the bias.
-	*/
-	mrd = ((brk->len + 7) >> 3) - 1;
-	dawrx |= (mrd & 0x3f) << (63 - 53);
+	mtspr(SPRN_LCTRL2, 0);
 
-	if (ppc_md.set_dawr)
-		return ppc_md.set_dawr(dawr, dawrx);
-	mtspr(SPRN_DAWR, dawr);
-	mtspr(SPRN_DAWRX, dawrx);
+	if ((brk->type & HW_BRK_TYPE_RDWR) == 0)
+		return 0;
+
+	if ((brk->type & HW_BRK_TYPE_RDWR) == HW_BRK_TYPE_READ)
+		lctrl1 |= LCTRL1_CRWE_RO | LCTRL1_CRWF_RO;
+	if ((brk->type & HW_BRK_TYPE_RDWR) == HW_BRK_TYPE_WRITE)
+		lctrl1 |= LCTRL1_CRWE_WO | LCTRL1_CRWF_WO;
+
+	mtspr(SPRN_CMPE, start_addr - 1);
+	mtspr(SPRN_CMPF, end_addr + 1);
+	mtspr(SPRN_LCTRL1, lctrl1);
+	mtspr(SPRN_LCTRL2, lctrl2);
+
 	return 0;
 }
 
@@ -828,6 +807,8 @@ void __set_breakpoint(struct arch_hw_breakpoint *brk)
 	if (dawr_enabled())
 		// Power8 or later
 		set_dawr(brk);
+	else if (IS_ENABLED(CONFIG_PPC_8xx))
+		set_breakpoint_8xx(brk);
 	else if (!cpu_has_feature(CPU_FTR_ARCH_207S))
 		// Power7 or earlier
 		set_dabr(brk);
@@ -857,6 +838,7 @@ static inline bool hw_brk_match(struct arch_hw_breakpoint *a,
 		return false;
 	if (a->len != b->len)
 		return false;
+	/* no need to check hw_len. it's calculated from address and len */
 	return true;
 }
 
@@ -1302,16 +1284,6 @@ void show_user_instructions(struct pt_regs *regs)
 
 	pc = regs->nip - (NR_INSN_TO_PRINT * 3 / 4 * sizeof(int));
 
-	/*
-	 * Make sure the NIP points at userspace, not kernel text/data or
-	 * elsewhere.
-	 */
-	if (!__access_ok(pc, NR_INSN_TO_PRINT * sizeof(int), USER_DS)) {
-		pr_info("%s[%d]: Bad NIP, not dumping instructions.\n",
-			current->comm, current->pid);
-		return;
-	}
-
 	seq_buf_init(&s, buf, sizeof(buf));
 
 	while (n) {
@@ -1322,7 +1294,7 @@ void show_user_instructions(struct pt_regs *regs)
 		for (i = 0; i < 8 && n; i++, n--, pc += sizeof(int)) {
 			int instr;
 
-			if (probe_kernel_address((const void *)pc, instr)) {
+			if (probe_user_read(&instr, (void __user *)pc, sizeof(instr))) {
 				seq_buf_printf(&s, "XXXXXXXX ");
 				continue;
 			}
@@ -1628,8 +1600,9 @@ static void setup_ksp_vsid(struct task_struct *p, unsigned long sp)
 /*
  * Copy architecture-specific thread state
  */
-int copy_thread(unsigned long clone_flags, unsigned long usp,
-		unsigned long kthread_arg, struct task_struct *p)
+int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
+		unsigned long kthread_arg, struct task_struct *p,
+		unsigned long tls)
 {
 	struct pt_regs *childregs, *kregs;
 	extern void ret_from_fork(void);
@@ -1668,12 +1641,10 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 		p->thread.regs = childregs;
 		childregs->gpr[3] = 0;  /* Result from fork() */
 		if (clone_flags & CLONE_SETTLS) {
-#ifdef CONFIG_PPC64
 			if (!is_32bit_task())
-				childregs->gpr[13] = childregs->gpr[6];
+				childregs->gpr[13] = tls;
 			else
-#endif
-				childregs->gpr[2] = childregs->gpr[6];
+				childregs->gpr[2] = tls;
 		}
 
 		f = ret_from_fork;
@@ -2010,6 +1981,32 @@ static inline int valid_irq_stack(unsigned long sp, struct task_struct *p,
 	return 0;
 }
 
+static inline int valid_emergency_stack(unsigned long sp, struct task_struct *p,
+					unsigned long nbytes)
+{
+#ifdef CONFIG_PPC64
+	unsigned long stack_page;
+	unsigned long cpu = task_cpu(p);
+
+	stack_page = (unsigned long)paca_ptrs[cpu]->emergency_sp - THREAD_SIZE;
+	if (sp >= stack_page && sp <= stack_page + THREAD_SIZE - nbytes)
+		return 1;
+
+# ifdef CONFIG_PPC_BOOK3S_64
+	stack_page = (unsigned long)paca_ptrs[cpu]->nmi_emergency_sp - THREAD_SIZE;
+	if (sp >= stack_page && sp <= stack_page + THREAD_SIZE - nbytes)
+		return 1;
+
+	stack_page = (unsigned long)paca_ptrs[cpu]->mc_emergency_sp - THREAD_SIZE;
+	if (sp >= stack_page && sp <= stack_page + THREAD_SIZE - nbytes)
+		return 1;
+# endif
+#endif
+
+	return 0;
+}
+
+
 int validate_sp(unsigned long sp, struct task_struct *p,
 		       unsigned long nbytes)
 {
@@ -2021,7 +2018,10 @@ int validate_sp(unsigned long sp, struct task_struct *p,
 	if (sp >= stack_page && sp <= stack_page + THREAD_SIZE - nbytes)
 		return 1;
 
-	return valid_irq_stack(sp, p, nbytes);
+	if (valid_irq_stack(sp, p, nbytes))
+		return 1;
+
+	return valid_emergency_stack(sp, p, nbytes);
 }
 
 EXPORT_SYMBOL(validate_sp);
@@ -2074,10 +2074,8 @@ void show_stack(struct task_struct *tsk, unsigned long *stack)
 	int count = 0;
 	int firstframe = 1;
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	struct ftrace_ret_stack *ret_stack;
-	extern void return_to_handler(void);
-	unsigned long rth = (unsigned long)return_to_handler;
-	int curr_frame = 0;
+	unsigned long ret_addr;
+	int ftrace_idx = 0;
 #endif
 
 	if (tsk == NULL)
@@ -2089,7 +2087,7 @@ void show_stack(struct task_struct *tsk, unsigned long *stack)
 	sp = (unsigned long) stack;
 	if (sp == 0) {
 		if (tsk == current)
-			sp = current_stack_pointer();
+			sp = current_stack_frame();
 		else
 			sp = tsk->thread.ksp;
 	}
@@ -2106,15 +2104,10 @@ void show_stack(struct task_struct *tsk, unsigned long *stack)
 		if (!firstframe || ip != lr) {
 			printk("["REG"] ["REG"] %pS", sp, ip, (void *)ip);
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-			if ((ip == rth) && curr_frame >= 0) {
-				ret_stack = ftrace_graph_get_ret_stack(current,
-								  curr_frame++);
-				if (ret_stack)
-					pr_cont(" (%pS)",
-						(void *)ret_stack->ret);
-				else
-					curr_frame = -1;
-			}
+			ret_addr = ftrace_graph_ret_addr(current,
+						&ftrace_idx, ip, stack);
+			if (ret_addr != ip)
+				pr_cont(" (%pS)", (void *)ret_addr);
 #endif
 			if (firstframe)
 				pr_cont(" (unreliable)");

@@ -1673,7 +1673,7 @@ static int rivafb_sync(struct fb_info *info)
  * ------------------------------------------------------------------------- */
 
 /* kernel interface */
-static struct fb_ops riva_fb_ops = {
+static const struct fb_ops riva_fb_ops = {
 	.owner 		= THIS_MODULE,
 	.fb_open	= rivafb_open,
 	.fb_release	= rivafb_release,
@@ -1902,7 +1902,6 @@ static int rivafb_probe(struct pci_dev *pd, const struct pci_device_id *ent)
 
 	info = framebuffer_alloc(sizeof(struct riva_par), &pd->dev);
 	if (!info) {
-		printk (KERN_ERR PFX "could not allocate memory\n");
 		ret = -ENOMEM;
 		goto err_ret;
 	}

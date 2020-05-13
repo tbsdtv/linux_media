@@ -33,9 +33,9 @@ struct apq8016_sbc_data {
 
 static int apq8016_sbc_dai_init(struct snd_soc_pcm_runtime *rtd)
 {
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_dai *codec_dai;
 	struct snd_soc_component *component;
-	struct snd_soc_dai_link *dai_link = rtd->dai_link;
 	struct snd_soc_card *card = rtd->card;
 	struct apq8016_sbc_data *pdata = snd_soc_card_get_drvdata(card);
 	int i, rval;
@@ -90,10 +90,9 @@ static int apq8016_sbc_dai_init(struct snd_soc_pcm_runtime *rtd)
 		pdata->jack_setup = true;
 	}
 
-	for (i = 0 ; i < dai_link->num_codecs; i++) {
-		struct snd_soc_dai *dai = rtd->codec_dais[i];
+	for_each_rtd_codec_dais(rtd, i, codec_dai) {
 
-		component = dai->component;
+		component = codec_dai->component;
 		/* Set default mclk for internal codec */
 		rval = snd_soc_component_set_sysclk(component, 0, 0, DEFAULT_MCLK_RATE,
 				       SND_SOC_CLOCK_IN);
@@ -117,6 +116,7 @@ static struct apq8016_sbc_data *apq8016_sbc_parse_of(struct snd_soc_card *card)
 	struct snd_soc_dai_link *link;
 	struct device_node *np, *codec, *cpu, *node  = dev->of_node;
 	struct apq8016_sbc_data *data;
+	struct snd_soc_dai_link_component *dlc;
 	int ret, num_links;
 
 	ret = snd_soc_of_parse_card_name(card, "qcom,model");
@@ -150,6 +150,16 @@ static struct apq8016_sbc_data *apq8016_sbc_parse_of(struct snd_soc_card *card)
 	link = data->dai_link;
 
 	for_each_child_of_node(node, np) {
+		dlc = devm_kzalloc(dev, 2 * sizeof(*dlc), GFP_KERNEL);
+		if (!dlc)
+			return ERR_PTR(-ENOMEM);
+
+		link->cpus	= &dlc[0];
+		link->platforms	= &dlc[1];
+
+		link->num_cpus		= 1;
+		link->num_platforms	= 1;
+
 		cpu = of_get_child_by_name(np, "cpu");
 		codec = of_get_child_by_name(np, "codec");
 
@@ -159,14 +169,14 @@ static struct apq8016_sbc_data *apq8016_sbc_parse_of(struct snd_soc_card *card)
 			goto error;
 		}
 
-		link->cpu_of_node = of_parse_phandle(cpu, "sound-dai", 0);
-		if (!link->cpu_of_node) {
+		link->cpus->of_node = of_parse_phandle(cpu, "sound-dai", 0);
+		if (!link->cpus->of_node) {
 			dev_err(card->dev, "error getting cpu phandle\n");
 			ret = -EINVAL;
 			goto error;
 		}
 
-		ret = snd_soc_of_get_dai_name(cpu, &link->cpu_dai_name);
+		ret = snd_soc_of_get_dai_name(cpu, &link->cpus->dai_name);
 		if (ret) {
 			dev_err(card->dev, "error getting cpu dai name\n");
 			goto error;
@@ -179,7 +189,7 @@ static struct apq8016_sbc_data *apq8016_sbc_parse_of(struct snd_soc_card *card)
 			goto error;
 		}
 
-		link->platform_of_node = link->cpu_of_node;
+		link->platforms->of_node = link->cpus->of_node;
 		ret = of_property_read_string(np, "link-name", &link->name);
 		if (ret) {
 			dev_err(card->dev, "error getting codec dai_link name\n");

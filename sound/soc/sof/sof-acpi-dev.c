@@ -15,10 +15,7 @@
 #include <sound/soc-acpi.h>
 #include <sound/soc-acpi-intel-match.h>
 #include <sound/sof.h>
-#ifdef CONFIG_X86
-#include <asm/iosf_mbi.h>
-#endif
-
+#include "../intel/common/soc-intel-quirks.h"
 #include "ops.h"
 
 /* platform specific devices */
@@ -32,22 +29,11 @@ static char *tplg_path;
 module_param(tplg_path, charp, 0444);
 MODULE_PARM_DESC(tplg_path, "alternate path for SOF topology.");
 
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_HASWELL)
-static const struct sof_dev_desc sof_acpi_haswell_desc = {
-	.machines = snd_soc_acpi_intel_haswell_machines,
-	.resindex_lpe_base = 0,
-	.resindex_pcicfg_base = 1,
-	.resindex_imr_base = -1,
-	.irqindex_host_ipc = 0,
-	.chip_info = &hsw_chip_info,
-	.default_fw_path = "intel/sof",
-	.default_tplg_path = "intel/sof-tplg",
-	.nocodec_fw_filename = "sof-hsw.ri",
-	.nocodec_tplg_filename = "sof-hsw-nocodec.tplg",
-	.ops = &sof_hsw_ops,
-	.arch_ops = &sof_xtensa_arch_ops
-};
-#endif
+static int sof_acpi_debug;
+module_param_named(sof_acpi_debug, sof_acpi_debug, int, 0444);
+MODULE_PARM_DESC(sof_acpi_debug, "SOF ACPI debug options (0x0 all off)");
+
+#define SOF_ACPI_DISABLE_PM_RUNTIME BIT(0)
 
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_BROADWELL)
 static const struct sof_dev_desc sof_acpi_broadwell_desc = {
@@ -59,10 +45,9 @@ static const struct sof_dev_desc sof_acpi_broadwell_desc = {
 	.chip_info = &bdw_chip_info,
 	.default_fw_path = "intel/sof",
 	.default_tplg_path = "intel/sof-tplg",
-	.nocodec_fw_filename = "sof-bdw.ri",
+	.default_fw_filename = "sof-bdw.ri",
 	.nocodec_tplg_filename = "sof-bdw-nocodec.tplg",
 	.ops = &sof_bdw_ops,
-	.arch_ops = &sof_xtensa_arch_ops
 };
 #endif
 
@@ -78,10 +63,9 @@ static const struct sof_dev_desc sof_acpi_baytrailcr_desc = {
 	.chip_info = &byt_chip_info,
 	.default_fw_path = "intel/sof",
 	.default_tplg_path = "intel/sof-tplg",
-	.nocodec_fw_filename = "sof-byt.ri",
+	.default_fw_filename = "sof-byt.ri",
 	.nocodec_tplg_filename = "sof-byt-nocodec.tplg",
 	.ops = &sof_byt_ops,
-	.arch_ops = &sof_xtensa_arch_ops
 };
 
 static const struct sof_dev_desc sof_acpi_baytrail_desc = {
@@ -93,61 +77,10 @@ static const struct sof_dev_desc sof_acpi_baytrail_desc = {
 	.chip_info = &byt_chip_info,
 	.default_fw_path = "intel/sof",
 	.default_tplg_path = "intel/sof-tplg",
-	.nocodec_fw_filename = "sof-byt.ri",
+	.default_fw_filename = "sof-byt.ri",
 	.nocodec_tplg_filename = "sof-byt-nocodec.tplg",
 	.ops = &sof_byt_ops,
-	.arch_ops = &sof_xtensa_arch_ops
 };
-
-#ifdef CONFIG_X86 /* TODO: move this to common helper */
-
-static bool is_byt_cr(struct platform_device *pdev)
-{
-	struct device *dev = &pdev->dev;
-	int status;
-
-	if (iosf_mbi_available()) {
-		u32 bios_status;
-		status = iosf_mbi_read(BT_MBI_UNIT_PMC, /* 0x04 PUNIT */
-				       MBI_REG_READ, /* 0x10 */
-				       0x006, /* BIOS_CONFIG */
-				       &bios_status);
-
-		if (status) {
-			dev_err(dev, "could not read PUNIT BIOS_CONFIG\n");
-		} else {
-			/* bits 26:27 mirror PMIC options */
-			bios_status = (bios_status >> 26) & 3;
-
-			if (bios_status == 1 || bios_status == 3) {
-				dev_info(dev, "Detected Baytrail-CR platform\n");
-				return true;
-			}
-
-			dev_info(dev, "BYT-CR not detected\n");
-		}
-	} else {
-		dev_info(dev, "IOSF_MBI not available, no BYT-CR detection\n");
-	}
-
-	if (platform_get_resource(pdev, IORESOURCE_IRQ, 5) == NULL) {
-		/*
-		 * Some devices detected as BYT-T have only a single IRQ listed,
-		 * causing platform_get_irq with index 5 to return -ENXIO.
-		 * The correct IRQ in this case is at index 0, as on BYT-CR.
-		 */
-		dev_info(dev, "Falling back to Baytrail-CR platform\n");
-		return true;
-	}
-
-	return false;
-}
-#else
-static int is_byt_cr(struct platform_device *pdev)
-{
-	return 0;
-}
-#endif
 
 static const struct sof_dev_desc sof_acpi_cherrytrail_desc = {
 	.machines = snd_soc_acpi_intel_cherrytrail_machines,
@@ -158,10 +91,9 @@ static const struct sof_dev_desc sof_acpi_cherrytrail_desc = {
 	.chip_info = &cht_chip_info,
 	.default_fw_path = "intel/sof",
 	.default_tplg_path = "intel/sof-tplg",
-	.nocodec_fw_filename = "sof-cht.ri",
+	.default_fw_filename = "sof-cht.ri",
 	.nocodec_tplg_filename = "sof-cht-nocodec.tplg",
 	.ops = &sof_cht_ops,
-	.arch_ops = &sof_xtensa_arch_ops
 };
 
 #endif
@@ -169,11 +101,14 @@ static const struct sof_dev_desc sof_acpi_cherrytrail_desc = {
 static const struct dev_pm_ops sof_acpi_pm = {
 	SET_SYSTEM_SLEEP_PM_OPS(snd_sof_suspend, snd_sof_resume)
 	SET_RUNTIME_PM_OPS(snd_sof_runtime_suspend, snd_sof_runtime_resume,
-			   NULL)
+			   snd_sof_runtime_idle)
 };
 
 static void sof_acpi_probe_complete(struct device *dev)
 {
+	if (sof_acpi_debug & SOF_ACPI_DISABLE_PM_RUNTIME)
+		return;
+
 	/* allow runtime_pm */
 	pm_runtime_set_autosuspend_delay(dev, SND_SOF_SUSPEND_DELAY_MS);
 	pm_runtime_use_autosuspend(dev);
@@ -184,7 +119,6 @@ static int sof_acpi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	const struct sof_dev_desc *desc;
-	struct snd_soc_acpi_mach *mach;
 	struct snd_sof_pdata *sof_pdata;
 	const struct snd_sof_dsp_ops *ops;
 	int ret;
@@ -200,7 +134,7 @@ static int sof_acpi_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_BAYTRAIL)
-	if (desc == &sof_acpi_baytrail_desc && is_byt_cr(pdev))
+	if (desc == &sof_acpi_baytrail_desc && soc_intel_is_byt_cr(pdev))
 		desc = &sof_acpi_baytrailcr_desc;
 #endif
 
@@ -211,35 +145,9 @@ static int sof_acpi_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_FORCE_NOCODEC_MODE)
-	/* force nocodec mode */
-	dev_warn(dev, "Force to use nocodec mode\n");
-	mach = devm_kzalloc(dev, sizeof(*mach), GFP_KERNEL);
-	if (!mach)
-		return -ENOMEM;
-	ret = sof_nocodec_setup(dev, sof_pdata, mach, desc, ops);
-	if (ret < 0)
-		return ret;
-#else
-	/* find machine */
-	mach = snd_soc_acpi_find_machine(desc->machines);
-	if (!mach) {
-		dev_warn(dev, "warning: No matching ASoC machine driver found\n");
-	} else {
-		sof_pdata->fw_filename = mach->sof_fw_filename;
-		sof_pdata->tplg_filename = mach->sof_tplg_filename;
-	}
-#endif
-
-	if (mach) {
-		mach->mach_params.platform = dev_name(dev);
-		mach->mach_params.acpi_ipc_irq_index = desc->irqindex_host_ipc;
-	}
-
-	sof_pdata->machine = mach;
 	sof_pdata->desc = desc;
 	sof_pdata->dev = &pdev->dev;
-	sof_pdata->platform = dev_name(dev);
+	sof_pdata->fw_filename = desc->default_fw_filename;
 
 	/* alternate fw and tplg filenames ? */
 	if (fw_path)
@@ -274,7 +182,8 @@ static int sof_acpi_probe(struct platform_device *pdev)
 
 static int sof_acpi_remove(struct platform_device *pdev)
 {
-	pm_runtime_disable(&pdev->dev);
+	if (!(sof_acpi_debug & SOF_ACPI_DISABLE_PM_RUNTIME))
+		pm_runtime_disable(&pdev->dev);
 
 	/* call sof helper for DSP hardware remove */
 	snd_sof_device_remove(&pdev->dev);
@@ -283,9 +192,6 @@ static int sof_acpi_remove(struct platform_device *pdev)
 }
 
 static const struct acpi_device_id sof_acpi_match[] = {
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_HASWELL)
-	{ "INT33C8", (unsigned long)&sof_acpi_haswell_desc },
-#endif
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_BROADWELL)
 	{ "INT3438", (unsigned long)&sof_acpi_broadwell_desc },
 #endif
@@ -310,3 +216,5 @@ static struct platform_driver snd_sof_acpi_driver = {
 module_platform_driver(snd_sof_acpi_driver);
 
 MODULE_LICENSE("Dual BSD/GPL");
+MODULE_IMPORT_NS(SND_SOC_SOF_BAYTRAIL);
+MODULE_IMPORT_NS(SND_SOC_SOF_BROADWELL);

@@ -241,6 +241,7 @@ static void r3k_flush_cache_page(struct vm_area_struct *vma,
 	int exec = vma->vm_flags & VM_EXEC;
 	struct mm_struct *mm = vma->vm_mm;
 	pgd_t *pgdp;
+	p4d_t *p4dp;
 	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
@@ -253,7 +254,8 @@ static void r3k_flush_cache_page(struct vm_area_struct *vma,
 		return;
 
 	pgdp = pgd_offset(mm, addr);
-	pudp = pud_offset(pgdp, addr);
+	p4dp = p4d_offset(pgdp, addr);
+	pudp = pud_offset(p4dp, addr);
 	pmdp = pmd_offset(pudp, addr);
 	ptep = pte_offset(pmdp, addr);
 
@@ -314,9 +316,9 @@ void r3k_cache_init(void)
 	_dma_cache_wback = r3k_dma_cache_wback_inv;
 	_dma_cache_inv = r3k_dma_cache_wback_inv;
 
-	printk("Primary instruction cache %ldkB, linesize %ld bytes.\n",
+	pr_info("Primary instruction cache %ldkB, linesize %ld bytes.\n",
 		icache_size >> 10, icache_lsize);
-	printk("Primary data cache %ldkB, linesize %ld bytes.\n",
+	pr_info("Primary data cache %ldkB, linesize %ld bytes.\n",
 		dcache_size >> 10, dcache_lsize);
 
 	build_clear_page();

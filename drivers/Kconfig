@@ -30,8 +30,6 @@ source "drivers/block/Kconfig"
 
 source "drivers/nvme/Kconfig"
 
-# misc before ide - BLK_DEV_SGIIOC4 depends on SGI_IOC4
-
 source "drivers/misc/Kconfig"
 
 source "drivers/ide/Kconfig"
@@ -108,8 +106,6 @@ source "drivers/hid/Kconfig"
 
 source "drivers/usb/Kconfig"
 
-source "drivers/uwb/Kconfig"
-
 source "drivers/mmc/Kconfig"
 
 source "drivers/memstick/Kconfig"
@@ -142,9 +138,15 @@ source "drivers/virt/Kconfig"
 
 source "drivers/virtio/Kconfig"
 
+source "drivers/vdpa/Kconfig"
+
+source "drivers/vhost/Kconfig"
+
 source "drivers/hv/Kconfig"
 
 source "drivers/xen/Kconfig"
+
+source "drivers/greybus/Kconfig"
 
 source "drivers/staging/Kconfig"
 
@@ -188,8 +190,6 @@ source "drivers/ipack/Kconfig"
 
 source "drivers/reset/Kconfig"
 
-source "drivers/fmc/Kconfig"
-
 source "drivers/phy/Kconfig"
 
 source "drivers/powercap/Kconfig"
@@ -203,6 +203,8 @@ source "drivers/ras/Kconfig"
 source "drivers/thunderbolt/Kconfig"
 
 source "drivers/android/Kconfig"
+
+source "drivers/gpu/trace/Kconfig"
 
 source "drivers/nvdimm/Kconfig"
 
@@ -232,4 +234,5 @@ source "drivers/interconnect/Kconfig"
 
 source "drivers/counter/Kconfig"
 
+source "drivers/most/Kconfig"
 endmenu

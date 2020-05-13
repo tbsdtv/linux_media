@@ -89,6 +89,7 @@ static const struct nft_chain_type nft_chain_nat_inet = {
 	.name		= "nat",
 	.type		= NFT_CHAIN_T_NAT,
 	.family		= NFPROTO_INET,
+	.owner		= THIS_MODULE,
 	.hook_mask	= (1 << NF_INET_PRE_ROUTING) |
 			  (1 << NF_INET_LOCAL_IN) |
 			  (1 << NF_INET_LOCAL_OUT) |
@@ -141,4 +142,7 @@ MODULE_ALIAS_NFT_CHAIN(AF_INET, "nat");
 #endif
 #ifdef CONFIG_NF_TABLES_IPV6
 MODULE_ALIAS_NFT_CHAIN(AF_INET6, "nat");
+#endif
+#ifdef CONFIG_NF_TABLES_INET
+MODULE_ALIAS_NFT_CHAIN(1, "nat");	/* NFPROTO_INET */
 #endif

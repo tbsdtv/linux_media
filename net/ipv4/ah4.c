@@ -107,7 +107,7 @@ static int ip_clear_mutable_options(const struct iphdr *iph, __be32 *daddr)
 			if (optlen < 6)
 				return -EINVAL;
 			memcpy(daddr, optptr+optlen-4, 4);
-			/* Fall through */
+			fallthrough;
 		default:
 			memset(optptr, 0, optlen);
 		}
@@ -590,8 +590,7 @@ static void __exit ah4_fini(void)
 {
 	if (xfrm4_protocol_deregister(&ah4_protocol, IPPROTO_AH) < 0)
 		pr_info("%s: can't remove protocol\n", __func__);
-	if (xfrm_unregister_type(&ah_type, AF_INET) < 0)
-		pr_info("%s: can't remove xfrm type\n", __func__);
+	xfrm_unregister_type(&ah_type, AF_INET);
 }
 
 module_init(ah4_init);

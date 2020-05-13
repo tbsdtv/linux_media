@@ -115,7 +115,7 @@ static int stid135_probe(struct stv *state)
 	enum device_cut_id cut_id;
 	int i;
 
-	//dev_warn(&state->base->i2c->dev, "%s\n", FE_STiD135_GetRevision());
+	dev_warn(&state->base->i2c->dev, "%s\n", FE_STiD135_GetRevision());
 
 	strcpy(init_params.demod_name,"STiD135");
 	init_params.pI2CHost		=	state->base;
@@ -165,10 +165,10 @@ static int stid135_probe(struct stv *state)
 
 	if (state->base->ts_mode == TS_STFE) {
 		dev_warn(&state->base->i2c->dev, "%s: 8xTS to STFE mode init.\n", __func__);
-		for(i=0;i<8;i++) {
-			err |= fe_stid135_set_ts_parallel_serial(state->base->handle, i+1, FE_TS_PARALLEL_ON_TSOUT_0);
-			err |= fe_stid135_set_maxllr_rate(state->base->handle, i+1, 260);
-		}
+	//	for(i=0;i<8;i++) {
+			err |= fe_stid135_set_ts_parallel_serial(state->base->handle, FE_SAT_DEMOD_1, FE_TS_PARALLEL_ON_TSOUT_0);
+		//	err |= fe_stid135_set_maxllr_rate(state->base->handle, i+1, 260);
+	//	}
 		err |= fe_stid135_enable_stfe(state->base->handle,FE_STFE_OUTPUT0);
 		err |= fe_stid135_set_stfe(state->base->handle, FE_STFE_TAGGING_MERGING_MODE, FE_STFE_INPUT1 |
 						FE_STFE_INPUT2 |FE_STFE_INPUT3 |FE_STFE_INPUT4| FE_STFE_INPUT5 |
@@ -182,9 +182,9 @@ static int stid135_probe(struct stv *state)
 	} else {
 		dev_warn(&state->base->i2c->dev, "%s: 2xTS parallel mode init.\n", __func__);
 		err |= fe_stid135_set_ts_parallel_serial(state->base->handle, FE_SAT_DEMOD_3, FE_TS_PARALLEL_PUNCT_CLOCK);
-		err |= fe_stid135_set_maxllr_rate(state->base->handle, FE_SAT_DEMOD_3, 260);
+		//err |= fe_stid135_set_maxllr_rate(state->base->handle, FE_SAT_DEMOD_3, 260);
 		err |= fe_stid135_set_ts_parallel_serial(state->base->handle, FE_SAT_DEMOD_1, FE_TS_PARALLEL_PUNCT_CLOCK);
-		err |= fe_stid135_set_maxllr_rate(state->base->handle, FE_SAT_DEMOD_1, 260);
+		//err |= fe_stid135_set_maxllr_rate(state->base->handle, FE_SAT_DEMOD_1, 260);
 	}
 
 	if (state->base->mode == 0) {
@@ -260,7 +260,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	u32 pls_mode, pls_code;
 	s32 rf_power;
 
-	dev_warn(&state->base->i2c->dev,
+	dev_dbg(&state->base->i2c->dev,
 			"delivery_system=%u modulation=%u frequency=%u symbol_rate=%u inversion=%u stream_id=%d\n",
 			p->delivery_system, p->modulation, p->frequency,
 			p->symbol_rate, p->inversion, p->stream_id);
@@ -315,7 +315,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	}
 
 	/* Set PLS before search */
-	dev_warn(&state->base->i2c->dev, "%s: set pls_mode %d, pls_code %d !\n", __func__, pls_mode, pls_code);
+	dev_dbg(&state->base->i2c->dev, "%s: set pls_mode %d, pls_code %d !\n", __func__, pls_mode, pls_code);
 	err |= fe_stid135_set_pls(state->base->handle, state->nr + 1, pls_mode, pls_code);
 	
 	if (err != FE_LLA_NO_ERROR)
@@ -335,7 +335,10 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	}
 
 	if (search_results.locked){
-		dev_warn(&state->base->i2c->dev, "%s: locked !\n", __func__);
+		dev_dbg(&state->base->i2c->dev, "%s: locked !\n", __func__);
+		//set maxllr,when the  demod locked ,allocation of resources
+		err |= fe_stid135_set_maxllr_rate(state->base->handle, state->nr +1, 180);
+		//for tbs6912
 		state->newTP = true;
 		state->loops = 15;
 		if(state->base->set_TSsampling)
@@ -343,15 +346,15 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 		}
 	else {
 		err |= fe_stid135_get_band_power_demod_not_locked(state->base->handle, state->nr + 1, &rf_power);
-		dev_warn(&state->base->i2c->dev, "%s: not locked, band rf_power %d dBm !\n", __func__, rf_power / 1000);
+		dev_dbg(&state->base->i2c->dev, "%s: not locked, band rf_power %d dBm !\n", __func__, rf_power / 1000);
 	}
 
 	/* Set ISI before search */
 	if (p->stream_id != NO_STREAM_ID_FILTER) {
-		dev_warn(&state->base->i2c->dev, "%s: set ISI %d !\n", __func__, p->stream_id & 0xFF);
+		dev_dbg(&state->base->i2c->dev, "%s: set ISI %d !\n", __func__, p->stream_id & 0xFF);
 		err |= fe_stid135_set_mis_filtering(state->base->handle, state->nr + 1, TRUE, p->stream_id & 0xFF, 0xFF);
 	} else {
-		dev_warn(&state->base->i2c->dev, "%s: disable ISI filtering !\n", __func__);
+		dev_dbg(&state->base->i2c->dev, "%s: disable ISI filtering !\n", __func__);
 		err |= fe_stid135_set_mis_filtering(state->base->handle, state->nr + 1, FALSE, 0, 0xFF);				
 	}
 	if (err != FE_LLA_NO_ERROR)
@@ -569,6 +572,9 @@ static int stid135_read_status(struct dvb_frontend *fe, enum fe_status *status)
 		*status |= FE_HAS_SIGNAL;
 
 		err = fe_stid135_get_band_power_demod_not_locked(state->base->handle, state->nr + 1, &state->signal_info.power);
+		// if unlocked, set to lowest resource..
+		err |= fe_stid135_set_maxllr_rate(state->base->handle, state->nr +1, 90);
+		
 		mutex_unlock(&state->base->status_lock);
 		if (err != FE_LLA_NO_ERROR) {
 			dev_err(&state->base->i2c->dev, "fe_stid135_get_band_power_demod_not_locked error\n");
@@ -612,7 +618,7 @@ static int stid135_tune(struct dvb_frontend *fe, bool re_tune,
 }
 
 
-static int stid135_get_algo(struct dvb_frontend *fe)
+static enum dvbfe_algo stid135_get_algo(struct dvb_frontend *fe)
 {
 	return DVBFE_ALGO_HW;
 }
@@ -667,8 +673,10 @@ static int stid135_send_master_cmd(struct dvb_frontend *fe,
 	struct stv *state = fe->demodulator_priv;
 	fe_lla_error_t err = FE_LLA_NO_ERROR;
 
+#if 0
 	if (state->base->mode == 0)
 		return 0;
+#endif
 
 	mutex_lock(&state->base->status_lock);
 	err |= fe_stid135_diseqc_init(state->base->handle, state->rf_in + 1, FE_SAT_DISEQC_2_3_PWM);
@@ -687,8 +695,10 @@ static int stid135_recv_slave_reply(struct dvb_frontend *fe,
 	struct stv *state = fe->demodulator_priv;
 	fe_lla_error_t err = FE_LLA_NO_ERROR;
 
+#if 0
 	if (state->base->mode == 0)
 		return 0;
+#endif
 
 	mutex_lock(&state->base->status_lock);
 	err = fe_stid135_diseqc_receive(state->base->handle, reply->msg, &reply->msg_len);
@@ -895,6 +905,9 @@ struct dvb_frontend *stid135_attach(struct i2c_adapter *i2c,
 	if (rfsource > 0 && rfsource < 5)
 		rf_in = rfsource - 1;
 	state->rf_in = base->mode ? rf_in : 0;
+
+	if (base->mode == 2)
+		state->rf_in = 3;
 
 	dev_info(&i2c->dev, "%s demod found at adr %02X on %s\n",
 		 state->fe.ops.info.name, cfg->adr, dev_name(&i2c->dev));

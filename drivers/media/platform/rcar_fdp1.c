@@ -2122,6 +2122,7 @@ static int fdp1_open(struct file *file)
 	if (ctx->hdl.error) {
 		ret = ctx->hdl.error;
 		v4l2_ctrl_handler_free(&ctx->hdl);
+		kfree(ctx);
 		goto done;
 	}
 
@@ -2306,7 +2307,7 @@ static int fdp1_probe(struct platform_device *pdev)
 		fdp1->fcp = rcar_fcp_get(fcp_node);
 		of_node_put(fcp_node);
 		if (IS_ERR(fdp1->fcp)) {
-			dev_err(&pdev->dev, "FCP not found (%ld)\n",
+			dev_dbg(&pdev->dev, "FCP not found (%ld)\n",
 				PTR_ERR(fdp1->fcp));
 			return PTR_ERR(fdp1->fcp);
 		}
@@ -2343,7 +2344,7 @@ static int fdp1_probe(struct platform_device *pdev)
 	video_set_drvdata(vfd, fdp1);
 	strscpy(vfd->name, fdp1_videodev.name, sizeof(vfd->name));
 
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 0);
+	ret = video_register_device(vfd, VFL_TYPE_VIDEO, 0);
 	if (ret) {
 		v4l2_err(&fdp1->v4l2_dev, "Failed to register video device\n");
 		goto release_m2m;
@@ -2368,7 +2369,7 @@ static int fdp1_probe(struct platform_device *pdev)
 		dprintk(fdp1, "FDP1 Version R-Car H3\n");
 		break;
 	case FD1_IP_M3N:
-		dprintk(fdp1, "FDP1 Version R-Car M3N\n");
+		dprintk(fdp1, "FDP1 Version R-Car M3-N\n");
 		break;
 	case FD1_IP_E3:
 		dprintk(fdp1, "FDP1 Version R-Car E3\n");

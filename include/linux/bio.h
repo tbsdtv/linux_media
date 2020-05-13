@@ -102,9 +102,23 @@ static inline void *bio_data(struct bio *bio)
 	return NULL;
 }
 
-static inline bool bio_full(struct bio *bio)
+/**
+ * bio_full - check if the bio is full
+ * @bio:	bio to check
+ * @len:	length of one segment to be added
+ *
+ * Return true if @bio is full and one segment with @len bytes can't be
+ * added to the bio, otherwise return false
+ */
+static inline bool bio_full(struct bio *bio, unsigned len)
 {
-	return bio->bi_vcnt >= bio->bi_max_vecs;
+	if (bio->bi_vcnt >= bio->bi_max_vecs)
+		return true;
+
+	if (bio->bi_iter.bi_size > UINT_MAX - len)
+		return true;
+
+	return false;
 }
 
 static inline bool bio_next_segment(const struct bio *bio,
@@ -305,7 +319,7 @@ struct bio_integrity_payload {
 	struct work_struct	bip_work;	/* I/O completion */
 
 	struct bio_vec		*bip_vec;
-	struct bio_vec		bip_inline_vecs[0];/* embedded bvec array */
+	struct bio_vec		bip_inline_vecs[];/* embedded bvec array */
 };
 
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
@@ -408,7 +422,6 @@ static inline void bio_wouldblock_error(struct bio *bio)
 }
 
 struct request_queue;
-extern int bio_phys_segments(struct request_queue *, struct bio *);
 
 extern int submit_bio_wait(struct bio *bio);
 extern void bio_advance(struct bio *, unsigned);
@@ -423,18 +436,11 @@ extern int bio_add_page(struct bio *, struct page *, unsigned int,unsigned int);
 extern int bio_add_pc_page(struct request_queue *, struct bio *, struct page *,
 			   unsigned int, unsigned int);
 bool __bio_try_merge_page(struct bio *bio, struct page *page,
-		unsigned int len, unsigned int off, bool same_page);
+		unsigned int len, unsigned int off, bool *same_page);
 void __bio_add_page(struct bio *bio, struct page *page,
 		unsigned int len, unsigned int off);
 int bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter);
-struct rq_map_data;
-extern struct bio *bio_map_user_iov(struct request_queue *,
-				    struct iov_iter *, gfp_t);
-extern void bio_unmap_user(struct bio *);
-extern struct bio *bio_map_kern(struct request_queue *, void *, unsigned int,
-				gfp_t);
-extern struct bio *bio_copy_kern(struct request_queue *, void *, unsigned int,
-				 gfp_t, int);
+void bio_release_pages(struct bio *bio, bool mark_dirty);
 extern void bio_set_pages_dirty(struct bio *bio);
 extern void bio_check_pages_dirty(struct bio *bio);
 
@@ -444,29 +450,14 @@ void generic_end_io_acct(struct request_queue *q, int op,
 				struct hd_struct *part,
 				unsigned long start_time);
 
-#ifndef ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE
-# error	"You should define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE for your platform"
-#endif
-#if ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE
-extern void bio_flush_dcache_pages(struct bio *bi);
-#else
-static inline void bio_flush_dcache_pages(struct bio *bi)
-{
-}
-#endif
-
 extern void bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
 			       struct bio *src, struct bvec_iter *src_iter);
 extern void bio_copy_data(struct bio *dst, struct bio *src);
 extern void bio_list_copy_data(struct bio *dst, struct bio *src);
 extern void bio_free_pages(struct bio *bio);
-
-extern struct bio *bio_copy_user_iov(struct request_queue *,
-				     struct rq_map_data *,
-				     struct iov_iter *,
-				     gfp_t);
-extern int bio_uncopy_user(struct bio *);
 void zero_fill_bio_iter(struct bio *bio, struct bvec_iter iter);
+void bio_truncate(struct bio *bio, unsigned new_size);
+void guard_bio_eod(struct bio *bio);
 
 static inline void zero_fill_bio(struct bio *bio)
 {

@@ -218,6 +218,12 @@ static void dpp1_dscl_set_lb(
 			INTERLEAVE_EN, lb_params->interleave_en, /* Interleave source enable */
 			LB_DATA_FORMAT__ALPHA_EN, lb_params->alpha_en); /* Alpha enable */
 	}
+	else {
+		/* DSCL caps: pixel data processed in float format */
+		REG_SET_2(LB_DATA_FORMAT, 0,
+			INTERLEAVE_EN, lb_params->interleave_en, /* Interleave source enable */
+			LB_DATA_FORMAT__ALPHA_EN, lb_params->alpha_en); /* Alpha enable */
+	}
 
 	REG_SET_2(LB_MEMORY_CTRL, 0,
 		MEMORY_CONFIG, mem_size_config,

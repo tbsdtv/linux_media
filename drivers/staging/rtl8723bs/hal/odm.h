@@ -849,7 +849,7 @@ typedef struct _ODM_PATH_DIVERSITY_ {
 	u32 PathB_Cnt[ODM_ASSOCIATE_ENTRY_NUM];
 } PATHDIV_T, *pPATHDIV_T;
 
-typedef enum _BASEBAND_CONFIG_PHY_REG_PG_VALUE_TYPE{
+typedef enum _BASEBAND_CONFIG_PHY_REG_PG_VALUE_TYPE {
 	PHY_REG_PG_RELATIVE_VALUE = 0,
 	PHY_REG_PG_EXACT_VALUE = 1
 } PHY_REG_PG_TYPE;
@@ -1364,10 +1364,6 @@ extern  u32 TxScalingTable_Jaguar[TXSCALE_TABLE_SIZE];
 /*  with original RSSI to determine if it is necessary to switch antenna. */
 #define SWAW_STEP_PEAK		0
 #define SWAW_STEP_DETERMINE	1
-
-/* Remove DIG by yuchen */
-
-void ODM_SetAntenna(PDM_ODM_T pDM_Odm, u8 Antenna);
 
 /* Remove BB power saving by Yuchen */
 

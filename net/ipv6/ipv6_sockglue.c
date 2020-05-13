@@ -183,9 +183,15 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 					retv = -EBUSY;
 					break;
 				}
-			} else if (sk->sk_protocol != IPPROTO_TCP)
+			} else if (sk->sk_protocol == IPPROTO_TCP) {
+				if (sk->sk_prot != &tcpv6_prot) {
+					retv = -EBUSY;
+					break;
+				}
 				break;
-
+			} else {
+				break;
+			}
 			if (sk->sk_state != TCP_ESTABLISHED) {
 				retv = -ENOTCONN;
 				break;
@@ -363,8 +369,8 @@ static int do_ipv6_setsockopt(struct sock *sk, int level, int optname,
 		break;
 
 	case IPV6_TRANSPARENT:
-		if (valbool && !ns_capable(net->user_ns, CAP_NET_ADMIN) &&
-		    !ns_capable(net->user_ns, CAP_NET_RAW)) {
+		if (valbool && !ns_capable(net->user_ns, CAP_NET_RAW) &&
+		    !ns_capable(net->user_ns, CAP_NET_ADMIN)) {
 			retv = -EPERM;
 			break;
 		}

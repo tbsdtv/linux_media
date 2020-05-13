@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
 cpustat
 fds_example
 hbm
+ibumad
 lathist
 lwt_len_hist
 map_perf_test

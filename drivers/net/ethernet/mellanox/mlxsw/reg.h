@@ -621,7 +621,7 @@ static inline void mlxsw_reg_sfn_pack(char *payload)
 {
 	MLXSW_REG_ZERO(sfn, payload);
 	mlxsw_reg_sfn_swid_set(payload, 0);
-	mlxsw_reg_sfn_end_set(payload, 1);
+	mlxsw_reg_sfn_end_set(payload, 0);
 	mlxsw_reg_sfn_num_rec_set(payload, MLXSW_REG_SFN_REC_MAX_COUNT);
 }
 
@@ -997,7 +997,7 @@ static inline void mlxsw_reg_spaft_pack(char *payload, u8 local_port,
 	MLXSW_REG_ZERO(spaft, payload);
 	mlxsw_reg_spaft_local_port_set(payload, local_port);
 	mlxsw_reg_spaft_allow_untagged_set(payload, allow_untagged);
-	mlxsw_reg_spaft_allow_prio_tagged_set(payload, true);
+	mlxsw_reg_spaft_allow_prio_tagged_set(payload, allow_untagged);
 	mlxsw_reg_spaft_allow_tagged_set(payload, true);
 }
 
@@ -3296,6 +3296,12 @@ MLXSW_ITEM32(reg, qpcr, g, 0x00, 14, 2);
  */
 MLXSW_ITEM32(reg, qpcr, pid, 0x00, 0, 14);
 
+/* reg_qpcr_clear_counter
+ * Clear counters.
+ * Access: OP
+ */
+MLXSW_ITEM32(reg, qpcr, clear_counter, 0x04, 31, 1);
+
 /* reg_qpcr_color_aware
  * Is the policer aware of colors.
  * Must be 0 (unaware) for cpu port.
@@ -3393,6 +3399,17 @@ enum mlxsw_reg_qpcr_action {
  */
 MLXSW_ITEM32(reg, qpcr, violate_action, 0x18, 0, 4);
 
+/* reg_qpcr_violate_count
+ * Counts the number of times violate_action happened on this PID.
+ * Access: RW
+ */
+MLXSW_ITEM64(reg, qpcr, violate_count, 0x20, 0, 64);
+
+#define MLXSW_REG_QPCR_LOWEST_CIR	1
+#define MLXSW_REG_QPCR_HIGHEST_CIR	(2 * 1000 * 1000 * 1000) /* 2Gpps */
+#define MLXSW_REG_QPCR_LOWEST_CBS	4
+#define MLXSW_REG_QPCR_HIGHEST_CBS	24
+
 static inline void mlxsw_reg_qpcr_pack(char *payload, u16 pid,
 				       enum mlxsw_reg_qpcr_ir_units ir_units,
 				       bool bytes, u32 cir, u16 cbs)
@@ -3477,10 +3494,10 @@ MLXSW_REG_DEFINE(qeec, MLXSW_REG_QEEC_ID, MLXSW_REG_QEEC_LEN);
 MLXSW_ITEM32(reg, qeec, local_port, 0x00, 16, 8);
 
 enum mlxsw_reg_qeec_hr {
-	MLXSW_REG_QEEC_HIERARCY_PORT,
-	MLXSW_REG_QEEC_HIERARCY_GROUP,
-	MLXSW_REG_QEEC_HIERARCY_SUBGROUP,
-	MLXSW_REG_QEEC_HIERARCY_TC,
+	MLXSW_REG_QEEC_HR_PORT,
+	MLXSW_REG_QEEC_HR_GROUP,
+	MLXSW_REG_QEEC_HR_SUBGROUP,
+	MLXSW_REG_QEEC_HR_TC,
 };
 
 /* reg_qeec_element_hierarchy
@@ -3514,6 +3531,18 @@ MLXSW_ITEM32(reg, qeec, next_element_index, 0x08, 0, 8);
  * Access: RW
  */
 MLXSW_ITEM32(reg, qeec, mise, 0x0C, 31, 1);
+
+/* reg_qeec_ptps
+ * PTP shaper
+ * 0: regular shaper mode
+ * 1: PTP oriented shaper
+ * Allowed only for hierarchy 0
+ * Not supported for CPU port
+ * Note that ptps mode may affect the shaper rates of all hierarchies
+ * Supported only on Spectrum-1
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qeec, ptps, 0x0C, 29, 1);
 
 enum {
 	MLXSW_REG_QEEC_BYTES_MODE,
@@ -3551,8 +3580,8 @@ MLXSW_ITEM32(reg, qeec, min_shaper_rate, 0x0C, 0, 28);
  */
 MLXSW_ITEM32(reg, qeec, mase, 0x10, 31, 1);
 
-/* A large max rate will disable the max shaper. */
-#define MLXSW_REG_QEEC_MAS_DIS	200000000	/* Kbps */
+/* The largest max shaper value possible to disable the shaper. */
+#define MLXSW_REG_QEEC_MAS_DIS	((1u << 31) - 1)	/* Kbps */
 
 /* reg_qeec_max_shaper_rate
  * Max shaper information rate.
@@ -3560,7 +3589,7 @@ MLXSW_ITEM32(reg, qeec, mase, 0x10, 31, 1);
  * When in bytes mode, value is specified in units of 1000bps.
  * Access: RW
  */
-MLXSW_ITEM32(reg, qeec, max_shaper_rate, 0x10, 0, 28);
+MLXSW_ITEM32(reg, qeec, max_shaper_rate, 0x10, 0, 31);
 
 /* reg_qeec_de
  * DWRR configuration enable. Enables configuration of the dwrr and
@@ -3590,6 +3619,21 @@ MLXSW_ITEM32(reg, qeec, dwrr, 0x18, 15, 1);
  */
 MLXSW_ITEM32(reg, qeec, dwrr_weight, 0x18, 0, 8);
 
+/* reg_qeec_max_shaper_bs
+ * Max shaper burst size
+ * Burst size is 2^max_shaper_bs * 512 bits
+ * For Spectrum-1: Range is: 5..25
+ * For Spectrum-2: Range is: 11..25
+ * Reserved when ptps = 1
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qeec, max_shaper_bs, 0x1C, 0, 6);
+
+#define MLXSW_REG_QEEC_HIGHEST_SHAPER_BS	25
+#define MLXSW_REG_QEEC_LOWEST_SHAPER_BS_SP1	5
+#define MLXSW_REG_QEEC_LOWEST_SHAPER_BS_SP2	11
+#define MLXSW_REG_QEEC_LOWEST_SHAPER_BS_SP3	5
+
 static inline void mlxsw_reg_qeec_pack(char *payload, u8 local_port,
 				       enum mlxsw_reg_qeec_hr hr, u8 index,
 				       u8 next_index)
@@ -3599,6 +3643,15 @@ static inline void mlxsw_reg_qeec_pack(char *payload, u8 local_port,
 	mlxsw_reg_qeec_element_hierarchy_set(payload, hr);
 	mlxsw_reg_qeec_element_index_set(payload, index);
 	mlxsw_reg_qeec_next_element_index_set(payload, next_index);
+}
+
+static inline void mlxsw_reg_qeec_ptps_pack(char *payload, u8 local_port,
+					    bool ptps)
+{
+	MLXSW_REG_ZERO(qeec, payload);
+	mlxsw_reg_qeec_local_port_set(payload, local_port);
+	mlxsw_reg_qeec_element_hierarchy_set(payload, MLXSW_REG_QEEC_HR_PORT);
+	mlxsw_reg_qeec_ptps_set(payload, ptps);
 }
 
 /* QRWE - QoS ReWrite Enable
@@ -3727,6 +3780,38 @@ mlxsw_reg_qpdsm_prio_pack(char *payload, unsigned short prio, u8 dscp)
 	mlxsw_reg_qpdsm_prio_entry_color2_dscp_set(payload, prio, dscp);
 }
 
+/* QPDP - QoS Port DSCP to Priority Mapping Register
+ * -------------------------------------------------
+ * This register controls the port default Switch Priority and Color. The
+ * default Switch Priority and Color are used for frames where the trust state
+ * uses default values. All member ports of a LAG should be configured with the
+ * same default values.
+ */
+#define MLXSW_REG_QPDP_ID 0x4007
+#define MLXSW_REG_QPDP_LEN 0x8
+
+MLXSW_REG_DEFINE(qpdp, MLXSW_REG_QPDP_ID, MLXSW_REG_QPDP_LEN);
+
+/* reg_qpdp_local_port
+ * Local Port. Supported for data packets from CPU port.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, qpdp, local_port, 0x00, 16, 8);
+
+/* reg_qpdp_switch_prio
+ * Default port Switch Priority (default 0)
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpdp, switch_prio, 0x04, 0, 4);
+
+static inline void mlxsw_reg_qpdp_pack(char *payload, u8 local_port,
+				       u8 switch_prio)
+{
+	MLXSW_REG_ZERO(qpdp, payload);
+	mlxsw_reg_qpdp_local_port_set(payload, local_port);
+	mlxsw_reg_qpdp_switch_prio_set(payload, switch_prio);
+}
+
 /* QPDPM - QoS Port DSCP to Priority Mapping Register
  * --------------------------------------------------
  * This register controls the mapping from DSCP field to
@@ -3814,6 +3899,112 @@ mlxsw_reg_qtctm_pack(char *payload, u8 local_port, bool mc)
 	mlxsw_reg_qtctm_mc_set(payload, mc);
 }
 
+/* QPSC - QoS PTP Shaper Configuration Register
+ * --------------------------------------------
+ * The QPSC allows advanced configuration of the shapers when QEEC.ptps=1.
+ * Supported only on Spectrum-1.
+ */
+#define MLXSW_REG_QPSC_ID 0x401B
+#define MLXSW_REG_QPSC_LEN 0x28
+
+MLXSW_REG_DEFINE(qpsc, MLXSW_REG_QPSC_ID, MLXSW_REG_QPSC_LEN);
+
+enum mlxsw_reg_qpsc_port_speed {
+	MLXSW_REG_QPSC_PORT_SPEED_100M,
+	MLXSW_REG_QPSC_PORT_SPEED_1G,
+	MLXSW_REG_QPSC_PORT_SPEED_10G,
+	MLXSW_REG_QPSC_PORT_SPEED_25G,
+};
+
+/* reg_qpsc_port_speed
+ * Port speed.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, qpsc, port_speed, 0x00, 0, 4);
+
+/* reg_qpsc_shaper_time_exp
+ * The base-time-interval for updating the shapers tokens (for all hierarchies).
+ * shaper_update_rate = 2 ^ shaper_time_exp * (1 + shaper_time_mantissa) * 32nSec
+ * shaper_rate = 64bit * shaper_inc / shaper_update_rate
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpsc, shaper_time_exp, 0x04, 16, 4);
+
+/* reg_qpsc_shaper_time_mantissa
+ * The base-time-interval for updating the shapers tokens (for all hierarchies).
+ * shaper_update_rate = 2 ^ shaper_time_exp * (1 + shaper_time_mantissa) * 32nSec
+ * shaper_rate = 64bit * shaper_inc / shaper_update_rate
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpsc, shaper_time_mantissa, 0x04, 0, 5);
+
+/* reg_qpsc_shaper_inc
+ * Number of tokens added to shaper on each update.
+ * Units of 8B.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpsc, shaper_inc, 0x08, 0, 5);
+
+/* reg_qpsc_shaper_bs
+ * Max shaper Burst size.
+ * Burst size is 2 ^ max_shaper_bs * 512 [bits]
+ * Range is: 5..25 (from 2KB..2GB)
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpsc, shaper_bs, 0x0C, 0, 6);
+
+/* reg_qpsc_ptsc_we
+ * Write enable to port_to_shaper_credits.
+ * Access: WO
+ */
+MLXSW_ITEM32(reg, qpsc, ptsc_we, 0x10, 31, 1);
+
+/* reg_qpsc_port_to_shaper_credits
+ * For split ports: range 1..57
+ * For non-split ports: range 1..112
+ * Written only when ptsc_we is set.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpsc, port_to_shaper_credits, 0x10, 0, 8);
+
+/* reg_qpsc_ing_timestamp_inc
+ * Ingress timestamp increment.
+ * 2's complement.
+ * The timestamp of MTPPTR at ingress will be incremented by this value. Global
+ * value for all ports.
+ * Same units as used by MTPPTR.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpsc, ing_timestamp_inc, 0x20, 0, 32);
+
+/* reg_qpsc_egr_timestamp_inc
+ * Egress timestamp increment.
+ * 2's complement.
+ * The timestamp of MTPPTR at egress will be incremented by this value. Global
+ * value for all ports.
+ * Same units as used by MTPPTR.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, qpsc, egr_timestamp_inc, 0x24, 0, 32);
+
+static inline void
+mlxsw_reg_qpsc_pack(char *payload, enum mlxsw_reg_qpsc_port_speed port_speed,
+		    u8 shaper_time_exp, u8 shaper_time_mantissa, u8 shaper_inc,
+		    u8 shaper_bs, u8 port_to_shaper_credits,
+		    int ing_timestamp_inc, int egr_timestamp_inc)
+{
+	MLXSW_REG_ZERO(qpsc, payload);
+	mlxsw_reg_qpsc_port_speed_set(payload, port_speed);
+	mlxsw_reg_qpsc_shaper_time_exp_set(payload, shaper_time_exp);
+	mlxsw_reg_qpsc_shaper_time_mantissa_set(payload, shaper_time_mantissa);
+	mlxsw_reg_qpsc_shaper_inc_set(payload, shaper_inc);
+	mlxsw_reg_qpsc_shaper_bs_set(payload, shaper_bs);
+	mlxsw_reg_qpsc_ptsc_we_set(payload, true);
+	mlxsw_reg_qpsc_port_to_shaper_credits_set(payload, port_to_shaper_credits);
+	mlxsw_reg_qpsc_ing_timestamp_inc_set(payload, ing_timestamp_inc);
+	mlxsw_reg_qpsc_egr_timestamp_inc_set(payload, egr_timestamp_inc);
+}
+
 /* PMLP - Ports Module to Local Port Register
  * ------------------------------------------
  * Configures the assignment of modules to local ports.
@@ -3841,6 +4032,7 @@ MLXSW_ITEM32(reg, pmlp, local_port, 0x00, 16, 8);
  * 1 - Lane 0 is used.
  * 2 - Lanes 0 and 1 are used.
  * 4 - Lanes 0, 1, 2 and 3 are used.
+ * 8 - Lanes 0-7 are used.
  * Access: RW
  */
 MLXSW_ITEM32(reg, pmlp, width, 0x00, 0, 8);
@@ -3855,14 +4047,14 @@ MLXSW_ITEM32_INDEXED(reg, pmlp, module, 0x04, 0, 8, 0x04, 0x00, false);
  * Tx Lane. When rxtx field is cleared, this field is used for Rx as well.
  * Access: RW
  */
-MLXSW_ITEM32_INDEXED(reg, pmlp, tx_lane, 0x04, 16, 2, 0x04, 0x00, false);
+MLXSW_ITEM32_INDEXED(reg, pmlp, tx_lane, 0x04, 16, 4, 0x04, 0x00, false);
 
 /* reg_pmlp_rx_lane
  * Rx Lane. When rxtx field is cleared, this field is ignored and Rx lane is
  * equal to Tx lane.
  * Access: RW
  */
-MLXSW_ITEM32_INDEXED(reg, pmlp, rx_lane, 0x04, 24, 2, 0x04, 0x00, false);
+MLXSW_ITEM32_INDEXED(reg, pmlp, rx_lane, 0x04, 24, 4, 0x04, 0x00, false);
 
 static inline void mlxsw_reg_pmlp_pack(char *payload, u8 local_port)
 {
@@ -3983,6 +4175,7 @@ MLXSW_ITEM32(reg, ptys, an_status, 0x04, 28, 4);
 #define MLXSW_REG_PTYS_EXT_ETH_SPEED_CAUI_4_100GBASE_CR4_KR4		BIT(9)
 #define MLXSW_REG_PTYS_EXT_ETH_SPEED_100GAUI_2_100GBASE_CR2_KR2		BIT(10)
 #define MLXSW_REG_PTYS_EXT_ETH_SPEED_200GAUI_4_200GBASE_CR4_KR4		BIT(12)
+#define MLXSW_REG_PTYS_EXT_ETH_SPEED_400GAUI_8				BIT(15)
 
 /* reg_ptys_ext_eth_proto_cap
  * Extended Ethernet port supported speeds and protocols.
@@ -3998,7 +4191,6 @@ MLXSW_ITEM32(reg, ptys, ext_eth_proto_cap, 0x08, 0, 32);
 #define MLXSW_REG_PTYS_ETH_SPEED_20GBASE_KR2		BIT(5)
 #define MLXSW_REG_PTYS_ETH_SPEED_40GBASE_CR4		BIT(6)
 #define MLXSW_REG_PTYS_ETH_SPEED_40GBASE_KR4		BIT(7)
-#define MLXSW_REG_PTYS_ETH_SPEED_56GBASE_R4		BIT(8)
 #define MLXSW_REG_PTYS_ETH_SPEED_10GBASE_CR		BIT(12)
 #define MLXSW_REG_PTYS_ETH_SPEED_10GBASE_SR		BIT(13)
 #define MLXSW_REG_PTYS_ETH_SPEED_10GBASE_ER_LR		BIT(14)
@@ -5246,6 +5438,69 @@ static inline void mlxsw_reg_pplr_pack(char *payload, u8 local_port,
 				 MLXSW_REG_PPLR_LB_TYPE_BIT_PHY_LOCAL : 0);
 }
 
+/* PMTM - Port Module Type Mapping Register
+ * ----------------------------------------
+ * The PMTM allows query or configuration of module types.
+ */
+#define MLXSW_REG_PMTM_ID 0x5067
+#define MLXSW_REG_PMTM_LEN 0x10
+
+MLXSW_REG_DEFINE(pmtm, MLXSW_REG_PMTM_ID, MLXSW_REG_PMTM_LEN);
+
+/* reg_pmtm_module
+ * Module number.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, pmtm, module, 0x00, 16, 8);
+
+enum mlxsw_reg_pmtm_module_type {
+	/* Backplane with 4 lanes */
+	MLXSW_REG_PMTM_MODULE_TYPE_BP_4X,
+	/* QSFP */
+	MLXSW_REG_PMTM_MODULE_TYPE_QSFP,
+	/* SFP */
+	MLXSW_REG_PMTM_MODULE_TYPE_SFP,
+	/* Backplane with single lane */
+	MLXSW_REG_PMTM_MODULE_TYPE_BP_1X = 4,
+	/* Backplane with two lane */
+	MLXSW_REG_PMTM_MODULE_TYPE_BP_2X = 8,
+	/* Chip2Chip4x */
+	MLXSW_REG_PMTM_MODULE_TYPE_C2C4X = 10,
+	/* Chip2Chip2x */
+	MLXSW_REG_PMTM_MODULE_TYPE_C2C2X,
+	/* Chip2Chip1x */
+	MLXSW_REG_PMTM_MODULE_TYPE_C2C1X,
+	/* QSFP-DD */
+	MLXSW_REG_PMTM_MODULE_TYPE_QSFP_DD = 14,
+	/* OSFP */
+	MLXSW_REG_PMTM_MODULE_TYPE_OSFP,
+	/* SFP-DD */
+	MLXSW_REG_PMTM_MODULE_TYPE_SFP_DD,
+	/* DSFP */
+	MLXSW_REG_PMTM_MODULE_TYPE_DSFP,
+	/* Chip2Chip8x */
+	MLXSW_REG_PMTM_MODULE_TYPE_C2C8X,
+};
+
+/* reg_pmtm_module_type
+ * Module type.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, pmtm, module_type, 0x04, 0, 4);
+
+static inline void mlxsw_reg_pmtm_pack(char *payload, u8 module)
+{
+	MLXSW_REG_ZERO(pmtm, payload);
+	mlxsw_reg_pmtm_module_set(payload, module);
+}
+
+static inline void
+mlxsw_reg_pmtm_unpack(char *payload,
+		      enum mlxsw_reg_pmtm_module_type *module_type)
+{
+	*module_type = mlxsw_reg_pmtm_module_type_get(payload);
+}
+
 /* HTGT - Host Trap Group Table
  * ----------------------------
  * Configures the properties for forwarding to CPU.
@@ -5282,16 +5537,29 @@ enum mlxsw_reg_htgt_trap_group {
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_PIM,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_MULTICAST,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_ARP,
-	MLXSW_REG_HTGT_TRAP_GROUP_SP_HOST_MISS,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_ROUTER_EXP,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_REMOTE_ROUTE,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_IP2ME,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_DHCP,
-	MLXSW_REG_HTGT_TRAP_GROUP_SP_RPF,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_EVENT,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_IPV6_MLD,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_IPV6_ND,
 	MLXSW_REG_HTGT_TRAP_GROUP_SP_LBERROR,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_PTP0,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_PTP1,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_VRRP,
+
+	__MLXSW_REG_HTGT_TRAP_GROUP_MAX,
+	MLXSW_REG_HTGT_TRAP_GROUP_MAX = __MLXSW_REG_HTGT_TRAP_GROUP_MAX - 1
+};
+
+enum mlxsw_reg_htgt_discard_trap_group {
+	MLXSW_REG_HTGT_DISCARD_TRAP_GROUP_BASE = MLXSW_REG_HTGT_TRAP_GROUP_MAX,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_DUMMY,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_L2_DISCARDS,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_L3_DISCARDS,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_TUNNEL_DISCARDS,
+	MLXSW_REG_HTGT_TRAP_GROUP_SP_ACL_DISCARDS,
 };
 
 /* reg_htgt_trap_group
@@ -5429,6 +5697,8 @@ enum mlxsw_reg_hpkt_action {
 	MLXSW_REG_HPKT_ACTION_DISCARD,
 	MLXSW_REG_HPKT_ACTION_SOFT_DISCARD,
 	MLXSW_REG_HPKT_ACTION_TRAP_AND_SOFT_DISCARD,
+	MLXSW_REG_HPKT_ACTION_TRAP_EXCEPTION_TO_CPU,
+	MLXSW_REG_HPKT_ACTION_SET_FW_DEFAULT = 15,
 };
 
 /* reg_hpkt_action
@@ -5439,6 +5709,8 @@ enum mlxsw_reg_hpkt_action {
  * 3 - Discard.
  * 4 - Soft discard (allow other traps to act on the packet).
  * 5 - Trap and soft discard (allow other traps to overwrite this trap).
+ * 6 - Trap to CPU (CPU receives sole copy) and count it as error.
+ * 15 - Restore the firmware's default action.
  * Access: RW
  *
  * Note: Must be set to 0 (forward) for event trap IDs, as they are already
@@ -8039,16 +8311,21 @@ MLXSW_ITEM32(reg, mtcap, sensor_count, 0x00, 0, 7);
 
 MLXSW_REG_DEFINE(mtmp, MLXSW_REG_MTMP_ID, MLXSW_REG_MTMP_LEN);
 
+#define MLXSW_REG_MTMP_MODULE_INDEX_MIN 64
+#define MLXSW_REG_MTMP_GBOX_INDEX_MIN 256
 /* reg_mtmp_sensor_index
  * Sensors index to access.
  * 64-127 of sensor_index are mapped to the SFP+/QSFP modules sequentially
  * (module 0 is mapped to sensor_index 64).
  * Access: Index
  */
-MLXSW_ITEM32(reg, mtmp, sensor_index, 0x00, 0, 7);
+MLXSW_ITEM32(reg, mtmp, sensor_index, 0x00, 0, 12);
 
 /* Convert to milli degrees Celsius */
-#define MLXSW_REG_MTMP_TEMP_TO_MC(val) (val * 125)
+#define MLXSW_REG_MTMP_TEMP_TO_MC(val) ({ typeof(val) v_ = (val); \
+					  ((v_) >= 0) ? ((v_) * 125) : \
+					  ((s16)((GENMASK(15, 0) + (v_) + 1) \
+					   * 125)); })
 
 /* reg_mtmp_temperature
  * Temperature reading from the sensor. Reading is in 0.125 Celsius
@@ -8107,7 +8384,7 @@ MLXSW_ITEM32(reg, mtmp, temperature_threshold_lo, 0x10, 0, 16);
  */
 MLXSW_ITEM_BUF(reg, mtmp, sensor_name, 0x18, MLXSW_REG_MTMP_SENSOR_NAME_SIZE);
 
-static inline void mlxsw_reg_mtmp_pack(char *payload, u8 sensor_index,
+static inline void mlxsw_reg_mtmp_pack(char *payload, u16 sensor_index,
 				       bool max_temp_enable,
 				       bool max_temp_reset)
 {
@@ -8119,11 +8396,10 @@ static inline void mlxsw_reg_mtmp_pack(char *payload, u8 sensor_index,
 						    MLXSW_REG_MTMP_THRESH_HI);
 }
 
-static inline void mlxsw_reg_mtmp_unpack(char *payload, unsigned int *p_temp,
-					 unsigned int *p_max_temp,
-					 char *sensor_name)
+static inline void mlxsw_reg_mtmp_unpack(char *payload, int *p_temp,
+					 int *p_max_temp, char *sensor_name)
 {
-	u16 temp;
+	s16 temp;
 
 	if (p_temp) {
 		temp = mlxsw_reg_mtmp_temperature_get(payload);
@@ -8156,7 +8432,7 @@ MLXSW_REG_DEFINE(mtbr, MLXSW_REG_MTBR_ID, MLXSW_REG_MTBR_LEN);
  * 64-127 are mapped to the SFP+/QSFP modules sequentially).
  * Access: Index
  */
-MLXSW_ITEM32(reg, mtbr, base_sensor_index, 0x00, 0, 7);
+MLXSW_ITEM32(reg, mtbr, base_sensor_index, 0x00, 0, 12);
 
 /* reg_mtbr_num_rec
  * Request: Number of records to read
@@ -8183,7 +8459,7 @@ MLXSW_ITEM32_INDEXED(reg, mtbr, rec_max_temp, MLXSW_REG_MTBR_BASE_LEN, 16,
 MLXSW_ITEM32_INDEXED(reg, mtbr, rec_temp, MLXSW_REG_MTBR_BASE_LEN, 0, 16,
 		     MLXSW_REG_MTBR_REC_LEN, 0x00, false);
 
-static inline void mlxsw_reg_mtbr_pack(char *payload, u8 base_sensor_index,
+static inline void mlxsw_reg_mtbr_pack(char *payload, u16 base_sensor_index,
 				       u8 num_rec)
 {
 	MLXSW_REG_ZERO(mtbr, payload);
@@ -8266,6 +8542,7 @@ MLXSW_ITEM32(reg, mcia, device_address, 0x04, 0, 16);
 MLXSW_ITEM32(reg, mcia, size, 0x08, 0, 16);
 
 #define MLXSW_REG_MCIA_EEPROM_PAGE_LENGTH	256
+#define MLXSW_REG_MCIA_EEPROM_UP_PAGE_LENGTH	128
 #define MLXSW_REG_MCIA_EEPROM_SIZE		48
 #define MLXSW_REG_MCIA_I2C_ADDR_LOW		0x50
 #define MLXSW_REG_MCIA_I2C_ADDR_HIGH		0x51
@@ -8300,6 +8577,14 @@ enum mlxsw_reg_mcia_eeprom_module_info {
  * Access: RW
  */
 MLXSW_ITEM_BUF(reg, mcia, eeprom, 0x10, MLXSW_REG_MCIA_EEPROM_SIZE);
+
+/* This is used to access the optional upper pages (1-3) in the QSFP+
+ * memory map. Page 1 is available on offset 256 through 383, page 2 -
+ * on offset 384 through 511, page 3 - on offset 512 through 639.
+ */
+#define MLXSW_REG_MCIA_PAGE_GET(off) (((off) - \
+				MLXSW_REG_MCIA_EEPROM_PAGE_LENGTH) / \
+				MLXSW_REG_MCIA_EEPROM_UP_PAGE_LENGTH + 1)
 
 static inline void mlxsw_reg_mcia_pack(char *payload, u8 module, u8 lock,
 				       u8 page_number, u16 device_addr,
@@ -8525,7 +8810,7 @@ mlxsw_reg_mpat_eth_rspan_l3_ipv6_pack(char *payload, u8 ttl,
  * properties.
  */
 #define MLXSW_REG_MPAR_ID 0x901B
-#define MLXSW_REG_MPAR_LEN 0x08
+#define MLXSW_REG_MPAR_LEN 0x0C
 
 MLXSW_REG_DEFINE(mpar, MLXSW_REG_MPAR_ID, MLXSW_REG_MPAR_LEN);
 
@@ -8687,6 +8972,107 @@ static inline void mlxsw_reg_mlcr_pack(char *payload, u8 local_port,
 	mlxsw_reg_mlcr_local_port_set(payload, local_port);
 	mlxsw_reg_mlcr_beacon_duration_set(payload, active ?
 					   MLXSW_REG_MLCR_DURATION_MAX : 0);
+}
+
+/* MTPPS - Management Pulse Per Second Register
+ * --------------------------------------------
+ * This register provides the device PPS capabilities, configure the PPS in and
+ * out modules and holds the PPS in time stamp.
+ */
+#define MLXSW_REG_MTPPS_ID 0x9053
+#define MLXSW_REG_MTPPS_LEN 0x3C
+
+MLXSW_REG_DEFINE(mtpps, MLXSW_REG_MTPPS_ID, MLXSW_REG_MTPPS_LEN);
+
+/* reg_mtpps_enable
+ * Enables the PPS functionality the specific pin.
+ * A boolean variable.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, mtpps, enable, 0x20, 31, 1);
+
+enum mlxsw_reg_mtpps_pin_mode {
+	MLXSW_REG_MTPPS_PIN_MODE_VIRTUAL_PIN = 0x2,
+};
+
+/* reg_mtpps_pin_mode
+ * Pin mode to be used. The mode must comply with the supported modes of the
+ * requested pin.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, mtpps, pin_mode, 0x20, 8, 4);
+
+#define MLXSW_REG_MTPPS_PIN_SP_VIRTUAL_PIN	7
+
+/* reg_mtpps_pin
+ * Pin to be configured or queried out of the supported pins.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, mtpps, pin, 0x20, 0, 8);
+
+/* reg_mtpps_time_stamp
+ * When pin_mode = pps_in, the latched device time when it was triggered from
+ * the external GPIO pin.
+ * When pin_mode = pps_out or virtual_pin or pps_out_and_virtual_pin, the target
+ * time to generate next output signal.
+ * Time is in units of device clock.
+ * Access: RW
+ */
+MLXSW_ITEM64(reg, mtpps, time_stamp, 0x28, 0, 64);
+
+static inline void
+mlxsw_reg_mtpps_vpin_pack(char *payload, u64 time_stamp)
+{
+	MLXSW_REG_ZERO(mtpps, payload);
+	mlxsw_reg_mtpps_pin_set(payload, MLXSW_REG_MTPPS_PIN_SP_VIRTUAL_PIN);
+	mlxsw_reg_mtpps_pin_mode_set(payload,
+				     MLXSW_REG_MTPPS_PIN_MODE_VIRTUAL_PIN);
+	mlxsw_reg_mtpps_enable_set(payload, true);
+	mlxsw_reg_mtpps_time_stamp_set(payload, time_stamp);
+}
+
+/* MTUTC - Management UTC Register
+ * -------------------------------
+ * Configures the HW UTC counter.
+ */
+#define MLXSW_REG_MTUTC_ID 0x9055
+#define MLXSW_REG_MTUTC_LEN 0x1C
+
+MLXSW_REG_DEFINE(mtutc, MLXSW_REG_MTUTC_ID, MLXSW_REG_MTUTC_LEN);
+
+enum mlxsw_reg_mtutc_operation {
+	MLXSW_REG_MTUTC_OPERATION_SET_TIME_AT_NEXT_SEC = 0,
+	MLXSW_REG_MTUTC_OPERATION_ADJUST_FREQ = 3,
+};
+
+/* reg_mtutc_operation
+ * Operation.
+ * Access: OP
+ */
+MLXSW_ITEM32(reg, mtutc, operation, 0x00, 0, 4);
+
+/* reg_mtutc_freq_adjustment
+ * Frequency adjustment: Every PPS the HW frequency will be
+ * adjusted by this value. Units of HW clock, where HW counts
+ * 10^9 HW clocks for 1 HW second.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, mtutc, freq_adjustment, 0x04, 0, 32);
+
+/* reg_mtutc_utc_sec
+ * UTC seconds.
+ * Access: WO
+ */
+MLXSW_ITEM32(reg, mtutc, utc_sec, 0x10, 0, 32);
+
+static inline void
+mlxsw_reg_mtutc_pack(char *payload, enum mlxsw_reg_mtutc_operation oper,
+		     u32 freq_adj, u32 utc_sec)
+{
+	MLXSW_REG_ZERO(mtutc, payload);
+	mlxsw_reg_mtutc_operation_set(payload, oper);
+	mlxsw_reg_mtutc_freq_adjustment_set(payload, freq_adj);
+	mlxsw_reg_mtutc_utc_sec_set(payload, utc_sec);
 }
 
 /* MCQI - Management Component Query Information
@@ -9041,6 +9427,275 @@ static inline void mlxsw_reg_mprs_pack(char *payload, u16 parsing_depth,
 	mlxsw_reg_mprs_parsing_depth_set(payload, parsing_depth);
 	mlxsw_reg_mprs_parsing_en_set(payload, true);
 	mlxsw_reg_mprs_vxlan_udp_dport_set(payload, vxlan_udp_dport);
+}
+
+/* MOGCR - Monitoring Global Configuration Register
+ * ------------------------------------------------
+ */
+#define MLXSW_REG_MOGCR_ID 0x9086
+#define MLXSW_REG_MOGCR_LEN 0x20
+
+MLXSW_REG_DEFINE(mogcr, MLXSW_REG_MOGCR_ID, MLXSW_REG_MOGCR_LEN);
+
+/* reg_mogcr_ptp_iftc
+ * PTP Ingress FIFO Trap Clear
+ * The PTP_ING_FIFO trap provides MTPPTR with clr according
+ * to this value. Default 0.
+ * Reserved when IB switches and when SwitchX/-2, Spectrum-2
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, mogcr, ptp_iftc, 0x00, 1, 1);
+
+/* reg_mogcr_ptp_eftc
+ * PTP Egress FIFO Trap Clear
+ * The PTP_EGR_FIFO trap provides MTPPTR with clr according
+ * to this value. Default 0.
+ * Reserved when IB switches and when SwitchX/-2, Spectrum-2
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, mogcr, ptp_eftc, 0x00, 0, 1);
+
+/* MTPPPC - Time Precision Packet Port Configuration
+ * -------------------------------------------------
+ * This register serves for configuration of which PTP messages should be
+ * timestamped. This is a global configuration, despite the register name.
+ *
+ * Reserved when Spectrum-2.
+ */
+#define MLXSW_REG_MTPPPC_ID 0x9090
+#define MLXSW_REG_MTPPPC_LEN 0x28
+
+MLXSW_REG_DEFINE(mtpppc, MLXSW_REG_MTPPPC_ID, MLXSW_REG_MTPPPC_LEN);
+
+/* reg_mtpppc_ing_timestamp_message_type
+ * Bitwise vector of PTP message types to timestamp at ingress.
+ * MessageType field as defined by IEEE 1588
+ * Each bit corresponds to a value (e.g. Bit0: Sync, Bit1: Delay_Req)
+ * Default all 0
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, mtpppc, ing_timestamp_message_type, 0x08, 0, 16);
+
+/* reg_mtpppc_egr_timestamp_message_type
+ * Bitwise vector of PTP message types to timestamp at egress.
+ * MessageType field as defined by IEEE 1588
+ * Each bit corresponds to a value (e.g. Bit0: Sync, Bit1: Delay_Req)
+ * Default all 0
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, mtpppc, egr_timestamp_message_type, 0x0C, 0, 16);
+
+static inline void mlxsw_reg_mtpppc_pack(char *payload, u16 ing, u16 egr)
+{
+	MLXSW_REG_ZERO(mtpppc, payload);
+	mlxsw_reg_mtpppc_ing_timestamp_message_type_set(payload, ing);
+	mlxsw_reg_mtpppc_egr_timestamp_message_type_set(payload, egr);
+}
+
+/* MTPPTR - Time Precision Packet Timestamping Reading
+ * ---------------------------------------------------
+ * The MTPPTR is used for reading the per port PTP timestamp FIFO.
+ * There is a trap for packets which are latched to the timestamp FIFO, thus the
+ * SW knows which FIFO to read. Note that packets enter the FIFO before been
+ * trapped. The sequence number is used to synchronize the timestamp FIFO
+ * entries and the trapped packets.
+ * Reserved when Spectrum-2.
+ */
+
+#define MLXSW_REG_MTPPTR_ID 0x9091
+#define MLXSW_REG_MTPPTR_BASE_LEN 0x10 /* base length, without records */
+#define MLXSW_REG_MTPPTR_REC_LEN 0x10 /* record length */
+#define MLXSW_REG_MTPPTR_REC_MAX_COUNT 4
+#define MLXSW_REG_MTPPTR_LEN (MLXSW_REG_MTPPTR_BASE_LEN +		\
+		    MLXSW_REG_MTPPTR_REC_LEN * MLXSW_REG_MTPPTR_REC_MAX_COUNT)
+
+MLXSW_REG_DEFINE(mtpptr, MLXSW_REG_MTPPTR_ID, MLXSW_REG_MTPPTR_LEN);
+
+/* reg_mtpptr_local_port
+ * Not supported for CPU port.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, mtpptr, local_port, 0x00, 16, 8);
+
+enum mlxsw_reg_mtpptr_dir {
+	MLXSW_REG_MTPPTR_DIR_INGRESS,
+	MLXSW_REG_MTPPTR_DIR_EGRESS,
+};
+
+/* reg_mtpptr_dir
+ * Direction.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, mtpptr, dir, 0x00, 0, 1);
+
+/* reg_mtpptr_clr
+ * Clear the records.
+ * Access: OP
+ */
+MLXSW_ITEM32(reg, mtpptr, clr, 0x04, 31, 1);
+
+/* reg_mtpptr_num_rec
+ * Number of valid records in the response
+ * Range 0.. cap_ptp_timestamp_fifo
+ * Access: RO
+ */
+MLXSW_ITEM32(reg, mtpptr, num_rec, 0x08, 0, 4);
+
+/* reg_mtpptr_rec_message_type
+ * MessageType field as defined by IEEE 1588 Each bit corresponds to a value
+ * (e.g. Bit0: Sync, Bit1: Delay_Req)
+ * Access: RO
+ */
+MLXSW_ITEM32_INDEXED(reg, mtpptr, rec_message_type,
+		     MLXSW_REG_MTPPTR_BASE_LEN, 8, 4,
+		     MLXSW_REG_MTPPTR_REC_LEN, 0, false);
+
+/* reg_mtpptr_rec_domain_number
+ * DomainNumber field as defined by IEEE 1588
+ * Access: RO
+ */
+MLXSW_ITEM32_INDEXED(reg, mtpptr, rec_domain_number,
+		     MLXSW_REG_MTPPTR_BASE_LEN, 0, 8,
+		     MLXSW_REG_MTPPTR_REC_LEN, 0, false);
+
+/* reg_mtpptr_rec_sequence_id
+ * SequenceId field as defined by IEEE 1588
+ * Access: RO
+ */
+MLXSW_ITEM32_INDEXED(reg, mtpptr, rec_sequence_id,
+		     MLXSW_REG_MTPPTR_BASE_LEN, 0, 16,
+		     MLXSW_REG_MTPPTR_REC_LEN, 0x4, false);
+
+/* reg_mtpptr_rec_timestamp_high
+ * Timestamp of when the PTP packet has passed through the port Units of PLL
+ * clock time.
+ * For Spectrum-1 the PLL clock is 156.25Mhz and PLL clock time is 6.4nSec.
+ * Access: RO
+ */
+MLXSW_ITEM32_INDEXED(reg, mtpptr, rec_timestamp_high,
+		     MLXSW_REG_MTPPTR_BASE_LEN, 0, 32,
+		     MLXSW_REG_MTPPTR_REC_LEN, 0x8, false);
+
+/* reg_mtpptr_rec_timestamp_low
+ * See rec_timestamp_high.
+ * Access: RO
+ */
+MLXSW_ITEM32_INDEXED(reg, mtpptr, rec_timestamp_low,
+		     MLXSW_REG_MTPPTR_BASE_LEN, 0, 32,
+		     MLXSW_REG_MTPPTR_REC_LEN, 0xC, false);
+
+static inline void mlxsw_reg_mtpptr_unpack(const char *payload,
+					   unsigned int rec,
+					   u8 *p_message_type,
+					   u8 *p_domain_number,
+					   u16 *p_sequence_id,
+					   u64 *p_timestamp)
+{
+	u32 timestamp_high, timestamp_low;
+
+	*p_message_type = mlxsw_reg_mtpptr_rec_message_type_get(payload, rec);
+	*p_domain_number = mlxsw_reg_mtpptr_rec_domain_number_get(payload, rec);
+	*p_sequence_id = mlxsw_reg_mtpptr_rec_sequence_id_get(payload, rec);
+	timestamp_high = mlxsw_reg_mtpptr_rec_timestamp_high_get(payload, rec);
+	timestamp_low = mlxsw_reg_mtpptr_rec_timestamp_low_get(payload, rec);
+	*p_timestamp = (u64)timestamp_high << 32 | timestamp_low;
+}
+
+/* MTPTPT - Monitoring Precision Time Protocol Trap Register
+ * ---------------------------------------------------------
+ * This register is used for configuring under which trap to deliver PTP
+ * packets depending on type of the packet.
+ */
+#define MLXSW_REG_MTPTPT_ID 0x9092
+#define MLXSW_REG_MTPTPT_LEN 0x08
+
+MLXSW_REG_DEFINE(mtptpt, MLXSW_REG_MTPTPT_ID, MLXSW_REG_MTPTPT_LEN);
+
+enum mlxsw_reg_mtptpt_trap_id {
+	MLXSW_REG_MTPTPT_TRAP_ID_PTP0,
+	MLXSW_REG_MTPTPT_TRAP_ID_PTP1,
+};
+
+/* reg_mtptpt_trap_id
+ * Trap id.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, mtptpt, trap_id, 0x00, 0, 4);
+
+/* reg_mtptpt_message_type
+ * Bitwise vector of PTP message types to trap. This is a necessary but
+ * non-sufficient condition since need to enable also per port. See MTPPPC.
+ * Message types are defined by IEEE 1588 Each bit corresponds to a value (e.g.
+ * Bit0: Sync, Bit1: Delay_Req)
+ */
+MLXSW_ITEM32(reg, mtptpt, message_type, 0x04, 0, 16);
+
+static inline void mlxsw_reg_mtptptp_pack(char *payload,
+					  enum mlxsw_reg_mtptpt_trap_id trap_id,
+					  u16 message_type)
+{
+	MLXSW_REG_ZERO(mtptpt, payload);
+	mlxsw_reg_mtptpt_trap_id_set(payload, trap_id);
+	mlxsw_reg_mtptpt_message_type_set(payload, message_type);
+}
+
+/* MGPIR - Management General Peripheral Information Register
+ * ----------------------------------------------------------
+ * MGPIR register allows software to query the hardware and
+ * firmware general information of peripheral entities.
+ */
+#define MLXSW_REG_MGPIR_ID 0x9100
+#define MLXSW_REG_MGPIR_LEN 0xA0
+
+MLXSW_REG_DEFINE(mgpir, MLXSW_REG_MGPIR_ID, MLXSW_REG_MGPIR_LEN);
+
+enum mlxsw_reg_mgpir_device_type {
+	MLXSW_REG_MGPIR_DEVICE_TYPE_NONE,
+	MLXSW_REG_MGPIR_DEVICE_TYPE_GEARBOX_DIE,
+};
+
+/* device_type
+ * Access: RO
+ */
+MLXSW_ITEM32(reg, mgpir, device_type, 0x00, 24, 4);
+
+/* devices_per_flash
+ * Number of devices of device_type per flash (can be shared by few devices).
+ * Access: RO
+ */
+MLXSW_ITEM32(reg, mgpir, devices_per_flash, 0x00, 16, 8);
+
+/* num_of_devices
+ * Number of devices of device_type.
+ * Access: RO
+ */
+MLXSW_ITEM32(reg, mgpir, num_of_devices, 0x00, 0, 8);
+
+/* num_of_modules
+ * Number of modules.
+ * Access: RO
+ */
+MLXSW_ITEM32(reg, mgpir, num_of_modules, 0x04, 0, 8);
+
+static inline void mlxsw_reg_mgpir_pack(char *payload)
+{
+	MLXSW_REG_ZERO(mgpir, payload);
+}
+
+static inline void
+mlxsw_reg_mgpir_unpack(char *payload, u8 *num_of_devices,
+		       enum mlxsw_reg_mgpir_device_type *device_type,
+		       u8 *devices_per_flash, u8 *num_of_modules)
+{
+	if (num_of_devices)
+		*num_of_devices = mlxsw_reg_mgpir_num_of_devices_get(payload);
+	if (device_type)
+		*device_type = mlxsw_reg_mgpir_device_type_get(payload);
+	if (devices_per_flash)
+		*devices_per_flash =
+				mlxsw_reg_mgpir_devices_per_flash_get(payload);
+	if (num_of_modules)
+		*num_of_modules = mlxsw_reg_mgpir_num_of_modules_get(payload);
 }
 
 /* TNGCR - Tunneling NVE General Configuration Register
@@ -9532,6 +10187,92 @@ static inline void mlxsw_reg_tigcr_pack(char *payload, bool ttlc, u8 ttl_uc)
 	mlxsw_reg_tigcr_ttl_uc_set(payload, ttl_uc);
 }
 
+/* TIEEM - Tunneling IPinIP Encapsulation ECN Mapping Register
+ * -----------------------------------------------------------
+ * The TIEEM register maps ECN of the IP header at the ingress to the
+ * encapsulation to the ECN of the underlay network.
+ */
+#define MLXSW_REG_TIEEM_ID 0xA812
+#define MLXSW_REG_TIEEM_LEN 0x0C
+
+MLXSW_REG_DEFINE(tieem, MLXSW_REG_TIEEM_ID, MLXSW_REG_TIEEM_LEN);
+
+/* reg_tieem_overlay_ecn
+ * ECN of the IP header in the overlay network.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, tieem, overlay_ecn, 0x04, 24, 2);
+
+/* reg_tineem_underlay_ecn
+ * ECN of the IP header in the underlay network.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, tieem, underlay_ecn, 0x04, 16, 2);
+
+static inline void mlxsw_reg_tieem_pack(char *payload, u8 overlay_ecn,
+					u8 underlay_ecn)
+{
+	MLXSW_REG_ZERO(tieem, payload);
+	mlxsw_reg_tieem_overlay_ecn_set(payload, overlay_ecn);
+	mlxsw_reg_tieem_underlay_ecn_set(payload, underlay_ecn);
+}
+
+/* TIDEM - Tunneling IPinIP Decapsulation ECN Mapping Register
+ * -----------------------------------------------------------
+ * The TIDEM register configures the actions that are done in the
+ * decapsulation.
+ */
+#define MLXSW_REG_TIDEM_ID 0xA813
+#define MLXSW_REG_TIDEM_LEN 0x0C
+
+MLXSW_REG_DEFINE(tidem, MLXSW_REG_TIDEM_ID, MLXSW_REG_TIDEM_LEN);
+
+/* reg_tidem_underlay_ecn
+ * ECN field of the IP header in the underlay network.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, tidem, underlay_ecn, 0x04, 24, 2);
+
+/* reg_tidem_overlay_ecn
+ * ECN field of the IP header in the overlay network.
+ * Access: Index
+ */
+MLXSW_ITEM32(reg, tidem, overlay_ecn, 0x04, 16, 2);
+
+/* reg_tidem_eip_ecn
+ * Egress IP ECN. ECN field of the IP header of the packet which goes out
+ * from the decapsulation.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, tidem, eip_ecn, 0x04, 8, 2);
+
+/* reg_tidem_trap_en
+ * Trap enable:
+ * 0 - No trap due to decap ECN
+ * 1 - Trap enable with trap_id
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, tidem, trap_en, 0x08, 28, 4);
+
+/* reg_tidem_trap_id
+ * Trap ID. Either DECAP_ECN0 or DECAP_ECN1.
+ * Reserved when trap_en is '0'.
+ * Access: RW
+ */
+MLXSW_ITEM32(reg, tidem, trap_id, 0x08, 0, 9);
+
+static inline void mlxsw_reg_tidem_pack(char *payload, u8 underlay_ecn,
+					u8 overlay_ecn, u8 eip_ecn,
+					bool trap_en, u16 trap_id)
+{
+	MLXSW_REG_ZERO(tidem, payload);
+	mlxsw_reg_tidem_underlay_ecn_set(payload, underlay_ecn);
+	mlxsw_reg_tidem_overlay_ecn_set(payload, overlay_ecn);
+	mlxsw_reg_tidem_eip_ecn_set(payload, eip_ecn);
+	mlxsw_reg_tidem_trap_en_set(payload, trap_en);
+	mlxsw_reg_tidem_trap_id_set(payload, trap_id);
+}
+
 /* SBPR - Shared Buffer Pools Register
  * -----------------------------------
  * The SBPR configures and retrieves the shared buffer pools and configuration.
@@ -10004,8 +10745,10 @@ static const struct mlxsw_reg_info *mlxsw_reg_infos[] = {
 	MLXSW_REG(qeec),
 	MLXSW_REG(qrwe),
 	MLXSW_REG(qpdsm),
+	MLXSW_REG(qpdp),
 	MLXSW_REG(qpdpm),
 	MLXSW_REG(qtctm),
+	MLXSW_REG(qpsc),
 	MLXSW_REG(pmlp),
 	MLXSW_REG(pmtu),
 	MLXSW_REG(ptys),
@@ -10018,6 +10761,7 @@ static const struct mlxsw_reg_info *mlxsw_reg_infos[] = {
 	MLXSW_REG(pbmc),
 	MLXSW_REG(pspa),
 	MLXSW_REG(pplr),
+	MLXSW_REG(pmtm),
 	MLXSW_REG(htgt),
 	MLXSW_REG(hpkt),
 	MLXSW_REG(rgcr),
@@ -10052,12 +10796,19 @@ static const struct mlxsw_reg_info *mlxsw_reg_infos[] = {
 	MLXSW_REG(mgir),
 	MLXSW_REG(mrsr),
 	MLXSW_REG(mlcr),
+	MLXSW_REG(mtpps),
+	MLXSW_REG(mtutc),
 	MLXSW_REG(mpsc),
 	MLXSW_REG(mcqi),
 	MLXSW_REG(mcc),
 	MLXSW_REG(mcda),
 	MLXSW_REG(mgpc),
 	MLXSW_REG(mprs),
+	MLXSW_REG(mogcr),
+	MLXSW_REG(mtpppc),
+	MLXSW_REG(mtpptr),
+	MLXSW_REG(mtptpt),
+	MLXSW_REG(mgpir),
 	MLXSW_REG(tngcr),
 	MLXSW_REG(tnumt),
 	MLXSW_REG(tnqcr),
@@ -10066,6 +10817,8 @@ static const struct mlxsw_reg_info *mlxsw_reg_infos[] = {
 	MLXSW_REG(tndem),
 	MLXSW_REG(tnpc),
 	MLXSW_REG(tigcr),
+	MLXSW_REG(tieem),
+	MLXSW_REG(tidem),
 	MLXSW_REG(sbpr),
 	MLXSW_REG(sbcm),
 	MLXSW_REG(sbpm),

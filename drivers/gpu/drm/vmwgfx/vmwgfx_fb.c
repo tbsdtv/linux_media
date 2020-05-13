@@ -26,13 +26,13 @@
  *
  **************************************************************************/
 
-#include <linux/export.h>
+#include <linux/pci.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_fourcc.h>
+#include <drm/ttm/ttm_placement.h>
+
 #include "vmwgfx_drv.h"
 #include "vmwgfx_kms.h"
-
-#include <drm/ttm/ttm_placement.h>
 
 #define VMW_DIRTY_DELAY (HZ / 30)
 
@@ -624,7 +624,7 @@ out_unlock:
 }
 
 
-static struct fb_ops vmw_fb_ops = {
+static const struct fb_ops vmw_fb_ops = {
 	.owner = THIS_MODULE,
 	.fb_check_var = vmw_fb_check_var,
 	.fb_set_par = vmw_fb_set_par,

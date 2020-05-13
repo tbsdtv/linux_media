@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-pxa/cm-x300.c
  *
@@ -7,10 +8,6 @@
  *
  * Mike Rapoport <mike@compulab.co.il>
  * Igor Grinberg <grinberg@compulab.co.il>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #define pr_fmt(fmt) "%s: " fmt, __func__
 
@@ -315,7 +312,6 @@ static struct pwm_lookup cm_x300_pwm_lookup[] = {
 static struct platform_pwm_backlight_data cm_x300_backlight_data = {
 	.max_brightness	= 100,
 	.dft_brightness	= 100,
-	.enable_gpio	= -1,
 };
 
 static struct platform_device cm_x300_backlight_device = {

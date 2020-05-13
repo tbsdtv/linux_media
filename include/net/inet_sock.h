@@ -52,7 +52,7 @@ struct ip_options {
 	unsigned char	router_alert;
 	unsigned char	cipso;
 	unsigned char	__pad2;
-	unsigned char	__data[0];
+	unsigned char	__data[];
 };
 
 struct ip_options_rcu {
@@ -160,6 +160,7 @@ struct inet_cork {
 	char			priority;
 	__u16			gso_size;
 	u64			transmit_time;
+	u32			mark;
 };
 
 struct inet_cork_full {

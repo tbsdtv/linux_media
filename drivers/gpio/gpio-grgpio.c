@@ -253,17 +253,16 @@ static int grgpio_irq_map(struct irq_domain *d, unsigned int irq,
 	lirq->irq = irq;
 	uirq = &priv->uirqs[lirq->index];
 	if (uirq->refcnt == 0) {
+		spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
 		ret = request_irq(uirq->uirq, grgpio_irq_handler, 0,
 				  dev_name(priv->dev), priv);
 		if (ret) {
 			dev_err(priv->dev,
 				"Could not request underlying irq %d\n",
 				uirq->uirq);
-
-			spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
-
 			return ret;
 		}
+		spin_lock_irqsave(&priv->gc.bgpio_lock, flags);
 	}
 	uirq->refcnt++;
 
@@ -309,8 +308,11 @@ static void grgpio_irq_unmap(struct irq_domain *d, unsigned int irq)
 	if (index >= 0) {
 		uirq = &priv->uirqs[lirq->index];
 		uirq->refcnt--;
-		if (uirq->refcnt == 0)
+		if (uirq->refcnt == 0) {
+			spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
 			free_irq(uirq->uirq, priv);
+			return;
+		}
 	}
 
 	spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
@@ -329,7 +331,6 @@ static int grgpio_probe(struct platform_device *ofdev)
 	void  __iomem *regs;
 	struct gpio_chip *gc;
 	struct grgpio_priv *priv;
-	struct resource *res;
 	int err;
 	u32 prop;
 	s32 *irqmap;
@@ -340,8 +341,7 @@ static int grgpio_probe(struct platform_device *ofdev)
 	if (!priv)
 		return -ENOMEM;
 
-	res = platform_get_resource(ofdev, IORESOURCE_MEM, 0);
-	regs = devm_ioremap_resource(&ofdev->dev, res);
+	regs = devm_platform_ioremap_resource(ofdev, 0);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 
@@ -410,8 +410,6 @@ static int grgpio_probe(struct platform_device *ofdev)
 				 * Continue without irq functionality for that
 				 * gpio line
 				 */
-				dev_err(priv->dev,
-					"Failed to get irq for offset %d\n", i);
 				continue;
 			}
 			priv->uirqs[lirq->index].uirq = ret;
@@ -437,11 +435,8 @@ static int grgpio_probe(struct platform_device *ofdev)
 static int grgpio_remove(struct platform_device *ofdev)
 {
 	struct grgpio_priv *priv = platform_get_drvdata(ofdev);
-	unsigned long flags;
 	int i;
 	int ret = 0;
-
-	spin_lock_irqsave(&priv->gc.bgpio_lock, flags);
 
 	if (priv->domain) {
 		for (i = 0; i < GRGPIO_MAX_NGPIO; i++) {
@@ -458,8 +453,6 @@ static int grgpio_remove(struct platform_device *ofdev)
 		irq_domain_remove(priv->domain);
 
 out:
-	spin_unlock_irqrestore(&priv->gc.bgpio_lock, flags);
-
 	return ret;
 }
 

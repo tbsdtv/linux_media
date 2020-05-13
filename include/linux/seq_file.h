@@ -21,7 +21,6 @@ struct seq_file {
 	size_t pad_until;
 	loff_t index;
 	loff_t read_pos;
-	u64 version;
 	struct mutex lock;
 	const struct seq_operations *op;
 	int poll_event;
@@ -127,6 +126,7 @@ void seq_put_hex_ll(struct seq_file *m, const char *delimiter,
 		    unsigned long long v, unsigned int width);
 
 void seq_escape(struct seq_file *m, const char *s, const char *esc);
+void seq_escape_mem_ascii(struct seq_file *m, const char *src, size_t isz);
 
 void seq_hex_dump(struct seq_file *m, const char *prefix_str, int prefix_type,
 		  int rowsize, int groupsize, const void *buf, size_t len,
@@ -157,6 +157,19 @@ static const struct file_operations __name ## _fops = {			\
 	.read		= seq_read,					\
 	.llseek		= seq_lseek,					\
 	.release	= single_release,				\
+}
+
+#define DEFINE_PROC_SHOW_ATTRIBUTE(__name)				\
+static int __name ## _open(struct inode *inode, struct file *file)	\
+{									\
+	return single_open(file, __name ## _show, inode->i_private);	\
+}									\
+									\
+static const struct proc_ops __name ## _proc_ops = {			\
+	.proc_open	= __name ## _open,				\
+	.proc_read	= seq_read,					\
+	.proc_lseek	= seq_lseek,					\
+	.proc_release	= single_release,				\
 }
 
 static inline struct user_namespace *seq_user_ns(struct seq_file *seq)

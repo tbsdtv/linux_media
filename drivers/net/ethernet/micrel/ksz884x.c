@@ -2166,7 +2166,7 @@ static void sw_get_broad_storm(struct ksz_hw *hw, u8 *percent)
 	num = (data & BROADCAST_STORM_RATE_HI);
 	num <<= 8;
 	num |= (data & BROADCAST_STORM_RATE_LO) >> 8;
-	num = (num * 100 + BROADCAST_STORM_VALUE / 2) / BROADCAST_STORM_VALUE;
+	num = DIV_ROUND_CLOSEST(num * 100, BROADCAST_STORM_VALUE);
 	*percent = (u8) num;
 }
 
@@ -4896,7 +4896,7 @@ unlock:
  * triggered to free up resources so that the transmit routine can continue
  * sending out packets.  The hardware is reset to correct the problem.
  */
-static void netdev_tx_timeout(struct net_device *dev)
+static void netdev_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 	static unsigned long last_reset;
 
@@ -5694,7 +5694,7 @@ static void dev_set_promiscuous(struct net_device *dev, struct dev_priv *priv,
 		 * from the bridge.
 		 */
 		if ((hw->features & STP_SUPPORT) && !promiscuous &&
-		    (dev->priv_flags & IFF_BRIDGE_PORT)) {
+		    netif_is_bridge_port(dev)) {
 			struct ksz_switch *sw = hw->ksz_switch;
 			int port = priv->port.first_port;
 

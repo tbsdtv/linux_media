@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * CRC vpmsum tester
  * Copyright 2017 Daniel Axtens, IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/crc-t10dif.h>
@@ -106,6 +103,7 @@ static int __init crc_test_init(void)
 				       crc32, verify32, len);
 				break;
 			}
+		cond_resched();
 		}
 		pr_info("crc-vpmsum_test done, completed %lu iterations\n", i);
 	} while (0);

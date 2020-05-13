@@ -1,17 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef __ASM_GENERIC_EXPORT_H
 #define __ASM_GENERIC_EXPORT_H
 
 #ifndef KSYM_FUNC
 #define KSYM_FUNC(x) x
 #endif
-#ifdef CONFIG_64BIT
-#ifndef KSYM_ALIGN
-#define KSYM_ALIGN 8
-#endif
-#else
-#ifndef KSYM_ALIGN
+#ifdef CONFIG_HAVE_ARCH_PREL32_RELOCATIONS
 #define KSYM_ALIGN 4
-#endif
+#elif defined(CONFIG_64BIT)
+#define KSYM_ALIGN 8
+#else
+#define KSYM_ALIGN 4
 #endif
 #ifndef KCRC_ALIGN
 #define KCRC_ALIGN 4
@@ -19,34 +18,34 @@
 
 .macro __put, val, name
 #ifdef CONFIG_HAVE_ARCH_PREL32_RELOCATIONS
-	.long	\val - ., \name - .
+	.long	\val - ., \name - ., 0
 #elif defined(CONFIG_64BIT)
-	.quad	\val, \name
+	.quad	\val, \name, 0
 #else
-	.long	\val, \name
+	.long	\val, \name, 0
 #endif
 .endm
 
 /*
- * note on .section use: @progbits vs %progbits nastiness doesn't matter,
- * since we immediately emit into those sections anyway.
+ * note on .section use: we specify progbits since usage of the "M" (SHF_MERGE)
+ * section flag requires it. Use '%progbits' instead of '@progbits' since the
+ * former apparently works on all arches according to the binutils source.
  */
+
 .macro ___EXPORT_SYMBOL name,val,sec
 #ifdef CONFIG_MODULES
-	.globl __ksymtab_\name
 	.section ___ksymtab\sec+\name,"a"
 	.balign KSYM_ALIGN
 __ksymtab_\name:
 	__put \val, __kstrtab_\name
 	.previous
-	.section __ksymtab_strings,"a"
+	.section __ksymtab_strings,"aMS",%progbits,1
 __kstrtab_\name:
 	.asciz "\name"
 	.previous
 #ifdef CONFIG_MODVERSIONS
 	.section ___kcrctab\sec+\name,"a"
 	.balign KCRC_ALIGN
-__kcrctab_\name:
 #if defined(CONFIG_MODULE_REL_CRCS)
 	.long __crc_\name - .
 #else
@@ -57,7 +56,6 @@ __kcrctab_\name:
 #endif
 #endif
 .endm
-#undef __put
 
 #if defined(CONFIG_TRIM_UNUSED_KSYMS)
 

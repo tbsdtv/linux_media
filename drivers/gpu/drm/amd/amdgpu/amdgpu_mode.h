@@ -331,8 +331,6 @@ struct amdgpu_mode_info {
 	struct drm_property *audio_property;
 	/* FMT dithering */
 	struct drm_property *dither_property;
-	/* maximum number of bits per channel for monitor color */
-	struct drm_property *max_bpc_property;
 	/* Adaptive Backlight Modulation (power feature) */
 	struct drm_property *abm_level_property;
 	/* hardcoded DFP edid from BIOS */
@@ -613,6 +611,11 @@ bool amdgpu_display_crtc_scaling_mode_fixup(struct drm_crtc *crtc,
 void amdgpu_panel_mode_fixup(struct drm_encoder *encoder,
 			     struct drm_display_mode *adjusted_mode);
 int amdgpu_display_crtc_idx_to_irq_type(struct amdgpu_device *adev, int crtc);
+
+bool amdgpu_crtc_get_scanout_position(struct drm_crtc *crtc,
+			bool in_vblank_irq, int *vpos,
+			int *hpos, ktime_t *stime, ktime_t *etime,
+			const struct drm_display_mode *mode);
 
 /* fbdev layer */
 int amdgpu_fbdev_init(struct amdgpu_device *adev);

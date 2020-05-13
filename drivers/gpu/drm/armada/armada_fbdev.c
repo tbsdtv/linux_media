@@ -1,22 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Russell King
  *  Written from the i915 driver.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
+
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 
 #include <drm/drm_fb_helper.h>
+#include <drm/drm_fourcc.h>
+
 #include "armada_crtc.h"
 #include "armada_drm.h"
 #include "armada_fb.h"
 #include "armada_gem.h"
 
-static /*const*/ struct fb_ops armada_fb_ops = {
+static const struct fb_ops armada_fb_ops = {
 	.owner		= THIS_MODULE,
 	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_fillrect	= drm_fb_helper_cfb_fillrect,
@@ -129,16 +129,10 @@ int armada_fbdev_init(struct drm_device *dev)
 
 	drm_fb_helper_prepare(dev, fbh, &armada_fb_helper_funcs);
 
-	ret = drm_fb_helper_init(dev, fbh, 1);
+	ret = drm_fb_helper_init(dev, fbh);
 	if (ret) {
 		DRM_ERROR("failed to initialize drm fb helper\n");
 		goto err_fb_helper;
-	}
-
-	ret = drm_fb_helper_single_add_all_connectors(fbh);
-	if (ret) {
-		DRM_ERROR("failed to add fb connectors\n");
-		goto err_fb_setup;
 	}
 
 	ret = drm_fb_helper_initial_config(fbh, 32);

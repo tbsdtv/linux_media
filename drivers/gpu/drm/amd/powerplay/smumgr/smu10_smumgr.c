@@ -21,6 +21,8 @@
  *
  */
 
+#include <linux/pci.h>
+
 #include "smumgr.h"
 #include "smu10_inc.h"
 #include "soc15_common.h"
@@ -116,6 +118,7 @@ static int smu10_copy_table_from_smc(struct pp_hwmgr *hwmgr,
 {
 	struct smu10_smumgr *priv =
 			(struct smu10_smumgr *)(hwmgr->smu_backend);
+	struct amdgpu_device *adev = hwmgr->adev;
 
 	PP_ASSERT_WITH_CODE(table_id < MAX_SMU_TABLE,
 			"Invalid SMU Table ID!", return -EINVAL;);
@@ -133,6 +136,9 @@ static int smu10_copy_table_from_smc(struct pp_hwmgr *hwmgr,
 			PPSMC_MSG_TransferTableSmu2Dram,
 			priv->smu_tables.entry[table_id].table_id);
 
+	/* flush hdp cache */
+	amdgpu_asic_flush_hdp(adev, NULL);
+
 	memcpy(table, (uint8_t *)priv->smu_tables.entry[table_id].table,
 			priv->smu_tables.entry[table_id].size);
 
@@ -144,6 +150,7 @@ static int smu10_copy_table_to_smc(struct pp_hwmgr *hwmgr,
 {
 	struct smu10_smumgr *priv =
 			(struct smu10_smumgr *)(hwmgr->smu_backend);
+	struct amdgpu_device *adev = hwmgr->adev;
 
 	PP_ASSERT_WITH_CODE(table_id < MAX_SMU_TABLE,
 			"Invalid SMU Table ID!", return -EINVAL;);
@@ -154,6 +161,8 @@ static int smu10_copy_table_to_smc(struct pp_hwmgr *hwmgr,
 
 	memcpy(priv->smu_tables.entry[table_id].table, table,
 			priv->smu_tables.entry[table_id].size);
+
+	amdgpu_asic_flush_hdp(adev, NULL);
 
 	smu10_send_msg_to_smc_with_parameter(hwmgr,
 			PPSMC_MSG_SetDriverDramAddrHigh,
@@ -291,6 +300,7 @@ static int smu10_smc_table_manager(struct pp_hwmgr *hwmgr, uint8_t *table, uint1
 
 
 const struct pp_smumgr_func smu10_smu_funcs = {
+	.name = "smu10_smu",
 	.smu_init = &smu10_smu_init,
 	.smu_fini = &smu10_smu_fini,
 	.start_smu = &smu10_start_smu,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * I2C client/driver for the ST M41T80 family of i2c rtc chips.
  *
@@ -6,11 +7,6 @@
  * Based on m41t00.c by Mark A. Greer <mgreer@mvista.com>
  *
  * 2006 (c) mycable GmbH
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -238,9 +234,6 @@ static int m41t80_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	struct m41t80_data *clientdata = i2c_get_clientdata(client);
 	unsigned char buf[8];
 	int err, flags;
-
-	if (tm->tm_year < 100 || tm->tm_year > 199)
-		return -EINVAL;
 
 	buf[M41T80_REG_SSEC] = 0;
 	buf[M41T80_REG_SEC] = bin2bcd(tm->tm_sec);
@@ -709,7 +702,6 @@ static ssize_t wdt_read(struct file *file, char __user *buf,
 
 /**
  *	wdt_ioctl:
- *	@inode: inode of the device
  *	@file: file handle to the device
  *	@cmd: watchdog command
  *	@arg: argument pointer
@@ -844,6 +836,7 @@ static const struct file_operations wdt_fops = {
 	.owner	= THIS_MODULE,
 	.read	= wdt_read,
 	.unlocked_ioctl = wdt_unlocked_ioctl,
+	.compat_ioctl = compat_ptr_ioctl,
 	.write	= wdt_write,
 	.open	= wdt_open,
 	.release = wdt_release,
@@ -876,7 +869,7 @@ static struct notifier_block wdt_notifier = {
 static int m41t80_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
 {
-	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
+	struct i2c_adapter *adapter = client->adapter;
 	int rc = 0;
 	struct rtc_time tm;
 	struct m41t80_data *m41t80_data = NULL;
@@ -929,6 +922,8 @@ static int m41t80_probe(struct i2c_client *client,
 	}
 
 	m41t80_data->rtc->ops = &m41t80_rtc_ops;
+	m41t80_data->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
+	m41t80_data->rtc->range_max = RTC_TIMESTAMP_END_2099;
 
 	if (client->irq <= 0) {
 		/* We cannot support UIE mode if we do not have an IRQ line */

@@ -1501,7 +1501,7 @@ bdx_tx_map_skb(struct bdx_priv *priv, struct sk_buff *skb,
 	bdx_tx_db_inc_wptr(db);
 
 	for (i = 0; i < nr_frags; i++) {
-		const struct skb_frag_struct *frag;
+		const skb_frag_t *frag;
 
 		frag = &skb_shinfo(skb)->frags[i];
 		db->wptr->len = skb_frag_size(frag);
@@ -2373,6 +2373,8 @@ static void bdx_get_ethtool_stats(struct net_device *netdev,
 static void bdx_set_ethtool_ops(struct net_device *netdev)
 {
 	static const struct ethtool_ops bdx_ethtool_ops = {
+		.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
+					     ETHTOOL_COALESCE_MAX_FRAMES,
 		.get_drvinfo = bdx_get_drvinfo,
 		.get_link = ethtool_op_get_link,
 		.get_coalesce = bdx_get_coalesce,

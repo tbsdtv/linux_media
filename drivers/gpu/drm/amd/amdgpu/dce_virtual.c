@@ -20,7 +20,9 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  *
  */
-#include <drm/drmP.h>
+
+#include <drm/drm_vblank.h>
+
 #include "amdgpu.h"
 #include "amdgpu_pm.h"
 #include "amdgpu_i2c.h"
@@ -121,6 +123,10 @@ static const struct drm_crtc_funcs dce_virtual_crtc_funcs = {
 	.set_config = amdgpu_display_crtc_set_config,
 	.destroy = dce_virtual_crtc_destroy,
 	.page_flip_target = amdgpu_display_crtc_page_flip_target,
+	.get_vblank_counter = amdgpu_get_vblank_counter_kms,
+	.enable_vblank = amdgpu_enable_vblank_kms,
+	.disable_vblank = amdgpu_disable_vblank_kms,
+	.get_vblank_timestamp = drm_crtc_vblank_helper_get_vblank_timestamp,
 };
 
 static void dce_virtual_crtc_dpms(struct drm_crtc *crtc, int mode)
@@ -216,6 +222,7 @@ static const struct drm_crtc_helper_funcs dce_virtual_crtc_helper_funcs = {
 	.prepare = dce_virtual_crtc_prepare,
 	.commit = dce_virtual_crtc_commit,
 	.disable = dce_virtual_crtc_disable,
+	.get_scanout_position = amdgpu_crtc_get_scanout_position,
 };
 
 static int dce_virtual_crtc_init(struct amdgpu_device *adev, int index)
@@ -258,15 +265,14 @@ static struct drm_encoder *
 dce_virtual_encoder(struct drm_connector *connector)
 {
 	struct drm_encoder *encoder;
-	int i;
 
-	drm_connector_for_each_possible_encoder(connector, encoder, i) {
+	drm_connector_for_each_possible_encoder(connector, encoder) {
 		if (encoder->encoder_type == DRM_MODE_ENCODER_VIRTUAL)
 			return encoder;
 	}
 
 	/* pick the first one */
-	drm_connector_for_each_possible_encoder(connector, encoder, i)
+	drm_connector_for_each_possible_encoder(connector, encoder)
 		return encoder;
 
 	return NULL;
@@ -452,12 +458,8 @@ static int dce_virtual_hw_init(void *handle)
 #endif
 		/* no DCE */
 		break;
-	case CHIP_VEGA10:
-	case CHIP_VEGA12:
-	case CHIP_VEGA20:
-		break;
 	default:
-		DRM_ERROR("Virtual display unsupported ASIC type: 0x%X\n", adev->asic_type);
+		break;
 	}
 	return 0;
 }
@@ -612,7 +614,6 @@ static int dce_virtual_connector_encoder_init(struct amdgpu_device *adev,
 	connector->display_info.subpixel_order = SubPixelHorizontalRGB;
 	connector->interlace_allowed = false;
 	connector->doublescan_allowed = false;
-	drm_connector_register(connector);
 
 	/* link them */
 	drm_connector_attach_encoder(connector, encoder);

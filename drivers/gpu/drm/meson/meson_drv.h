@@ -7,14 +7,32 @@
 #ifndef __MESON_DRV_H
 #define __MESON_DRV_H
 
-#include <linux/platform_device.h>
-#include <linux/regmap.h>
+#include <linux/device.h>
 #include <linux/of.h>
-#include <linux/soc/amlogic/meson-canvas.h>
-#include <drm/drmP.h>
+#include <linux/of_device.h>
+#include <linux/regmap.h>
+
+struct drm_crtc;
+struct drm_device;
+struct drm_plane;
+struct meson_drm;
+struct meson_afbcd_ops;
+
+enum vpu_compatible {
+	VPU_COMPATIBLE_GXBB = 0,
+	VPU_COMPATIBLE_GXL  = 1,
+	VPU_COMPATIBLE_GXM  = 2,
+	VPU_COMPATIBLE_G12A = 3,
+};
+
+struct meson_drm_match_data {
+	enum vpu_compatible compat;
+	struct meson_afbcd_ops *afbcd_ops;
+};
 
 struct meson_drm {
 	struct device *dev;
+	enum vpu_compatible compat;
 	void __iomem *io_base;
 	struct regmap *hhi;
 	int vsync_irq;
@@ -35,11 +53,16 @@ struct meson_drm {
 		bool osd1_enabled;
 		bool osd1_interlace;
 		bool osd1_commit;
+		bool osd1_afbcd;
 		uint32_t osd1_ctrl_stat;
+		uint32_t osd1_ctrl_stat2;
 		uint32_t osd1_blk0_cfg[5];
+		uint32_t osd1_blk1_cfg4;
+		uint32_t osd1_blk2_cfg4;
 		uint32_t osd1_addr;
 		uint32_t osd1_stride;
 		uint32_t osd1_height;
+		uint32_t osd1_width;
 		uint32_t osd_sc_ctrl0;
 		uint32_t osd_sc_i_wh_m1;
 		uint32_t osd_sc_o_h_start_end;
@@ -110,12 +133,24 @@ struct meson_drm {
 		bool venc_repeat;
 		bool hdmi_use_enci;
 	} venc;
+
+	struct {
+		dma_addr_t addr_dma;
+		uint32_t *addr;
+		unsigned int offset;
+	} rdma;
+
+	struct {
+		struct meson_afbcd_ops *ops;
+		u64 modifier;
+		u32 format;
+	} afbcd;
 };
 
 static inline int meson_vpu_is_compatible(struct meson_drm *priv,
-					  const char *compat)
+					  enum vpu_compatible family)
 {
-	return of_device_is_compatible(priv->dev->of_node, compat);
+	return priv->compat == family;
 }
 
 #endif /* __MESON_DRV_H */

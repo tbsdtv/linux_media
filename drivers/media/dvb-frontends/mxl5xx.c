@@ -33,7 +33,6 @@
 #include <asm/div64.h>
 #include <asm/unaligned.h>
 
-#include <media/dvb_frontend.h>
 #include "mxl5xx.h"
 #include "mxl5xx_regs.h"
 #include "mxl5xx_defs.h"

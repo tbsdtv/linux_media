@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* linux/drivers/mfd/sm501.c
  *
  * Copyright (C) 2006 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
  *	Vincent Sanders <vince@simtec.co.uk>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * SM501 MFD driver
 */
@@ -20,6 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/pci.h>
 #include <linux/platform_data/i2c-gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/gpio/machine.h>
 #include <linux/slab.h>
 
@@ -1088,8 +1086,7 @@ static int sm501_register_gpio(struct sm501_devdata *sm)
 	iounmap(gpio->regs);
 
  err_claimed:
-	release_resource(gpio->regs_res);
-	kfree(gpio->regs_res);
+	release_mem_region(iobase, 0x20);
 
 	return ret;
 }
@@ -1097,6 +1094,7 @@ static int sm501_register_gpio(struct sm501_devdata *sm)
 static void sm501_gpio_remove(struct sm501_devdata *sm)
 {
 	struct sm501_gpio *gpio = &sm->gpio;
+	resource_size_t iobase = sm->io_res->start + SM501_GPIO;
 
 	if (!sm->gpio.registered)
 		return;
@@ -1105,8 +1103,7 @@ static void sm501_gpio_remove(struct sm501_devdata *sm)
 	gpiochip_remove(&gpio->high.gpio);
 
 	iounmap(gpio->regs);
-	release_resource(gpio->regs_res);
-	kfree(gpio->regs_res);
+	release_mem_region(iobase, 0x20);
 }
 
 static inline int sm501_gpio_isregistered(struct sm501_devdata *sm)
@@ -1397,10 +1394,8 @@ static int sm501_plat_probe(struct platform_device *dev)
 	sm->platdata = dev_get_platdata(&dev->dev);
 
 	ret = platform_get_irq(dev, 0);
-	if (ret < 0) {
-		dev_err(&dev->dev, "failed to get irq resource\n");
+	if (ret < 0)
 		goto err_res;
-	}
 	sm->irq = ret;
 
 	sm->io_res = platform_get_resource(dev, IORESOURCE_MEM, 1);
@@ -1431,8 +1426,7 @@ static int sm501_plat_probe(struct platform_device *dev)
 	return sm501_init_dev(sm);
 
  err_claim:
-	release_resource(sm->regs_claim);
-	kfree(sm->regs_claim);
+	release_mem_region(sm->io_res->start, 0x100);
  err_res:
 	kfree(sm);
  err1:
@@ -1641,8 +1635,7 @@ static int sm501_pci_probe(struct pci_dev *dev,
 	return 0;
 
  err4:
-	release_resource(sm->regs_claim);
-	kfree(sm->regs_claim);
+	release_mem_region(sm->io_res->start, 0x100);
  err3:
 	pci_disable_device(dev);
  err2:
@@ -1677,8 +1670,7 @@ static void sm501_pci_remove(struct pci_dev *dev)
 	sm501_dev_remove(sm);
 	iounmap(sm->regs);
 
-	release_resource(sm->regs_claim);
-	kfree(sm->regs_claim);
+	release_mem_region(sm->io_res->start, 0x100);
 
 	pci_disable_device(dev);
 }
@@ -1690,8 +1682,7 @@ static int sm501_plat_remove(struct platform_device *dev)
 	sm501_dev_remove(sm);
 	iounmap(sm->regs);
 
-	release_resource(sm->regs_claim);
-	kfree(sm->regs_claim);
+	release_mem_region(sm->io_res->start, 0x100);
 
 	return 0;
 }

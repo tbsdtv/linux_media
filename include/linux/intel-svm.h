@@ -49,7 +49,7 @@ struct svm_dev_ops {
 
 /**
  * intel_svm_bind_mm() - Bind the current process to a PASID
- * @dev:	Device to be granted acccess
+ * @dev:	Device to be granted access
  * @pasid:	Address for allocated PASID
  * @flags:	Flags. Later for requesting supervisor mode, etc.
  * @ops:	Callbacks to device driver
@@ -122,7 +122,7 @@ static inline int intel_svm_unbind_mm(struct device *dev, int pasid)
 	BUG();
 }
 
-static int intel_svm_is_pasid_valid(struct device *dev, int pasid)
+static inline int intel_svm_is_pasid_valid(struct device *dev, int pasid)
 {
 	return -EINVAL;
 }

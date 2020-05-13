@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2017 Texas Instruments Incorporated - http://www.ti.com/
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/clk/ti-dra7-atl.h>
+#include <dt-bindings/clock/ti-dra7-atl.h>
 #include <dt-bindings/input/input.h>
 
 / {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * itg3200_core.c -- support InvenSense ITG3200
  *                   Digital 3-Axis Gyroscope driver
@@ -5,10 +6,6 @@
  * Copyright (c) 2011 Christian Strobel <christian.strobel@iis.fraunhofer.de>
  * Copyright (c) 2011 Manuel Stahl <manuel.stahl@iis.fraunhofer.de>
  * Copyright (c) 2012 Thorsten Nowak <thorsten.nowak@iis.fraunhofer.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * TODO:
  * - Support digital low pass filter
@@ -18,7 +15,6 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/i2c.h>
-#include <linux/gpio.h>
 #include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/module.h>
@@ -157,7 +153,7 @@ static int itg3200_write_raw(struct iio_dev *indio_dev,
 					  t);
 
 		mutex_unlock(&indio_dev->mlock);
-	return ret;
+		return ret;
 
 	default:
 		return -EINVAL;

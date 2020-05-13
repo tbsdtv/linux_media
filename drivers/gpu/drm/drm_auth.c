@@ -28,10 +28,16 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <drm/drmP.h>
+#include <linux/slab.h>
+
+#include <drm/drm_auth.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
+#include <drm/drm_lease.h>
+#include <drm/drm_print.h>
+
 #include "drm_internal.h"
 #include "drm_legacy.h"
-#include <drm/drm_lease.h>
 
 /**
  * DOC: master and authentication
@@ -147,11 +153,6 @@ static int drm_new_set_master(struct drm_device *dev, struct drm_file *fpriv)
 		return -ENOMEM;
 	}
 
-	if (dev->driver->master_create) {
-		ret = dev->driver->master_create(dev, fpriv->master);
-		if (ret)
-			goto out_err;
-	}
 	fpriv->is_master = 1;
 	fpriv->authenticated = 1;
 
@@ -326,9 +327,6 @@ static void drm_master_destroy(struct kref *kref)
 	if (drm_core_check_feature(dev, DRIVER_MODESET))
 		drm_lease_destroy(master);
 
-	if (dev->driver->master_destroy)
-		dev->driver->master_destroy(dev, master);
-
 	drm_legacy_master_rmmaps(dev, master);
 
 	idr_destroy(&master->magic_map);
@@ -351,3 +349,23 @@ void drm_master_put(struct drm_master **master)
 	*master = NULL;
 }
 EXPORT_SYMBOL(drm_master_put);
+
+/* Used by drm_client and drm_fb_helper */
+bool drm_master_internal_acquire(struct drm_device *dev)
+{
+	mutex_lock(&dev->master_mutex);
+	if (dev->master) {
+		mutex_unlock(&dev->master_mutex);
+		return false;
+	}
+
+	return true;
+}
+EXPORT_SYMBOL(drm_master_internal_acquire);
+
+/* Used by drm_client and drm_fb_helper */
+void drm_master_internal_release(struct drm_device *dev)
+{
+	mutex_unlock(&dev->master_mutex);
+}
+EXPORT_SYMBOL(drm_master_internal_release);

@@ -90,70 +90,58 @@ static int video_out[][9] = {
 
 static struct saa7134_format formats[] = {
 	{
-		.name     = "8 bpp gray",
 		.fourcc   = V4L2_PIX_FMT_GREY,
 		.depth    = 8,
 		.pm       = 0x06,
 	},{
-		.name     = "15 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_RGB555,
 		.depth    = 16,
 		.pm       = 0x13 | 0x80,
 	},{
-		.name     = "15 bpp RGB, be",
 		.fourcc   = V4L2_PIX_FMT_RGB555X,
 		.depth    = 16,
 		.pm       = 0x13 | 0x80,
 		.bswap    = 1,
 	},{
-		.name     = "16 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_RGB565,
 		.depth    = 16,
 		.pm       = 0x10 | 0x80,
 	},{
-		.name     = "16 bpp RGB, be",
 		.fourcc   = V4L2_PIX_FMT_RGB565X,
 		.depth    = 16,
 		.pm       = 0x10 | 0x80,
 		.bswap    = 1,
 	},{
-		.name     = "24 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_BGR24,
 		.depth    = 24,
 		.pm       = 0x11,
 	},{
-		.name     = "24 bpp RGB, be",
 		.fourcc   = V4L2_PIX_FMT_RGB24,
 		.depth    = 24,
 		.pm       = 0x11,
 		.bswap    = 1,
 	},{
-		.name     = "32 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_BGR32,
 		.depth    = 32,
 		.pm       = 0x12,
 	},{
-		.name     = "32 bpp RGB, be",
 		.fourcc   = V4L2_PIX_FMT_RGB32,
 		.depth    = 32,
 		.pm       = 0x12,
 		.bswap    = 1,
 		.wswap    = 1,
 	},{
-		.name     = "4:2:2 packed, YUYV",
 		.fourcc   = V4L2_PIX_FMT_YUYV,
 		.depth    = 16,
 		.pm       = 0x00,
 		.bswap    = 1,
 		.yuv      = 1,
 	},{
-		.name     = "4:2:2 packed, UYVY",
 		.fourcc   = V4L2_PIX_FMT_UYVY,
 		.depth    = 16,
 		.pm       = 0x00,
 		.yuv      = 1,
 	},{
-		.name     = "4:2:2 planar, Y-Cb-Cr",
 		.fourcc   = V4L2_PIX_FMT_YUV422P,
 		.depth    = 16,
 		.pm       = 0x09,
@@ -162,7 +150,6 @@ static struct saa7134_format formats[] = {
 		.hshift   = 1,
 		.vshift   = 0,
 	},{
-		.name     = "4:2:0 planar, Y-Cb-Cr",
 		.fourcc   = V4L2_PIX_FMT_YUV420,
 		.depth    = 12,
 		.pm       = 0x0a,
@@ -171,7 +158,6 @@ static struct saa7134_format formats[] = {
 		.hshift   = 1,
 		.vshift   = 1,
 	},{
-		.name     = "4:2:0 planar, Y-Cb-Cr",
 		.fourcc   = V4L2_PIX_FMT_YVU420,
 		.depth    = 12,
 		.pm       = 0x0a,
@@ -720,10 +706,10 @@ static int start_preview(struct saa7134_dev *dev)
 		return err;
 
 	dev->ovfield = dev->win.field;
-	video_dbg("start_preview %dx%d+%d+%d %s field=%s\n",
-		dev->win.w.width, dev->win.w.height,
-		dev->win.w.left, dev->win.w.top,
-		dev->ovfmt->name, v4l2_field_names[dev->ovfield]);
+	video_dbg("%s %dx%d+%d+%d 0x%08x field=%s\n", __func__,
+		  dev->win.w.width, dev->win.w.height,
+		  dev->win.w.left, dev->win.w.top,
+		  dev->ovfmt->fourcc, v4l2_field_names[dev->ovfield]);
 
 	/* setup window + clipping */
 	set_size(dev, TASK_B, dev->win.w.width, dev->win.w.height,
@@ -1022,8 +1008,7 @@ int saa7134_vb2_start_streaming(struct vb2_queue *vq, unsigned int count)
 	 */
 	if ((dmaq == &dev->video_q && !vb2_is_streaming(&dev->vbi_vbq)) ||
 	    (dmaq == &dev->vbi_q && !vb2_is_streaming(&dev->video_vbq)))
-		pm_qos_add_request(&dev->qos_request,
-			PM_QOS_CPU_DMA_LATENCY, 20);
+		cpu_latency_qos_add_request(&dev->qos_request, 20);
 	dmaq->seq_nr = 0;
 
 	return 0;
@@ -1038,7 +1023,7 @@ void saa7134_vb2_stop_streaming(struct vb2_queue *vq)
 
 	if ((dmaq == &dev->video_q && !vb2_is_streaming(&dev->vbi_vbq)) ||
 	    (dmaq == &dev->vbi_q && !vb2_is_streaming(&dev->video_vbq)))
-		pm_qos_remove_request(&dev->qos_request);
+		cpu_latency_qos_remove_request(&dev->qos_request);
 }
 
 static const struct vb2_ops vb2_qops = {
@@ -1780,9 +1765,6 @@ static int saa7134_enum_fmt_vid_cap(struct file *file, void  *priv,
 	if (f->index >= FORMATS)
 		return -EINVAL;
 
-	strscpy(f->description, formats[f->index].name,
-		sizeof(f->description));
-
 	f->pixelformat = formats[f->index].fourcc;
 
 	return 0;
@@ -1798,9 +1780,6 @@ static int saa7134_enum_fmt_vid_overlay(struct file *file, void  *priv,
 
 	if ((f->index >= FORMATS) || formats[f->index].planar)
 		return -EINVAL;
-
-	strscpy(f->description, formats[f->index].name,
-		sizeof(f->description));
 
 	f->pixelformat = formats[f->index].fourcc;
 

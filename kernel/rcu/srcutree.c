@@ -5,7 +5,7 @@
  * Copyright (C) IBM Corporation, 2006
  * Copyright (C) Fujitsu, 2012
  *
- * Author: Paul McKenney <paulmck@linux.ibm.com>
+ * Authors: Paul McKenney <paulmck@linux.ibm.com>
  *	   Lai Jiangshan <laijs@cn.fujitsu.com>
  *
  * For detailed explanation of Read-Copy Update mechanism see -
@@ -450,7 +450,7 @@ static void srcu_gp_start(struct srcu_struct *ssp)
 	spin_unlock_rcu_node(sdp);  /* Interrupts remain disabled. */
 	smp_mb(); /* Order prior store to ->srcu_gp_seq_needed vs. GP start. */
 	rcu_seq_start(&ssp->srcu_gp_seq);
-	state = rcu_seq_state(READ_ONCE(ssp->srcu_gp_seq));
+	state = rcu_seq_state(ssp->srcu_gp_seq);
 	WARN_ON_ONCE(state != SRCU_STATE_SCAN1);
 }
 
@@ -530,11 +530,11 @@ static void srcu_gp_end(struct srcu_struct *ssp)
 	idx = rcu_seq_state(ssp->srcu_gp_seq);
 	WARN_ON_ONCE(idx != SRCU_STATE_SCAN2);
 	cbdelay = srcu_get_delay(ssp);
-	ssp->srcu_last_gp_end = ktime_get_mono_fast_ns();
+	WRITE_ONCE(ssp->srcu_last_gp_end, ktime_get_mono_fast_ns());
 	rcu_seq_end(&ssp->srcu_gp_seq);
 	gpseq = rcu_seq_current(&ssp->srcu_gp_seq);
 	if (ULONG_CMP_LT(ssp->srcu_gp_seq_needed_exp, gpseq))
-		ssp->srcu_gp_seq_needed_exp = gpseq;
+		WRITE_ONCE(ssp->srcu_gp_seq_needed_exp, gpseq);
 	spin_unlock_irq_rcu_node(ssp);
 	mutex_unlock(&ssp->srcu_gp_mutex);
 	/* A new grace period can start at this point.  But only one. */
@@ -550,7 +550,7 @@ static void srcu_gp_end(struct srcu_struct *ssp)
 		snp->srcu_have_cbs[idx] = gpseq;
 		rcu_seq_set_state(&snp->srcu_have_cbs[idx], 1);
 		if (ULONG_CMP_LT(snp->srcu_gp_seq_needed_exp, gpseq))
-			snp->srcu_gp_seq_needed_exp = gpseq;
+			WRITE_ONCE(snp->srcu_gp_seq_needed_exp, gpseq);
 		mask = snp->srcu_data_have_cbs[idx];
 		snp->srcu_data_have_cbs[idx] = 0;
 		spin_unlock_irq_rcu_node(snp);
@@ -614,7 +614,7 @@ static void srcu_funnel_exp_start(struct srcu_struct *ssp, struct srcu_node *snp
 	}
 	spin_lock_irqsave_rcu_node(ssp, flags);
 	if (ULONG_CMP_LT(ssp->srcu_gp_seq_needed_exp, s))
-		ssp->srcu_gp_seq_needed_exp = s;
+		WRITE_ONCE(ssp->srcu_gp_seq_needed_exp, s);
 	spin_unlock_irqrestore_rcu_node(ssp, flags);
 }
 
@@ -660,7 +660,7 @@ static void srcu_funnel_gp_start(struct srcu_struct *ssp, struct srcu_data *sdp,
 		if (snp == sdp->mynode)
 			snp->srcu_data_have_cbs[idx] |= sdp->grpmask;
 		if (!do_norm && ULONG_CMP_LT(snp->srcu_gp_seq_needed_exp, s))
-			snp->srcu_gp_seq_needed_exp = s;
+			WRITE_ONCE(snp->srcu_gp_seq_needed_exp, s);
 		spin_unlock_irqrestore_rcu_node(snp, flags);
 	}
 
@@ -674,7 +674,7 @@ static void srcu_funnel_gp_start(struct srcu_struct *ssp, struct srcu_data *sdp,
 		smp_store_release(&ssp->srcu_gp_seq_needed, s); /*^^^*/
 	}
 	if (!do_norm && ULONG_CMP_LT(ssp->srcu_gp_seq_needed_exp, s))
-		ssp->srcu_gp_seq_needed_exp = s;
+		WRITE_ONCE(ssp->srcu_gp_seq_needed_exp, s);
 
 	/* If grace period not already done and none in progress, start it. */
 	if (!rcu_seq_done(&ssp->srcu_gp_seq, s) &&
@@ -762,6 +762,7 @@ static bool srcu_might_be_idle(struct srcu_struct *ssp)
 	unsigned long flags;
 	struct srcu_data *sdp;
 	unsigned long t;
+	unsigned long tlast;
 
 	/* If the local srcu_data structure has callbacks, not idle.  */
 	local_irq_save(flags);
@@ -780,9 +781,9 @@ static bool srcu_might_be_idle(struct srcu_struct *ssp)
 
 	/* First, see if enough time has passed since the last GP. */
 	t = ktime_get_mono_fast_ns();
+	tlast = READ_ONCE(ssp->srcu_last_gp_end);
 	if (exp_holdoff == 0 ||
-	    time_in_range_open(t, ssp->srcu_last_gp_end,
-			       ssp->srcu_last_gp_end + exp_holdoff))
+	    time_in_range_open(t, tlast, tlast + exp_holdoff))
 		return false; /* Too soon after last GP. */
 
 	/* Next, check for probable idleness. */
@@ -831,8 +832,8 @@ static void srcu_leak_callback(struct rcu_head *rhp)
  * srcu_read_lock(), and srcu_read_unlock() that are all passed the same
  * srcu_struct structure.
  */
-void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
-		 rcu_callback_t func, bool do_norm)
+static void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
+			rcu_callback_t func, bool do_norm)
 {
 	unsigned long flags;
 	int idx;
@@ -853,7 +854,7 @@ void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
 	local_irq_save(flags);
 	sdp = this_cpu_ptr(ssp->sda);
 	spin_lock_rcu_node(sdp);
-	rcu_segcblist_enqueue(&sdp->srcu_cblist, rhp, false);
+	rcu_segcblist_enqueue(&sdp->srcu_cblist, rhp);
 	rcu_segcblist_advance(&sdp->srcu_cblist,
 			      rcu_seq_current(&ssp->srcu_gp_seq));
 	s = rcu_seq_snap(&ssp->srcu_gp_seq);
@@ -1052,7 +1053,7 @@ void srcu_barrier(struct srcu_struct *ssp)
 		sdp->srcu_barrier_head.func = srcu_barrier_cb;
 		debug_rcu_head_queue(&sdp->srcu_barrier_head);
 		if (!rcu_segcblist_entrain(&sdp->srcu_cblist,
-					   &sdp->srcu_barrier_head, 0)) {
+					   &sdp->srcu_barrier_head)) {
 			debug_rcu_head_unqueue(&sdp->srcu_barrier_head);
 			atomic_dec(&ssp->srcu_barrier_cpu_cnt);
 		}
@@ -1078,7 +1079,7 @@ EXPORT_SYMBOL_GPL(srcu_barrier);
  */
 unsigned long srcu_batches_completed(struct srcu_struct *ssp)
 {
-	return ssp->srcu_idx;
+	return READ_ONCE(ssp->srcu_idx);
 }
 EXPORT_SYMBOL_GPL(srcu_batches_completed);
 
@@ -1129,7 +1130,9 @@ static void srcu_advance_state(struct srcu_struct *ssp)
 			return; /* readers present, retry later. */
 		}
 		srcu_flip(ssp);
+		spin_lock_irq_rcu_node(ssp);
 		rcu_seq_set_state(&ssp->srcu_gp_seq, SRCU_STATE_SCAN2);
+		spin_unlock_irq_rcu_node(ssp);
 	}
 
 	if (rcu_seq_state(READ_ONCE(ssp->srcu_gp_seq)) == SRCU_STATE_SCAN2) {
@@ -1279,8 +1282,9 @@ void srcu_torture_stats_print(struct srcu_struct *ssp, char *tt, char *tf)
 
 		c0 = l0 - u0;
 		c1 = l1 - u1;
-		pr_cont(" %d(%ld,%ld %1p)",
-			cpu, c0, c1, rcu_segcblist_head(&sdp->srcu_cblist));
+		pr_cont(" %d(%ld,%ld %c)",
+			cpu, c0, c1,
+			"C."[rcu_segcblist_empty(&sdp->srcu_cblist)]);
 		s0 += c0;
 		s1 += c1;
 	}
@@ -1310,3 +1314,68 @@ void __init srcu_init(void)
 		queue_work(rcu_gp_wq, &ssp->work.work);
 	}
 }
+
+#ifdef CONFIG_MODULES
+
+/* Initialize any global-scope srcu_struct structures used by this module. */
+static int srcu_module_coming(struct module *mod)
+{
+	int i;
+	struct srcu_struct **sspp = mod->srcu_struct_ptrs;
+	int ret;
+
+	for (i = 0; i < mod->num_srcu_structs; i++) {
+		ret = init_srcu_struct(*(sspp++));
+		if (WARN_ON_ONCE(ret))
+			return ret;
+	}
+	return 0;
+}
+
+/* Clean up any global-scope srcu_struct structures used by this module. */
+static void srcu_module_going(struct module *mod)
+{
+	int i;
+	struct srcu_struct **sspp = mod->srcu_struct_ptrs;
+
+	for (i = 0; i < mod->num_srcu_structs; i++)
+		cleanup_srcu_struct(*(sspp++));
+}
+
+/* Handle one module, either coming or going. */
+static int srcu_module_notify(struct notifier_block *self,
+			      unsigned long val, void *data)
+{
+	struct module *mod = data;
+	int ret = 0;
+
+	switch (val) {
+	case MODULE_STATE_COMING:
+		ret = srcu_module_coming(mod);
+		break;
+	case MODULE_STATE_GOING:
+		srcu_module_going(mod);
+		break;
+	default:
+		break;
+	}
+	return ret;
+}
+
+static struct notifier_block srcu_module_nb = {
+	.notifier_call = srcu_module_notify,
+	.priority = 0,
+};
+
+static __init int init_srcu_module_notifier(void)
+{
+	int ret;
+
+	ret = register_module_notifier(&srcu_module_nb);
+	if (ret)
+		pr_warn("Failed to register srcu module notifier\n");
+	return ret;
+}
+late_initcall(init_srcu_module_notifier);
+
+#endif /* #ifdef CONFIG_MODULES */

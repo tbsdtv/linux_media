@@ -81,8 +81,8 @@ int phm_enable_dynamic_state_management(struct pp_hwmgr *hwmgr)
 	adev = hwmgr->adev;
 
 	/* Skip for suspend/resume case */
-	if (smum_is_dpm_running(hwmgr) && !amdgpu_passthrough(adev)
-		&& adev->in_suspend) {
+	if (!hwmgr->pp_one_vf && smum_is_dpm_running(hwmgr)
+	    && !amdgpu_passthrough(adev) && adev->in_suspend) {
 		pr_info("dpm has been enabled\n");
 		return 0;
 	}
@@ -98,6 +98,9 @@ int phm_disable_dynamic_state_management(struct pp_hwmgr *hwmgr)
 	int ret = -EINVAL;
 
 	PHM_FUNC_CHECK(hwmgr);
+
+	if (!hwmgr->not_vf)
+		return 0;
 
 	if (!smum_is_dpm_running(hwmgr)) {
 		pr_info("dpm has been disabled\n");
@@ -200,6 +203,9 @@ int phm_stop_thermal_controller(struct pp_hwmgr *hwmgr)
 {
 	PHM_FUNC_CHECK(hwmgr);
 
+	if (!hwmgr->not_vf)
+		return 0;
+
 	if (hwmgr->hwmgr_func->stop_thermal_controller == NULL)
 		return -EINVAL;
 
@@ -225,8 +231,20 @@ int phm_register_irq_handlers(struct pp_hwmgr *hwmgr)
 int phm_start_thermal_controller(struct pp_hwmgr *hwmgr)
 {
 	int ret = 0;
-	struct PP_TemperatureRange range = {TEMP_RANGE_MIN, TEMP_RANGE_MAX};
+	struct PP_TemperatureRange range = {
+		TEMP_RANGE_MIN,
+		TEMP_RANGE_MAX,
+		TEMP_RANGE_MAX,
+		TEMP_RANGE_MIN,
+		TEMP_RANGE_MAX,
+		TEMP_RANGE_MAX,
+		TEMP_RANGE_MIN,
+		TEMP_RANGE_MAX,
+		TEMP_RANGE_MAX};
 	struct amdgpu_device *adev = hwmgr->adev;
+
+	if (!hwmgr->not_vf)
+		return 0;
 
 	if (hwmgr->hwmgr_func->get_thermal_temperature_range)
 		hwmgr->hwmgr_func->get_thermal_temperature_range(
@@ -239,6 +257,13 @@ int phm_start_thermal_controller(struct pp_hwmgr *hwmgr)
 
 	adev->pm.dpm.thermal.min_temp = range.min;
 	adev->pm.dpm.thermal.max_temp = range.max;
+	adev->pm.dpm.thermal.max_edge_emergency_temp = range.edge_emergency_max;
+	adev->pm.dpm.thermal.min_hotspot_temp = range.hotspot_min;
+	adev->pm.dpm.thermal.max_hotspot_crit_temp = range.hotspot_crit_max;
+	adev->pm.dpm.thermal.max_hotspot_emergency_temp = range.hotspot_emergency_max;
+	adev->pm.dpm.thermal.min_mem_temp = range.mem_min;
+	adev->pm.dpm.thermal.max_mem_crit_temp = range.mem_crit_max;
+	adev->pm.dpm.thermal.max_mem_emergency_temp = range.mem_emergency_max;
 
 	return ret;
 }
@@ -247,6 +272,8 @@ int phm_start_thermal_controller(struct pp_hwmgr *hwmgr)
 bool phm_check_smc_update_required_for_display_configuration(struct pp_hwmgr *hwmgr)
 {
 	PHM_FUNC_CHECK(hwmgr);
+	if (hwmgr->pp_one_vf)
+		return false;
 
 	if (hwmgr->hwmgr_func->check_smc_update_required_for_display_configuration == NULL)
 		return false;
@@ -465,6 +492,9 @@ int phm_get_max_high_clocks(struct pp_hwmgr *hwmgr, struct amd_pp_simple_clock_i
 int phm_disable_smc_firmware_ctf(struct pp_hwmgr *hwmgr)
 {
 	PHM_FUNC_CHECK(hwmgr);
+
+	if (!hwmgr->not_vf)
+		return 0;
 
 	if (hwmgr->hwmgr_func->disable_smc_firmware_ctf == NULL)
 		return -EINVAL;

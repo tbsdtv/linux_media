@@ -1,11 +1,14 @@
-#ifndef _LINUX_MODULE_H
-#define _LINUX_MODULE_H
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Dynamic loading of modules into the kernel.
  *
  * Rewritten by Richard Henderson <rth@tamu.edu> Dec 1996
  * Rewritten again by Rusty Russell, 2002
  */
+
+#ifndef _LINUX_MODULE_H
+#define _LINUX_MODULE_H
+
 #include <linux/list.h>
 #include <linux/stat.h>
 #include <linux/compiler.h>
@@ -21,12 +24,10 @@
 #include <linux/rbtree_latch.h>
 #include <linux/error-injection.h>
 #include <linux/tracepoint-defs.h>
+#include <linux/srcu.h>
 
 #include <linux/percpu.h>
 #include <asm/module.h>
-
-/* In stripped ARM and x86-64 modules, ~ is surprisingly rare. */
-#define MODULE_SIG_STRING "~Module signature appended~\n"
 
 /* Not Yet Implemented */
 #define MODULE_SUPPORTED_DEVICE(name)
@@ -169,6 +170,16 @@ extern void cleanup_module(void);
 #define MODULE_SOFTDEP(_softdep) MODULE_INFO(softdep, _softdep)
 
 /*
+ * MODULE_FILE is used for generating modules.builtin
+ * So, make it no-op when this is being built as a module
+ */
+#ifdef MODULE
+#define MODULE_FILE
+#else
+#define MODULE_FILE	MODULE_INFO(file, KBUILD_MODFILE);
+#endif
+
+/*
  * The following license idents are currently accepted as indicating free
  * software modules
  *
@@ -212,7 +223,7 @@ extern void cleanup_module(void);
  * 2.	So the community can ignore bug reports including proprietary modules
  * 3.	So vendors can do likewise based on their own policies
  */
-#define MODULE_LICENSE(_license) MODULE_INFO(license, _license)
+#define MODULE_LICENSE(_license) MODULE_FILE MODULE_INFO(license, _license)
 
 /*
  * Author(s), use "Name <email>" or just "Name", for multiple
@@ -274,6 +285,8 @@ extern typeof(name) __mod_##type##__##name##_device_table		\
  * format is simply firmware file name.  Multiple firmware
  * files require multiple MODULE_FIRMWARE() specifiers */
 #define MODULE_FIRMWARE(_firmware) MODULE_INFO(firmware, _firmware)
+
+#define MODULE_IMPORT_NS(ns) MODULE_INFO(import_ns, #ns)
 
 struct notifier_block;
 
@@ -426,7 +439,7 @@ struct module {
 
 #ifdef CONFIG_KALLSYMS
 	/* Protected by RCU and/or module_mutex: use rcu_dereference() */
-	struct mod_kallsyms *kallsyms;
+	struct mod_kallsyms __rcu *kallsyms;
 	struct mod_kallsyms core_kallsyms;
 
 	/* Section attributes */
@@ -449,6 +462,10 @@ struct module {
 #ifdef CONFIG_TRACEPOINTS
 	unsigned int num_tracepoints;
 	tracepoint_ptr_t *tracepoints_ptrs;
+#endif
+#ifdef CONFIG_TREE_SRCU
+	unsigned int num_srcu_structs;
+	struct srcu_struct **srcu_struct_ptrs;
 #endif
 #ifdef CONFIG_BPF_EVENTS
 	unsigned int num_bpf_raw_events;
@@ -842,13 +859,9 @@ extern int module_sysfs_initialized;
 #define __MODULE_STRING(x) __stringify(x)
 
 #ifdef CONFIG_STRICT_MODULE_RWX
-extern void set_all_modules_text_rw(void);
-extern void set_all_modules_text_ro(void);
 extern void module_enable_ro(const struct module *mod, bool after_init);
 extern void module_disable_ro(const struct module *mod);
 #else
-static inline void set_all_modules_text_rw(void) { }
-static inline void set_all_modules_text_ro(void) { }
 static inline void module_enable_ro(const struct module *mod, bool after_init) { }
 static inline void module_disable_ro(const struct module *mod) { }
 #endif

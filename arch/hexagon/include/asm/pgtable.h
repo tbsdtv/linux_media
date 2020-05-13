@@ -158,8 +158,6 @@ extern pgd_t swapper_pg_dir[PTRS_PER_PGD];  /* located in head.S */
 
 /* Seems to be zero even in architectures where the zero page is firewalled? */
 #define FIRST_USER_ADDRESS 0UL
-#define pte_special(pte)	0
-#define pte_mkspecial(pte)	(pte)
 
 /*  HUGETLB not working currently  */
 #ifdef CONFIG_HUGETLB_PAGE
@@ -430,9 +428,6 @@ static inline int pte_exec(pte_t pte)
 #define ZERO_PAGE(vaddr) (virt_to_page(&empty_zero_page))
 
 #define __pte_offset(address) (((address) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
-
-/*  I think this is in case we have page table caches; needed by init/main.c  */
-#define pgtable_cache_init()    do { } while (0)
 
 /*
  * Swap/file PTE definitions.  If _PAGE_PRESENT is zero, the rest of the PTE is

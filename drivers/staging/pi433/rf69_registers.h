@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0+
- *
+/* SPDX-License-Identifier: GPL-2.0+ */
+/*
  * register description for HopeRf rf69 radio module
  *
  * Copyright (C) 2016 Wolf-Entwicklungen
@@ -395,7 +395,7 @@
 #define  MASK_SYNC_CONFIG_SYNC_TOLERANCE	0x07
 
 /* RegPacketConfig1 */
-#define  MASK_PACKETCONFIG1_PAKET_FORMAT_VARIABLE	0x80
+#define  MASK_PACKETCONFIG1_PACKET_FORMAT_VARIABLE	0x80
 #define  MASK_PACKETCONFIG1_DCFREE			0x60
 #define  MASK_PACKETCONFIG1_CRC_ON			0x10 /* default */
 #define  MASK_PACKETCONFIG1_CRCAUTOCLEAR_OFF		0x08

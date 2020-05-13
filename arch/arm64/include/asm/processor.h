@@ -1,26 +1,15 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Based on arch/arm/include/asm/processor.h
  *
  * Copyright (C) 1995-1999 Russell King
  * Copyright (C) 2012 ARM Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef __ASM_PROCESSOR_H
 #define __ASM_PROCESSOR_H
 
 #define KERNEL_DS		UL(-1)
-#define USER_DS			((UL(1) << MAX_USER_VA_BITS) - 1)
+#define USER_DS			((UL(1) << VA_BITS) - 1)
 
 /*
  * On arm64 systems, unaligned accesses by the CPU are cheap, and so there is
@@ -31,17 +20,20 @@
 #define NET_IP_ALIGN	0
 
 #ifndef __ASSEMBLY__
-#ifdef __KERNEL__
 
 #include <linux/build_bug.h>
 #include <linux/cache.h>
 #include <linux/init.h>
 #include <linux/stddef.h>
 #include <linux/string.h>
+#include <linux/thread_info.h>
+
+#include <vdso/processor.h>
 
 #include <asm/alternative.h>
 #include <asm/cpufeature.h>
 #include <asm/hw_breakpoint.h>
+#include <asm/kasan.h>
 #include <asm/lse.h>
 #include <asm/pgtable-hwdef.h>
 #include <asm/pointer_auth.h>
@@ -53,8 +45,8 @@
  * TASK_UNMAPPED_BASE - the lower boundary of the mmap VM area.
  */
 
-#define DEFAULT_MAP_WINDOW_64	(UL(1) << VA_BITS)
-#define TASK_SIZE_64		(UL(1) << vabits_user)
+#define DEFAULT_MAP_WINDOW_64	(UL(1) << VA_BITS_MIN)
+#define TASK_SIZE_64		(UL(1) << vabits_actual)
 
 #ifdef CONFIG_COMPAT
 #if defined(CONFIG_ARM64_64K_PAGES) && defined(CONFIG_KUSER_HELPERS)
@@ -156,7 +148,8 @@ struct thread_struct {
 	unsigned long		fault_code;	/* ESR_EL1 value */
 	struct debug_info	debug;		/* debugging */
 #ifdef CONFIG_ARM64_PTR_AUTH
-	struct ptrauth_keys	keys_user;
+	struct ptrauth_keys_user	keys_user;
+	struct ptrauth_keys_kernel	keys_kernel;
 #endif
 };
 
@@ -204,6 +197,16 @@ static inline void start_thread_common(struct pt_regs *regs, unsigned long pc)
 		regs->pmr_save = GIC_PRIO_IRQON;
 }
 
+static inline void set_ssbs_bit(struct pt_regs *regs)
+{
+	regs->pstate |= PSR_SSBS_BIT;
+}
+
+static inline void set_compat_ssbs_bit(struct pt_regs *regs)
+{
+	regs->pstate |= PSR_AA32_SSBS_BIT;
+}
+
 static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 				unsigned long sp)
 {
@@ -211,9 +214,21 @@ static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 	regs->pstate = PSR_MODE_EL0t;
 
 	if (arm64_get_ssbd_state() != ARM64_SSBD_FORCE_ENABLE)
-		regs->pstate |= PSR_SSBS_BIT;
+		set_ssbs_bit(regs);
 
 	regs->sp = sp;
+}
+
+static inline bool is_ttbr0_addr(unsigned long addr)
+{
+	/* entry assembly clears tags for TTBR0 addrs */
+	return addr < TASK_SIZE;
+}
+
+static inline bool is_ttbr1_addr(unsigned long addr)
+{
+	/* TTBR1 addresses may have a tag if KASAN_SW_TAGS is in use */
+	return arch_kasan_reset_tag(addr) >= PAGE_OFFSET;
 }
 
 #ifdef CONFIG_COMPAT
@@ -230,7 +245,7 @@ static inline void compat_start_thread(struct pt_regs *regs, unsigned long pc,
 #endif
 
 	if (arm64_get_ssbd_state() != ARM64_SSBD_FORCE_ENABLE)
-		regs->pstate |= PSR_AA32_SSBS_BIT;
+		set_compat_ssbs_bit(regs);
 
 	regs->compat_sp = sp;
 }
@@ -243,11 +258,6 @@ struct task_struct;
 extern void release_thread(struct task_struct *);
 
 unsigned long get_wchan(struct task_struct *p);
-
-static inline void cpu_relax(void)
-{
-	asm volatile("yield" ::: "memory");
-}
 
 /* Thread switching */
 extern struct task_struct *cpu_switch_to(struct task_struct *prev,
@@ -282,10 +292,6 @@ static inline void spin_lock_prefetch(const void *ptr)
 		     "nop") : : "p" (ptr));
 }
 
-#define HAVE_ARCH_PICK_MMAP_LAYOUT
-
-#endif
-
 extern unsigned long __ro_after_init signal_minsigstksz; /* sigframe size */
 extern void __init minsigstksz_setup(void);
 
@@ -306,6 +312,14 @@ extern void __init minsigstksz_setup(void);
 
 /* PR_PAC_RESET_KEYS prctl */
 #define PAC_RESET_KEYS(tsk, arg)	ptrauth_prctl_reset_keys(tsk, arg)
+
+#ifdef CONFIG_ARM64_TAGGED_ADDR_ABI
+/* PR_{SET,GET}_TAGGED_ADDR_CTRL prctl */
+long set_tagged_addr_ctrl(unsigned long arg);
+long get_tagged_addr_ctrl(void);
+#define SET_TAGGED_ADDR_CTRL(arg)	set_tagged_addr_ctrl(arg)
+#define GET_TAGGED_ADDR_CTRL()		get_tagged_addr_ctrl()
+#endif
 
 /*
  * For CONFIG_GCC_PLUGIN_STACKLEAK

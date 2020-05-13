@@ -28,12 +28,11 @@
 #include <acpi/platform/aclinux.h>
 #include <acpi/actypes.h>
 #include <acpi/acpi_bus.h>
-#include <asm/cpu_device_id.h>
-#include <asm/iosf_mbi.h>
 #include <sound/soc-acpi.h>
 #include <sound/soc-acpi-intel-match.h>
 #include "../sst-mfld-platform.h"
 #include "../../common/sst-dsp.h"
+#include "../../common/soc-intel-quirks.h"
 #include "sst.h"
 
 /* LPE viewpoint addresses */
@@ -166,7 +165,7 @@ static int sst_platform_get_resources(struct intel_sst_drv *ctx)
 	ctx->iram_base = rsrc->start + ctx->pdata->res_info->iram_offset;
 	ctx->iram_end =  ctx->iram_base + ctx->pdata->res_info->iram_size - 1;
 	dev_info(ctx->dev, "IRAM base: %#x", ctx->iram_base);
-	ctx->iram = devm_ioremap_nocache(ctx->dev, ctx->iram_base,
+	ctx->iram = devm_ioremap(ctx->dev, ctx->iram_base,
 					 ctx->pdata->res_info->iram_size);
 	if (!ctx->iram) {
 		dev_err(ctx->dev, "unable to map IRAM\n");
@@ -176,7 +175,7 @@ static int sst_platform_get_resources(struct intel_sst_drv *ctx)
 	ctx->dram_base = rsrc->start + ctx->pdata->res_info->dram_offset;
 	ctx->dram_end = ctx->dram_base + ctx->pdata->res_info->dram_size - 1;
 	dev_info(ctx->dev, "DRAM base: %#x", ctx->dram_base);
-	ctx->dram = devm_ioremap_nocache(ctx->dev, ctx->dram_base,
+	ctx->dram = devm_ioremap(ctx->dev, ctx->dram_base,
 					 ctx->pdata->res_info->dram_size);
 	if (!ctx->dram) {
 		dev_err(ctx->dev, "unable to map DRAM\n");
@@ -185,7 +184,7 @@ static int sst_platform_get_resources(struct intel_sst_drv *ctx)
 
 	ctx->shim_phy_add = rsrc->start + ctx->pdata->res_info->shim_offset;
 	dev_info(ctx->dev, "SHIM base: %#x", ctx->shim_phy_add);
-	ctx->shim = devm_ioremap_nocache(ctx->dev, ctx->shim_phy_add,
+	ctx->shim = devm_ioremap(ctx->dev, ctx->shim_phy_add,
 					ctx->pdata->res_info->shim_size);
 	if (!ctx->shim) {
 		dev_err(ctx->dev, "unable to map SHIM\n");
@@ -198,7 +197,7 @@ static int sst_platform_get_resources(struct intel_sst_drv *ctx)
 	/* Get mailbox addr */
 	ctx->mailbox_add = rsrc->start + ctx->pdata->res_info->mbox_offset;
 	dev_info(ctx->dev, "Mailbox base: %#x", ctx->mailbox_add);
-	ctx->mailbox = devm_ioremap_nocache(ctx->dev, ctx->mailbox_add,
+	ctx->mailbox = devm_ioremap(ctx->dev, ctx->mailbox_add,
 					    ctx->pdata->res_info->mbox_size);
 	if (!ctx->mailbox) {
 		dev_err(ctx->dev, "unable to map mailbox\n");
@@ -217,7 +216,7 @@ static int sst_platform_get_resources(struct intel_sst_drv *ctx)
 	ctx->ddr_base = rsrc->start;
 	ctx->ddr_end = rsrc->end;
 	dev_info(ctx->dev, "DDR base: %#x", ctx->ddr_base);
-	ctx->ddr = devm_ioremap_nocache(ctx->dev, ctx->ddr_base,
+	ctx->ddr = devm_ioremap(ctx->dev, ctx->ddr_base,
 					resource_size(rsrc));
 	if (!ctx->ddr) {
 		dev_err(ctx->dev, "unable to map DDR\n");
@@ -232,64 +231,6 @@ static int sst_platform_get_resources(struct intel_sst_drv *ctx)
 
 	return 0;
 }
-
-static int is_byt(void)
-{
-	bool status = false;
-	static const struct x86_cpu_id cpu_ids[] = {
-		{ X86_VENDOR_INTEL, 6, 55 }, /* Valleyview, Bay Trail */
-		{}
-	};
-	if (x86_match_cpu(cpu_ids))
-		status = true;
-	return status;
-}
-
-static bool is_byt_cr(struct platform_device *pdev)
-{
-	struct device *dev = &pdev->dev;
-	int status = 0;
-
-	if (!is_byt())
-		return false;
-
-	if (iosf_mbi_available()) {
-		u32 bios_status;
-		status = iosf_mbi_read(BT_MBI_UNIT_PMC, /* 0x04 PUNIT */
-				       MBI_REG_READ, /* 0x10 */
-				       0x006, /* BIOS_CONFIG */
-				       &bios_status);
-
-		if (status) {
-			dev_err(dev, "could not read PUNIT BIOS_CONFIG\n");
-		} else {
-			/* bits 26:27 mirror PMIC options */
-			bios_status = (bios_status >> 26) & 3;
-
-			if (bios_status == 1 || bios_status == 3) {
-				dev_info(dev, "Detected Baytrail-CR platform\n");
-				return true;
-			}
-
-			dev_info(dev, "BYT-CR not detected\n");
-		}
-	} else {
-		dev_info(dev, "IOSF_MBI not available, no BYT-CR detection\n");
-	}
-
-	if (platform_get_resource(pdev, IORESOURCE_IRQ, 5) == NULL) {
-		/*
-		 * Some devices detected as BYT-T have only a single IRQ listed,
-		 * causing platform_get_irq with index 5 to return -ENXIO.
-		 * The correct IRQ in this case is at index 0, as on BYT-CR.
-		 */
-		dev_info(dev, "Falling back to Baytrail-CR platform\n");
-		return true;
-	}
-
-	return false;
-}
-
 
 static int sst_acpi_probe(struct platform_device *pdev)
 {
@@ -315,7 +256,7 @@ static int sst_acpi_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	if (is_byt())
+	if (soc_intel_is_byt())
 		mach->pdata = &byt_rvp_platform_data;
 	else
 		mach->pdata = &chv_platform_data;
@@ -333,7 +274,7 @@ static int sst_acpi_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	if (is_byt_cr(pdev)) {
+	if (soc_intel_is_byt_cr(pdev)) {
 		/* override resource info */
 		byt_rvp_platform_data.res_info = &bytcr_res_info;
 	}

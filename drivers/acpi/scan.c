@@ -1462,7 +1462,7 @@ int acpi_dma_configure(struct device *dev, enum dev_dma_attr attr)
 	iort_dma_setup(dev, &dma_addr, &size);
 
 	iommu = iort_iommu_configure(dev);
-	if (IS_ERR(iommu) && PTR_ERR(iommu) == -EPROBE_DEFER)
+	if (PTR_ERR(iommu) == -EPROBE_DEFER)
 		return -EPROBE_DEFER;
 
 	arch_setup_dma_ops(dev, dma_addr, size,
@@ -2174,6 +2174,7 @@ int __init acpi_scan_init(void)
 	acpi_pci_root_init();
 	acpi_pci_link_init();
 	acpi_processor_init();
+	acpi_platform_init();
 	acpi_lpss_init();
 	acpi_apd_init();
 	acpi_cmos_rtc_init();
@@ -2204,6 +2205,12 @@ int __init acpi_scan_init(void)
 	acpi_gpe_apply_masked_gpes();
 	acpi_update_all_gpes();
 
+	/*
+	 * Although we call __add_memory() that is documented to require the
+	 * device_hotplug_lock, it is not necessary here because this is an
+	 * early code when userspace or any other code path cannot trigger
+	 * hotplug/hotunplug operations.
+	 */
 	mutex_lock(&acpi_scan_lock);
 	/*
 	 * Enumerate devices in the ACPI namespace.

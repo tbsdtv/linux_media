@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Performance events - AMD Processor Power Reporting Mechanism
  *
  * Copyright (C) 2016 Advanced Micro Devices, Inc.
  *
  * Author: Huang Rui <ray.huang@amd.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -262,7 +259,7 @@ static int power_cpu_init(unsigned int cpu)
 }
 
 static const struct x86_cpu_id cpu_match[] = {
-	{ .vendor = X86_VENDOR_AMD, .family = 0x15 },
+	X86_MATCH_VENDOR_FAM(AMD, 0x15, NULL),
 	{},
 };
 

@@ -1,6 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
- * Use of this source code is governed by the GPLv2 license.
  *
  * Test code for seccomp bpf.
  */
@@ -35,6 +35,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <time.h>
+#include <limits.h>
 #include <linux/elf.h>
 #include <sys/uio.h>
 #include <sys/utsname.h>
@@ -43,6 +44,7 @@
 #include <sys/times.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <linux/kcmp.h>
 
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -111,6 +113,8 @@ struct seccomp_data {
 # elif defined(__arm__)
 #  define __NR_seccomp 383
 # elif defined(__aarch64__)
+#  define __NR_seccomp 277
+# elif defined(__riscv)
 #  define __NR_seccomp 277
 # elif defined(__hppa__)
 #  define __NR_seccomp 338
@@ -197,6 +201,19 @@ struct seccomp_notif_sizes {
 	__u16 seccomp_notif_resp;
 	__u16 seccomp_data;
 };
+#endif
+
+#ifndef PTRACE_EVENTMSG_SYSCALL_ENTRY
+#define PTRACE_EVENTMSG_SYSCALL_ENTRY	1
+#define PTRACE_EVENTMSG_SYSCALL_EXIT	2
+#endif
+
+#ifndef SECCOMP_USER_NOTIF_FLAG_CONTINUE
+#define SECCOMP_USER_NOTIF_FLAG_CONTINUE 0x00000001
+#endif
+
+#ifndef SECCOMP_FILTER_FLAG_TSYNC_ESRCH
+#define SECCOMP_FILTER_FLAG_TSYNC_ESRCH (1UL << 4)
 #endif
 
 #ifndef seccomp
@@ -896,7 +913,7 @@ TEST(ERRNO_order)
 	EXPECT_EQ(12, errno);
 }
 
-FIXTURE_DATA(TRAP) {
+FIXTURE(TRAP) {
 	struct sock_fprog prog;
 };
 
@@ -1007,7 +1024,7 @@ TEST_F(TRAP, handler)
 	EXPECT_NE(0, (unsigned long)sigsys->_call_addr);
 }
 
-FIXTURE_DATA(precedence) {
+FIXTURE(precedence) {
 	struct sock_fprog allow;
 	struct sock_fprog log;
 	struct sock_fprog trace;
@@ -1496,7 +1513,7 @@ void tracer_poke(struct __test_metadata *_metadata, pid_t tracee, int status,
 	EXPECT_EQ(0, ret);
 }
 
-FIXTURE_DATA(TRACE_poke) {
+FIXTURE(TRACE_poke) {
 	struct sock_fprog prog;
 	pid_t tracer;
 	long poked;
@@ -1582,6 +1599,10 @@ TEST_F(TRACE_poke, getpid_runs_normally)
 # define ARCH_REGS	struct user_pt_regs
 # define SYSCALL_NUM	regs[8]
 # define SYSCALL_RET	regs[0]
+#elif defined(__riscv) && __riscv_xlen == 64
+# define ARCH_REGS	struct user_regs_struct
+# define SYSCALL_NUM	a7
+# define SYSCALL_RET	a0
 #elif defined(__hppa__)
 # define ARCH_REGS	struct user_regs_struct
 # define SYSCALL_NUM	gr[20]
@@ -1671,7 +1692,7 @@ void change_syscall(struct __test_metadata *_metadata,
 	EXPECT_EQ(0, ret) {}
 
 #if defined(__x86_64__) || defined(__i386__) || defined(__powerpc__) || \
-    defined(__s390__) || defined(__hppa__)
+	defined(__s390__) || defined(__hppa__) || defined(__riscv)
 	{
 		regs.SYSCALL_NUM = syscall;
 	}
@@ -1775,13 +1796,18 @@ void tracer_ptrace(struct __test_metadata *_metadata, pid_t tracee,
 	unsigned long msg;
 	static bool entry;
 
-	/* Make sure we got an empty message. */
+	/*
+	 * The traditional way to tell PTRACE_SYSCALL entry/exit
+	 * is by counting.
+	 */
+	entry = !entry;
+
+	/* Make sure we got an appropriate message. */
 	ret = ptrace(PTRACE_GETEVENTMSG, tracee, NULL, &msg);
 	EXPECT_EQ(0, ret);
-	EXPECT_EQ(0, msg);
+	EXPECT_EQ(entry ? PTRACE_EVENTMSG_SYSCALL_ENTRY
+			: PTRACE_EVENTMSG_SYSCALL_EXIT, msg);
 
-	/* The only way to tell PTRACE_SYSCALL entry/exit is by counting. */
-	entry = !entry;
 	if (!entry)
 		return;
 
@@ -1795,7 +1821,7 @@ void tracer_ptrace(struct __test_metadata *_metadata, pid_t tracee,
 		change_syscall(_metadata, tracee, -1, -ESRCH);
 }
 
-FIXTURE_DATA(TRACE_syscall) {
+FIXTURE(TRACE_syscall) {
 	struct sock_fprog prog;
 	pid_t tracer, mytid, mypid, parent;
 };
@@ -2165,7 +2191,8 @@ TEST(detect_seccomp_filter_flags)
 	unsigned int flags[] = { SECCOMP_FILTER_FLAG_TSYNC,
 				 SECCOMP_FILTER_FLAG_LOG,
 				 SECCOMP_FILTER_FLAG_SPEC_ALLOW,
-				 SECCOMP_FILTER_FLAG_NEW_LISTENER };
+				 SECCOMP_FILTER_FLAG_NEW_LISTENER,
+				 SECCOMP_FILTER_FLAG_TSYNC_ESRCH };
 	unsigned int exclusive[] = {
 				SECCOMP_FILTER_FLAG_TSYNC,
 				SECCOMP_FILTER_FLAG_NEW_LISTENER };
@@ -2299,7 +2326,7 @@ struct tsync_sibling {
 		}							\
 	} while (0)
 
-FIXTURE_DATA(TSYNC) {
+FIXTURE(TSYNC) {
 	struct sock_fprog root_prog, apply_prog;
 	struct tsync_sibling sibling[TSYNC_SIBLINGS];
 	sem_t started;
@@ -2606,6 +2633,55 @@ TEST_F(TSYNC, two_siblings_with_one_divergence)
 	ret = seccomp(SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_TSYNC,
 		      &self->apply_prog);
 	ASSERT_EQ(self->sibling[0].system_tid, ret) {
+		TH_LOG("Did not fail on diverged sibling.");
+	}
+
+	/* Wake the threads */
+	pthread_mutex_lock(&self->mutex);
+	ASSERT_EQ(0, pthread_cond_broadcast(&self->cond)) {
+		TH_LOG("cond broadcast non-zero");
+	}
+	pthread_mutex_unlock(&self->mutex);
+
+	/* Ensure they are both unkilled. */
+	PTHREAD_JOIN(self->sibling[0].tid, &status);
+	EXPECT_EQ(SIBLING_EXIT_UNKILLED, (long)status);
+	PTHREAD_JOIN(self->sibling[1].tid, &status);
+	EXPECT_EQ(SIBLING_EXIT_UNKILLED, (long)status);
+}
+
+TEST_F(TSYNC, two_siblings_with_one_divergence_no_tid_in_err)
+{
+	long ret, flags;
+	void *status;
+
+	ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
+		TH_LOG("Kernel does not support PR_SET_NO_NEW_PRIVS!");
+	}
+
+	ret = seccomp(SECCOMP_SET_MODE_FILTER, 0, &self->root_prog);
+	ASSERT_NE(ENOSYS, errno) {
+		TH_LOG("Kernel does not support seccomp syscall!");
+	}
+	ASSERT_EQ(0, ret) {
+		TH_LOG("Kernel does not support SECCOMP_SET_MODE_FILTER!");
+	}
+	self->sibling[0].diverge = 1;
+	tsync_start_sibling(&self->sibling[0]);
+	tsync_start_sibling(&self->sibling[1]);
+
+	while (self->sibling_count < TSYNC_SIBLINGS) {
+		sem_wait(&self->started);
+		self->sibling_count++;
+	}
+
+	flags = SECCOMP_FILTER_FLAG_TSYNC | \
+		SECCOMP_FILTER_FLAG_TSYNC_ESRCH;
+	ret = seccomp(SECCOMP_SET_MODE_FILTER, flags, &self->apply_prog);
+	ASSERT_EQ(ESRCH, errno) {
+		TH_LOG("Did not return ESRCH for diverged sibling.");
+	}
+	ASSERT_EQ(-1, ret) {
 		TH_LOG("Did not fail on diverged sibling.");
 	}
 
@@ -3067,7 +3143,7 @@ static int user_trap_syscall(int nr, unsigned int flags)
 	return seccomp(SECCOMP_SET_MODE_FILTER, flags, &prog);
 }
 
-#define USER_NOTIF_MAGIC 116983961184613L
+#define USER_NOTIF_MAGIC INT_MAX
 TEST(user_notification_basic)
 {
 	pid_t pid;
@@ -3136,7 +3212,18 @@ TEST(user_notification_basic)
 	EXPECT_GT(poll(&pollfd, 1, -1), 0);
 	EXPECT_EQ(pollfd.revents, POLLIN);
 
-	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, &req), 0);
+	/* Test that we can't pass garbage to the kernel. */
+	memset(&req, 0, sizeof(req));
+	req.pid = -1;
+	errno = 0;
+	ret = ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, &req);
+	EXPECT_EQ(-1, ret);
+	EXPECT_EQ(EINVAL, errno);
+
+	if (ret) {
+		req.pid = 0;
+		EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, &req), 0);
+	}
 
 	pollfd.fd = listener;
 	pollfd.events = POLLIN | POLLOUT;
@@ -3161,6 +3248,24 @@ TEST(user_notification_basic)
 	EXPECT_EQ(waitpid(pid, &status, 0), pid);
 	EXPECT_EQ(true, WIFEXITED(status));
 	EXPECT_EQ(0, WEXITSTATUS(status));
+}
+
+TEST(user_notification_with_tsync)
+{
+	int ret;
+	unsigned int flags;
+
+	/* these were exclusive */
+	flags = SECCOMP_FILTER_FLAG_NEW_LISTENER |
+		SECCOMP_FILTER_FLAG_TSYNC;
+	ASSERT_EQ(-1, user_trap_syscall(__NR_getppid, flags));
+	ASSERT_EQ(EINVAL, errno);
+
+	/* but now they're not */
+	flags |= SECCOMP_FILTER_FLAG_TSYNC_ESRCH;
+	ret = user_trap_syscall(__NR_getppid, flags);
+	close(ret);
+	ASSERT_LE(0, ret);
 }
 
 TEST(user_notification_kill_in_middle)
@@ -3256,6 +3361,7 @@ TEST(user_notification_signal)
 
 	close(sk_pair[1]);
 
+	memset(&req, 0, sizeof(req));
 	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, &req), 0);
 
 	EXPECT_EQ(kill(pid, SIGUSR1), 0);
@@ -3274,6 +3380,7 @@ TEST(user_notification_signal)
 	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, &resp), -1);
 	EXPECT_EQ(errno, ENOENT);
 
+	memset(&req, 0, sizeof(req));
 	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, &req), 0);
 
 	resp.id = req.id;
@@ -3473,6 +3580,108 @@ TEST(seccomp_get_notif_sizes)
 	ASSERT_EQ(seccomp(SECCOMP_GET_NOTIF_SIZES, 0, &sizes), 0);
 	EXPECT_EQ(sizes.seccomp_notif, sizeof(struct seccomp_notif));
 	EXPECT_EQ(sizes.seccomp_notif_resp, sizeof(struct seccomp_notif_resp));
+}
+
+static int filecmp(pid_t pid1, pid_t pid2, int fd1, int fd2)
+{
+#ifdef __NR_kcmp
+	return syscall(__NR_kcmp, pid1, pid2, KCMP_FILE, fd1, fd2);
+#else
+	errno = ENOSYS;
+	return -1;
+#endif
+}
+
+TEST(user_notification_continue)
+{
+	pid_t pid;
+	long ret;
+	int status, listener;
+	struct seccomp_notif req = {};
+	struct seccomp_notif_resp resp = {};
+	struct pollfd pollfd;
+
+	ret = prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+	ASSERT_EQ(0, ret) {
+		TH_LOG("Kernel does not support PR_SET_NO_NEW_PRIVS!");
+	}
+
+	listener = user_trap_syscall(__NR_dup, SECCOMP_FILTER_FLAG_NEW_LISTENER);
+	ASSERT_GE(listener, 0);
+
+	pid = fork();
+	ASSERT_GE(pid, 0);
+
+	if (pid == 0) {
+		int dup_fd, pipe_fds[2];
+		pid_t self;
+
+		ret = pipe(pipe_fds);
+		if (ret < 0)
+			exit(1);
+
+		dup_fd = dup(pipe_fds[0]);
+		if (dup_fd < 0)
+			exit(1);
+
+		self = getpid();
+
+		ret = filecmp(self, self, pipe_fds[0], dup_fd);
+		if (ret)
+			exit(2);
+
+		exit(0);
+	}
+
+	pollfd.fd = listener;
+	pollfd.events = POLLIN | POLLOUT;
+
+	EXPECT_GT(poll(&pollfd, 1, -1), 0);
+	EXPECT_EQ(pollfd.revents, POLLIN);
+
+	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_RECV, &req), 0);
+
+	pollfd.fd = listener;
+	pollfd.events = POLLIN | POLLOUT;
+
+	EXPECT_GT(poll(&pollfd, 1, -1), 0);
+	EXPECT_EQ(pollfd.revents, POLLOUT);
+
+	EXPECT_EQ(req.data.nr, __NR_dup);
+
+	resp.id = req.id;
+	resp.flags = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
+
+	/*
+	 * Verify that setting SECCOMP_USER_NOTIF_FLAG_CONTINUE enforces other
+	 * args be set to 0.
+	 */
+	resp.error = 0;
+	resp.val = USER_NOTIF_MAGIC;
+	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, &resp), -1);
+	EXPECT_EQ(errno, EINVAL);
+
+	resp.error = USER_NOTIF_MAGIC;
+	resp.val = 0;
+	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, &resp), -1);
+	EXPECT_EQ(errno, EINVAL);
+
+	resp.error = 0;
+	resp.val = 0;
+	EXPECT_EQ(ioctl(listener, SECCOMP_IOCTL_NOTIF_SEND, &resp), 0) {
+		if (errno == EINVAL)
+			XFAIL(goto skip, "Kernel does not support SECCOMP_USER_NOTIF_FLAG_CONTINUE");
+	}
+
+skip:
+	EXPECT_EQ(waitpid(pid, &status, 0), pid);
+	EXPECT_EQ(true, WIFEXITED(status));
+	EXPECT_EQ(0, WEXITSTATUS(status)) {
+		if (WEXITSTATUS(status) == 2) {
+			XFAIL(return, "Kernel does not support kcmp() syscall");
+			return;
+		}
+	}
 }
 
 /*

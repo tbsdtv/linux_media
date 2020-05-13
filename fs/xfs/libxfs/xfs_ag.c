@@ -10,6 +10,7 @@
 #include "xfs_shared.h"
 #include "xfs_format.h"
 #include "xfs_trans_resv.h"
+#include "xfs_bit.h"
 #include "xfs_sb.h"
 #include "xfs_mount.h"
 #include "xfs_btree.h"
@@ -22,26 +23,34 @@
 #include "xfs_ag_resv.h"
 #include "xfs_health.h"
 
-static struct xfs_buf *
+static int
 xfs_get_aghdr_buf(
 	struct xfs_mount	*mp,
 	xfs_daddr_t		blkno,
 	size_t			numblks,
-	int			flags,
+	struct xfs_buf		**bpp,
 	const struct xfs_buf_ops *ops)
 {
 	struct xfs_buf		*bp;
+	int			error;
 
-	bp = xfs_buf_get_uncached(mp->m_ddev_targp, numblks, flags);
-	if (!bp)
-		return NULL;
+	error = xfs_buf_get_uncached(mp->m_ddev_targp, numblks, 0, &bp);
+	if (error)
+		return error;
 
 	xfs_buf_zero(bp, 0, BBTOB(bp->b_length));
 	bp->b_bn = blkno;
 	bp->b_maps[0].bm_bn = blkno;
 	bp->b_ops = ops;
 
-	return bp;
+	*bpp = bp;
+	return 0;
+}
+
+static inline bool is_log_ag(struct xfs_mount *mp, struct aghdr_init_data *id)
+{
+	return mp->m_sb.sb_logstart > 0 &&
+	       id->agno == XFS_FSB_TO_AGNO(mp, mp->m_sb.sb_logstart);
 }
 
 /*
@@ -53,7 +62,62 @@ xfs_btroot_init(
 	struct xfs_buf		*bp,
 	struct aghdr_init_data	*id)
 {
-	xfs_btree_init_block(mp, bp, id->type, 0, 0, id->agno, 0);
+	xfs_btree_init_block(mp, bp, id->type, 0, 0, id->agno);
+}
+
+/* Finish initializing a free space btree. */
+static void
+xfs_freesp_init_recs(
+	struct xfs_mount	*mp,
+	struct xfs_buf		*bp,
+	struct aghdr_init_data	*id)
+{
+	struct xfs_alloc_rec	*arec;
+	struct xfs_btree_block	*block = XFS_BUF_TO_BLOCK(bp);
+
+	arec = XFS_ALLOC_REC_ADDR(mp, XFS_BUF_TO_BLOCK(bp), 1);
+	arec->ar_startblock = cpu_to_be32(mp->m_ag_prealloc_blocks);
+
+	if (is_log_ag(mp, id)) {
+		struct xfs_alloc_rec	*nrec;
+		xfs_agblock_t		start = XFS_FSB_TO_AGBNO(mp,
+							mp->m_sb.sb_logstart);
+
+		ASSERT(start >= mp->m_ag_prealloc_blocks);
+		if (start != mp->m_ag_prealloc_blocks) {
+			/*
+			 * Modify first record to pad stripe align of log
+			 */
+			arec->ar_blockcount = cpu_to_be32(start -
+						mp->m_ag_prealloc_blocks);
+			nrec = arec + 1;
+
+			/*
+			 * Insert second record at start of internal log
+			 * which then gets trimmed.
+			 */
+			nrec->ar_startblock = cpu_to_be32(
+					be32_to_cpu(arec->ar_startblock) +
+					be32_to_cpu(arec->ar_blockcount));
+			arec = nrec;
+			be16_add_cpu(&block->bb_numrecs, 1);
+		}
+		/*
+		 * Change record start to after the internal log
+		 */
+		be32_add_cpu(&arec->ar_startblock, mp->m_sb.sb_logblocks);
+	}
+
+	/*
+	 * Calculate the record block count and check for the case where
+	 * the log might have consumed all available space in the AG. If
+	 * so, reset the record count to 0 to avoid exposure of an invalid
+	 * record start block.
+	 */
+	arec->ar_blockcount = cpu_to_be32(id->agsize -
+					  be32_to_cpu(arec->ar_startblock));
+	if (!arec->ar_blockcount)
+		block->bb_numrecs = 0;
 }
 
 /*
@@ -65,13 +129,8 @@ xfs_bnoroot_init(
 	struct xfs_buf		*bp,
 	struct aghdr_init_data	*id)
 {
-	struct xfs_alloc_rec	*arec;
-
-	xfs_btree_init_block(mp, bp, XFS_BTNUM_BNO, 0, 1, id->agno, 0);
-	arec = XFS_ALLOC_REC_ADDR(mp, XFS_BUF_TO_BLOCK(bp), 1);
-	arec->ar_startblock = cpu_to_be32(mp->m_ag_prealloc_blocks);
-	arec->ar_blockcount = cpu_to_be32(id->agsize -
-					  be32_to_cpu(arec->ar_startblock));
+	xfs_btree_init_block(mp, bp, XFS_BTNUM_BNO, 0, 1, id->agno);
+	xfs_freesp_init_recs(mp, bp, id);
 }
 
 static void
@@ -80,13 +139,8 @@ xfs_cntroot_init(
 	struct xfs_buf		*bp,
 	struct aghdr_init_data	*id)
 {
-	struct xfs_alloc_rec	*arec;
-
-	xfs_btree_init_block(mp, bp, XFS_BTNUM_CNT, 0, 1, id->agno, 0);
-	arec = XFS_ALLOC_REC_ADDR(mp, XFS_BUF_TO_BLOCK(bp), 1);
-	arec->ar_startblock = cpu_to_be32(mp->m_ag_prealloc_blocks);
-	arec->ar_blockcount = cpu_to_be32(id->agsize -
-					  be32_to_cpu(arec->ar_startblock));
+	xfs_btree_init_block(mp, bp, XFS_BTNUM_CNT, 0, 1, id->agno);
+	xfs_freesp_init_recs(mp, bp, id);
 }
 
 /*
@@ -101,7 +155,7 @@ xfs_rmaproot_init(
 	struct xfs_btree_block	*block = XFS_BUF_TO_BLOCK(bp);
 	struct xfs_rmap_rec	*rrec;
 
-	xfs_btree_init_block(mp, bp, XFS_BTNUM_RMAP, 0, 4, id->agno, 0);
+	xfs_btree_init_block(mp, bp, XFS_BTNUM_RMAP, 0, 4, id->agno);
 
 	/*
 	 * mark the AG header regions as static metadata The BNO
@@ -149,6 +203,18 @@ xfs_rmaproot_init(
 		rrec->rm_offset = 0;
 		be16_add_cpu(&block->bb_numrecs, 1);
 	}
+
+	/* account for the log space */
+	if (is_log_ag(mp, id)) {
+		rrec = XFS_RMAP_REC_ADDR(block,
+				be16_to_cpu(block->bb_numrecs) + 1);
+		rrec->rm_startblock = cpu_to_be32(
+				XFS_FSB_TO_AGBNO(mp, mp->m_sb.sb_logstart));
+		rrec->rm_blockcount = cpu_to_be32(mp->m_sb.sb_logblocks);
+		rrec->rm_owner = cpu_to_be64(XFS_RMAP_OWN_LOG);
+		rrec->rm_offset = 0;
+		be16_add_cpu(&block->bb_numrecs, 1);
+	}
 }
 
 /*
@@ -165,7 +231,7 @@ xfs_sbblock_init(
 	struct xfs_buf		*bp,
 	struct aghdr_init_data	*id)
 {
-	struct xfs_dsb		*dsb = XFS_BUF_TO_SBP(bp);
+	struct xfs_dsb		*dsb = bp->b_addr;
 
 	xfs_sb_to_disk(dsb, &mp->m_sb);
 	dsb->sb_inprogress = 1;
@@ -177,7 +243,7 @@ xfs_agfblock_init(
 	struct xfs_buf		*bp,
 	struct aghdr_init_data	*id)
 {
-	struct xfs_agf		*agf = XFS_BUF_TO_AGF(bp);
+	struct xfs_agf		*agf = bp->b_addr;
 	xfs_extlen_t		tmpsize;
 
 	agf->agf_magicnum = cpu_to_be32(XFS_AGF_MAGIC);
@@ -209,6 +275,14 @@ xfs_agfblock_init(
 		agf->agf_refcount_level = cpu_to_be32(1);
 		agf->agf_refcount_blocks = cpu_to_be32(1);
 	}
+
+	if (is_log_ag(mp, id)) {
+		int64_t	logblocks = mp->m_sb.sb_logblocks;
+
+		be32_add_cpu(&agf->agf_freeblks, -logblocks);
+		agf->agf_longest = cpu_to_be32(id->agsize -
+			XFS_FSB_TO_AGBNO(mp, mp->m_sb.sb_logstart) - logblocks);
+	}
 }
 
 static void
@@ -227,7 +301,7 @@ xfs_agflblock_init(
 		uuid_copy(&agfl->agfl_uuid, &mp->m_sb.sb_meta_uuid);
 	}
 
-	agfl_bno = XFS_BUF_TO_AGFL_BNO(mp, bp);
+	agfl_bno = xfs_buf_to_agfl_bno(bp);
 	for (bucket = 0; bucket < xfs_agfl_size(mp); bucket++)
 		agfl_bno[bucket] = cpu_to_be32(NULLAGBLOCK);
 }
@@ -238,7 +312,7 @@ xfs_agiblock_init(
 	struct xfs_buf		*bp,
 	struct aghdr_init_data	*id)
 {
-	struct xfs_agi		*agi = XFS_BUF_TO_AGI(bp);
+	struct xfs_agi		*agi = bp->b_addr;
 	int			bucket;
 
 	agi->agi_magicnum = cpu_to_be32(XFS_AGI_MAGIC);
@@ -269,13 +343,13 @@ xfs_ag_init_hdr(
 	struct aghdr_init_data	*id,
 	aghdr_init_work_f	work,
 	const struct xfs_buf_ops *ops)
-
 {
 	struct xfs_buf		*bp;
+	int			error;
 
-	bp = xfs_get_aghdr_buf(mp, id->daddr, id->numblks, 0, ops);
-	if (!bp)
-		return -ENOMEM;
+	error = xfs_get_aghdr_buf(mp, id->daddr, id->numblks, &bp, ops);
+	if (error)
+		return error;
 
 	(*work)(mp, bp, id);
 
@@ -428,7 +502,7 @@ xfs_ag_extend_space(
 	if (error)
 		return error;
 
-	agi = XFS_BUF_TO_AGI(bp);
+	agi = bp->b_addr;
 	be32_add_cpu(&agi->agi_length, len);
 	ASSERT(id->agno == mp->m_sb.sb_agcount - 1 ||
 	       be32_to_cpu(agi->agi_length) == mp->m_sb.sb_agblocks);
@@ -441,7 +515,7 @@ xfs_ag_extend_space(
 	if (error)
 		return error;
 
-	agf = XFS_BUF_TO_AGF(bp);
+	agf = bp->b_addr;
 	be32_add_cpu(&agf->agf_length, len);
 	ASSERT(agf->agf_length == agi->agi_length);
 	xfs_alloc_log_agf(tp, bp, XFS_AGF_LENGTH);
@@ -495,11 +569,11 @@ xfs_ag_get_geometry(
 	memset(ageo, 0, sizeof(*ageo));
 	ageo->ag_number = agno;
 
-	agi = XFS_BUF_TO_AGI(agi_bp);
+	agi = agi_bp->b_addr;
 	ageo->ag_icount = be32_to_cpu(agi->agi_count);
 	ageo->ag_ifree = be32_to_cpu(agi->agi_freecount);
 
-	agf = XFS_BUF_TO_AGF(agf_bp);
+	agf = agf_bp->b_addr;
 	ageo->ag_length = be32_to_cpu(agf->agf_length);
 	freeblks = pag->pagf_freeblks +
 		   pag->pagf_flcount +

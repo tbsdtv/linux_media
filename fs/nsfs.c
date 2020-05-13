@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/mount.h>
+#include <linux/pseudo_fs.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/proc_fs.h>
 #include <linux/proc_ns.h>
 #include <linux/magic.h>
 #include <linux/ktime.h>
@@ -9,6 +11,8 @@
 #include <linux/user_namespace.h>
 #include <linux/nsfs.h>
 #include <linux/uaccess.h>
+
+#include "internal.h"
 
 static struct vfsmount *nsfs_mnt;
 
@@ -51,7 +55,7 @@ static void nsfs_evict(struct inode *inode)
 	ns->ops->put(ns);
 }
 
-static void *__ns_get_path(struct path *path, struct ns_common *ns)
+static int __ns_get_path(struct path *path, struct ns_common *ns)
 {
 	struct vfsmount *mnt = nsfs_mnt;
 	struct dentry *dentry;
@@ -70,13 +74,13 @@ static void *__ns_get_path(struct path *path, struct ns_common *ns)
 got_it:
 	path->mnt = mntget(mnt);
 	path->dentry = dentry;
-	return NULL;
+	return 0;
 slow:
 	rcu_read_unlock();
 	inode = new_inode_pseudo(mnt->mnt_sb);
 	if (!inode) {
 		ns->ops->put(ns);
-		return ERR_PTR(-ENOMEM);
+		return -ENOMEM;
 	}
 	inode->i_ino = ns->inum;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
@@ -88,7 +92,7 @@ slow:
 	dentry = d_alloc_anon(mnt->mnt_sb);
 	if (!dentry) {
 		iput(inode);
-		return ERR_PTR(-ENOMEM);
+		return -ENOMEM;
 	}
 	d_instantiate(dentry, inode);
 	dentry->d_fsdata = (void *)ns->ops;
@@ -97,23 +101,22 @@ slow:
 		d_delete(dentry);	/* make sure ->d_prune() does nothing */
 		dput(dentry);
 		cpu_relax();
-		return ERR_PTR(-EAGAIN);
+		return -EAGAIN;
 	}
 	goto got_it;
 }
 
-void *ns_get_path_cb(struct path *path, ns_get_path_helper_t *ns_get_cb,
+int ns_get_path_cb(struct path *path, ns_get_path_helper_t *ns_get_cb,
 		     void *private_data)
 {
-	void *ret;
+	int ret;
 
 	do {
 		struct ns_common *ns = ns_get_cb(private_data);
 		if (!ns)
-			return ERR_PTR(-ENOENT);
-
+			return -ENOENT;
 		ret = __ns_get_path(path, ns);
-	} while (ret == ERR_PTR(-EAGAIN));
+	} while (ret == -EAGAIN);
 
 	return ret;
 }
@@ -130,7 +133,7 @@ static struct ns_common *ns_get_path_task(void *private_data)
 	return args->ns_ops->get(args->task);
 }
 
-void *ns_get_path(struct path *path, struct task_struct *task,
+int ns_get_path(struct path *path, struct task_struct *task,
 		  const struct proc_ns_operations *ns_ops)
 {
 	struct ns_get_path_task_args args = {
@@ -146,7 +149,7 @@ int open_related_ns(struct ns_common *ns,
 {
 	struct path path = {};
 	struct file *f;
-	void *err;
+	int err;
 	int fd;
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
@@ -163,11 +166,11 @@ int open_related_ns(struct ns_common *ns,
 		}
 
 		err = __ns_get_path(&path, relative);
-	} while (err == ERR_PTR(-EAGAIN));
+	} while (err == -EAGAIN);
 
-	if (IS_ERR(err)) {
+	if (err) {
 		put_unused_fd(fd);
-		return PTR_ERR(err);
+		return err;
 	}
 
 	f = dentry_open(&path, O_RDONLY, current_cred());
@@ -244,6 +247,20 @@ out_invalid:
 	return ERR_PTR(-EINVAL);
 }
 
+/**
+ * ns_match() - Returns true if current namespace matches dev/ino provided.
+ * @ns_common: current ns
+ * @dev: dev_t from nsfs that will be matched against current nsfs
+ * @ino: ino_t from nsfs that will be matched against current nsfs
+ *
+ * Return: true if dev and ino matches the current nsfs.
+ */
+bool ns_match(const struct ns_common *ns, dev_t dev, ino_t ino)
+{
+	return (ns->inum == ino) && (nsfs_mnt->mnt_sb->s_dev == dev);
+}
+
+
 static int nsfs_show_path(struct seq_file *seq, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
@@ -258,15 +275,20 @@ static const struct super_operations nsfs_ops = {
 	.evict_inode = nsfs_evict,
 	.show_path = nsfs_show_path,
 };
-static struct dentry *nsfs_mount(struct file_system_type *fs_type,
-			int flags, const char *dev_name, void *data)
+
+static int nsfs_init_fs_context(struct fs_context *fc)
 {
-	return mount_pseudo(fs_type, "nsfs:", &nsfs_ops,
-			&ns_dentry_operations, NSFS_MAGIC);
+	struct pseudo_fs_context *ctx = init_pseudo(fc, NSFS_MAGIC);
+	if (!ctx)
+		return -ENOMEM;
+	ctx->ops = &nsfs_ops;
+	ctx->dops = &ns_dentry_operations;
+	return 0;
 }
+
 static struct file_system_type nsfs = {
 	.name = "nsfs",
-	.mount = nsfs_mount,
+	.init_fs_context = nsfs_init_fs_context,
 	.kill_sb = kill_anon_super,
 };
 

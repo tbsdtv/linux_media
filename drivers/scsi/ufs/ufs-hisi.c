@@ -1,11 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * HiSilicon Hixxxx UFS Driver
  *
  * Copyright (c) 2016-2017 Linaro Ltd.
  * Copyright (c) 2016-2017 HiSilicon Technologies Co., Ltd.
- *
- * Released under the GPLv2 only.
- * SPDX-License-Identifier: GPL-2.0
  */
 
 #include <linux/time.h>
@@ -237,7 +235,7 @@ static int ufs_hisi_link_startup_pre_change(struct ufs_hba *hba)
 	ufshcd_writel(hba, reg, REG_AUTO_HIBERNATE_IDLE_TIMER);
 
 	/* Unipro PA_Local_TX_LCC_Enable */
-	ufshcd_dme_set(hba, UIC_ARG_MIB_SEL(0x155E, 0x0), 0x0);
+	ufshcd_disable_host_tx_lcc(hba);
 	/* close Unipro VS_Mk2ExtnSupport */
 	ufshcd_dme_set(hba, UIC_ARG_MIB_SEL(0xD0AB, 0x0), 0x0);
 	ufshcd_dme_get(hba, UIC_ARG_MIB_SEL(0xD0AB, 0x0), &value);
@@ -449,17 +447,12 @@ static int ufs_hisi_resume(struct ufs_hba *hba, enum ufs_pm_op pm_op)
 
 static int ufs_hisi_get_resource(struct ufs_hisi_host *host)
 {
-	struct resource *mem_res;
 	struct device *dev = host->hba->dev;
 	struct platform_device *pdev = to_platform_device(dev);
 
 	/* get resource of ufs sys ctrl */
-	mem_res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	host->ufs_sys_ctrl = devm_ioremap_resource(dev, mem_res);
-	if (IS_ERR(host->ufs_sys_ctrl))
-		return PTR_ERR(host->ufs_sys_ctrl);
-
-	return 0;
+	host->ufs_sys_ctrl = devm_platform_ioremap_resource(pdev, 1);
+	return PTR_ERR_OR_ZERO(host->ufs_sys_ctrl);
 }
 
 static void ufs_hisi_set_pm_lvl(struct ufs_hba *hba)

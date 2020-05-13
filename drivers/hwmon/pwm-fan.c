@@ -304,7 +304,7 @@ static int pwm_fan_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, ctx);
 
-	ctx->irq = platform_get_irq(pdev, 0);
+	ctx->irq = platform_get_irq_optional(pdev, 0);
 	if (ctx->irq == -EPROBE_DEFER)
 		return ctx->irq;
 
@@ -320,8 +320,10 @@ static int pwm_fan_probe(struct platform_device *pdev)
 			dev_err(dev, "Failed to enable fan supply: %d\n", ret);
 			return ret;
 		}
-		devm_add_action_or_reset(dev, pwm_fan_regulator_disable,
-					 ctx->reg_en);
+		ret = devm_add_action_or_reset(dev, pwm_fan_regulator_disable,
+					       ctx->reg_en);
+		if (ret)
+			return ret;
 	}
 
 	ctx->pwm_value = MAX_PWM;
@@ -337,7 +339,9 @@ static int pwm_fan_probe(struct platform_device *pdev)
 		return ret;
 	}
 	timer_setup(&ctx->rpm_timer, sample_timer, 0);
-	devm_add_action_or_reset(dev, pwm_fan_pwm_disable, ctx);
+	ret = devm_add_action_or_reset(dev, pwm_fan_pwm_disable, ctx);
+	if (ret)
+		return ret;
 
 	of_property_read_u32(dev->of_node, "pulses-per-revolution", &ppr);
 	ctx->pulses_per_revolution = ppr;
@@ -386,8 +390,7 @@ static int pwm_fan_probe(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int pwm_fan_suspend(struct device *dev)
+static int pwm_fan_disable(struct device *dev)
 {
 	struct pwm_fan_ctx *ctx = dev_get_drvdata(dev);
 	struct pwm_args args;
@@ -412,6 +415,17 @@ static int pwm_fan_suspend(struct device *dev)
 	}
 
 	return 0;
+}
+
+static void pwm_fan_shutdown(struct platform_device *pdev)
+{
+	pwm_fan_disable(&pdev->dev);
+}
+
+#ifdef CONFIG_PM_SLEEP
+static int pwm_fan_suspend(struct device *dev)
+{
+	return pwm_fan_disable(dev);
 }
 
 static int pwm_fan_resume(struct device *dev)
@@ -451,6 +465,7 @@ MODULE_DEVICE_TABLE(of, of_pwm_fan_match);
 
 static struct platform_driver pwm_fan_driver = {
 	.probe		= pwm_fan_probe,
+	.shutdown	= pwm_fan_shutdown,
 	.driver	= {
 		.name		= "pwm-fan",
 		.pm		= &pwm_fan_pm,

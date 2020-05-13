@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2010 Felix Fietkau <nbd@openwrt.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __RC_MINSTREL_HT_H
@@ -36,6 +33,7 @@ struct mcs_group {
 	u16 flags;
 	u8 streams;
 	u8 shift;
+	u8 bw;
 	u16 duration[MCS_GROUP_RATES];
 };
 
@@ -51,6 +49,12 @@ struct minstrel_mcs_group_data {
 
 	/* MCS rate statistics */
 	struct minstrel_rate_stats rates[MCS_GROUP_RATES];
+};
+
+enum minstrel_sample_mode {
+	MINSTREL_SAMPLE_IDLE,
+	MINSTREL_SAMPLE_ACTIVE,
+	MINSTREL_SAMPLE_PENDING,
 };
 
 struct minstrel_ht_sta {
@@ -74,6 +78,8 @@ struct minstrel_ht_sta {
 	unsigned int overhead;
 	unsigned int overhead_rtscts;
 
+	unsigned int total_packets_last;
+	unsigned int total_packets_cur;
 	unsigned int total_packets;
 	unsigned int sample_packets;
 
@@ -84,6 +90,9 @@ struct minstrel_ht_sta {
 	u8 sample_tries;
 	u8 sample_count;
 	u8 sample_slow;
+
+	enum minstrel_sample_mode sample_mode;
+	u16 sample_rate;
 
 	/* current MCS group to be sampled */
 	u8 sample_group;
@@ -110,6 +119,6 @@ struct minstrel_ht_sta_priv {
 
 void minstrel_ht_add_sta_debugfs(void *priv, void *priv_sta, struct dentry *dir);
 int minstrel_ht_get_tp_avg(struct minstrel_ht_sta *mi, int group, int rate,
-			   int prob_ewma);
+			   int prob_avg);
 
 #endif

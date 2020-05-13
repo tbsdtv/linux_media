@@ -40,6 +40,7 @@
 #include <linux/frame.h>
 #include <linux/kasan.h>
 #include <linux/moduleloader.h>
+#include <linux/vmalloc.h>
 
 #include <asm/text-patching.h>
 #include <asm/cacheflush.h>
@@ -56,7 +57,7 @@
 DEFINE_PER_CPU(struct kprobe *, current_kprobe) = NULL;
 DEFINE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 
-#define stack_addr(regs) ((unsigned long *)kernel_stack_pointer(regs))
+#define stack_addr(regs) ((unsigned long *)regs->sp)
 
 #define W(row, b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, ba, bb, bc, bd, be, bf)\
 	(((b0##UL << 0x0)|(b1##UL << 0x1)|(b2##UL << 0x2)|(b3##UL << 0x3) |   \
@@ -119,14 +120,14 @@ __synthesize_relative_insn(void *dest, void *from, void *to, u8 op)
 /* Insert a jump instruction at address 'from', which jumps to address 'to'.*/
 void synthesize_reljump(void *dest, void *from, void *to)
 {
-	__synthesize_relative_insn(dest, from, to, RELATIVEJUMP_OPCODE);
+	__synthesize_relative_insn(dest, from, to, JMP32_INSN_OPCODE);
 }
 NOKPROBE_SYMBOL(synthesize_reljump);
 
 /* Insert a call instruction at address 'from', which calls address 'to'.*/
 void synthesize_relcall(void *dest, void *from, void *to)
 {
-	__synthesize_relative_insn(dest, from, to, RELATIVECALL_OPCODE);
+	__synthesize_relative_insn(dest, from, to, CALL_INSN_OPCODE);
 }
 NOKPROBE_SYMBOL(synthesize_relcall);
 
@@ -301,7 +302,7 @@ static int can_probe(unsigned long paddr)
 		 * Another debugging subsystem might insert this breakpoint.
 		 * In that case, we can't recover it.
 		 */
-		if (insn.opcode.bytes[0] == BREAKPOINT_INSTRUCTION)
+		if (insn.opcode.bytes[0] == INT3_INSN_OPCODE)
 			return 0;
 		addr += insn.length;
 	}
@@ -351,8 +352,12 @@ int __copy_instruction(u8 *dest, u8 *src, u8 *real, struct insn *insn)
 	kernel_insn_init(insn, dest, MAX_INSN_SIZE);
 	insn_get_length(insn);
 
+	/* We can not probe force emulate prefixed instruction */
+	if (insn_has_emulate_prefix(insn))
+		return 0;
+
 	/* Another subsystem puts a breakpoint, failed to recover */
-	if (insn->opcode.bytes[0] == BREAKPOINT_INSTRUCTION)
+	if (insn->opcode.bytes[0] == INT3_INSN_OPCODE)
 		return 0;
 
 	/* We should not singlestep on the exception masking instructions */
@@ -396,14 +401,14 @@ static int prepare_boost(kprobe_opcode_t *buf, struct kprobe *p,
 	int len = insn->length;
 
 	if (can_boost(insn, p->addr) &&
-	    MAX_INSN_SIZE - len >= RELATIVEJUMP_SIZE) {
+	    MAX_INSN_SIZE - len >= JMP32_INSN_SIZE) {
 		/*
 		 * These instructions can be executed directly if it
 		 * jumps back to correct address.
 		 */
 		synthesize_reljump(buf + len, p->ainsn.insn + len,
 				   p->addr + insn->length);
-		len += RELATIVEJUMP_SIZE;
+		len += JMP32_INSN_SIZE;
 		p->ainsn.boostable = true;
 	} else {
 		p->ainsn.boostable = false;
@@ -497,12 +502,14 @@ int arch_prepare_kprobe(struct kprobe *p)
 
 void arch_arm_kprobe(struct kprobe *p)
 {
-	text_poke(p->addr, ((unsigned char []){BREAKPOINT_INSTRUCTION}), 1);
+	text_poke(p->addr, ((unsigned char []){INT3_INSN_OPCODE}), 1);
+	text_poke_sync();
 }
 
 void arch_disarm_kprobe(struct kprobe *p)
 {
 	text_poke(p->addr, &p->opcode, 1);
+	text_poke_sync();
 }
 
 void arch_remove_kprobe(struct kprobe *p)
@@ -580,7 +587,7 @@ static void setup_singlestep(struct kprobe *p, struct pt_regs *regs,
 	if (setup_detour_execution(p, regs, reenter))
 		return;
 
-#if !defined(CONFIG_PREEMPT)
+#if !defined(CONFIG_PREEMPTION)
 	if (p->ainsn.boostable && !p->post_handler) {
 		/* Boost up -- we can execute copied instructions directly */
 		if (!reenter)
@@ -605,7 +612,7 @@ static void setup_singlestep(struct kprobe *p, struct pt_regs *regs,
 	regs->flags |= X86_EFLAGS_TF;
 	regs->flags &= ~X86_EFLAGS_IF;
 	/* single step inline if the instruction is an int3 */
-	if (p->opcode == BREAKPOINT_INSTRUCTION)
+	if (p->opcode == INT3_INSN_OPCODE)
 		regs->ip = (unsigned long)p->addr;
 	else
 		regs->ip = (unsigned long)p->ainsn.insn;
@@ -691,7 +698,7 @@ int kprobe_int3_handler(struct pt_regs *regs)
 				reset_current_kprobe();
 			return 1;
 		}
-	} else if (*addr != BREAKPOINT_INSTRUCTION) {
+	} else if (*addr != INT3_INSN_OPCODE) {
 		/*
 		 * The breakpoint instruction was removed right
 		 * after we hit it.  Another cpu has removed
@@ -718,29 +725,27 @@ asm(
 	".global kretprobe_trampoline\n"
 	".type kretprobe_trampoline, @function\n"
 	"kretprobe_trampoline:\n"
-#ifdef CONFIG_X86_64
 	/* We don't bother saving the ss register */
+#ifdef CONFIG_X86_64
 	"	pushq %rsp\n"
 	"	pushfq\n"
 	SAVE_REGS_STRING
 	"	movq %rsp, %rdi\n"
 	"	call trampoline_handler\n"
 	/* Replace saved sp with true return address. */
-	"	movq %rax, 152(%rsp)\n"
+	"	movq %rax, 19*8(%rsp)\n"
 	RESTORE_REGS_STRING
 	"	popfq\n"
 #else
-	"	pushf\n"
+	"	pushl %esp\n"
+	"	pushfl\n"
 	SAVE_REGS_STRING
 	"	movl %esp, %eax\n"
 	"	call trampoline_handler\n"
-	/* Move flags to cs */
-	"	movl 56(%esp), %edx\n"
-	"	movl %edx, 52(%esp)\n"
-	/* Replace saved flags with true return address. */
-	"	movl %eax, 56(%esp)\n"
+	/* Replace saved sp with true return address. */
+	"	movl %eax, 15*4(%esp)\n"
 	RESTORE_REGS_STRING
-	"	popf\n"
+	"	popfl\n"
 #endif
 	"	ret\n"
 	".size kretprobe_trampoline, .-kretprobe_trampoline\n"
@@ -781,16 +786,13 @@ __used __visible void *trampoline_handler(struct pt_regs *regs)
 	INIT_HLIST_HEAD(&empty_rp);
 	kretprobe_hash_lock(current, &head, &flags);
 	/* fixup registers */
-#ifdef CONFIG_X86_64
 	regs->cs = __KERNEL_CS;
-	/* On x86-64, we use pt_regs->sp for return address holder. */
-	frame_pointer = &regs->sp;
-#else
-	regs->cs = __KERNEL_CS | get_kernel_rpl();
+#ifdef CONFIG_X86_32
+	regs->cs |= get_kernel_rpl();
 	regs->gs = 0;
-	/* On x86-32, we use pt_regs->flags for return address holder. */
-	frame_pointer = &regs->flags;
 #endif
+	/* We use pt_regs->sp for return address holder. */
+	frame_pointer = &regs->sp;
 	regs->ip = trampoline_address;
 	regs->orig_ax = ~0UL;
 
@@ -813,7 +815,7 @@ __used __visible void *trampoline_handler(struct pt_regs *regs)
 			continue;
 		/*
 		 * Return probes must be pushed on this hash list correct
-		 * order (same as return order) so that it can be poped
+		 * order (same as return order) so that it can be popped
 		 * correctly. However, if we find it is pushed it incorrect
 		 * order, this means we find a function which should not be
 		 * probed, because the wrong order entry is pushed on the

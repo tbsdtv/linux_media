@@ -20,7 +20,7 @@ config NETFILTER_FAMILY_ARP
 	bool
 
 config NETFILTER_NETLINK_ACCT
-tristate "Netfilter NFACCT over NFNETLINK interface"
+	tristate "Netfilter NFACCT over NFNETLINK interface"
 	depends on NETFILTER_ADVANCED
 	select NETFILTER_NETLINK
 	help
@@ -34,7 +34,7 @@ config NETFILTER_NETLINK_QUEUE
 	help
 	  If this option is enabled, the kernel will include support
 	  for queueing packets via NFNETLINK.
-	  
+
 config NETFILTER_NETLINK_LOG
 	tristate "Netfilter LOG over NFNETLINK interface"
 	default m if NETFILTER_ADVANCED=n
@@ -223,8 +223,6 @@ config NF_CONNTRACK_FTP
 	  of Network Address Translation on them.
 
 	  This is FTP support on Layer 3 independent connection tracking.
-	  Layer 3 independent connection tracking is experimental scheme
-	  which generalize ip_conntrack to support other layer 3 protocols.
 
 	  To compile it as a module, choose M here.  If unsure, say N.
 
@@ -338,7 +336,7 @@ config NF_CONNTRACK_SIP
 	help
 	  SIP is an application-layer control protocol that can establish,
 	  modify, and terminate multimedia sessions (conferences) such as
-	  Internet telephony calls. With the ip_conntrack_sip and
+	  Internet telephony calls. With the nf_conntrack_sip and
 	  the nf_nat_sip modules you can support the protocol on a connection
 	  tracking/NATing firewall.
 
@@ -457,14 +455,6 @@ config NF_TABLES
 	  To compile it as a module, choose M here.
 
 if NF_TABLES
-
-config NF_TABLES_SET
-	tristate "Netfilter nf_tables set infrastructure"
-	help
-	  This option enables the nf_tables set infrastructure that allows to
-	  look up for elements in a set and to build one-way mappings between
-	  matchings and actions.
-
 config NF_TABLES_INET
 	depends on IPV6
 	select NF_TABLES_IPV4
@@ -651,6 +641,17 @@ config NFT_TPROXY
 	help
 	  This makes transparent proxy support available in nftables.
 
+config NFT_SYNPROXY
+	tristate "Netfilter nf_tables SYNPROXY expression support"
+	depends on NF_CONNTRACK && NETFILTER_ADVANCED
+	select NETFILTER_SYNPROXY
+	select SYN_COOKIES
+	help
+	  The SYNPROXY expression allows you to intercept TCP connections and
+	  establish them using syncookies before they are passed on to the
+	  server. This allows to avoid conntrack and server resource usage
+	  during SYN-flood attacks.
+
 if NF_TABLES_NETDEV
 
 config NF_DUP_NETDEV
@@ -688,7 +689,7 @@ config NF_FLOW_TABLE_INET
 	tristate "Netfilter flow table mixed IPv4/IPv6 module"
 	depends on NF_FLOW_TABLE
 	help
-          This option adds the flow table mixed IPv4/IPv6 support.
+	  This option adds the flow table mixed IPv4/IPv6 support.
 
 	  To compile it as a module, choose M here.
 
@@ -906,7 +907,7 @@ config NETFILTER_XT_TARGET_LED
 	    echo netfilter-ssh > /sys/class/leds/<ledname>/trigger
 
 	  For more information on the LEDs available on your system, see
-	  Documentation/leds/leds-class.txt
+	  Documentation/leds/leds-class.rst
 
 config NETFILTER_XT_TARGET_LOG
 	tristate "LOG target support"
@@ -1056,7 +1057,7 @@ config NETFILTER_XT_TARGET_TRACE
 	  the tables, chains, rules.
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_TARGET_SECMARK
 	tristate '"SECMARK" target support'
@@ -1115,7 +1116,7 @@ config NETFILTER_XT_MATCH_ADDRTYPE
 	  eg. UNICAST, LOCAL, BROADCAST, ...
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_BPF
 	tristate '"bpf" match support'
@@ -1160,7 +1161,7 @@ config NETFILTER_XT_MATCH_COMMENT
 	  comments in your iptables ruleset.
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_CONNBYTES
 	tristate  '"connbytes" per-connection counter match support'
@@ -1171,7 +1172,7 @@ config NETFILTER_XT_MATCH_CONNBYTES
 	  number of bytes and/or packets for each direction within a connection.
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_CONNLABEL
 	tristate '"connlabel" match support'
@@ -1237,7 +1238,7 @@ config NETFILTER_XT_MATCH_DCCP
 	  and DCCP flags.
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_DEVGROUP
 	tristate '"devgroup" match support'
@@ -1302,7 +1303,7 @@ config NETFILTER_XT_MATCH_HELPER
 	depends on NETFILTER_ADVANCED
 	help
 	  Helper matching allows you to match packets in dynamic connections
-	  tracked by a conntrack-helper, ie. ip_conntrack_ftp
+	  tracked by a conntrack-helper, ie. nf_conntrack_ftp
 
 	  To compile it as a module, choose M here.  If unsure, say Y.
 
@@ -1473,7 +1474,7 @@ config NETFILTER_XT_MATCH_QUOTA
 	  byte counter.
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_RATEEST
 	tristate '"rateest" match support'
@@ -1493,11 +1494,11 @@ config NETFILTER_XT_MATCH_REALM
 	  This option adds a `realm' match, which allows you to use the realm
 	  key from the routing subsystem inside iptables.
 
-	  This match pretty much resembles the CONFIG_NET_CLS_ROUTE4 option 
+	  This match pretty much resembles the CONFIG_NET_CLS_ROUTE4 option
 	  in tc world.
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_RECENT
 	tristate '"recent" match support'
@@ -1514,12 +1515,12 @@ config NETFILTER_XT_MATCH_SCTP
 	depends on NETFILTER_ADVANCED
 	default IP_SCTP
 	help
-	  With this option enabled, you will be able to use the 
+	  With this option enabled, you will be able to use the
 	  `sctp' match in order to match on SCTP source/destination ports
 	  and SCTP chunk types.
 
 	  If you want to compile it as a module, say M here and read
-	  <file:Documentation/kbuild/modules.txt>.  If unsure, say `N'.
+	  <file:Documentation/kbuild/modules.rst>.  If unsure, say `N'.
 
 config NETFILTER_XT_MATCH_SOCKET
 	tristate '"socket" match support'

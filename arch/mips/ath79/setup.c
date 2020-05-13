@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Atheros AR71XX/AR724X/AR913X specific setup
  *
@@ -6,10 +7,6 @@
  *  Copyright (C) 2008 Imre Kaloz <kaloz@openwrt.org>
  *
  *  Parts of this file are based on Atheros' 2.6.15/2.6.31 BSP
- *
- *  This program is free software; you can redistribute it and/or modify it
- *  under the terms of the GNU General Public License version 2 as published
- *  by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -18,7 +15,7 @@
 #include <linux/memblock.h>
 #include <linux/err.h>
 #include <linux/clk.h>
-#include <linux/clk-provider.h>
+#include <linux/of_clk.h>
 #include <linux/of_fdt.h>
 #include <linux/irqchip.h>
 
@@ -156,7 +153,7 @@ static void __init ath79_detect_sys_type(void)
 	case REV_ID_MAJOR_QCA9533_V2:
 		ver = 2;
 		ath79_soc_rev = 2;
-		/* drop through */
+		/* fall through */
 
 	case REV_ID_MAJOR_QCA9533:
 		ath79_soc = ATH79_SOC_QCA9533;
@@ -229,9 +226,9 @@ void __init plat_mem_setup(void)
 	else if (fw_passed_dtb)
 		__dt_setup_arch((void *)KSEG0ADDR(fw_passed_dtb));
 
-	ath79_reset_base = ioremap_nocache(AR71XX_RESET_BASE,
+	ath79_reset_base = ioremap(AR71XX_RESET_BASE,
 					   AR71XX_RESET_SIZE);
-	ath79_pll_base = ioremap_nocache(AR71XX_PLL_BASE,
+	ath79_pll_base = ioremap(AR71XX_PLL_BASE,
 					 AR71XX_PLL_SIZE);
 	ath79_detect_sys_type();
 	ath79_ddr_ctrl_init();

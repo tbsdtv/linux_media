@@ -25,6 +25,33 @@
 
 #include "display_mode_lib.h"
 #include "dc_features.h"
+#include "dcn20/display_mode_vba_20.h"
+#include "dcn20/display_rq_dlg_calc_20.h"
+#include "dcn20/display_mode_vba_20v2.h"
+#include "dcn20/display_rq_dlg_calc_20v2.h"
+#include "dcn21/display_mode_vba_21.h"
+#include "dcn21/display_rq_dlg_calc_21.h"
+
+const struct dml_funcs dml20_funcs = {
+	.validate = dml20_ModeSupportAndSystemConfigurationFull,
+	.recalculate = dml20_recalculate,
+	.rq_dlg_get_dlg_reg = dml20_rq_dlg_get_dlg_reg,
+	.rq_dlg_get_rq_reg = dml20_rq_dlg_get_rq_reg
+};
+
+const struct dml_funcs dml20v2_funcs = {
+	.validate = dml20v2_ModeSupportAndSystemConfigurationFull,
+	.recalculate = dml20v2_recalculate,
+	.rq_dlg_get_dlg_reg = dml20v2_rq_dlg_get_dlg_reg,
+	.rq_dlg_get_rq_reg = dml20v2_rq_dlg_get_rq_reg
+};
+
+const struct dml_funcs dml21_funcs = {
+        .validate = dml21_ModeSupportAndSystemConfigurationFull,
+        .recalculate = dml21_recalculate,
+        .rq_dlg_get_dlg_reg = dml21_rq_dlg_get_dlg_reg,
+        .rq_dlg_get_rq_reg = dml21_rq_dlg_get_rq_reg
+};
 
 void dml_init_instance(struct display_mode_lib *lib,
 		const struct _vcs_dpi_soc_bounding_box_st *soc_bb,
@@ -34,6 +61,20 @@ void dml_init_instance(struct display_mode_lib *lib,
 	lib->soc = *soc_bb;
 	lib->ip = *ip_params;
 	lib->project = project;
+	switch (project) {
+	case DML_PROJECT_NAVI10:
+		lib->funcs = dml20_funcs;
+		break;
+	case DML_PROJECT_NAVI10v2:
+		lib->funcs = dml20v2_funcs;
+		break;
+        case DML_PROJECT_DCN21:
+                lib->funcs = dml21_funcs;
+                break;
+
+	default:
+		break;
+	}
 }
 
 const char *dml_get_status_message(enum dm_validation_status status)

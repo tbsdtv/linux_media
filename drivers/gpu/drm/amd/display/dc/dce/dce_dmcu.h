@@ -71,6 +71,10 @@
 	DMCU_COMMON_REG_LIST_DCE_BASE(), \
 	SR(DMU_MEM_PWR_CNTL)
 
+#define DMCU_DCN20_REG_LIST()\
+	DMCU_DCN10_REG_LIST(), \
+	SR(DMCUB_SCRATCH15)
+
 #define DMCU_SF(reg_name, field_name, post_fix)\
 	.field_name = reg_name ## __ ## field_name ## post_fix
 
@@ -175,6 +179,7 @@ struct dce_dmcu_registers {
 	uint32_t DMCU_INTERRUPT_TO_UC_EN_MASK;
 	uint32_t SMU_INTERRUPT_CONTROL;
 	uint32_t DC_DMCU_SCRATCH;
+	uint32_t DMCUB_SCRATCH15;
 };
 
 struct dce_dmcu {
@@ -261,6 +266,20 @@ struct dmcu *dcn10_dmcu_create(
 	const struct dce_dmcu_shift *dmcu_shift,
 	const struct dce_dmcu_mask *dmcu_mask);
 
+struct dmcu *dcn20_dmcu_create(
+	struct dc_context *ctx,
+	const struct dce_dmcu_registers *regs,
+	const struct dce_dmcu_shift *dmcu_shift,
+	const struct dce_dmcu_mask *dmcu_mask);
+
+struct dmcu *dcn21_dmcu_create(
+	struct dc_context *ctx,
+	const struct dce_dmcu_registers *regs,
+	const struct dce_dmcu_shift *dmcu_shift,
+	const struct dce_dmcu_mask *dmcu_mask);
+
 void dce_dmcu_destroy(struct dmcu **dmcu);
+
+static const uint32_t abm_gain_stepsize = 0x0060;
 
 #endif /* _DCE_ABM_H_ */

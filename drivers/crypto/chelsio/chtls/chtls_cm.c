@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018 Chelsio Communications, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Written by: Atul Gupta (atul.gupta@chelsio.com)
  */
@@ -448,6 +445,7 @@ void chtls_destroy_sock(struct sock *sk)
 	chtls_purge_write_queue(sk);
 	free_tls_keyid(sk);
 	kref_put(&csk->kref, chtls_sock_release);
+	csk->cdev = NULL;
 	sk->sk_prot = &tcp_prot;
 	sk->sk_prot->destroy(sk);
 }
@@ -730,6 +728,14 @@ static int chtls_close_listsrv_rpl(struct chtls_dev *cdev, struct sk_buff *skb)
 	return 0;
 }
 
+static void chtls_purge_wr_queue(struct sock *sk)
+{
+	struct sk_buff *skb;
+
+	while ((skb = dequeue_wr(sk)) != NULL)
+		kfree_skb(skb);
+}
+
 static void chtls_release_resources(struct sock *sk)
 {
 	struct chtls_sock *csk = rcu_dereference_sk_user_data(sk);
@@ -744,13 +750,20 @@ static void chtls_release_resources(struct sock *sk)
 	kfree_skb(csk->txdata_skb_cache);
 	csk->txdata_skb_cache = NULL;
 
+	if (csk->wr_credits != csk->wr_max_credits) {
+		chtls_purge_wr_queue(sk);
+		chtls_reset_wr_list(csk);
+	}
+
 	if (csk->l2t_entry) {
 		cxgb4_l2t_release(csk->l2t_entry);
 		csk->l2t_entry = NULL;
 	}
 
-	cxgb4_remove_tid(tids, csk->port_id, tid, sk->sk_family);
-	sock_put(sk);
+	if (sk->sk_state != TCP_SYN_SENT) {
+		cxgb4_remove_tid(tids, csk->port_id, tid, sk->sk_family);
+		sock_put(sk);
+	}
 }
 
 static void chtls_conn_done(struct sock *sk)
@@ -1276,7 +1289,7 @@ static int chtls_pass_accept_req(struct chtls_dev *cdev, struct sk_buff *skb)
 	ctx = (struct listen_ctx *)data;
 	lsk = ctx->lsk;
 
-	if (unlikely(tid >= cdev->tids->ntids)) {
+	if (unlikely(tid_out_of_range(cdev->tids, tid))) {
 		pr_info("passive open TID %u too large\n", tid);
 		return 1;
 	}
@@ -1300,7 +1313,7 @@ static void make_established(struct sock *sk, u32 snd_isn, unsigned int opt)
 	tp->write_seq = snd_isn;
 	tp->snd_nxt = snd_isn;
 	tp->snd_una = snd_isn;
-	inet_sk(sk)->inet_id = tp->write_seq ^ jiffies;
+	inet_sk(sk)->inet_id = prandom_u32();
 	assign_rxopt(sk, opt);
 
 	if (tp->rcv_wnd > (RCV_BUFSIZ_M << 10))
@@ -1706,6 +1719,9 @@ static void chtls_peer_close(struct sock *sk, struct sk_buff *skb)
 {
 	struct chtls_sock *csk = rcu_dereference_sk_user_data(sk);
 
+	if (csk_flag_nochk(csk, CSK_ABORT_RPL_PENDING))
+		goto out;
+
 	sk->sk_shutdown |= RCV_SHUTDOWN;
 	sock_set_flag(sk, SOCK_DONE);
 
@@ -1738,6 +1754,8 @@ static void chtls_peer_close(struct sock *sk, struct sk_buff *skb)
 		else
 			sk_wake_async(sk, SOCK_WAKE_WAITD, POLL_IN);
 	}
+out:
+	kfree_skb(skb);
 }
 
 static void chtls_close_con_rpl(struct sock *sk, struct sk_buff *skb)
@@ -1747,6 +1765,10 @@ static void chtls_close_con_rpl(struct sock *sk, struct sk_buff *skb)
 	struct tcp_sock *tp;
 
 	csk = rcu_dereference_sk_user_data(sk);
+
+	if (csk_flag_nochk(csk, CSK_ABORT_RPL_PENDING))
+		goto out;
+
 	tp = tcp_sk(sk);
 
 	tp->snd_una = ntohl(rpl->snd_nxt) - 1;  /* exclude FIN */
@@ -1776,6 +1798,7 @@ static void chtls_close_con_rpl(struct sock *sk, struct sk_buff *skb)
 	default:
 		pr_info("close_con_rpl in bad state %d\n", sk->sk_state);
 	}
+out:
 	kfree_skb(skb);
 }
 
@@ -1818,6 +1841,20 @@ static void send_defer_abort_rpl(struct chtls_dev *cdev, struct sk_buff *skb)
 	kfree_skb(skb);
 }
 
+/*
+ * Add an skb to the deferred skb queue for processing from process context.
+ */
+static void t4_defer_reply(struct sk_buff *skb, struct chtls_dev *cdev,
+			   defer_handler_t handler)
+{
+	DEFERRED_SKB_CB(skb)->handler = handler;
+	spin_lock_bh(&cdev->deferq.lock);
+	__skb_queue_tail(&cdev->deferq, skb);
+	if (skb_queue_len(&cdev->deferq) == 1)
+		schedule_work(&cdev->deferq_task);
+	spin_unlock_bh(&cdev->deferq.lock);
+}
+
 static void send_abort_rpl(struct sock *sk, struct sk_buff *skb,
 			   struct chtls_dev *cdev, int status, int queue)
 {
@@ -1832,7 +1869,7 @@ static void send_abort_rpl(struct sock *sk, struct sk_buff *skb,
 
 	if (!reply_skb) {
 		req->status = (queue << 1);
-		send_defer_abort_rpl(cdev, skb);
+		t4_defer_reply(skb, cdev, send_defer_abort_rpl);
 		return;
 	}
 
@@ -1849,20 +1886,6 @@ static void send_abort_rpl(struct sock *sk, struct sk_buff *skb,
 		}
 	}
 	cxgb4_ofld_send(cdev->lldi->ports[0], reply_skb);
-}
-
-/*
- * Add an skb to the deferred skb queue for processing from process context.
- */
-static void t4_defer_reply(struct sk_buff *skb, struct chtls_dev *cdev,
-			   defer_handler_t handler)
-{
-	DEFERRED_SKB_CB(skb)->handler = handler;
-	spin_lock_bh(&cdev->deferq.lock);
-	__skb_queue_tail(&cdev->deferq, skb);
-	if (skb_queue_len(&cdev->deferq) == 1)
-		schedule_work(&cdev->deferq_task);
-	spin_unlock_bh(&cdev->deferq.lock);
 }
 
 static void chtls_send_abort_rpl(struct sock *sk, struct sk_buff *skb,
@@ -1885,6 +1908,7 @@ static void chtls_send_abort_rpl(struct sock *sk, struct sk_buff *skb,
 	}
 
 	set_abort_rpl_wr(reply_skb, tid, status);
+	kfree_skb(skb);
 	set_wr_txq(reply_skb, CPL_PRIORITY_DATA, queue);
 	if (csk_conn_inline(csk)) {
 		struct l2t_entry *e = csk->l2t_entry;
@@ -1895,7 +1919,6 @@ static void chtls_send_abort_rpl(struct sock *sk, struct sk_buff *skb,
 		}
 	}
 	cxgb4_ofld_send(cdev->lldi->ports[0], reply_skb);
-	kfree_skb(skb);
 }
 
 /*
@@ -1997,7 +2020,8 @@ static void chtls_abort_req_rss(struct sock *sk, struct sk_buff *skb)
 		chtls_conn_done(sk);
 	}
 
-	chtls_send_abort_rpl(sk, skb, csk->cdev, rst_status, queue);
+	chtls_send_abort_rpl(sk, skb, BLOG_SKB_CB(skb)->cdev,
+			     rst_status, queue);
 }
 
 static void chtls_abort_rpl_rss(struct sock *sk, struct sk_buff *skb)
@@ -2031,6 +2055,7 @@ static int chtls_conn_cpl(struct chtls_dev *cdev, struct sk_buff *skb)
 	struct cpl_peer_close *req = cplhdr(skb) + RSS_HDR;
 	void (*fn)(struct sock *sk, struct sk_buff *skb);
 	unsigned int hwtid = GET_TID(req);
+	struct chtls_sock *csk;
 	struct sock *sk;
 	u8 opcode;
 
@@ -2040,6 +2065,8 @@ static int chtls_conn_cpl(struct chtls_dev *cdev, struct sk_buff *skb)
 	if (!sk)
 		goto rel_skb;
 
+	csk = sk->sk_user_data;
+
 	switch (opcode) {
 	case CPL_PEER_CLOSE:
 		fn = chtls_peer_close;
@@ -2048,6 +2075,11 @@ static int chtls_conn_cpl(struct chtls_dev *cdev, struct sk_buff *skb)
 		fn = chtls_close_con_rpl;
 		break;
 	case CPL_ABORT_REQ_RSS:
+		/*
+		 * Save the offload device in the skb, we may process this
+		 * message after the socket has closed.
+		 */
+		BLOG_SKB_CB(skb)->cdev = csk->cdev;
 		fn = chtls_abort_req_rss;
 		break;
 	case CPL_ABORT_RPL_RSS:
@@ -2063,19 +2095,6 @@ static int chtls_conn_cpl(struct chtls_dev *cdev, struct sk_buff *skb)
 rel_skb:
 	kfree_skb(skb);
 	return 0;
-}
-
-static struct sk_buff *dequeue_wr(struct sock *sk)
-{
-	struct chtls_sock *csk = rcu_dereference_sk_user_data(sk);
-	struct sk_buff *skb = csk->wr_skb_head;
-
-	if (likely(skb)) {
-	/* Don't bother clearing the tail */
-		csk->wr_skb_head = WR_SKB_CB(skb)->next_wr;
-		WR_SKB_CB(skb)->next_wr = NULL;
-	}
-	return skb;
 }
 
 static void chtls_rx_ack(struct sock *sk, struct sk_buff *skb)

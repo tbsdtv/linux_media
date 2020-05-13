@@ -130,6 +130,7 @@ struct kxcjk1013_data {
 	struct i2c_client *client;
 	struct iio_trigger *dready_trig;
 	struct iio_trigger *motion_trig;
+	struct iio_mount_matrix orientation;
 	struct mutex mutex;
 	s16 buffer[8];
 	u8 odr_bits;
@@ -983,6 +984,20 @@ static const struct iio_event_spec kxcjk1013_event = {
 				 BIT(IIO_EV_INFO_PERIOD)
 };
 
+static const struct iio_mount_matrix *
+kxcjk1013_get_mount_matrix(const struct iio_dev *indio_dev,
+			   const struct iio_chan_spec *chan)
+{
+	struct kxcjk1013_data *data = iio_priv(indio_dev);
+
+	return &data->orientation;
+}
+
+static const struct iio_chan_spec_ext_info kxcjk1013_ext_info[] = {
+	IIO_MOUNT_MATRIX(IIO_SHARED_BY_TYPE, kxcjk1013_get_mount_matrix),
+	{ }
+};
+
 #define KXCJK1013_CHANNEL(_axis) {					\
 	.type = IIO_ACCEL,						\
 	.modified = 1,							\
@@ -999,6 +1014,7 @@ static const struct iio_event_spec kxcjk1013_event = {
 		.endianness = IIO_LE,					\
 	},								\
 	.event_spec = &kxcjk1013_event,				\
+	.ext_info = kxcjk1013_ext_info,					\
 	.num_event_specs = 1						\
 }
 
@@ -1267,10 +1283,17 @@ static int kxcjk1013_probe(struct i2c_client *client,
 	data->client = client;
 
 	pdata = dev_get_platdata(&client->dev);
-	if (pdata)
+	if (pdata) {
 		data->active_high_intr = pdata->active_high_intr;
-	else
+		data->orientation = pdata->orientation;
+	} else {
 		data->active_high_intr = true; /* default polarity */
+
+		ret = iio_read_mount_matrix(&client->dev, "mount-matrix",
+					    &data->orientation);
+		if (ret)
+			return ret;
+	}
 
 	if (id) {
 		data->chipset = (enum kx_chipset)(id->driver_data);
@@ -1486,7 +1509,8 @@ static const struct acpi_device_id kx_acpi_match[] = {
 	{"KIOX0008", KXCJ91008},
 	{"KIOX0009", KXTJ21009},
 	{"KIOX000A", KXCJ91008},
-	{"KIOX010A", KXCJ91008}, /* KXCJ91008 inside the display of a 2-in-1 */
+	{"KIOX010A", KXCJ91008}, /* KXCJ91008 in the display of a yoga 2-in-1 */
+	{"KIOX020A", KXCJ91008}, /* KXCJ91008 in the base of a yoga 2-in-1 */
 	{"KXTJ1009", KXTJ21009},
 	{"KXJ2109",  KXTJ21009},
 	{"SMO8500",  KXCJ91008},

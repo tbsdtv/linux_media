@@ -27,7 +27,10 @@ config SUSPEND_SKIP_SYNC
 	  Skip the kernel sys_sync() before freezing user processes.
 	  Some systems prefer not to pay this cost on every invocation
 	  of suspend, or they are content with invoking sync() from
-	  user-space before invoking suspend.  Say Y if that's your case.
+	  user-space before invoking suspend.  There's a run-time switch
+	  at '/sys/power/sync_on_suspend' to configure this behaviour.
+	  This setting changes the default for the run-tim switch. Say Y
+	  to change the default to disable the kernel sys_sync().
 
 config HIBERNATE_CALLBACKS
 	bool
@@ -66,7 +69,7 @@ config HIBERNATION
 	  need to run mkswap against the swap partition used for the suspend.
 
 	  It also works with swap files to a limited extent (for details see
-	  <file:Documentation/power/swsusp-and-swap-files.txt>).
+	  <file:Documentation/power/swsusp-and-swap-files.rst>).
 
 	  Right now you may boot without resuming and resume later but in the
 	  meantime you cannot use the swap partition(s)/file(s) involved in
@@ -75,10 +78,7 @@ config HIBERNATION
 	  MOUNT any journaled filesystems mounted before the suspend or they
 	  will get corrupted in a nasty way.
 
-	  For more information take a look at <file:Documentation/power/swsusp.txt>.
-
-config ARCH_SAVE_PAGE_KEYS
-	bool
+	  For more information take a look at <file:Documentation/power/swsusp.rst>.
 
 config PM_STD_PARTITION
 	string "Default resume partition"
@@ -256,7 +256,7 @@ config APM_EMULATION
 	  notification of APM "events" (e.g. battery status change).
 
 	  In order to use APM, you will need supporting software. For location
-	  and more information, read <file:Documentation/power/apm-acpi.txt>
+	  and more information, read <file:Documentation/power/apm-acpi.rst>
 	  and the Battery Powered Linux mini-HOWTO, available from
 	  <http://www.tldp.org/docs.html#howto>.
 

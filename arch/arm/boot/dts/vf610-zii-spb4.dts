@@ -42,6 +42,14 @@
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
 	};
+
+	supply-voltage-monitor {
+		compatible = "iio-hwmon";
+		io-channels = <&adc0 8>, /* 28V_SW   */
+			      <&adc0 9>, /* +3.3V    */
+			      <&adc1 8>, /* VCC_1V5  */
+			      <&adc1 9>; /* VCC_1V2  */
+	};
 };
 
 &adc0 {
@@ -313,13 +321,6 @@
 		fsl,pins = <
 			VF610_PAD_PTB14__I2C0_SCL		0x37ff
 			VF610_PAD_PTB15__I2C0_SDA		0x37ff
-		>;
-	};
-
-	pinctrl_i2c1: i2c1grp {
-		fsl,pins = <
-			VF610_PAD_PTB16__I2C1_SCL		0x37ff
-			VF610_PAD_PTB17__I2C1_SDA		0x37ff
 		>;
 	};
 

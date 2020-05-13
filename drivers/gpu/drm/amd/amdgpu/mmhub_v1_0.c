@@ -21,15 +21,14 @@
  *
  */
 #include "amdgpu.h"
+#include "amdgpu_ras.h"
 #include "mmhub_v1_0.h"
 
 #include "mmhub/mmhub_1_0_offset.h"
 #include "mmhub/mmhub_1_0_sh_mask.h"
 #include "mmhub/mmhub_1_0_default.h"
-#include "athub/athub_1_0_offset.h"
-#include "athub/athub_1_0_sh_mask.h"
 #include "vega10_enum.h"
-
+#include "soc15.h"
 #include "soc15_common.h"
 
 #define mmDAGB0_CNTL_MISC2_RV 0x008f
@@ -111,6 +110,9 @@ static void mmhub_v1_0_init_system_aperture_regs(struct amdgpu_device *adev)
 		WREG32_SOC15(MMHUB, 0, mmMC_VM_SYSTEM_APERTURE_HIGH_ADDR,
 			     max(adev->gmc.fb_end, adev->gmc.agp_end) >> 18);
 
+	if (amdgpu_sriov_vf(adev))
+		return;
+
 	/* Set default page address. */
 	value = adev->vram_scratch.gpu_addr - adev->gmc.vram_start +
 		adev->vm_manager.vram_base_offset;
@@ -156,6 +158,9 @@ static void mmhub_v1_0_init_cache_regs(struct amdgpu_device *adev)
 {
 	uint32_t tmp;
 
+	if (amdgpu_sriov_vf(adev))
+		return;
+
 	/* Setup L2 cache */
 	tmp = RREG32_SOC15(MMHUB, 0, mmVM_L2_CNTL);
 	tmp = REG_SET_FIELD(tmp, VM_L2_CNTL, ENABLE_L2_CACHE, 1);
@@ -197,11 +202,16 @@ static void mmhub_v1_0_enable_system_domain(struct amdgpu_device *adev)
 	tmp = RREG32_SOC15(MMHUB, 0, mmVM_CONTEXT0_CNTL);
 	tmp = REG_SET_FIELD(tmp, VM_CONTEXT0_CNTL, ENABLE_CONTEXT, 1);
 	tmp = REG_SET_FIELD(tmp, VM_CONTEXT0_CNTL, PAGE_TABLE_DEPTH, 0);
+	tmp = REG_SET_FIELD(tmp, VM_CONTEXT0_CNTL,
+			    RETRY_PERMISSION_OR_INVALID_PAGE_FAULT, 0);
 	WREG32_SOC15(MMHUB, 0, mmVM_CONTEXT0_CNTL, tmp);
 }
 
 static void mmhub_v1_0_disable_identity_aperture(struct amdgpu_device *adev)
 {
+	if (amdgpu_sriov_vf(adev))
+		return;
+
 	WREG32_SOC15(MMHUB, 0, mmVM_L2_CONTEXT1_IDENTITY_APERTURE_LOW_ADDR_LO32,
 		     0XFFFFFFFF);
 	WREG32_SOC15(MMHUB, 0, mmVM_L2_CONTEXT1_IDENTITY_APERTURE_LOW_ADDR_HI32,
@@ -256,7 +266,8 @@ static void mmhub_v1_0_setup_vmid_config(struct amdgpu_device *adev)
 				    block_size);
 		/* Send no-retry XNACK on fault to suppress VM fault storm. */
 		tmp = REG_SET_FIELD(tmp, VM_CONTEXT1_CNTL,
-				    RETRY_PERMISSION_OR_INVALID_PAGE_FAULT, 1);
+				    RETRY_PERMISSION_OR_INVALID_PAGE_FAULT,
+				    !amdgpu_noretry);
 		WREG32_SOC15_OFFSET(MMHUB, 0, mmVM_CONTEXT1_CNTL, i, tmp);
 		WREG32_SOC15_OFFSET(MMHUB, 0, mmVM_CONTEXT1_PAGE_TABLE_START_ADDR_LO32, i*2, 0);
 		WREG32_SOC15_OFFSET(MMHUB, 0, mmVM_CONTEXT1_PAGE_TABLE_START_ADDR_HI32, i*2, 0);
@@ -338,11 +349,13 @@ void mmhub_v1_0_gart_disable(struct amdgpu_device *adev)
 				0);
 	WREG32_SOC15(MMHUB, 0, mmMC_VM_MX_L1_TLB_CNTL, tmp);
 
-	/* Setup L2 cache */
-	tmp = RREG32_SOC15(MMHUB, 0, mmVM_L2_CNTL);
-	tmp = REG_SET_FIELD(tmp, VM_L2_CNTL, ENABLE_L2_CACHE, 0);
-	WREG32_SOC15(MMHUB, 0, mmVM_L2_CNTL, tmp);
-	WREG32_SOC15(MMHUB, 0, mmVM_L2_CNTL3, 0);
+	if (!amdgpu_sriov_vf(adev)) {
+		/* Setup L2 cache */
+		tmp = RREG32_SOC15(MMHUB, 0, mmVM_L2_CNTL);
+		tmp = REG_SET_FIELD(tmp, VM_L2_CNTL, ENABLE_L2_CACHE, 0);
+		WREG32_SOC15(MMHUB, 0, mmVM_L2_CNTL, tmp);
+		WREG32_SOC15(MMHUB, 0, mmVM_L2_CNTL3, 0);
+	}
 }
 
 /**
@@ -354,6 +367,10 @@ void mmhub_v1_0_gart_disable(struct amdgpu_device *adev)
 void mmhub_v1_0_set_fault_enable_default(struct amdgpu_device *adev, bool value)
 {
 	u32 tmp;
+
+	if (amdgpu_sriov_vf(adev))
+		return;
+
 	tmp = RREG32_SOC15(MMHUB, 0, mmVM_L2_PROTECTION_FAULT_CNTL);
 	tmp = REG_SET_FIELD(tmp, VM_L2_PROTECTION_FAULT_CNTL,
 			RANGE_PROTECTION_FAULT_ENABLE_DEFAULT, value);
@@ -391,7 +408,7 @@ void mmhub_v1_0_set_fault_enable_default(struct amdgpu_device *adev, bool value)
 
 void mmhub_v1_0_init(struct amdgpu_device *adev)
 {
-	struct amdgpu_vmhub *hub = &adev->vmhub[AMDGPU_MMHUB];
+	struct amdgpu_vmhub *hub = &adev->vmhub[AMDGPU_MMHUB_0];
 
 	hub->ctx0_ptb_addr_lo32 =
 		SOC15_REG_OFFSET(MMHUB, 0,
@@ -399,6 +416,8 @@ void mmhub_v1_0_init(struct amdgpu_device *adev)
 	hub->ctx0_ptb_addr_hi32 =
 		SOC15_REG_OFFSET(MMHUB, 0,
 				 mmVM_CONTEXT0_PAGE_TABLE_BASE_ADDR_HI32);
+	hub->vm_inv_eng0_sem =
+		SOC15_REG_OFFSET(MMHUB, 0, mmVM_INVALIDATE_ENG0_SEM);
 	hub->vm_inv_eng0_req =
 		SOC15_REG_OFFSET(MMHUB, 0, mmVM_INVALIDATE_ENG0_REQ);
 	hub->vm_inv_eng0_ack =
@@ -475,22 +494,6 @@ static void mmhub_v1_0_update_medium_grain_clock_gating(struct amdgpu_device *ad
 		WREG32_SOC15(MMHUB, 0, mmDAGB1_CNTL_MISC2, data2);
 }
 
-static void athub_update_medium_grain_clock_gating(struct amdgpu_device *adev,
-						   bool enable)
-{
-	uint32_t def, data;
-
-	def = data = RREG32_SOC15(ATHUB, 0, mmATHUB_MISC_CNTL);
-
-	if (enable && (adev->cg_flags & AMD_CG_SUPPORT_MC_MGCG))
-		data |= ATHUB_MISC_CNTL__CG_ENABLE_MASK;
-	else
-		data &= ~ATHUB_MISC_CNTL__CG_ENABLE_MASK;
-
-	if (def != data)
-		WREG32_SOC15(ATHUB, 0, mmATHUB_MISC_CNTL, data);
-}
-
 static void mmhub_v1_0_update_medium_grain_light_sleep(struct amdgpu_device *adev,
 						       bool enable)
 {
@@ -507,23 +510,6 @@ static void mmhub_v1_0_update_medium_grain_light_sleep(struct amdgpu_device *ade
 		WREG32_SOC15(MMHUB, 0, mmATC_L2_MISC_CG, data);
 }
 
-static void athub_update_medium_grain_light_sleep(struct amdgpu_device *adev,
-						  bool enable)
-{
-	uint32_t def, data;
-
-	def = data = RREG32_SOC15(ATHUB, 0, mmATHUB_MISC_CNTL);
-
-	if (enable && (adev->cg_flags & AMD_CG_SUPPORT_MC_LS) &&
-	    (adev->cg_flags & AMD_CG_SUPPORT_HDP_LS))
-		data |= ATHUB_MISC_CNTL__CG_MEM_LS_ENABLE_MASK;
-	else
-		data &= ~ATHUB_MISC_CNTL__CG_MEM_LS_ENABLE_MASK;
-
-	if(def != data)
-		WREG32_SOC15(ATHUB, 0, mmATHUB_MISC_CNTL, data);
-}
-
 int mmhub_v1_0_set_clockgating(struct amdgpu_device *adev,
 			       enum amd_clockgating_state state)
 {
@@ -535,14 +521,11 @@ int mmhub_v1_0_set_clockgating(struct amdgpu_device *adev,
 	case CHIP_VEGA12:
 	case CHIP_VEGA20:
 	case CHIP_RAVEN:
+	case CHIP_RENOIR:
 		mmhub_v1_0_update_medium_grain_clock_gating(adev,
-				state == AMD_CG_STATE_GATE ? true : false);
-		athub_update_medium_grain_clock_gating(adev,
-				state == AMD_CG_STATE_GATE ? true : false);
+				state == AMD_CG_STATE_GATE);
 		mmhub_v1_0_update_medium_grain_light_sleep(adev,
-				state == AMD_CG_STATE_GATE ? true : false);
-		athub_update_medium_grain_light_sleep(adev,
-				state == AMD_CG_STATE_GATE ? true : false);
+				state == AMD_CG_STATE_GATE);
 		break;
 	default:
 		break;
@@ -553,18 +536,230 @@ int mmhub_v1_0_set_clockgating(struct amdgpu_device *adev,
 
 void mmhub_v1_0_get_clockgating(struct amdgpu_device *adev, u32 *flags)
 {
-	int data;
+	int data, data1;
 
 	if (amdgpu_sriov_vf(adev))
 		*flags = 0;
 
+	data = RREG32_SOC15(MMHUB, 0, mmATC_L2_MISC_CG);
+
+	data1 = RREG32_SOC15(MMHUB, 0, mmDAGB0_CNTL_MISC2);
+
 	/* AMD_CG_SUPPORT_MC_MGCG */
-	data = RREG32_SOC15(ATHUB, 0, mmATHUB_MISC_CNTL);
-	if (data & ATHUB_MISC_CNTL__CG_ENABLE_MASK)
+	if ((data & ATC_L2_MISC_CG__ENABLE_MASK) &&
+	    !(data1 & (DAGB0_CNTL_MISC2__DISABLE_WRREQ_CG_MASK |
+		       DAGB0_CNTL_MISC2__DISABLE_WRRET_CG_MASK |
+		       DAGB0_CNTL_MISC2__DISABLE_RDREQ_CG_MASK |
+		       DAGB0_CNTL_MISC2__DISABLE_RDRET_CG_MASK |
+		       DAGB0_CNTL_MISC2__DISABLE_TLBWR_CG_MASK |
+		       DAGB0_CNTL_MISC2__DISABLE_TLBRD_CG_MASK)))
 		*flags |= AMD_CG_SUPPORT_MC_MGCG;
 
 	/* AMD_CG_SUPPORT_MC_LS */
-	data = RREG32_SOC15(MMHUB, 0, mmATC_L2_MISC_CG);
 	if (data & ATC_L2_MISC_CG__MEM_LS_ENABLE_MASK)
 		*flags |= AMD_CG_SUPPORT_MC_LS;
 }
+
+static const struct soc15_ras_field_entry mmhub_v1_0_ras_fields[] = {
+	{ "MMEA0_DRAMRD_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMRD_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMRD_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA0_DRAMWR_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMWR_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMWR_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA0_DRAMWR_DATAMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMWR_DATAMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMWR_DATAMEM_DED_COUNT),
+	},
+	{ "MMEA0_RRET_TAGMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, RRET_TAGMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, RRET_TAGMEM_DED_COUNT),
+	},
+	{ "MMEA0_WRET_TAGMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, WRET_TAGMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, WRET_TAGMEM_DED_COUNT),
+	},
+	{ "MMEA0_DRAMRD_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMRD_PAGEMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA0_DRAMWR_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, DRAMWR_PAGEMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA0_IORD_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, IORD_CMDMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA0_IOWR_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, IOWR_CMDMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA0_IOWR_DATAMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT_VG20, IOWR_DATAMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA0_GMIRD_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIRD_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIRD_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA0_GMIWR_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIWR_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIWR_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA0_GMIWR_DATAMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIWR_DATAMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIWR_DATAMEM_DED_COUNT),
+	},
+	{ "MMEA0_GMIRD_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIRD_PAGEMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA0_GMIWR_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA0_EDC_CNT2_VG20, GMIWR_PAGEMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA1_DRAMRD_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMRD_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMRD_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA1_DRAMWR_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMWR_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMWR_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA1_DRAMWR_DATAMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMWR_DATAMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMWR_DATAMEM_DED_COUNT),
+	},
+	{ "MMEA1_RRET_TAGMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, RRET_TAGMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, RRET_TAGMEM_DED_COUNT),
+	},
+	{ "MMEA1_WRET_TAGMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, WRET_TAGMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, WRET_TAGMEM_DED_COUNT),
+	},
+	{ "MMEA1_DRAMRD_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMRD_PAGEMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA1_DRAMWR_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, DRAMWR_PAGEMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA1_IORD_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, IORD_CMDMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA1_IOWR_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, IOWR_CMDMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA1_IOWR_DATAMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT_VG20, IOWR_DATAMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA1_GMIRD_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIRD_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIRD_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA1_GMIWR_CMDMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIWR_CMDMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIWR_CMDMEM_DED_COUNT),
+	},
+	{ "MMEA1_GMIWR_DATAMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIWR_DATAMEM_SEC_COUNT),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIWR_DATAMEM_DED_COUNT),
+	},
+	{ "MMEA1_GMIRD_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIRD_PAGEMEM_SED_COUNT),
+	0, 0,
+	},
+	{ "MMEA1_GMIWR_PAGEMEM", SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT2_VG20),
+	SOC15_REG_FIELD(MMEA1_EDC_CNT2_VG20, GMIWR_PAGEMEM_SED_COUNT),
+	0, 0,
+	}
+};
+
+static const struct soc15_reg_entry mmhub_v1_0_edc_cnt_regs[] = {
+   { SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT_VG20), 0, 0, 0},
+   { SOC15_REG_ENTRY(MMHUB, 0, mmMMEA0_EDC_CNT2_VG20), 0, 0, 0},
+   { SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT_VG20), 0, 0, 0},
+   { SOC15_REG_ENTRY(MMHUB, 0, mmMMEA1_EDC_CNT2_VG20), 0, 0, 0},
+};
+
+static int mmhub_v1_0_get_ras_error_count(const struct soc15_reg_entry *reg,
+	uint32_t value, uint32_t *sec_count, uint32_t *ded_count)
+{
+	uint32_t i;
+	uint32_t sec_cnt, ded_cnt;
+
+	for (i = 0; i < ARRAY_SIZE(mmhub_v1_0_ras_fields); i++) {
+		if(mmhub_v1_0_ras_fields[i].reg_offset != reg->reg_offset)
+			continue;
+
+		sec_cnt = (value &
+				mmhub_v1_0_ras_fields[i].sec_count_mask) >>
+				mmhub_v1_0_ras_fields[i].sec_count_shift;
+		if (sec_cnt) {
+			DRM_INFO("MMHUB SubBlock %s, SEC %d\n",
+				mmhub_v1_0_ras_fields[i].name,
+				sec_cnt);
+			*sec_count += sec_cnt;
+		}
+
+		ded_cnt = (value &
+				mmhub_v1_0_ras_fields[i].ded_count_mask) >>
+				mmhub_v1_0_ras_fields[i].ded_count_shift;
+		if (ded_cnt) {
+			DRM_INFO("MMHUB SubBlock %s, DED %d\n",
+				mmhub_v1_0_ras_fields[i].name,
+				ded_cnt);
+			*ded_count += ded_cnt;
+		}
+	}
+
+	return 0;
+}
+
+static void mmhub_v1_0_query_ras_error_count(struct amdgpu_device *adev,
+					   void *ras_error_status)
+{
+	struct ras_err_data *err_data = (struct ras_err_data *)ras_error_status;
+	uint32_t sec_count = 0, ded_count = 0;
+	uint32_t i;
+	uint32_t reg_value;
+
+	err_data->ue_count = 0;
+	err_data->ce_count = 0;
+
+	for (i = 0; i < ARRAY_SIZE(mmhub_v1_0_edc_cnt_regs); i++) {
+		reg_value =
+			RREG32(SOC15_REG_ENTRY_OFFSET(mmhub_v1_0_edc_cnt_regs[i]));
+		if (reg_value)
+			mmhub_v1_0_get_ras_error_count(&mmhub_v1_0_edc_cnt_regs[i],
+				reg_value, &sec_count, &ded_count);
+	}
+
+	err_data->ce_count += sec_count;
+	err_data->ue_count += ded_count;
+}
+
+static void mmhub_v1_0_reset_ras_error_count(struct amdgpu_device *adev)
+{
+	uint32_t i;
+
+	/* read back edc counter registers to reset the counters to 0 */
+	if (amdgpu_ras_is_supported(adev, AMDGPU_RAS_BLOCK__MMHUB)) {
+		for (i = 0; i < ARRAY_SIZE(mmhub_v1_0_edc_cnt_regs); i++)
+			RREG32(SOC15_REG_ENTRY_OFFSET(mmhub_v1_0_edc_cnt_regs[i]));
+	}
+}
+
+const struct amdgpu_mmhub_funcs mmhub_v1_0_funcs = {
+	.ras_late_init = amdgpu_mmhub_ras_late_init,
+	.query_ras_error_count = mmhub_v1_0_query_ras_error_count,
+	.reset_ras_error_count = mmhub_v1_0_reset_ras_error_count,
+};

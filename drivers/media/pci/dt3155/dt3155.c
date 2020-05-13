@@ -306,7 +306,6 @@ static int dt3155_enum_fmt_vid_cap(struct file *filp,
 	if (f->index)
 		return -EINVAL;
 	f->pixelformat = V4L2_PIX_FMT_GREY;
-	strscpy(f->description, "8-bit Greyscale", sizeof(f->description));
 	return 0;
 }
 
@@ -551,7 +550,7 @@ static int dt3155_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 					IRQF_SHARED, DT3155_NAME, pd);
 	if (err)
 		goto err_iounmap;
-	err = video_register_device(&pd->vdev, VFL_TYPE_GRABBER, -1);
+	err = video_register_device(&pd->vdev, VFL_TYPE_VIDEO, -1);
 	if (err)
 		goto err_free_irq;
 	dev_info(&pdev->dev, "/dev/video%i is ready\n", pd->vdev.minor);

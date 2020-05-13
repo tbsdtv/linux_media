@@ -1,5 +1,5 @@
 /*
- * Copyright(c) 2015 - 2018 Intel Corporation.
+ * Copyright(c) 2015 - 2019 Intel Corporation.
  *
  * This file is provided under a dual BSD/GPLv2 license.  When using or
  * redistributing this file, you may do so under either license.
@@ -161,7 +161,7 @@ int hfi1_pcie_ddinit(struct hfi1_devdata *dd, struct pci_dev *pdev)
 		return -EINVAL;
 	}
 
-	dd->kregbase1 = ioremap_nocache(addr, RCV_ARRAY);
+	dd->kregbase1 = ioremap(addr, RCV_ARRAY);
 	if (!dd->kregbase1) {
 		dd_dev_err(dd, "UC mapping of kregbase1 failed\n");
 		return -ENOMEM;
@@ -179,7 +179,7 @@ int hfi1_pcie_ddinit(struct hfi1_devdata *dd, struct pci_dev *pdev)
 	dd_dev_info(dd, "RcvArray count: %u\n", rcv_array_count);
 	dd->base2_start  = RCV_ARRAY + rcv_array_count * 8;
 
-	dd->kregbase2 = ioremap_nocache(
+	dd->kregbase2 = ioremap(
 		addr + dd->base2_start,
 		TXE_PIO_SEND - dd->base2_start);
 	if (!dd->kregbase2) {
@@ -319,7 +319,9 @@ int pcie_speeds(struct hfi1_devdata *dd)
 	/*
 	 * bus->max_bus_speed is set from the bridge's linkcap Max Link Speed
 	 */
-	if (parent && dd->pcidev->bus->max_bus_speed != PCIE_SPEED_8_0GT) {
+	if (parent &&
+	    (dd->pcidev->bus->max_bus_speed == PCIE_SPEED_2_5GT ||
+	     dd->pcidev->bus->max_bus_speed == PCIE_SPEED_5_0GT)) {
 		dd_dev_info(dd, "Parent PCIe bridge does not support Gen3\n");
 		dd->link_gen3_capable = 0;
 	}
@@ -449,10 +451,6 @@ error:
 static int hfi1_pcie_caps;
 module_param_named(pcie_caps, hfi1_pcie_caps, int, 0444);
 MODULE_PARM_DESC(pcie_caps, "Max PCIe tuning: Payload (0..3), ReadReq (4..7)");
-
-uint aspm_mode = ASPM_MODE_DISABLED;
-module_param_named(aspm, aspm_mode, uint, 0444);
-MODULE_PARM_DESC(aspm, "PCIe ASPM: 0: disable, 1: enable, 2: dynamic");
 
 /**
  * tune_pcie_caps() - Code to adjust PCIe capabilities.

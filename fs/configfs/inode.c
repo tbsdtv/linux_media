@@ -76,14 +76,11 @@ int configfs_setattr(struct dentry * dentry, struct iattr * iattr)
 	if (ia_valid & ATTR_GID)
 		sd_iattr->ia_gid = iattr->ia_gid;
 	if (ia_valid & ATTR_ATIME)
-		sd_iattr->ia_atime = timespec64_trunc(iattr->ia_atime,
-						      inode->i_sb->s_time_gran);
+		sd_iattr->ia_atime = iattr->ia_atime;
 	if (ia_valid & ATTR_MTIME)
-		sd_iattr->ia_mtime = timespec64_trunc(iattr->ia_mtime,
-						      inode->i_sb->s_time_gran);
+		sd_iattr->ia_mtime = iattr->ia_mtime;
 	if (ia_valid & ATTR_CTIME)
-		sd_iattr->ia_ctime = timespec64_trunc(iattr->ia_ctime,
-						      inode->i_sb->s_time_gran);
+		sd_iattr->ia_ctime = iattr->ia_ctime;
 	if (ia_valid & ATTR_MODE) {
 		umode_t mode = iattr->ia_mode;
 
@@ -164,41 +161,27 @@ static void configfs_set_inode_lock_class(struct configfs_dirent *sd,
 
 #endif /* CONFIG_LOCKDEP */
 
-int configfs_create(struct dentry * dentry, umode_t mode, void (*init)(struct inode *))
+struct inode *configfs_create(struct dentry *dentry, umode_t mode)
 {
-	int error = 0;
 	struct inode *inode = NULL;
 	struct configfs_dirent *sd;
 	struct inode *p_inode;
 
 	if (!dentry)
-		return -ENOENT;
+		return ERR_PTR(-ENOENT);
 
 	if (d_really_is_positive(dentry))
-		return -EEXIST;
+		return ERR_PTR(-EEXIST);
 
 	sd = dentry->d_fsdata;
 	inode = configfs_new_inode(mode, sd, dentry->d_sb);
 	if (!inode)
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 
 	p_inode = d_inode(dentry->d_parent);
 	p_inode->i_mtime = p_inode->i_ctime = current_time(p_inode);
 	configfs_set_inode_lock_class(sd, inode);
-
-	init(inode);
-	if (S_ISDIR(mode) || S_ISLNK(mode)) {
-		/*
-		 * ->symlink(), ->mkdir(), configfs_register_subsystem() or
-		 * create_default_group() - already hashed.
-		 */
-		d_instantiate(dentry, inode);
-		dget(dentry);  /* pin link and directory dentries in core */
-	} else {
-		/* ->lookup() */
-		d_add(dentry, inode);
-	}
-	return error;
+	return inode;
 }
 
 /*

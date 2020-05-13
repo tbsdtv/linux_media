@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2015-2018 The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _DPU_CRTC_H_
@@ -249,17 +238,14 @@ void dpu_crtc_vblank_callback(struct drm_crtc *crtc);
 /**
  * dpu_crtc_commit_kickoff - trigger kickoff of the commit for this crtc
  * @crtc: Pointer to drm crtc object
- * @async: true if the commit is asynchronous, false otherwise
  */
-void dpu_crtc_commit_kickoff(struct drm_crtc *crtc, bool async);
+void dpu_crtc_commit_kickoff(struct drm_crtc *crtc);
 
 /**
  * dpu_crtc_complete_commit - callback signalling completion of current commit
  * @crtc: Pointer to drm crtc object
- * @old_state: Pointer to drm crtc old state object
  */
-void dpu_crtc_complete_commit(struct drm_crtc *crtc,
-		struct drm_crtc_state *old_state);
+void dpu_crtc_complete_commit(struct drm_crtc *crtc);
 
 /**
  * dpu_crtc_init - create a new crtc object

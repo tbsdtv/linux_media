@@ -10,13 +10,16 @@
 #define SPI_ENABLE       	 0x1c
 
 #define SPI_DEVICE       	 0x20   // spi choose: 0 is for 9789, 1 is for fpga , default is 0
-#define SPI_RESET       	 0x24   // spi config 9789 reset , default 0, 1 is valid.
+#define SPI_RESET       	 0x24   // spi config 9789 reset , default 0, 1 is valid. read for qamb is mod and control
 #define SPI_AD4351       	 0x2c   // spi config ad4351 
 #define AD9789_MODULATION	 0x28   // spi mod set
+#define AD9789B_MODULATION	 0x38   // spi mod set for tbs6008
+#define SPI_9789B_RESET       	 0x34   // spi config 9789b reset , default 0, 1 is valid. read for qamb is mod and control
 
 #define SPI_BW_LIGHT	 0x34  // spi bw light set
 
 #define SPI_TESTREG       	 0x30   // debug
+#define MOD_RESET_IPCORE       	 0x38   //qamb reset ipcore
 
 #define MOD_ASI_DEVICE		0X14
 #define MOD_ASI_BASEADDRESS  0x4000
@@ -104,6 +107,15 @@ enum{
 #define Dmaout_adapter1  0x9000
 #define Dmaout_adapter2  0xa000
 #define Dmaout_adapter3  0xb000
+
+#define Dmaout_adapter4  0x8800
+#define Dmaout_adapter5  0x9800
+#define Dmaout_adapter6  0xa800
+#define Dmaout_adapter7  0xb800
+
+#define DMA_BASEADDRESS(_n) ((_n<4)?(0x8000+0x1000*_n):(0x8800+0x1000*(_n-4)))
+#define DMA_MASK(_n)	(0x18 + 4*_n )
+#define DMA_STATUS(_n) (0x0010<<_n)
 
 #define Int_adapter  0xc000
 

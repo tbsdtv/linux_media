@@ -72,7 +72,7 @@
 #define  ADIS16209_STAT_FLASH_UPT_FAIL_BIT	2
 /* Power supply above 3.625 V */
 #define  ADIS16209_STAT_POWER_HIGH_BIT		1
-/* Power supply below 3.15 V */
+/* Power supply below 2.975 V */
 #define  ADIS16209_STAT_POWER_LOW_BIT		0
 
 #define ADIS16209_CMD_REG			0x3E
@@ -240,7 +240,13 @@ static const char * const adis16209_status_error_msgs[] = {
 	[ADIS16209_STAT_SPI_FAIL_BIT] = "SPI failure",
 	[ADIS16209_STAT_FLASH_UPT_FAIL_BIT] = "Flash update failed",
 	[ADIS16209_STAT_POWER_HIGH_BIT] = "Power supply above 3.625V",
-	[ADIS16209_STAT_POWER_LOW_BIT] = "Power supply below 3.15V",
+	[ADIS16209_STAT_POWER_LOW_BIT] = "Power supply below 2.975V",
+};
+
+static const struct adis_timeout adis16209_timeouts = {
+	.reset_ms = ADIS16209_STARTUP_DELAY_MS,
+	.self_test_ms = ADIS16209_STARTUP_DELAY_MS,
+	.sw_reset_ms = ADIS16209_STARTUP_DELAY_MS,
 };
 
 static const struct adis_data adis16209_data = {
@@ -250,8 +256,9 @@ static const struct adis_data adis16209_data = {
 	.diag_stat_reg = ADIS16209_STAT_REG,
 
 	.self_test_mask = ADIS16209_MSC_CTRL_SELF_TEST_EN,
+	.self_test_reg = ADIS16209_MSC_CTRL_REG,
 	.self_test_no_autoclear = true,
-	.startup_delay = ADIS16209_STARTUP_DELAY_MS,
+	.timeouts = &adis16209_timeouts,
 
 	.status_error_msgs = adis16209_status_error_msgs,
 	.status_error_mask = BIT(ADIS16209_STAT_SELFTEST_FAIL_BIT) |

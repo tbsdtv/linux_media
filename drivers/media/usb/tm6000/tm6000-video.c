@@ -52,15 +52,12 @@ EXPORT_SYMBOL_GPL(tm6000_debug);
 
 static struct tm6000_fmt format[] = {
 	{
-		.name     = "4:2:2, packed, YVY2",
 		.fourcc   = V4L2_PIX_FMT_YUYV,
 		.depth    = 16,
 	}, {
-		.name     = "4:2:2, packed, UYVY",
 		.fourcc   = V4L2_PIX_FMT_UYVY,
 		.depth    = 16,
 	}, {
-		.name     = "A/V + VBI mux packet",
 		.fourcc   = V4L2_PIX_FMT_TM6000,
 		.depth    = 16,
 	}
@@ -875,7 +872,6 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void  *priv,
 	if (f->index >= ARRAY_SIZE(format))
 		return -EINVAL;
 
-	strscpy(f->description, format[f->index].name, sizeof(f->description));
 	f->pixelformat = format[f->index].fourcc;
 	return 0;
 }
@@ -1304,7 +1300,7 @@ static int __tm6000_open(struct file *file)
 		video_device_node_name(vdev));
 
 	switch (vdev->vfl_type) {
-	case VFL_TYPE_GRABBER:
+	case VFL_TYPE_VIDEO:
 		type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		break;
 	case VFL_TYPE_VBI:
@@ -1643,7 +1639,7 @@ int tm6000_v4l2_register(struct tm6000_core *dev)
 	INIT_LIST_HEAD(&dev->vidq.active);
 	INIT_LIST_HEAD(&dev->vidq.queued);
 
-	ret = video_register_device(&dev->vfd, VFL_TYPE_GRABBER, video_nr);
+	ret = video_register_device(&dev->vfd, VFL_TYPE_VIDEO, video_nr);
 
 	if (ret < 0) {
 		printk(KERN_INFO "%s: can't register video device\n",

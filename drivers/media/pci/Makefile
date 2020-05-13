@@ -18,6 +18,7 @@ obj-y        +=	ttpci/		\
 		tbsecp3/	\
 		tbscapture/	\
 		tbsmod/		\
+		tbsci/		\
 		intel/
 
 obj-$(CONFIG_VIDEO_IVTV) += ivtv/

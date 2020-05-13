@@ -1288,11 +1288,8 @@ static int emac_tso_csum(struct emac_adapter *adpt,
 			memset(tpd, 0, sizeof(*tpd));
 			memset(&extra_tpd, 0, sizeof(extra_tpd));
 
-			ipv6_hdr(skb)->payload_len = 0;
-			tcp_hdr(skb)->check =
-				~csum_ipv6_magic(&ipv6_hdr(skb)->saddr,
-						 &ipv6_hdr(skb)->daddr,
-						 0, IPPROTO_TCP, 0);
+			tcp_v6_gso_csum_prep(skb);
+
 			TPD_PKT_LEN_SET(&extra_tpd, skb->len);
 			TPD_LSO_SET(&extra_tpd, 1);
 			TPD_LSOV_SET(&extra_tpd, 1);
@@ -1385,15 +1382,13 @@ static void emac_tx_fill_tpd(struct emac_adapter *adpt,
 	}
 
 	for (i = 0; i < nr_frags; i++) {
-		struct skb_frag_struct *frag;
-
-		frag = &skb_shinfo(skb)->frags[i];
+		skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 
 		tpbuf = GET_TPD_BUFFER(tx_q, tx_q->tpd.produce_idx);
-		tpbuf->length = frag->size;
-		tpbuf->dma_addr = dma_map_page(adpt->netdev->dev.parent,
-					       frag->page.p, frag->page_offset,
-					       tpbuf->length, DMA_TO_DEVICE);
+		tpbuf->length = skb_frag_size(frag);
+		tpbuf->dma_addr = skb_frag_dma_map(adpt->netdev->dev.parent,
+						   frag, 0, tpbuf->length,
+						   DMA_TO_DEVICE);
 		ret = dma_mapping_error(adpt->netdev->dev.parent,
 					tpbuf->dma_addr);
 		if (ret)

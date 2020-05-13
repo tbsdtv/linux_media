@@ -1,0 +1,9 @@
+config TBS_PCIE_CI
+	tristate "TBS PCIe ci cards"
+	depends on PCI && I2C && DVB_CORE
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+
+	help
+	  Support for TBS PCIe ci cards
+
+	  Say Y if you own such a device and want to use it.

@@ -23,19 +23,20 @@
  * Authors:
  *     David Airlie
  */
-#include <linux/module.h>
-#include <linux/slab.h>
-#include <linux/pm_runtime.h>
 
-#include <drm/drmP.h>
+#include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/pm_runtime.h>
+#include <linux/slab.h>
+#include <linux/vga_switcheroo.h>
+
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
-#include <drm/radeon_drm.h>
-#include "radeon.h"
-
 #include <drm/drm_fb_helper.h>
+#include <drm/drm_fourcc.h>
+#include <drm/radeon_drm.h>
 
-#include <linux/vga_switcheroo.h>
+#include "radeon.h"
 
 /* object hierarchy -
  * this contains a helper + a radeon fb
@@ -72,7 +73,7 @@ radeonfb_release(struct fb_info *info, int user)
 	return 0;
 }
 
-static struct fb_ops radeonfb_ops = {
+static const struct fb_ops radeonfb_ops = {
 	.owner = THIS_MODULE,
 	DRM_FB_HELPER_DEFAULT_OPS,
 	.fb_open = radeonfb_open,
@@ -125,6 +126,7 @@ static int radeonfb_create_pinned_object(struct radeon_fbdev *rfbdev,
 					 struct drm_mode_fb_cmd2 *mode_cmd,
 					 struct drm_gem_object **gobj_p)
 {
+	const struct drm_format_info *info;
 	struct radeon_device *rdev = rfbdev->rdev;
 	struct drm_gem_object *gobj = NULL;
 	struct radeon_bo *rbo = NULL;
@@ -135,7 +137,8 @@ static int radeonfb_create_pinned_object(struct radeon_fbdev *rfbdev,
 	int height = mode_cmd->height;
 	u32 cpp;
 
-	cpp = drm_format_plane_cpp(mode_cmd->pixel_format, 0);
+	info = drm_get_format_info(rdev->ddev, mode_cmd);
+	cpp = info->cpp[0];
 
 	/* need to align pitch with crtc limits */
 	mode_cmd->pitches[0] = radeon_align_pitch(rdev, mode_cmd->width, cpp,
@@ -351,14 +354,9 @@ int radeon_fbdev_init(struct radeon_device *rdev)
 	drm_fb_helper_prepare(rdev->ddev, &rfbdev->helper,
 			      &radeon_fb_helper_funcs);
 
-	ret = drm_fb_helper_init(rdev->ddev, &rfbdev->helper,
-				 RADEONFB_CONN_LIMIT);
+	ret = drm_fb_helper_init(rdev->ddev, &rfbdev->helper);
 	if (ret)
 		goto free;
-
-	ret = drm_fb_helper_single_add_all_connectors(&rfbdev->helper);
-	if (ret)
-		goto fini;
 
 	/* disable all the possible outputs/crtcs before entering KMS mode */
 	drm_helper_disable_unused_functions(rdev->ddev);
@@ -400,16 +398,4 @@ bool radeon_fbdev_robj_is_fb(struct radeon_device *rdev, struct radeon_bo *robj)
 	if (robj == gem_to_radeon_bo(rdev->mode_info.rfbdev->fb.obj[0]))
 		return true;
 	return false;
-}
-
-void radeon_fb_add_connector(struct radeon_device *rdev, struct drm_connector *connector)
-{
-	if (rdev->mode_info.rfbdev)
-		drm_fb_helper_add_one_connector(&rdev->mode_info.rfbdev->helper, connector);
-}
-
-void radeon_fb_remove_connector(struct radeon_device *rdev, struct drm_connector *connector)
-{
-	if (rdev->mode_info.rfbdev)
-		drm_fb_helper_remove_one_connector(&rdev->mode_info.rfbdev->helper, connector);
 }

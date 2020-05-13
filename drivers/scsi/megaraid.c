@@ -2795,11 +2795,9 @@ megaraid_biosparam(struct scsi_device *sdev, struct block_device *bdev,
 		    sector_t capacity, int geom[])
 {
 	adapter_t	*adapter;
-	unsigned char	*bh;
 	int	heads;
 	int	sectors;
 	int	cylinders;
-	int	rval;
 
 	/* Get pointer to host config structure */
 	adapter = (adapter_t *)sdev->host->hostdata;
@@ -2826,15 +2824,8 @@ megaraid_biosparam(struct scsi_device *sdev, struct block_device *bdev,
 			geom[2] = cylinders;
 	}
 	else {
-		bh = scsi_bios_ptable(bdev);
-
-		if( bh ) {
-			rval = scsi_partsize(bh, capacity,
-					    &geom[2], &geom[0], &geom[1]);
-			kfree(bh);
-			if( rval != -1 )
-				return rval;
-		}
+		if (scsi_partsize(bdev, capacity, geom))
+			return 0;
 
 		dev_info(&adapter->dev->dev,
 			 "invalid partition on this disk on channel %d\n",
@@ -4183,11 +4174,11 @@ megaraid_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		 */
 		if (pdev->subsystem_vendor == PCI_VENDOR_ID_COMPAQ &&
 		    pdev->subsystem_device == 0xC000)
-		   	return -ENODEV;
+			goto out_disable_device;
 		/* Now check the magic signature byte */
 		pci_read_config_word(pdev, PCI_CONF_AMISIG, &magic);
 		if (magic != HBA_SIGNATURE_471 && magic != HBA_SIGNATURE)
-			return -ENODEV;
+			goto out_disable_device;
 		/* Ok it is probably a megaraid */
 	}
 

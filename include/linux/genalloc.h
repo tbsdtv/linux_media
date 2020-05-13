@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Basic general purpose allocator for managing special purpose
  * memory, for example, memory that is not managed by the regular
@@ -21,9 +22,6 @@
  * the allocator can NOT be used in NMI handler.  So code uses the
  * allocator in NMI handler should depend on
  * CONFIG_ARCH_HAVE_NMI_SAFE_CMPXCHG.
- *
- * This source code is licensed under the GNU General Public License,
- * Version 2.  See the file COPYING for more details.
  */
 
 
@@ -78,7 +76,7 @@ struct gen_pool_chunk {
 	void *owner;			/* private data to retrieve at alloc time */
 	unsigned long start_addr;	/* start address of memory chunk */
 	unsigned long end_addr;		/* end address of memory chunk (inclusive) */
-	unsigned long bits[0];		/* bitmap for allocating memory chunk */
+	unsigned long bits[];		/* bitmap for allocating memory chunk */
 };
 
 /*
@@ -157,6 +155,15 @@ static inline unsigned long gen_pool_alloc(struct gen_pool *pool, size_t size)
 
 extern void *gen_pool_dma_alloc(struct gen_pool *pool, size_t size,
 		dma_addr_t *dma);
+extern void *gen_pool_dma_alloc_algo(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, genpool_algo_t algo, void *data);
+extern void *gen_pool_dma_alloc_align(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, int align);
+extern void *gen_pool_dma_zalloc(struct gen_pool *pool, size_t size, dma_addr_t *dma);
+extern void *gen_pool_dma_zalloc_algo(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, genpool_algo_t algo, void *data);
+extern void *gen_pool_dma_zalloc_align(struct gen_pool *pool, size_t size,
+		dma_addr_t *dma, int align);
 extern void gen_pool_free_owner(struct gen_pool *pool, unsigned long addr,
 		size_t size, void **owner);
 static inline void gen_pool_free(struct gen_pool *pool, unsigned long addr,
@@ -199,7 +206,7 @@ extern struct gen_pool *devm_gen_pool_create(struct device *dev,
 		int min_alloc_order, int nid, const char *name);
 extern struct gen_pool *gen_pool_get(struct device *dev, const char *name);
 
-bool addr_in_gen_pool(struct gen_pool *pool, unsigned long start,
+extern bool gen_pool_has_addr(struct gen_pool *pool, unsigned long start,
 			size_t size);
 
 #ifdef CONFIG_OF

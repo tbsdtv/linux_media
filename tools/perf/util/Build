@@ -1,7 +1,10 @@
 perf-y += annotate.o
+perf-y += block-info.o
 perf-y += block-range.o
 perf-y += build-id.o
+perf-y += cacheline.o
 perf-y += config.o
+perf-y += copyfile.o
 perf-y += ctype.o
 perf-y += db-export.o
 perf-y += env.o
@@ -9,6 +12,8 @@ perf-y += event.o
 perf-y += evlist.o
 perf-y += evsel.o
 perf-y += evsel_fprintf.o
+perf-y += perf_event_attr_fprintf.o
+perf-y += evswitch.o
 perf-y += find_bit.o
 perf-y += get_current_dir_name.o
 perf-y += kallsyms.o
@@ -20,6 +25,8 @@ perf-y += parse-events.o
 perf-y += perf_regs.o
 perf-y += path.o
 perf-y += print_binary.o
+perf-y += rlimit.o
+perf-y += argv_split.o
 perf-y += rbtree.o
 perf-y += libstring.o
 perf-y += bitmap.o
@@ -32,6 +39,7 @@ perf-y += strfilter.o
 perf-y += top.o
 perf-y += usage.o
 perf-y += dso.o
+perf-y += dsos.o
 perf-y += symbol.o
 perf-y += symbol_fprintf.o
 perf-y += color.o
@@ -41,6 +49,7 @@ perf-y += header.o
 perf-y += callchain.o
 perf-y += values.o
 perf-y += debug.o
+perf-y += fncache.o
 perf-y += machine.o
 perf-y += map.o
 perf-y += pstack.o
@@ -67,8 +76,8 @@ perf-y += svghelper.o
 perf-y += sort.o
 perf-y += hist.o
 perf-y += util.o
-perf-y += xyarray.o
 perf-y += cpumap.o
+perf-y += affinity.o
 perf-y += cputopo.o
 perf-y += cgroup.o
 perf-y += target.o
@@ -82,12 +91,14 @@ perf-y += stat-display.o
 perf-y += record.o
 perf-y += srcline.o
 perf-y += srccode.o
+perf-y += synthetic-events.o
 perf-y += data.o
 perf-y += tsc.o
 perf-y += cloexec.o
 perf-y += call-path.o
 perf-y += rwsem.o
 perf-y += thread-stack.o
+perf-y += spark.o
 perf-$(CONFIG_AUXTRACE) += auxtrace.o
 perf-$(CONFIG_AUXTRACE) += intel-pt-decoder/
 perf-$(CONFIG_AUXTRACE) += intel-pt.o
@@ -110,7 +121,9 @@ perf-y += mem-events.o
 perf-y += vsprintf.o
 perf-y += units.o
 perf-y += time-utils.o
+perf-y += expr-flex.o
 perf-y += expr-bison.o
+perf-y += expr.o
 perf-y += branch.o
 perf-y += mem2node.o
 
@@ -147,6 +160,8 @@ perf-$(CONFIG_ZLIB) += zlib.o
 perf-$(CONFIG_LZMA) += lzma.o
 perf-$(CONFIG_ZSTD) += zstd.o
 
+perf-$(CONFIG_LIBCAP) += cap.o
+
 perf-y += demangle-java.o
 perf-y += demangle-rust.o
 
@@ -176,9 +191,13 @@ $(OUTPUT)util/parse-events-bison.c: util/parse-events.y
 	$(call rule_mkdir)
 	$(Q)$(call echo-cmd,bison)$(BISON) -v util/parse-events.y -d $(PARSER_DEBUG_BISON) -o $@ -p parse_events_
 
+$(OUTPUT)util/expr-flex.c: util/expr.l $(OUTPUT)util/expr-bison.c
+	$(call rule_mkdir)
+	$(Q)$(call echo-cmd,flex)$(FLEX) -o $@ --header-file=$(OUTPUT)util/expr-flex.h $(PARSER_DEBUG_FLEX) util/expr.l
+
 $(OUTPUT)util/expr-bison.c: util/expr.y
 	$(call rule_mkdir)
-	$(Q)$(call echo-cmd,bison)$(BISON) -v util/expr.y -d $(PARSER_DEBUG_BISON) -o $@ -p expr__
+	$(Q)$(call echo-cmd,bison)$(BISON) -v util/expr.y -d $(PARSER_DEBUG_BISON) -o $@ -p expr_
 
 $(OUTPUT)util/pmu-flex.c: util/pmu.l $(OUTPUT)util/pmu-bison.c
 	$(call rule_mkdir)
@@ -190,12 +209,14 @@ $(OUTPUT)util/pmu-bison.c: util/pmu.y
 
 CFLAGS_parse-events-flex.o  += -w
 CFLAGS_pmu-flex.o           += -w
+CFLAGS_expr-flex.o          += -w
 CFLAGS_parse-events-bison.o += -DYYENABLE_NLS=0 -w
 CFLAGS_pmu-bison.o          += -DYYENABLE_NLS=0 -DYYLTYPE_IS_TRIVIAL=0 -w
 CFLAGS_expr-bison.o         += -DYYENABLE_NLS=0 -DYYLTYPE_IS_TRIVIAL=0 -w
 
 $(OUTPUT)util/parse-events.o: $(OUTPUT)util/parse-events-flex.c $(OUTPUT)util/parse-events-bison.c
 $(OUTPUT)util/pmu.o: $(OUTPUT)util/pmu-flex.c $(OUTPUT)util/pmu-bison.c
+$(OUTPUT)util/expr.o: $(OUTPUT)util/expr-flex.c $(OUTPUT)util/expr-bison.c
 
 CFLAGS_bitmap.o        += -Wno-unused-parameter -DETC_PERFCONFIG="BUILD_STR($(ETC_PERFCONFIG_SQ))"
 CFLAGS_find_bit.o      += -Wno-unused-parameter -DETC_PERFCONFIG="BUILD_STR($(ETC_PERFCONFIG_SQ))"
@@ -203,13 +224,22 @@ CFLAGS_rbtree.o        += -Wno-unused-parameter -DETC_PERFCONFIG="BUILD_STR($(ET
 CFLAGS_libstring.o     += -Wno-unused-parameter -DETC_PERFCONFIG="BUILD_STR($(ETC_PERFCONFIG_SQ))"
 CFLAGS_hweight.o       += -Wno-unused-parameter -DETC_PERFCONFIG="BUILD_STR($(ETC_PERFCONFIG_SQ))"
 CFLAGS_parse-events.o  += -Wno-redundant-decls
+CFLAGS_expr.o          += -Wno-redundant-decls
 CFLAGS_header.o        += -include $(OUTPUT)PERF-VERSION-FILE
 
 $(OUTPUT)util/kallsyms.o: ../lib/symbol/kallsyms.c FORCE
 	$(call rule_mkdir)
 	$(call if_changed_dep,cc_o_c)
 
+$(OUTPUT)util/argv_split.o: ../lib/argv_split.c FORCE
+	$(call rule_mkdir)
+	$(call if_changed_dep,cc_o_c)
+
 $(OUTPUT)util/bitmap.o: ../lib/bitmap.c FORCE
+	$(call rule_mkdir)
+	$(call if_changed_dep,cc_o_c)
+
+$(OUTPUT)util/ctype.o: ../lib/ctype.c FORCE
 	$(call rule_mkdir)
 	$(call if_changed_dep,cc_o_c)
 

@@ -475,8 +475,7 @@ static int hdlcdrv_close(struct net_device *dev)
 
 	if (s->ops && s->ops->close)
 		i = s->ops->close(dev);
-	if (s->skb)
-		dev_kfree_skb(s->skb);
+	dev_kfree_skb(s->skb);
 	s->skb = NULL;
 	s->opened = 0;
 	return i;
@@ -687,8 +686,6 @@ struct net_device *hdlcdrv_register(const struct hdlcdrv_ops *ops,
 	struct net_device *dev;
 	struct hdlcdrv_state *s;
 	int err;
-
-	BUG_ON(ops == NULL);
 
 	if (privsize < sizeof(struct hdlcdrv_state))
 		privsize = sizeof(struct hdlcdrv_state);

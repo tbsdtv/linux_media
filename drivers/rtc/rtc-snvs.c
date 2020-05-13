@@ -7,7 +7,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_wakeirq.h>
 #include <linux/rtc.h>
@@ -151,7 +150,7 @@ static int snvs_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	struct snvs_rtc_data *data = dev_get_drvdata(dev);
 	unsigned long time = rtc_read_lp_counter(data);
 
-	rtc_time_to_tm(time, tm);
+	rtc_time64_to_tm(time, tm);
 
 	return 0;
 }
@@ -159,10 +158,8 @@ static int snvs_rtc_read_time(struct device *dev, struct rtc_time *tm)
 static int snvs_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
 	struct snvs_rtc_data *data = dev_get_drvdata(dev);
-	unsigned long time;
+	unsigned long time = rtc_tm_to_time64(tm);
 	int ret;
-
-	rtc_tm_to_time(tm, &time);
 
 	/* Disable RTC first */
 	ret = snvs_rtc_enable(data, false);
@@ -185,7 +182,7 @@ static int snvs_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	u32 lptar, lpsr;
 
 	regmap_read(data->regmap, data->offset + SNVS_LPTAR, &lptar);
-	rtc_time_to_tm(lptar, &alrm->time);
+	rtc_time64_to_tm(lptar, &alrm->time);
 
 	regmap_read(data->regmap, data->offset + SNVS_LPSR, &lpsr);
 	alrm->pending = (lpsr & SNVS_LPSR_LPTA) ? 1 : 0;
@@ -207,11 +204,8 @@ static int snvs_rtc_alarm_irq_enable(struct device *dev, unsigned int enable)
 static int snvs_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct snvs_rtc_data *data = dev_get_drvdata(dev);
-	struct rtc_time *alrm_tm = &alrm->time;
-	unsigned long time;
+	unsigned long time = rtc_tm_to_time64(&alrm->time);
 	int ret;
-
-	rtc_tm_to_time(alrm_tm, &time);
 
 	regmap_update_bits(data->regmap, data->offset + SNVS_LPCR, SNVS_LPCR_LPTA_EN, 0);
 	ret = rtc_write_sync_lp(data);
@@ -269,6 +263,12 @@ static const struct regmap_config snvs_rtc_config = {
 	.reg_stride = 4,
 };
 
+static void snvs_rtc_action(void *data)
+{
+	if (data)
+		clk_disable_unprepare(data);
+}
+
 static int snvs_rtc_probe(struct platform_device *pdev)
 {
 	struct snvs_rtc_data *data;
@@ -278,6 +278,10 @@ static int snvs_rtc_probe(struct platform_device *pdev)
 	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
+
+	data->rtc = devm_rtc_allocate_device(&pdev->dev);
+	if (IS_ERR(data->rtc))
+		return PTR_ERR(data->rtc);
 
 	data->regmap = syscon_regmap_lookup_by_phandle(pdev->dev.of_node, "regmap");
 
@@ -315,6 +319,10 @@ static int snvs_rtc_probe(struct platform_device *pdev)
 		}
 	}
 
+	ret = devm_add_action_or_reset(&pdev->dev, snvs_rtc_action, data->clk);
+	if (ret)
+		return ret;
+
 	platform_set_drvdata(pdev, data);
 
 	/* Initialize glitch detect */
@@ -327,7 +335,7 @@ static int snvs_rtc_probe(struct platform_device *pdev)
 	ret = snvs_rtc_enable(data, true);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable rtc %d\n", ret);
-		goto error_rtc_device_register;
+		return ret;
 	}
 
 	device_init_wakeup(&pdev->dev, true);
@@ -340,24 +348,13 @@ static int snvs_rtc_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request irq %d: %d\n",
 			data->irq, ret);
-		goto error_rtc_device_register;
+		return ret;
 	}
 
-	data->rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
-					&snvs_rtc_ops, THIS_MODULE);
-	if (IS_ERR(data->rtc)) {
-		ret = PTR_ERR(data->rtc);
-		dev_err(&pdev->dev, "failed to register rtc: %d\n", ret);
-		goto error_rtc_device_register;
-	}
+	data->rtc->ops = &snvs_rtc_ops;
+	data->rtc->range_max = U32_MAX;
 
-	return 0;
-
-error_rtc_device_register:
-	if (data->clk)
-		clk_disable_unprepare(data->clk);
-
-	return ret;
+	return rtc_register_device(data->rtc);
 }
 
 static int __maybe_unused snvs_rtc_suspend_noirq(struct device *dev)

@@ -26,8 +26,11 @@
 #ifndef __AMDGPU_DM_H__
 #define __AMDGPU_DM_H__
 
-#include <drm/drmP.h>
 #include <drm/drm_atomic.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_dp_mst_helper.h>
+#include <drm/drm_plane.h>
 
 /*
  * This file contains the definition for amdgpu_display_manager
@@ -47,12 +50,15 @@
 
 #include "irq_types.h"
 #include "signal_types.h"
+#include "amdgpu_dm_crc.h"
 
 /* Forward declarations */
 struct amdgpu_device;
 struct drm_device;
 struct amdgpu_dm_irq_handler_data;
 struct dc;
+struct amdgpu_bo;
+struct dmub_srv;
 
 struct common_irq_params {
 	struct amdgpu_device *adev;
@@ -84,15 +90,41 @@ struct dm_comressor_info {
 };
 
 /**
- * struct amdgpu_dm_backlight_caps - Usable range of backlight values from ACPI
- * @min_input_signal: minimum possible input in range 0-255
- * @max_input_signal: maximum possible input in range 0-255
- * @caps_valid: true if these values are from the ACPI interface
+ * struct amdgpu_dm_backlight_caps - Information about backlight
+ *
+ * Describe the backlight support for ACPI or eDP AUX.
  */
 struct amdgpu_dm_backlight_caps {
+	/**
+	 * @ext_caps: Keep the data struct with all the information about the
+	 * display support for HDR.
+	 */
+	union dpcd_sink_ext_caps *ext_caps;
+	/**
+	 * @aux_min_input_signal: Min brightness value supported by the display
+	 */
+	u32 aux_min_input_signal;
+	/**
+	 * @aux_max_input_signal: Max brightness value supported by the display
+	 * in nits.
+	 */
+	u32 aux_max_input_signal;
+	/**
+	 * @min_input_signal: minimum possible input in range 0-255.
+	 */
 	int min_input_signal;
+	/**
+	 * @max_input_signal: maximum possible input in range 0-255.
+	 */
 	int max_input_signal;
+	/**
+	 * @caps_valid: true if these values are from the ACPI interface.
+	 */
 	bool caps_valid;
+	/**
+	 * @aux_support: Describes if the display supports AUX backlight.
+	 */
+	bool aux_support;
 };
 
 /**
@@ -104,12 +136,69 @@ struct amdgpu_dm_backlight_caps {
  * @display_indexes_num: Max number of display streams supported
  * @irq_handler_list_table_lock: Synchronizes access to IRQ tables
  * @backlight_dev: Backlight control device
+ * @backlight_link: Link on which to control backlight
+ * @backlight_caps: Capabilities of the backlight device
+ * @freesync_module: Module handling freesync calculations
+ * @fw_dmcu: Reference to DMCU firmware
+ * @dmcu_fw_version: Version of the DMCU firmware
+ * @soc_bounding_box: SOC bounding box values provided by gpu_info FW
  * @cached_state: Caches device atomic state for suspend/resume
  * @compressor: Frame buffer compression buffer. See &struct dm_comressor_info
  */
 struct amdgpu_display_manager {
 
 	struct dc *dc;
+
+	/**
+	 * @dmub_srv:
+	 *
+	 * DMUB service, used for controlling the DMUB on hardware
+	 * that supports it. The pointer to the dmub_srv will be
+	 * NULL on hardware that does not support it.
+	 */
+	struct dmub_srv *dmub_srv;
+
+	/**
+	 * @dmub_fb_info:
+	 *
+	 * Framebuffer regions for the DMUB.
+	 */
+	struct dmub_srv_fb_info *dmub_fb_info;
+
+	/**
+	 * @dmub_fw:
+	 *
+	 * DMUB firmware, required on hardware that has DMUB support.
+	 */
+	const struct firmware *dmub_fw;
+
+	/**
+	 * @dmub_bo:
+	 *
+	 * Buffer object for the DMUB.
+	 */
+	struct amdgpu_bo *dmub_bo;
+
+	/**
+	 * @dmub_bo_gpu_addr:
+	 *
+	 * GPU virtual address for the DMUB buffer object.
+	 */
+	u64 dmub_bo_gpu_addr;
+
+	/**
+	 * @dmub_bo_cpu_addr:
+	 *
+	 * CPU address for the DMUB buffer object.
+	 */
+	void *dmub_bo_cpu_addr;
+
+	/**
+	 * @dmcub_fw_version:
+	 *
+	 * DMCUB firmware version.
+	 */
+	uint32_t dmcub_fw_version;
 
 	/**
 	 * @cgs_device:
@@ -124,7 +213,7 @@ struct amdgpu_display_manager {
 	u16 display_indexes_num;
 
 	/**
-	 * @atomic_obj
+	 * @atomic_obj:
 	 *
 	 * In combination with &dm_atomic_state it helps manage
 	 * global atomic state that doesn't map cleanly into existing
@@ -139,6 +228,28 @@ struct amdgpu_display_manager {
 	 * sequences.
 	 */
 	struct mutex dc_lock;
+
+	/**
+	 * @audio_lock:
+	 *
+	 * Guards access to audio instance changes.
+	 */
+	struct mutex audio_lock;
+
+	/**
+	 * @audio_component:
+	 *
+	 * Used to notify ELD changes to sound driver.
+	 */
+	struct drm_audio_component *audio_component;
+
+	/**
+	 * @audio_registered:
+	 *
+	 * True if the audio component has been registered
+	 * successfully, false otherwise.
+	 */
+	bool audio_registered;
 
 	/**
 	 * @irq_handler_list_low_tab:
@@ -199,6 +310,9 @@ struct amdgpu_display_manager {
 	struct amdgpu_dm_backlight_caps backlight_caps;
 
 	struct mod_freesync *freesync_module;
+#ifdef CONFIG_DRM_AMD_DC_HDCP
+	struct hdcp_workqueue *hdcp_workqueue;
+#endif
 
 	struct drm_atomic_state *cached_state;
 
@@ -206,6 +320,13 @@ struct amdgpu_display_manager {
 
 	const struct firmware *fw_dmcu;
 	uint32_t dmcu_fw_version;
+	/**
+	 * @soc_bounding_box:
+	 *
+	 * gpu_info FW provided soc bounding box struct or 0 if not
+	 * available in FW
+	 */
+	const struct gpu_info_soc_bounding_box_v1_0 *soc_bounding_box;
 };
 
 struct amdgpu_dm_connector {
@@ -235,6 +356,7 @@ struct amdgpu_dm_connector {
 	struct drm_dp_mst_port *port;
 	struct amdgpu_dm_connector *mst_port;
 	struct amdgpu_encoder *mst_encoder;
+	struct drm_dp_aux *dsc_aux;
 
 	/* TODO see if we can merge with ddc_bus or make a dm_connector */
 	struct amdgpu_i2c_adapter *i2c;
@@ -244,6 +366,9 @@ struct amdgpu_dm_connector {
 	int max_vfreq ;
 	int pixel_clock_mhz;
 
+	/* Audio instance - protected by audio_lock. */
+	int audio_inst;
+
 	struct mutex hpd_lock;
 
 	bool fake_enable;
@@ -251,6 +376,7 @@ struct amdgpu_dm_connector {
 	uint32_t debugfs_dpcd_address;
 	uint32_t debugfs_dpcd_size;
 #endif
+	bool force_yuv420_output;
 };
 
 #define to_amdgpu_dm_connector(x) container_of(x, struct amdgpu_dm_connector, base)
@@ -271,11 +397,15 @@ struct dm_crtc_state {
 	struct drm_crtc_state base;
 	struct dc_stream_state *stream;
 
+	bool cm_has_degamma;
+	bool cm_is_degamma_srgb;
+
+	int update_type;
 	int active_planes;
 	bool interrupts_enabled;
 
 	int crc_skip_count;
-	bool crc_enabled;
+	enum amdgpu_dm_pipe_crc_source crc_src;
 
 	bool freesync_timing_changed;
 	bool freesync_vrr_info_changed;
@@ -304,10 +434,11 @@ struct dm_connector_state {
 	enum amdgpu_rmx_type scaling;
 	uint8_t underscan_vborder;
 	uint8_t underscan_hborder;
-	uint8_t max_bpc;
 	bool underscan_enable;
 	bool freesync_capable;
 	uint8_t abm_level;
+	int vcpi_slots;
+	uint64_t pbn;
 };
 
 #define to_dm_connector_state(x)\
@@ -343,28 +474,17 @@ void dm_restore_drm_connector_state(struct drm_device *dev,
 void amdgpu_dm_update_freesync_caps(struct drm_connector *connector,
 					struct edid *edid);
 
-/* amdgpu_dm_crc.c */
-#ifdef CONFIG_DEBUG_FS
-int amdgpu_dm_crtc_set_crc_source(struct drm_crtc *crtc, const char *src_name);
-int amdgpu_dm_crtc_verify_crc_source(struct drm_crtc *crtc,
-				     const char *src_name,
-				     size_t *values_cnt);
-void amdgpu_dm_crtc_handle_crc_irq(struct drm_crtc *crtc);
-#else
-#define amdgpu_dm_crtc_set_crc_source NULL
-#define amdgpu_dm_crtc_verify_crc_source NULL
-#define amdgpu_dm_crtc_handle_crc_irq(x)
-#endif
-
 #define MAX_COLOR_LUT_ENTRIES 4096
 /* Legacy gamm LUT users such as X doesn't like large LUT sizes */
 #define MAX_COLOR_LEGACY_LUT_ENTRIES 256
 
 void amdgpu_dm_init_color_mod(void);
-int amdgpu_dm_set_degamma_lut(struct drm_crtc_state *crtc_state,
-			      struct dc_plane_state *dc_plane_state);
-void amdgpu_dm_set_ctm(struct dm_crtc_state *crtc);
-int amdgpu_dm_set_regamma_lut(struct dm_crtc_state *crtc);
+int amdgpu_dm_update_crtc_color_mgmt(struct dm_crtc_state *crtc);
+int amdgpu_dm_update_plane_color_mgmt(struct dm_crtc_state *crtc,
+				      struct dc_plane_state *dc_plane_state);
+
+void amdgpu_dm_update_connector_after_detect(
+		struct amdgpu_dm_connector *aconnector);
 
 extern const struct drm_encoder_helper_funcs amdgpu_dm_encoder_helper_funcs;
 

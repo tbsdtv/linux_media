@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * rtc-ds1307.c - RTC driver for some mostly-compatible I2C chips.
  *
@@ -5,10 +6,6 @@
  *  Copyright (C) 2006 David Brownell
  *  Copyright (C) 2009 Matthias Fuchs (rx8025 support)
  *  Copyright (C) 2012 Bertrand Achard (nvram access fixes)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/acpi.h>
@@ -25,6 +22,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/clk-provider.h>
 #include <linux/regmap.h>
+#include <linux/watchdog.h>
 
 /*
  * We can't determine type by probing, but if we expect pre-Linux code
@@ -147,6 +145,15 @@ enum ds_type {
 #	define M41TXX_BIT_CALIB_SIGN	BIT(5)
 #	define M41TXX_M_CALIBRATION	GENMASK(4, 0)
 
+#define DS1388_REG_WDOG_HUN_SECS	0x08
+#define DS1388_REG_WDOG_SECS		0x09
+#define DS1388_REG_FLAG			0x0b
+#	define DS1388_BIT_WF		BIT(6)
+#	define DS1388_BIT_OSF		BIT(7)
+#define DS1388_REG_CONTROL		0x0c
+#	define DS1388_BIT_RST		BIT(0)
+#	define DS1388_BIT_WDE		BIT(1)
+
 /* negative offset step is -2.034ppm */
 #define M41TXX_NEG_OFFSET_STEP_PPB	2034
 /* positive offset step is +4.068ppm */
@@ -225,6 +232,52 @@ static int ds1307_get_time(struct device *dev, struct rtc_time *t)
 		return -EINVAL;
 	}
 
+	tmp = regs[DS1307_REG_SECS];
+	switch (ds1307->type) {
+	case ds_1307:
+	case m41t0:
+	case m41t00:
+	case m41t11:
+		if (tmp & DS1307_BIT_CH)
+			return -EINVAL;
+		break;
+	case ds_1308:
+	case ds_1338:
+		if (tmp & DS1307_BIT_CH)
+			return -EINVAL;
+
+		ret = regmap_read(ds1307->regmap, DS1307_REG_CONTROL, &tmp);
+		if (ret)
+			return ret;
+		if (tmp & DS1338_BIT_OSF)
+			return -EINVAL;
+		break;
+	case ds_1340:
+		if (tmp & DS1340_BIT_nEOSC)
+			return -EINVAL;
+
+		ret = regmap_read(ds1307->regmap, DS1340_REG_FLAG, &tmp);
+		if (ret)
+			return ret;
+		if (tmp & DS1340_BIT_OSF)
+			return -EINVAL;
+		break;
+	case ds_1388:
+		ret = regmap_read(ds1307->regmap, DS1388_REG_FLAG, &tmp);
+		if (ret)
+			return ret;
+		if (tmp & DS1388_BIT_OSF)
+			return -EINVAL;
+		break;
+	case mcp794xx:
+		if (!(tmp & MCP794XX_BIT_ST))
+			return -EINVAL;
+
+		break;
+	default:
+		break;
+	}
+
 	t->tm_sec = bcd2bin(regs[DS1307_REG_SECS] & 0x7f);
 	t->tm_min = bcd2bin(regs[DS1307_REG_MIN] & 0x7f);
 	tmp = regs[DS1307_REG_HOUR] & 0x3f;
@@ -289,7 +342,17 @@ static int ds1307_set_time(struct device *dev, struct rtc_time *t)
 	if (t->tm_year > 199 && chip->century_bit)
 		regs[chip->century_reg] |= chip->century_bit;
 
-	if (ds1307->type == mcp794xx) {
+	switch (ds1307->type) {
+	case ds_1308:
+	case ds_1338:
+		regmap_update_bits(ds1307->regmap, DS1307_REG_CONTROL,
+				   DS1338_BIT_OSF, 0);
+		break;
+	case ds_1340:
+		regmap_update_bits(ds1307->regmap, DS1340_REG_FLAG,
+				   DS1340_BIT_OSF, 0);
+		break;
+	case mcp794xx:
 		/*
 		 * these bits were cleared when preparing the date/time
 		 * values and need to be set again before writing the
@@ -297,6 +360,9 @@ static int ds1307_set_time(struct device *dev, struct rtc_time *t)
 		 */
 		regs[DS1307_REG_SECS] |= MCP794XX_BIT_ST;
 		regs[DS1307_REG_WDAY] |= MCP794XX_BIT_VBATEN;
+		break;
+	default:
+		break;
 	}
 
 	dev_dbg(dev, "%s: %7ph\n", "write", regs);
@@ -795,6 +861,72 @@ static int m41txx_rtc_set_offset(struct device *dev, long offset)
 				  M41TXX_M_CALIBRATION | M41TXX_BIT_CALIB_SIGN,
 				  ctrl_reg);
 }
+
+#ifdef CONFIG_WATCHDOG_CORE
+static int ds1388_wdt_start(struct watchdog_device *wdt_dev)
+{
+	struct ds1307 *ds1307 = watchdog_get_drvdata(wdt_dev);
+	u8 regs[2];
+	int ret;
+
+	ret = regmap_update_bits(ds1307->regmap, DS1388_REG_FLAG,
+				 DS1388_BIT_WF, 0);
+	if (ret)
+		return ret;
+
+	ret = regmap_update_bits(ds1307->regmap, DS1388_REG_CONTROL,
+				 DS1388_BIT_WDE | DS1388_BIT_RST, 0);
+	if (ret)
+		return ret;
+
+	/*
+	 * watchdog timeouts are measured in seconds. So ignore hundredths of
+	 * seconds field.
+	 */
+	regs[0] = 0;
+	regs[1] = bin2bcd(wdt_dev->timeout);
+
+	ret = regmap_bulk_write(ds1307->regmap, DS1388_REG_WDOG_HUN_SECS, regs,
+				sizeof(regs));
+	if (ret)
+		return ret;
+
+	return regmap_update_bits(ds1307->regmap, DS1388_REG_CONTROL,
+				  DS1388_BIT_WDE | DS1388_BIT_RST,
+				  DS1388_BIT_WDE | DS1388_BIT_RST);
+}
+
+static int ds1388_wdt_stop(struct watchdog_device *wdt_dev)
+{
+	struct ds1307 *ds1307 = watchdog_get_drvdata(wdt_dev);
+
+	return regmap_update_bits(ds1307->regmap, DS1388_REG_CONTROL,
+				  DS1388_BIT_WDE | DS1388_BIT_RST, 0);
+}
+
+static int ds1388_wdt_ping(struct watchdog_device *wdt_dev)
+{
+	struct ds1307 *ds1307 = watchdog_get_drvdata(wdt_dev);
+	u8 regs[2];
+
+	return regmap_bulk_read(ds1307->regmap, DS1388_REG_WDOG_HUN_SECS, regs,
+				sizeof(regs));
+}
+
+static int ds1388_wdt_set_timeout(struct watchdog_device *wdt_dev,
+				  unsigned int val)
+{
+	struct ds1307 *ds1307 = watchdog_get_drvdata(wdt_dev);
+	u8 regs[2];
+
+	wdt_dev->timeout = val;
+	regs[0] = 0;
+	regs[1] = bin2bcd(wdt_dev->timeout);
+
+	return regmap_bulk_write(ds1307->regmap, DS1388_REG_WDOG_HUN_SECS, regs,
+				 sizeof(regs));
+}
+#endif
 
 static const struct rtc_class_ops rx8130_rtc_ops = {
 	.read_time      = ds1307_get_time,
@@ -1518,6 +1650,48 @@ static void ds1307_clks_register(struct ds1307 *ds1307)
 
 #endif /* CONFIG_COMMON_CLK */
 
+#ifdef CONFIG_WATCHDOG_CORE
+static const struct watchdog_info ds1388_wdt_info = {
+	.options = WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING | WDIOF_MAGICCLOSE,
+	.identity = "DS1388 watchdog",
+};
+
+static const struct watchdog_ops ds1388_wdt_ops = {
+	.owner = THIS_MODULE,
+	.start = ds1388_wdt_start,
+	.stop = ds1388_wdt_stop,
+	.ping = ds1388_wdt_ping,
+	.set_timeout = ds1388_wdt_set_timeout,
+
+};
+
+static void ds1307_wdt_register(struct ds1307 *ds1307)
+{
+	struct watchdog_device	*wdt;
+
+	if (ds1307->type != ds_1388)
+		return;
+
+	wdt = devm_kzalloc(ds1307->dev, sizeof(*wdt), GFP_KERNEL);
+	if (!wdt)
+		return;
+
+	wdt->info = &ds1388_wdt_info;
+	wdt->ops = &ds1388_wdt_ops;
+	wdt->timeout = 99;
+	wdt->max_timeout = 99;
+	wdt->min_timeout = 1;
+
+	watchdog_init_timeout(wdt, 0, ds1307->dev);
+	watchdog_set_drvdata(wdt, ds1307);
+	devm_watchdog_register_device(ds1307->dev, wdt);
+}
+#else
+static void ds1307_wdt_register(struct ds1307 *ds1307)
+{
+}
+#endif /* CONFIG_WATCHDOG_CORE */
+
 static const struct regmap_config regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
@@ -1705,7 +1879,6 @@ static int ds1307_probe(struct i2c_client *client,
 		break;
 	}
 
-read_rtc:
 	/* read RTC registers */
 	err = regmap_bulk_read(ds1307->regmap, chip->offset, regs,
 			       sizeof(regs));
@@ -1714,75 +1887,11 @@ read_rtc:
 		goto exit;
 	}
 
-	/*
-	 * minimal sanity checking; some chips (like DS1340) don't
-	 * specify the extra bits as must-be-zero, but there are
-	 * still a few values that are clearly out-of-range.
-	 */
-	tmp = regs[DS1307_REG_SECS];
-	switch (ds1307->type) {
-	case ds_1307:
-	case m41t0:
-	case m41t00:
-	case m41t11:
-		/* clock halted?  turn it on, so clock can tick. */
-		if (tmp & DS1307_BIT_CH) {
-			regmap_write(ds1307->regmap, DS1307_REG_SECS, 0);
-			dev_warn(ds1307->dev, "SET TIME!\n");
-			goto read_rtc;
-		}
-		break;
-	case ds_1308:
-	case ds_1338:
-		/* clock halted?  turn it on, so clock can tick. */
-		if (tmp & DS1307_BIT_CH)
-			regmap_write(ds1307->regmap, DS1307_REG_SECS, 0);
-
-		/* oscillator fault?  clear flag, and warn */
-		if (regs[DS1307_REG_CONTROL] & DS1338_BIT_OSF) {
-			regmap_write(ds1307->regmap, DS1307_REG_CONTROL,
-				     regs[DS1307_REG_CONTROL] &
-				     ~DS1338_BIT_OSF);
-			dev_warn(ds1307->dev, "SET TIME!\n");
-			goto read_rtc;
-		}
-		break;
-	case ds_1340:
-		/* clock halted?  turn it on, so clock can tick. */
-		if (tmp & DS1340_BIT_nEOSC)
-			regmap_write(ds1307->regmap, DS1307_REG_SECS, 0);
-
-		err = regmap_read(ds1307->regmap, DS1340_REG_FLAG, &tmp);
-		if (err) {
-			dev_dbg(ds1307->dev, "read error %d\n", err);
-			goto exit;
-		}
-
-		/* oscillator fault?  clear flag, and warn */
-		if (tmp & DS1340_BIT_OSF) {
-			regmap_write(ds1307->regmap, DS1340_REG_FLAG, 0);
-			dev_warn(ds1307->dev, "SET TIME!\n");
-		}
-		break;
-	case mcp794xx:
-		/* make sure that the backup battery is enabled */
-		if (!(regs[DS1307_REG_WDAY] & MCP794XX_BIT_VBATEN)) {
-			regmap_write(ds1307->regmap, DS1307_REG_WDAY,
-				     regs[DS1307_REG_WDAY] |
-				     MCP794XX_BIT_VBATEN);
-		}
-
-		/* clock halted?  turn it on, so clock can tick. */
-		if (!(tmp & MCP794XX_BIT_ST)) {
-			regmap_write(ds1307->regmap, DS1307_REG_SECS,
-				     MCP794XX_BIT_ST);
-			dev_warn(ds1307->dev, "SET TIME!\n");
-			goto read_rtc;
-		}
-
-		break;
-	default:
-		break;
+	if (ds1307->type == mcp794xx &&
+	    !(regs[DS1307_REG_WDAY] & MCP794XX_BIT_VBATEN)) {
+		regmap_write(ds1307->regmap, DS1307_REG_WDAY,
+			     regs[DS1307_REG_WDAY] |
+			     MCP794XX_BIT_VBATEN);
 	}
 
 	tmp = regs[DS1307_REG_HOUR];
@@ -1872,6 +1981,7 @@ read_rtc:
 
 	ds1307_hwmon_register(ds1307);
 	ds1307_clks_register(ds1307);
+	ds1307_wdt_register(ds1307);
 
 	return 0;
 

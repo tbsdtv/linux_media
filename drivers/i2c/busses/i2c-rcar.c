@@ -139,6 +139,7 @@ struct rcar_i2c_priv {
 	enum dma_data_direction dma_direction;
 
 	struct reset_control *rstc;
+	int irq;
 };
 
 #define rcar_i2c_priv_to_dev(p)		((p)->adap.dev.parent)
@@ -234,17 +235,20 @@ static int rcar_i2c_bus_barrier(struct rcar_i2c_priv *priv)
 	return i2c_recover_bus(&priv->adap);
 }
 
-static int rcar_i2c_clock_calculate(struct rcar_i2c_priv *priv, struct i2c_timings *t)
+static int rcar_i2c_clock_calculate(struct rcar_i2c_priv *priv)
 {
 	u32 scgd, cdf, round, ick, sum, scl, cdf_width;
 	unsigned long rate;
 	struct device *dev = rcar_i2c_priv_to_dev(priv);
+	struct i2c_timings t = {
+		.bus_freq_hz		= I2C_MAX_STANDARD_MODE_FREQ,
+		.scl_fall_ns		= 35,
+		.scl_rise_ns		= 200,
+		.scl_int_delay_ns	= 50,
+	};
 
 	/* Fall back to previously used values if not supplied */
-	t->bus_freq_hz = t->bus_freq_hz ?: 100000;
-	t->scl_fall_ns = t->scl_fall_ns ?: 35;
-	t->scl_rise_ns = t->scl_rise_ns ?: 200;
-	t->scl_int_delay_ns = t->scl_int_delay_ns ?: 50;
+	i2c_parse_fw_timings(dev, &t, false);
 
 	switch (priv->devtype) {
 	case I2C_RCAR_GEN1:
@@ -290,7 +294,7 @@ static int rcar_i2c_clock_calculate(struct rcar_i2c_priv *priv, struct i2c_timin
 	 *  = F[sum * ick / 1000000000]
 	 *  = F[(ick / 1000000) * sum / 1000]
 	 */
-	sum = t->scl_fall_ns + t->scl_rise_ns + t->scl_int_delay_ns;
+	sum = t.scl_fall_ns + t.scl_rise_ns + t.scl_int_delay_ns;
 	round = (ick + 500000) / 1000000 * sum;
 	round = (round + 500) / 1000;
 
@@ -308,7 +312,7 @@ static int rcar_i2c_clock_calculate(struct rcar_i2c_priv *priv, struct i2c_timin
 	 */
 	for (scgd = 0; scgd < 0x40; scgd++) {
 		scl = ick / (20 + (scgd * 8) + round);
-		if (scl <= t->bus_freq_hz)
+		if (scl <= t.bus_freq_hz)
 			goto scgd_find;
 	}
 	dev_err(dev, "it is impossible to calculate best SCL\n");
@@ -316,7 +320,7 @@ static int rcar_i2c_clock_calculate(struct rcar_i2c_priv *priv, struct i2c_timin
 
 scgd_find:
 	dev_dbg(dev, "clk %d/%d(%lu), round %u, CDF:0x%x, SCGD: 0x%x\n",
-		scl, t->bus_freq_hz, clk_get_rate(priv->clk), round, cdf, scgd);
+		scl, t.bus_freq_hz, rate, round, cdf, scgd);
 
 	/* keep icccr value */
 	priv->icccr = scgd << cdf_width | cdf;
@@ -861,9 +865,11 @@ static int rcar_unreg_slave(struct i2c_client *slave)
 
 	WARN_ON(!priv->slave);
 
+	/* disable irqs and ensure none is running before clearing ptr */
 	rcar_i2c_write(priv, ICSIER, 0);
 	rcar_i2c_write(priv, ICSCR, 0);
 
+	synchronize_irq(priv->irq);
 	priv->slave = NULL;
 
 	pm_runtime_put(rcar_i2c_priv_to_dev(priv));
@@ -917,8 +923,7 @@ static int rcar_i2c_probe(struct platform_device *pdev)
 	struct rcar_i2c_priv *priv;
 	struct i2c_adapter *adap;
 	struct device *dev = &pdev->dev;
-	struct i2c_timings i2c_t;
-	int irq, ret;
+	int ret;
 
 	/* Otherwise logic will break because some bytes must always use PIO */
 	BUILD_BUG_ON_MSG(RCAR_MIN_DMA_LEN < 3, "Invalid min DMA length");
@@ -954,8 +959,6 @@ static int rcar_i2c_probe(struct platform_device *pdev)
 	i2c_set_adapdata(adap, priv);
 	strlcpy(adap->name, pdev->name, sizeof(adap->name));
 
-	i2c_parse_fw_timings(dev, &i2c_t, false);
-
 	/* Init DMA */
 	sg_init_table(&priv->sg, 1);
 	priv->dma_direction = DMA_NONE;
@@ -964,7 +967,7 @@ static int rcar_i2c_probe(struct platform_device *pdev)
 	/* Activate device for clock calculation */
 	pm_runtime_enable(dev);
 	pm_runtime_get_sync(dev);
-	ret = rcar_i2c_clock_calculate(priv, &i2c_t);
+	ret = rcar_i2c_clock_calculate(priv);
 	if (ret < 0)
 		goto out_pm_put;
 
@@ -984,10 +987,10 @@ static int rcar_i2c_probe(struct platform_device *pdev)
 		pm_runtime_put(dev);
 
 
-	irq = platform_get_irq(pdev, 0);
-	ret = devm_request_irq(dev, irq, rcar_i2c_irq, 0, dev_name(dev), priv);
+	priv->irq = platform_get_irq(pdev, 0);
+	ret = devm_request_irq(dev, priv->irq, rcar_i2c_irq, 0, dev_name(dev), priv);
 	if (ret < 0) {
-		dev_err(dev, "cannot get irq %d\n", irq);
+		dev_err(dev, "cannot get irq %d\n", priv->irq);
 		goto out_pm_disable;
 	}
 

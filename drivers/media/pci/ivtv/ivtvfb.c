@@ -37,7 +37,7 @@
 #include <linux/ivtvfb.h>
 
 #ifdef CONFIG_X86_64
-#include <asm/pat.h>
+#include <asm/memtype.h>
 #endif
 
 /* card parameters */
@@ -925,7 +925,7 @@ static int ivtvfb_blank(int blank_mode, struct fb_info *info)
 	return 0;
 }
 
-static struct fb_ops ivtvfb_ops = {
+static const struct fb_ops ivtvfb_ops = {
 	.owner = THIS_MODULE,
 	.fb_write       = ivtvfb_write,
 	.fb_check_var   = ivtvfb_check_var,
@@ -1049,7 +1049,6 @@ static int ivtvfb_init_vidmode(struct ivtv *itv)
 
 	oi->ivtvfb_info.node = -1;
 	oi->ivtvfb_info.flags = FBINFO_FLAG_DEFAULT;
-	oi->ivtvfb_info.fbops = &ivtvfb_ops;
 	oi->ivtvfb_info.par = itv;
 	oi->ivtvfb_info.var = oi->ivtvfb_defined;
 	oi->ivtvfb_info.fix = oi->ivtvfb_fix;
@@ -1256,11 +1255,7 @@ static int ivtvfb_callback_cleanup(struct device *dev, void *p)
 		itv->streams[IVTV_DEC_STREAM_TYPE_MPG].vdev.device_caps &=
 			~V4L2_CAP_VIDEO_OUTPUT_OVERLAY;
 		itv->v4l2_cap &= ~V4L2_CAP_VIDEO_OUTPUT_OVERLAY;
-		if (unregister_framebuffer(&itv->osd_info->ivtvfb_info)) {
-			IVTVFB_WARN("Framebuffer %d is in use, cannot unload\n",
-				       itv->instance);
-			return 0;
-		}
+		unregister_framebuffer(&itv->osd_info->ivtvfb_info);
 		IVTVFB_INFO("Unregister framebuffer %d\n", itv->instance);
 		itv->ivtvfb_restore = NULL;
 		ivtvfb_blank(FB_BLANK_VSYNC_SUSPEND, &oi->ivtvfb_info);

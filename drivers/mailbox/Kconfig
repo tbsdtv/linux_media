@@ -54,7 +54,7 @@ config ARMADA_37XX_RWTM_MBOX
 
 config OMAP2PLUS_MBOX
 	tristate "OMAP2+ Mailbox framework support"
-	depends on ARCH_OMAP2PLUS
+	depends on ARCH_OMAP2PLUS || ARCH_K3
 	help
 	  Mailbox implementation for OMAP family chips with hardware for
 	  interprocessor communication involving DSP, IVA1.0 and IVA2 in
@@ -226,5 +226,14 @@ config ZYNQMP_IPI_MBOX
 	  between processors with Xilinx ZynqMP IPI. It will place the
 	  message to the IPI buffer and will access the IPI control
 	  registers to kick the other processor or enquire status.
+
+config SUN6I_MSGBOX
+	tristate "Allwinner sun6i/sun8i/sun9i/sun50i Message Box"
+	depends on ARCH_SUNXI || COMPILE_TEST
+	default ARCH_SUNXI
+	help
+	  Mailbox implementation for the hardware message box present in
+	  various Allwinner SoCs. This mailbox is used for communication
+	  between the application CPUs and the power management coprocessor.
 
 endif

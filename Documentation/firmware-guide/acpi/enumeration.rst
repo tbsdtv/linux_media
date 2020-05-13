@@ -71,8 +71,8 @@ DMA support
 DMA controllers enumerated via ACPI should be registered in the system to
 provide generic access to their resources. For example, a driver that would
 like to be accessible to slave devices via generic API call
-dma_request_slave_channel() must register itself at the end of the probe
-function like this::
+dma_request_chan() must register itself at the end of the probe function like
+this::
 
 	err = devm_acpi_dma_controller_register(dev, xlate_func, dw);
 	/* Handle the error if it's not a case of !CONFIG_ACPI */
@@ -112,15 +112,15 @@ could look like::
 	}
 	#endif
 
-dma_request_slave_channel() will call xlate_func() for each registered DMA
-controller. In the xlate function the proper channel must be chosen based on
+dma_request_chan() will call xlate_func() for each registered DMA controller.
+In the xlate function the proper channel must be chosen based on
 information in struct acpi_dma_spec and the properties of the controller
 provided by struct acpi_dma.
 
-Clients must call dma_request_slave_channel() with the string parameter that
-corresponds to a specific FixedDMA resource. By default "tx" means the first
-entry of the FixedDMA resource array, "rx" means the second entry. The table
-below shows a layout::
+Clients must call dma_request_chan() with the string parameter that corresponds
+to a specific FixedDMA resource. By default "tx" means the first entry of the
+FixedDMA resource array, "rx" means the second entry. The table below shows a
+layout::
 
 	Device (I2C0)
 	{
@@ -316,7 +316,7 @@ specifies the path to the controller. In order to use these GPIOs in Linux
 we need to translate them to the corresponding Linux GPIO descriptors.
 
 There is a standard GPIO API for that and is documented in
-Documentation/gpio/.
+Documentation/admin-guide/gpio/.
 
 In the above example we can get the corresponding two GPIO descriptors with
 a code like this::
@@ -339,7 +339,7 @@ a code like this::
 There are also devm_* versions of these functions which release the
 descriptors once the device is released.
 
-See Documentation/acpi/gpio-properties.txt for more information about the
+See Documentation/firmware-guide/acpi/gpio-properties.rst for more information about the
 _DSD binding related to GPIOs.
 
 MFD devices

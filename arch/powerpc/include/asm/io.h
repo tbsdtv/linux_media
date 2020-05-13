@@ -691,8 +691,6 @@ static inline void iosync(void)
  * * ioremap_prot allows to specify the page flags as an argument and can
  *   also be hooked by the platform via ppc_md.
  *
- * * ioremap_nocache is identical to ioremap
- *
  * * ioremap_wc enables write combining
  *
  * * ioremap_wt enables write through
@@ -705,15 +703,8 @@ static inline void iosync(void)
  *   create hand-made mappings for use only by the PCI code and cannot
  *   currently be hooked. Must be page aligned.
  *
- * * __ioremap is the low level implementation used by ioremap and
- *   ioremap_prot and cannot be hooked (but can be used by a hook on one
- *   of the previous ones)
- *
  * * __ioremap_caller is the same as above but takes an explicit caller
  *   reference rather than using __builtin_return_address(0)
- *
- * * __iounmap, is the low level implementation used by iounmap and cannot
- *   be hooked (but can be used by a hook on iounmap)
  *
  */
 extern void __iomem *ioremap(phys_addr_t address, unsigned long size);
@@ -722,19 +713,19 @@ extern void __iomem *ioremap_prot(phys_addr_t address, unsigned long size,
 extern void __iomem *ioremap_wc(phys_addr_t address, unsigned long size);
 void __iomem *ioremap_wt(phys_addr_t address, unsigned long size);
 void __iomem *ioremap_coherent(phys_addr_t address, unsigned long size);
-#define ioremap_nocache(addr, size)	ioremap((addr), (size))
 #define ioremap_uc(addr, size)		ioremap((addr), (size))
 #define ioremap_cache(addr, size) \
 	ioremap_prot((addr), (size), pgprot_val(PAGE_KERNEL))
 
 extern void iounmap(volatile void __iomem *addr);
 
-extern void __iomem *__ioremap(phys_addr_t, unsigned long size,
-			       unsigned long flags);
+int early_ioremap_range(unsigned long ea, phys_addr_t pa,
+			unsigned long size, pgprot_t prot);
+void __iomem *do_ioremap(phys_addr_t pa, phys_addr_t offset, unsigned long size,
+			 pgprot_t prot, void *caller);
+
 extern void __iomem *__ioremap_caller(phys_addr_t, unsigned long size,
 				      pgprot_t prot, void *caller);
-
-extern void __iounmap(volatile void __iomem *addr);
 
 extern void __iomem * __ioremap_at(phys_addr_t pa, void *ea,
 				   unsigned long size, pgprot_t prot);

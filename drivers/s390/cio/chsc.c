@@ -180,11 +180,12 @@ EXPORT_SYMBOL_GPL(chsc_ssqd);
  * @scssc: request and response block for SADC
  * @summary_indicator_addr: summary indicator address
  * @subchannel_indicator_addr: subchannel indicator address
+ * @isc: Interruption Subclass for this subchannel
  *
  * Returns 0 on success.
  */
 int chsc_sadc(struct subchannel_id schid, struct chsc_scssc_area *scssc,
-	      u64 summary_indicator_addr, u64 subchannel_indicator_addr)
+	      u64 summary_indicator_addr, u64 subchannel_indicator_addr, u8 isc)
 {
 	memset(scssc, 0, sizeof(*scssc));
 	scssc->request.length = 0x0fe0;
@@ -196,7 +197,7 @@ int chsc_sadc(struct subchannel_id schid, struct chsc_scssc_area *scssc,
 
 	scssc->ks = PAGE_DEFAULT_KEY >> 4;
 	scssc->kc = PAGE_DEFAULT_KEY >> 4;
-	scssc->isc = QDIO_AIRQ_ISC;
+	scssc->isc = isc;
 	scssc->schid = schid;
 
 	/* enable the time delay disablement facility */
@@ -321,36 +322,6 @@ struct chsc_sei {
 		u8 nt_area[PAGE_SIZE - 24];
 	} u;
 } __packed __aligned(PAGE_SIZE);
-
-/*
- * Node Descriptor as defined in SA22-7204, "Common I/O-Device Commands"
- */
-
-#define ND_VALIDITY_VALID	0
-#define ND_VALIDITY_OUTDATED	1
-#define ND_VALIDITY_INVALID	2
-
-struct node_descriptor {
-	/* Flags. */
-	union {
-		struct {
-			u32 validity:3;
-			u32 reserved:5;
-		} __packed;
-		u8 byte0;
-	} __packed;
-
-	/* Node parameters. */
-	u32 params:24;
-
-	/* Node ID. */
-	char type[6];
-	char model[3];
-	char manufacturer[3];
-	char plant[2];
-	char seq[12];
-	u16 tag;
-} __packed;
 
 /*
  * Link Incident Record as defined in SA22-7202, "ESCON I/O Interface"

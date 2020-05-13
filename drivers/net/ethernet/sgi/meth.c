@@ -90,7 +90,7 @@ struct meth_private {
 	spinlock_t meth_lock;
 };
 
-static void meth_tx_timeout(struct net_device *dev);
+static void meth_tx_timeout(struct net_device *dev, unsigned int txqueue);
 static irqreturn_t meth_interrupt(int irq, void *dev_id);
 
 /* global, initialized in ip32-setup.c */
@@ -247,8 +247,7 @@ static void meth_free_tx_ring(struct meth_private *priv)
 
 	/* Remove any pending skb */
 	for (i = 0; i < TX_RING_ENTRIES; i++) {
-		if (priv->tx_skbs[i])
-			dev_kfree_skb(priv->tx_skbs[i]);
+		dev_kfree_skb(priv->tx_skbs[i]);
 		priv->tx_skbs[i] = NULL;
 	}
 	dma_free_coherent(&priv->pdev->dev, TX_RING_BUFFER_SIZE, priv->tx_ring,
@@ -728,7 +727,7 @@ static netdev_tx_t meth_tx(struct sk_buff *skb, struct net_device *dev)
 /*
  * Deal with a transmit timeout.
  */
-static void meth_tx_timeout(struct net_device *dev)
+static void meth_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 	struct meth_private *priv = netdev_priv(dev);
 	unsigned long flags;

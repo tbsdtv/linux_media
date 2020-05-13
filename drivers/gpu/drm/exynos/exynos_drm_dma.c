@@ -4,11 +4,13 @@
 // Author: Inki Dae <inki.dae@samsung.com>
 // Author: Andrzej Hajda <a.hajda@samsung.com>
 
-#include <drm/drmP.h>
-#include <drm/exynos_drm.h>
 #include <linux/dma-iommu.h>
 #include <linux/dma-mapping.h>
 #include <linux/iommu.h>
+#include <linux/platform_device.h>
+
+#include <drm/drm_print.h>
+#include <drm/exynos_drm.h>
 
 #include "exynos_drm_drv.h"
 
@@ -56,7 +58,7 @@ static inline void clear_dma_max_seg_size(struct device *dev)
  * mapping.
  */
 static int drm_iommu_attach_device(struct drm_device *drm_dev,
-				struct device *subdrv_dev)
+				struct device *subdrv_dev, void **dma_priv)
 {
 	struct exynos_drm_private *priv = drm_dev->dev_private;
 	int ret;
@@ -72,7 +74,14 @@ static int drm_iommu_attach_device(struct drm_device *drm_dev,
 		return ret;
 
 	if (IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)) {
-		if (to_dma_iommu_mapping(subdrv_dev))
+		/*
+		 * Keep the original DMA mapping of the sub-device and
+		 * restore it on Exynos DRM detach, otherwise the DMA
+		 * framework considers it as IOMMU-less during the next
+		 * probe (in case of deferred probe or modular build)
+		 */
+		*dma_priv = to_dma_iommu_mapping(subdrv_dev);
+		if (*dma_priv)
 			arm_iommu_detach_device(subdrv_dev);
 
 		ret = arm_iommu_attach_device(subdrv_dev, priv->mapping);
@@ -96,19 +105,21 @@ static int drm_iommu_attach_device(struct drm_device *drm_dev,
  * mapping
  */
 static void drm_iommu_detach_device(struct drm_device *drm_dev,
-				struct device *subdrv_dev)
+				    struct device *subdrv_dev, void **dma_priv)
 {
 	struct exynos_drm_private *priv = drm_dev->dev_private;
 
-	if (IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU))
+	if (IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)) {
 		arm_iommu_detach_device(subdrv_dev);
-	else if (IS_ENABLED(CONFIG_IOMMU_DMA))
+		arm_iommu_attach_device(subdrv_dev, *dma_priv);
+	} else if (IS_ENABLED(CONFIG_IOMMU_DMA))
 		iommu_detach_device(priv->mapping, subdrv_dev);
 
 	clear_dma_max_seg_size(subdrv_dev);
 }
 
-int exynos_drm_register_dma(struct drm_device *drm, struct device *dev)
+int exynos_drm_register_dma(struct drm_device *drm, struct device *dev,
+			    void **dma_priv)
 {
 	struct exynos_drm_private *priv = drm->dev_private;
 
@@ -135,13 +146,14 @@ int exynos_drm_register_dma(struct drm_device *drm, struct device *dev)
 		priv->mapping = mapping;
 	}
 
-	return drm_iommu_attach_device(drm, dev);
+	return drm_iommu_attach_device(drm, dev, dma_priv);
 }
 
-void exynos_drm_unregister_dma(struct drm_device *drm, struct device *dev)
+void exynos_drm_unregister_dma(struct drm_device *drm, struct device *dev,
+			       void **dma_priv)
 {
 	if (IS_ENABLED(CONFIG_EXYNOS_IOMMU))
-		drm_iommu_detach_device(drm, dev);
+		drm_iommu_detach_device(drm, dev, dma_priv);
 }
 
 void exynos_drm_cleanup_dma(struct drm_device *drm)

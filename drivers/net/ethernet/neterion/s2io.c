@@ -747,7 +747,6 @@ static int init_shared_mem(struct s2io_nic *nic)
 				return -ENOMEM;
 			}
 			mem_allocated += size;
-			memset(tmp_v_addr, 0, size);
 
 			size = sizeof(struct rxd_info) *
 				rxd_count[nic->rxd_mode];
@@ -5156,7 +5155,7 @@ static int do_s2io_delete_unicast_mc(struct s2io_nic *sp, u64 addr)
 /* read mac entries from CAM */
 static u64 do_s2io_read_unicast_mc(struct s2io_nic *sp, int offset)
 {
-	u64 tmp64 = 0xffffffffffff0000ULL, val64;
+	u64 tmp64, val64;
 	struct XENA_dev_config __iomem *bar0 = sp->bar0;
 
 	/* read mac addr */
@@ -7239,7 +7238,7 @@ out_unlock:
  *  void
  */
 
-static void s2io_tx_watchdog(struct net_device *dev)
+static void s2io_tx_watchdog(struct net_device *dev, unsigned int txqueue)
 {
 	struct s2io_nic *sp = netdev_priv(dev);
 	struct swStat *swstats = &sp->mac_control.stats_info->sw_stat;

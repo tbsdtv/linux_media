@@ -9,7 +9,7 @@ This is the authoritative documentation on the design, interface and
 conventions of cgroup v2.  It describes all userland-visible aspects
 of cgroup including core and specific controller behaviors.  All
 future changes must be reflected in this document.  Documentation for
-v1 is available under Documentation/cgroup-v1/.
+v1 is available under :ref:`Documentation/admin-guide/cgroup-v1/index.rst <cgroup-v1>`.
 
 .. CONTENTS
 
@@ -61,6 +61,8 @@ v1 is available under Documentation/cgroup-v1/.
      5-6. Device
      5-7. RDMA
        5-7-1. RDMA Interface Files
+     5-8. HugeTLB
+       5.8-1. HugeTLB Interface Files
      5-8. Misc
        5-8-1. perf_event
      5-N. Non-normative information
@@ -185,6 +187,17 @@ cgroup v2 currently supports the following mount options.
         This option is system wide and can only be set on mount or
         modified through remount from the init namespace. The mount
         option is ignored on non-init namespace mounts.
+
+  memory_recursiveprot
+
+        Recursively apply memory.min and memory.low protection to
+        entire subtrees, without requiring explicit downward
+        propagation into leaf cgroups.  This allows protecting entire
+        subtrees from one another, while retaining free competition
+        within those subtrees.  This should have been the default
+        behavior but is a mount-option to avoid regressing setups
+        relying on the original semantics (e.g. specifying bogusly
+        high 'bypass' protection values at higher tree levels).
 
 
 Organizing Processes and Threads
@@ -615,8 +628,8 @@ on an IO device and is an example of this type.
 Protections
 -----------
 
-A cgroup is protected to be allocated upto the configured amount of
-the resource if the usages of all its ancestors are under their
+A cgroup is protected upto the configured amount of the resource
+as long as the usages of all its ancestors are under their
 protected levels.  Protections can be hard guarantees or best effort
 soft boundaries.  Protections can also be over-committed in which case
 only upto the amount available to the parent is protected among
@@ -704,6 +717,12 @@ Conventions
   shouldn't have resource control interface files.  Also,
   informational files on the root cgroup which end up showing global
   information available elsewhere shouldn't exist.
+
+- The default time unit is microseconds.  If a different unit is ever
+  used, an explicit unit suffix must be present.
+
+- A parts-per quantity should use a percentage decimal with at least
+  two digit fractional part - e.g. 13.40.
 
 - If a controller implements weight based resource distribution, its
   interface file should be named "weight" and have the range [1,
@@ -945,6 +964,13 @@ controller implements weight and absolute bandwidth limit models for
 normal scheduling policy and absolute bandwidth allocation model for
 realtime scheduling policy.
 
+In all the above models, cycles distribution is defined only on a temporal
+base and it does not account for the frequency at which tasks are executed.
+The (optional) utilization clamping support allows to hint the schedutil
+cpufreq governor about the minimum desired frequency which should always be
+provided by a CPU, as well as the maximum desired frequency, which should not
+be exceeded by a CPU.
+
 WARNING: cgroup2 doesn't yet support control of realtime processes and
 the cpu controller can only be enabled when all RT processes are in
 the root cgroup.  Be aware that system management software may already
@@ -1008,7 +1034,34 @@ All time durations are in microseconds.
 	A read-only nested-key file which exists on non-root cgroups.
 
 	Shows pressure stall information for CPU. See
-	Documentation/accounting/psi.txt for details.
+	:ref:`Documentation/accounting/psi.rst <psi>` for details.
+
+  cpu.uclamp.min
+        A read-write single value file which exists on non-root cgroups.
+        The default is "0", i.e. no utilization boosting.
+
+        The requested minimum utilization (protection) as a percentage
+        rational number, e.g. 12.34 for 12.34%.
+
+        This interface allows reading and setting minimum utilization clamp
+        values similar to the sched_setattr(2). This minimum utilization
+        value is used to clamp the task specific minimum utilization clamp.
+
+        The requested minimum utilization (protection) is always capped by
+        the current value for the maximum utilization (limit), i.e.
+        `cpu.uclamp.max`.
+
+  cpu.uclamp.max
+        A read-write single value file which exists on non-root cgroups.
+        The default is "max". i.e. no utilization capping
+
+        The requested maximum utilization (limit) as a percentage rational
+        number, e.g. 98.76 for 98.76%.
+
+        This interface allows reading and setting maximum utilization clamp
+        values similar to the sched_setattr(2). This maximum utilization
+        value is used to clamp the task specific maximum utilization clamp.
+
 
 
 Memory
@@ -1056,9 +1109,12 @@ PAGE_SIZE multiple when read back.
 	is within its effective min boundary, the cgroup's memory
 	won't be reclaimed under any conditions. If there is no
 	unprotected reclaimable memory available, OOM killer
-	is invoked.
+	is invoked. Above the effective min boundary (or
+	effective low boundary if it is higher), pages are reclaimed
+	proportionally to the overage, reducing reclaim pressure for
+	smaller overages.
 
-       Effective min boundary is limited by memory.min values of
+	Effective min boundary is limited by memory.min values of
 	all ancestor cgroups. If there is memory.min overcommitment
 	(child cgroup or cgroups are requiring more protected memory
 	than parent will allow), then each child cgroup will get
@@ -1077,8 +1133,12 @@ PAGE_SIZE multiple when read back.
 
 	Best-effort memory protection.  If the memory usage of a
 	cgroup is within its effective low boundary, the cgroup's
-	memory won't be reclaimed unless memory can be reclaimed
-	from unprotected cgroups.
+	memory won't be reclaimed unless there is no reclaimable
+	memory available in unprotected cgroups.
+	Above the effective low	boundary (or 
+	effective min boundary if it is higher), pages are reclaimed
+	proportionally to the overage, reducing reclaim pressure for
+	smaller overages.
 
 	Effective low boundary is limited by memory.low values of
 	all ancestor cgroups. If there is memory.low overcommitment
@@ -1140,6 +1200,11 @@ PAGE_SIZE multiple when read back.
 	otherwise, a value change in this file generates a file
 	modified event.
 
+	Note that all fields in this file are hierarchical and the
+	file modified event can be generated due to an event down the
+	hierarchy. For for the local events at the cgroup level see
+	memory.events.local.
+
 	  low
 		The number of times the cgroup is reclaimed due to
 		high memory pressure even though its usage is under
@@ -1178,6 +1243,11 @@ PAGE_SIZE multiple when read back.
 	  oom_kill
 		The number of processes belonging to this cgroup
 		killed by any kind of OOM killer.
+
+  memory.events.local
+	Similar to memory.events but the fields in the file are local
+	to the cgroup i.e. not hierarchical. The file modified event
+	generated on this file reflects only the local events.
 
   memory.stat
 	A read-only flat-keyed file which exists on non-root cgroups.
@@ -1232,7 +1302,12 @@ PAGE_SIZE multiple when read back.
 	  inactive_anon, active_anon, inactive_file, active_file, unevictable
 		Amount of memory, swap-backed and filesystem-backed,
 		on the internal memory management lists used by the
-		page reclaim algorithm
+		page reclaim algorithm.
+
+		As these represent internal list state (eg. shmem pages are on anon
+		memory management lists), inactive_foo + active_foo may not be equal to
+		the value for the foo counter, since the foo counter is type-based, not
+		list-based.
 
 	  slab_reclaimable
 		Part of "slab" that might be reclaimed, such as
@@ -1249,53 +1324,41 @@ PAGE_SIZE multiple when read back.
 		Number of major page faults incurred
 
 	  workingset_refault
-
 		Number of refaults of previously evicted pages
 
 	  workingset_activate
-
 		Number of refaulted pages that were immediately activated
 
 	  workingset_nodereclaim
-
 		Number of times a shadow node has been reclaimed
 
 	  pgrefill
-
 		Amount of scanned pages (in an active LRU list)
 
 	  pgscan
-
 		Amount of scanned pages (in an inactive LRU list)
 
 	  pgsteal
-
 		Amount of reclaimed pages
 
 	  pgactivate
-
 		Amount of pages moved to the active LRU list
 
 	  pgdeactivate
-
-		Amount of pages moved to the inactive LRU lis
+		Amount of pages moved to the inactive LRU list
 
 	  pglazyfree
-
 		Amount of pages postponed to be freed under memory pressure
 
 	  pglazyfreed
-
 		Amount of reclaimed lazyfree pages
 
 	  thp_fault_alloc
-
 		Number of transparent hugepages which were allocated to satisfy
 		a page fault, including COW faults. This counter is not present
 		when CONFIG_TRANSPARENT_HUGEPAGE is not set.
 
 	  thp_collapse_alloc
-
 		Number of transparent hugepages which were allocated to allow
 		collapsing an existing range of pages. This counter is not
 		present when CONFIG_TRANSPARENT_HUGEPAGE is not set.
@@ -1339,7 +1402,7 @@ PAGE_SIZE multiple when read back.
 	A read-only nested-key file which exists on non-root cgroups.
 
 	Shows pressure stall information for memory. See
-	Documentation/accounting/psi.txt for details.
+	:ref:`Documentation/accounting/psi.rst <psi>` for details.
 
 
 Usage Guidelines
@@ -1414,10 +1477,107 @@ IO Interface Files
 	  dios		Number of discard IOs
 	  ======	=====================
 
-	An example read output follows:
+	An example read output follows::
 
 	  8:16 rbytes=1459200 wbytes=314773504 rios=192 wios=353 dbytes=0 dios=0
 	  8:0 rbytes=90430464 wbytes=299008000 rios=8950 wios=1252 dbytes=50331648 dios=3021
+
+  io.cost.qos
+	A read-write nested-keyed file with exists only on the root
+	cgroup.
+
+	This file configures the Quality of Service of the IO cost
+	model based controller (CONFIG_BLK_CGROUP_IOCOST) which
+	currently implements "io.weight" proportional control.  Lines
+	are keyed by $MAJ:$MIN device numbers and not ordered.  The
+	line for a given device is populated on the first write for
+	the device on "io.cost.qos" or "io.cost.model".  The following
+	nested keys are defined.
+
+	  ======	=====================================
+	  enable	Weight-based control enable
+	  ctrl		"auto" or "user"
+	  rpct		Read latency percentile    [0, 100]
+	  rlat		Read latency threshold
+	  wpct		Write latency percentile   [0, 100]
+	  wlat		Write latency threshold
+	  min		Minimum scaling percentage [1, 10000]
+	  max		Maximum scaling percentage [1, 10000]
+	  ======	=====================================
+
+	The controller is disabled by default and can be enabled by
+	setting "enable" to 1.  "rpct" and "wpct" parameters default
+	to zero and the controller uses internal device saturation
+	state to adjust the overall IO rate between "min" and "max".
+
+	When a better control quality is needed, latency QoS
+	parameters can be configured.  For example::
+
+	  8:16 enable=1 ctrl=auto rpct=95.00 rlat=75000 wpct=95.00 wlat=150000 min=50.00 max=150.0
+
+	shows that on sdb, the controller is enabled, will consider
+	the device saturated if the 95th percentile of read completion
+	latencies is above 75ms or write 150ms, and adjust the overall
+	IO issue rate between 50% and 150% accordingly.
+
+	The lower the saturation point, the better the latency QoS at
+	the cost of aggregate bandwidth.  The narrower the allowed
+	adjustment range between "min" and "max", the more conformant
+	to the cost model the IO behavior.  Note that the IO issue
+	base rate may be far off from 100% and setting "min" and "max"
+	blindly can lead to a significant loss of device capacity or
+	control quality.  "min" and "max" are useful for regulating
+	devices which show wide temporary behavior changes - e.g. a
+	ssd which accepts writes at the line speed for a while and
+	then completely stalls for multiple seconds.
+
+	When "ctrl" is "auto", the parameters are controlled by the
+	kernel and may change automatically.  Setting "ctrl" to "user"
+	or setting any of the percentile and latency parameters puts
+	it into "user" mode and disables the automatic changes.  The
+	automatic mode can be restored by setting "ctrl" to "auto".
+
+  io.cost.model
+	A read-write nested-keyed file with exists only on the root
+	cgroup.
+
+	This file configures the cost model of the IO cost model based
+	controller (CONFIG_BLK_CGROUP_IOCOST) which currently
+	implements "io.weight" proportional control.  Lines are keyed
+	by $MAJ:$MIN device numbers and not ordered.  The line for a
+	given device is populated on the first write for the device on
+	"io.cost.qos" or "io.cost.model".  The following nested keys
+	are defined.
+
+	  =====		================================
+	  ctrl		"auto" or "user"
+	  model		The cost model in use - "linear"
+	  =====		================================
+
+	When "ctrl" is "auto", the kernel may change all parameters
+	dynamically.  When "ctrl" is set to "user" or any other
+	parameters are written to, "ctrl" become "user" and the
+	automatic changes are disabled.
+
+	When "model" is "linear", the following model parameters are
+	defined.
+
+	  =============	========================================
+	  [r|w]bps	The maximum sequential IO throughput
+	  [r|w]seqiops	The maximum 4k sequential IOs per second
+	  [r|w]randiops	The maximum 4k random IOs per second
+	  =============	========================================
+
+	From the above, the builtin linear model determines the base
+	costs of a sequential and random IO and the cost coefficient
+	for the IO size.  While simple, this model can cover most
+	common device classes acceptably.
+
+	The IO cost model isn't expected to be accurate in absolute
+	sense and is scaled to the device behavior dynamically.
+
+	If needed, tools/cgroup/iocost_coef_gen.py can be used to
+	generate device-specific coefficients.
 
   io.weight
 	A read-write flat-keyed file which exists on non-root cgroups.
@@ -1482,7 +1642,7 @@ IO Interface Files
 	A read-only nested-key file which exists on non-root cgroups.
 
 	Shows pressure stall information for IO. See
-	Documentation/accounting/psi.txt for details.
+	:ref:`Documentation/accounting/psi.rst <psi>` for details.
 
 
 Writeback
@@ -1692,7 +1852,7 @@ Cpuset Interface Files
 	from the requested CPUs.
 
 	The CPU numbers are comma-separated numbers or ranges.
-	For example:
+	For example::
 
 	  # cat cpuset.cpus
 	  0-4,6,8-10
@@ -1731,7 +1891,7 @@ Cpuset Interface Files
 	from the requested memory nodes.
 
 	The memory node numbers are comma-separated numbers or ranges.
-	For example:
+	For example::
 
 	  # cat cpuset.mems
 	  0-1,3
@@ -1767,7 +1927,7 @@ Cpuset Interface Files
 
         It accepts only the following input values when written to.
 
-        "root"   - a paritition root
+        "root"   - a partition root
         "member" - a non-root member of a partition
 
 	When set to be a partition root, the current cgroup is the
@@ -1897,6 +2057,33 @@ RDMA Interface Files
 	  mlx4_0 hca_handle=1 hca_object=20
 	  ocrdma1 hca_handle=1 hca_object=23
 
+HugeTLB
+-------
+
+The HugeTLB controller allows to limit the HugeTLB usage per control group and
+enforces the controller limit during page fault.
+
+HugeTLB Interface Files
+~~~~~~~~~~~~~~~~~~~~~~~
+
+  hugetlb.<hugepagesize>.current
+	Show current usage for "hugepagesize" hugetlb.  It exists for all
+	the cgroup except root.
+
+  hugetlb.<hugepagesize>.max
+	Set/show the hard limit of "hugepagesize" hugetlb usage.
+	The default value is "max".  It exists for all the cgroup except root.
+
+  hugetlb.<hugepagesize>.events
+	A read-only flat-keyed file which exists on non-root cgroups.
+
+	  max
+		The number of allocation failure due to HugeTLB limit
+
+  hugetlb.<hugepagesize>.events.local
+	Similar to hugetlb.<hugepagesize>.events but the fields in the file
+	are local to the cgroup i.e. not hierarchical. The file modified event
+	generated on this file reflects only the local events.
 
 Misc
 ----
@@ -2108,7 +2295,7 @@ following two functions.
 	a queue (device) has been associated with the bio and
 	before submission.
 
-  wbc_account_io(@wbc, @page, @bytes)
+  wbc_account_cgroup_owner(@wbc, @page, @bytes)
 	Should be called for each data segment being written out.
 	While this function doesn't care exactly when it's called
 	during the writeback session, it's the easiest and most
@@ -2335,8 +2522,10 @@ system performance due to overreclaim, to the point where the feature
 becomes self-defeating.
 
 The memory.low boundary on the other hand is a top-down allocated
-reserve.  A cgroup enjoys reclaim protection when it's within its low,
-which makes delegation of subtrees possible.
+reserve.  A cgroup enjoys reclaim protection when it's within its
+effective low, which makes delegation of subtrees possible. It also
+enjoys having reclaim pressure proportional to its overage when
+above its effective low.
 
 The original high boundary, the hard limit, is defined as a strict
 limit that can not budge, even if the OOM killer has to be called.

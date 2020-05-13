@@ -130,6 +130,19 @@ static int am33xx_push_sram_idle(void)
 	return 0;
 }
 
+static int am33xx_do_sram_idle(u32 wfi_flags)
+{
+	int ret = 0;
+
+	if (!m3_ipc || !pm_ops)
+		return 0;
+
+	if (wfi_flags & WFI_FLAG_WAKE_M3)
+		ret = m3_ipc->ops->prepare_low_power(m3_ipc, WKUP_M3_IDLE);
+
+	return pm_ops->cpu_suspend(am33xx_do_wfi_sram, wfi_flags);
+}
+
 static int __init am43xx_map_gic(void)
 {
 	gic_dist_base = ioremap(AM43XX_GIC_DIST_BASE, SZ_4K);
@@ -141,7 +154,7 @@ static int __init am43xx_map_gic(void)
 }
 
 #ifdef CONFIG_SUSPEND
-struct wkup_m3_wakeup_src rtc_wake_src(void)
+static struct wkup_m3_wakeup_src rtc_wake_src(void)
 {
 	u32 i;
 
@@ -157,7 +170,7 @@ struct wkup_m3_wakeup_src rtc_wake_src(void)
 	return rtc_ext_wakeup;
 }
 
-int am33xx_rtc_only_idle(unsigned long wfi_flags)
+static int am33xx_rtc_only_idle(unsigned long wfi_flags)
 {
 	omap_rtc_power_off_program(&omap_rtc->dev);
 	am33xx_do_wfi_sram(wfi_flags);
@@ -178,6 +191,7 @@ static int am33xx_pm_suspend(suspend_state_t suspend_state)
 					  suspend_wfi_flags);
 
 		suspend_wfi_flags &= ~WFI_FLAG_RTC_ONLY;
+		dev_info(pm33xx_dev, "Entering RTC Only mode with DDR in self-refresh\n");
 
 		if (!ret) {
 			clk_restore_context();
@@ -251,13 +265,15 @@ static int am33xx_pm_begin(suspend_state_t state)
 	if (state == PM_SUSPEND_MEM && pm_ops->check_off_mode_enable()) {
 		nvmem = devm_nvmem_device_get(&omap_rtc->dev,
 					      "omap_rtc_scratch0");
-		if (nvmem)
+		if (!IS_ERR(nvmem))
 			nvmem_device_write(nvmem, RTC_SCRATCH_MAGIC_REG * 4, 4,
 					   (void *)&rtc_magic_val);
 		rtc_only_idle = 1;
 	} else {
 		rtc_only_idle = 0;
 	}
+
+	pm_ops->begin_suspend();
 
 	switch (state) {
 	case PM_SUSPEND_MEM:
@@ -277,9 +293,12 @@ static void am33xx_pm_end(void)
 	struct nvmem_device *nvmem;
 
 	nvmem = devm_nvmem_device_get(&omap_rtc->dev, "omap_rtc_scratch0");
+	if (IS_ERR(nvmem))
+		return;
+
 	m3_ipc->ops->finish_low_power(m3_ipc);
 	if (rtc_only_idle) {
-		if (retrigger_irq)
+		if (retrigger_irq) {
 			/*
 			 * 32 bits of Interrupt Set-Pending correspond to 32
 			 * 32 interrupts. Compute the bit offset of the
@@ -290,11 +309,15 @@ static void am33xx_pm_end(void)
 			writel_relaxed(1 << (retrigger_irq & 31),
 				       gic_dist_base + GIC_INT_SET_PENDING_BASE
 				       + retrigger_irq / 32 * 4);
-			nvmem_device_write(nvmem, RTC_SCRATCH_MAGIC_REG * 4, 4,
-					   (void *)&val);
+		}
+
+		nvmem_device_write(nvmem, RTC_SCRATCH_MAGIC_REG * 4, 4,
+				   (void *)&val);
 	}
 
 	rtc_only_idle = 0;
+
+	pm_ops->finish_suspend();
 }
 
 static int am33xx_pm_valid(suspend_state_t state)
@@ -414,7 +437,7 @@ static int am33xx_pm_rtc_setup(void)
 
 		nvmem = devm_nvmem_device_get(&omap_rtc->dev,
 					      "omap_rtc_scratch0");
-		if (nvmem) {
+		if (!IS_ERR(nvmem)) {
 			nvmem_device_read(nvmem, RTC_SCRATCH_MAGIC_REG * 4,
 					  4, (void *)&rtc_magic_val);
 			if ((rtc_magic_val & 0xffff) != RTC_REG_BOOT_MAGIC)
@@ -497,7 +520,7 @@ static int am33xx_pm_probe(struct platform_device *pdev)
 	suspend_wfi_flags |= WFI_FLAG_WAKE_M3;
 #endif /* CONFIG_SUSPEND */
 
-	ret = pm_ops->init();
+	ret = pm_ops->init(am33xx_do_sram_idle);
 	if (ret) {
 		dev_err(dev, "Unable to call core pm init!\n");
 		ret = -ENODEV;
@@ -516,6 +539,8 @@ err_free_sram:
 
 static int am33xx_pm_remove(struct platform_device *pdev)
 {
+	if (pm_ops->deinit)
+		pm_ops->deinit();
 	suspend_set_ops(NULL);
 	wkup_m3_ipc_put(m3_ipc);
 	am33xx_pm_free_sram();

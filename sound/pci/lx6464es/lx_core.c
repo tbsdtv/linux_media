@@ -161,7 +161,7 @@ struct dsp_cmd_info {
     the number of status words (in addition to the return value)
 */
 
-static struct dsp_cmd_info dsp_commands[] =
+static const struct dsp_cmd_info dsp_commands[] =
 {
 	{ (CMD_00_INFO_DEBUG << OPCODE_OFFSET)			, 1 /*custom*/
 	  , 1	, 0 /**/		    , CMD_NAME("INFO_DEBUG") },
@@ -858,7 +858,7 @@ int lx_level_unmute(struct lx6464es *chip, int is_capture, int unmute)
 	return err;
 }
 
-static u32 peak_map[] = {
+static const u32 peak_map[] = {
 	0x00000109, /* -90.308dB */
 	0x0000083B, /* -72.247dB */
 	0x000020C4, /* -60.205dB */
@@ -986,8 +986,6 @@ static int lx_interrupt_handle_async_events(struct lx6464es *chip, u32 irqsrc,
 	 * Stat[8]	LSB overrun
 	 * */
 
-	u64 orun_mask;
-	u64 urun_mask;
 	int eb_pending_out = (irqsrc & MASK_SYS_STATUS_EOBO) ? 1 : 0;
 	int eb_pending_in  = (irqsrc & MASK_SYS_STATUS_EOBI) ? 1 : 0;
 
@@ -1009,9 +1007,6 @@ static int lx_interrupt_handle_async_events(struct lx6464es *chip, u32 irqsrc,
 		dev_dbg(chip->card->dev, "interrupt: EOBO pending %llx\n",
 			    *r_notified_out_pipe_mask);
 	}
-
-	orun_mask = ((u64)stat[7] << 32) + stat[8];
-	urun_mask = ((u64)stat[5] << 32) + stat[6];
 
 	/* todo: handle xrun notification */
 

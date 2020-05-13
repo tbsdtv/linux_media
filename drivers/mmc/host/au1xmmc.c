@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/drivers/mmc/host/au1xmmc.c - AU1XX0 MMC driver
  *
@@ -16,9 +17,6 @@
  *     All Rights Reserved.
  *
 
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 /* Why don't we use the SD controllers' carddetect feature?
@@ -986,12 +984,9 @@ static int au1xmmc_probe(struct platform_device *pdev)
 		goto out2;
 	}
 
-	r = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-	if (!r) {
-		dev_err(&pdev->dev, "no IRQ defined\n");
+	host->irq = platform_get_irq(pdev, 0);
+	if (host->irq < 0)
 		goto out3;
-	}
-	host->irq = r->start;
 
 	mmc->ops = &au1xmmc_ops;
 

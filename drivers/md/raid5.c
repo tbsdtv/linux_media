@@ -1134,7 +1134,7 @@ again:
 			bi->bi_iter.bi_size = STRIPE_SIZE;
 			bi->bi_write_hint = sh->dev[i].write_hint;
 			if (!rrdev)
-				sh->dev[i].write_hint = RWF_WRITE_LIFE_NOT_SET;
+				sh->dev[i].write_hint = RWH_WRITE_LIFE_NOT_SET;
 			/*
 			 * If this is discard request, set bi_vcnt 0. We don't
 			 * want to confuse SCSI because SCSI will replace payload
@@ -1187,7 +1187,7 @@ again:
 			rbi->bi_io_vec[0].bv_offset = 0;
 			rbi->bi_iter.bi_size = STRIPE_SIZE;
 			rbi->bi_write_hint = sh->dev[i].write_hint;
-			sh->dev[i].write_hint = RWF_WRITE_LIFE_NOT_SET;
+			sh->dev[i].write_hint = RWH_WRITE_LIFE_NOT_SET;
 			/*
 			 * If this is discard request, set bi_vcnt 0. We don't
 			 * want to confuse SCSI because SCSI will replace payload
@@ -2526,7 +2526,8 @@ static void raid5_end_read_request(struct bio * bi)
 		int set_bad = 0;
 
 		clear_bit(R5_UPTODATE, &sh->dev[i].flags);
-		atomic_inc(&rdev->read_errors);
+		if (!(bi->bi_status == BLK_STS_PROTECTION))
+			atomic_inc(&rdev->read_errors);
 		if (test_bit(R5_ReadRepl, &sh->dev[i].flags))
 			pr_warn_ratelimited(
 				"md/raid:%s: read error on replacement device (sector %llu on %s).\n",
@@ -2549,16 +2550,24 @@ static void raid5_end_read_request(struct bio * bi)
 				(unsigned long long)s,
 				bdn);
 		} else if (atomic_read(&rdev->read_errors)
-			 > conf->max_nr_stripes)
-			pr_warn("md/raid:%s: Too many read errors, failing device %s.\n",
-			       mdname(conf->mddev), bdn);
-		else
+			 > conf->max_nr_stripes) {
+			if (!test_bit(Faulty, &rdev->flags)) {
+				pr_warn("md/raid:%s: %d read_errors > %d stripes\n",
+				    mdname(conf->mddev),
+				    atomic_read(&rdev->read_errors),
+				    conf->max_nr_stripes);
+				pr_warn("md/raid:%s: Too many read errors, failing device %s.\n",
+				    mdname(conf->mddev), bdn);
+			}
+		} else
 			retry = 1;
 		if (set_bad && test_bit(In_sync, &rdev->flags)
 		    && !test_bit(R5_ReadNoMerge, &sh->dev[i].flags))
 			retry = 1;
 		if (retry)
-			if (test_bit(R5_ReadNoMerge, &sh->dev[i].flags)) {
+			if (sh->qd_idx >= 0 && sh->pd_idx == i)
+				set_bit(R5_ReadError, &sh->dev[i].flags);
+			else if (test_bit(R5_ReadNoMerge, &sh->dev[i].flags)) {
 				set_bit(R5_ReadError, &sh->dev[i].flags);
 				clear_bit(R5_ReadNoMerge, &sh->dev[i].flags);
 			} else
@@ -4612,7 +4621,6 @@ static void break_stripe_batch_list(struct stripe_head *head_sh,
 					  (1 << STRIPE_FULL_WRITE) |
 					  (1 << STRIPE_BIOFILL_RUN) |
 					  (1 << STRIPE_COMPUTE_RUN)  |
-					  (1 << STRIPE_OPS_REQ_PENDING) |
 					  (1 << STRIPE_DISCARD) |
 					  (1 << STRIPE_BATCH_READY) |
 					  (1 << STRIPE_BATCH_ERR) |
@@ -5251,7 +5259,6 @@ static int raid5_read_one_chunk(struct mddev *mddev, struct bio *raid_bio)
 		rcu_read_unlock();
 		raid_bio->bi_next = (void*)rdev;
 		bio_set_dev(align_bi, rdev->bdev);
-		bio_clear_flag(align_bi, BIO_SEG_VALID);
 
 		if (is_badblock(rdev, align_bi->bi_iter.bi_sector,
 				bio_sectors(align_bi),
@@ -5492,7 +5499,7 @@ static void make_discard_request(struct mddev *mddev, struct bio *bi)
 		return;
 
 	logical_sector = bi->bi_iter.bi_sector & ~((sector_t)STRIPE_SECTORS-1);
-	last_sector = bi->bi_iter.bi_sector + (bi->bi_iter.bi_size>>9);
+	last_sector = bio_end_sector(bi);
 
 	bi->bi_next = NULL;
 
@@ -5585,8 +5592,8 @@ static bool raid5_make_request(struct mddev *mddev, struct bio * bi)
 		if (ret == 0)
 			return true;
 		if (ret == -ENODEV) {
-			md_flush_request(mddev, bi);
-			return true;
+			if (md_flush_request(mddev, bi))
+				return true;
 		}
 		/* ret == -EAGAIN, fallback */
 		/*
@@ -5719,7 +5726,8 @@ static bool raid5_make_request(struct mddev *mddev, struct bio * bi)
 				do_flush = false;
 			}
 
-			set_bit(STRIPE_HANDLE, &sh->state);
+			if (!sh->batch_head || sh == sh->batch_head)
+				set_bit(STRIPE_HANDLE, &sh->state);
 			clear_bit(STRIPE_DELAYED, &sh->state);
 			if ((!sh->batch_head || sh == sh->batch_head) &&
 			    (bi->bi_opf & REQ_SYNC) &&
@@ -6590,7 +6598,6 @@ raid5_show_group_thread_cnt(struct mddev *mddev, char *page)
 
 static int alloc_thread_groups(struct r5conf *conf, int cnt,
 			       int *group_cnt,
-			       int *worker_cnt_per_group,
 			       struct r5worker_group **worker_groups);
 static ssize_t
 raid5_store_group_thread_cnt(struct mddev *mddev, const char *page, size_t len)
@@ -6599,7 +6606,7 @@ raid5_store_group_thread_cnt(struct mddev *mddev, const char *page, size_t len)
 	unsigned int new;
 	int err;
 	struct r5worker_group *new_groups, *old_groups;
-	int group_cnt, worker_cnt_per_group;
+	int group_cnt;
 
 	if (len >= PAGE_SIZE)
 		return -EINVAL;
@@ -6622,13 +6629,11 @@ raid5_store_group_thread_cnt(struct mddev *mddev, const char *page, size_t len)
 		if (old_groups)
 			flush_workqueue(raid5_wq);
 
-		err = alloc_thread_groups(conf, new,
-					  &group_cnt, &worker_cnt_per_group,
-					  &new_groups);
+		err = alloc_thread_groups(conf, new, &group_cnt, &new_groups);
 		if (!err) {
 			spin_lock_irq(&conf->device_lock);
 			conf->group_cnt = group_cnt;
-			conf->worker_cnt_per_group = worker_cnt_per_group;
+			conf->worker_cnt_per_group = new;
 			conf->worker_groups = new_groups;
 			spin_unlock_irq(&conf->device_lock);
 
@@ -6664,16 +6669,13 @@ static struct attribute_group raid5_attrs_group = {
 	.attrs = raid5_attrs,
 };
 
-static int alloc_thread_groups(struct r5conf *conf, int cnt,
-			       int *group_cnt,
-			       int *worker_cnt_per_group,
+static int alloc_thread_groups(struct r5conf *conf, int cnt, int *group_cnt,
 			       struct r5worker_group **worker_groups)
 {
 	int i, j, k;
 	ssize_t size;
 	struct r5worker *workers;
 
-	*worker_cnt_per_group = cnt;
 	if (cnt == 0) {
 		*group_cnt = 0;
 		*worker_groups = NULL;
@@ -6874,7 +6876,7 @@ static struct r5conf *setup_conf(struct mddev *mddev)
 	struct disk_info *disk;
 	char pers_name[6];
 	int i;
-	int group_cnt, worker_cnt_per_group;
+	int group_cnt;
 	struct r5worker_group *new_group;
 	int ret;
 
@@ -6920,10 +6922,9 @@ static struct r5conf *setup_conf(struct mddev *mddev)
 	for (i = 0; i < PENDING_IO_MAX; i++)
 		list_add(&conf->pending_data[i].sibling, &conf->free_list);
 	/* Don't enable multi-threading by default*/
-	if (!alloc_thread_groups(conf, 0, &group_cnt, &worker_cnt_per_group,
-				 &new_group)) {
+	if (!alloc_thread_groups(conf, 0, &group_cnt, &new_group)) {
 		conf->group_cnt = group_cnt;
-		conf->worker_cnt_per_group = worker_cnt_per_group;
+		conf->worker_cnt_per_group = 0;
 		conf->worker_groups = new_group;
 	} else
 		goto abort;
@@ -7672,7 +7673,7 @@ abort:
 static int raid5_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 {
 	struct r5conf *conf = mddev->private;
-	int err = -EEXIST;
+	int ret, err = -EEXIST;
 	int disk;
 	struct disk_info *p;
 	int first = 0;
@@ -7687,7 +7688,14 @@ static int raid5_add_disk(struct mddev *mddev, struct md_rdev *rdev)
 		 * The array is in readonly mode if journal is missing, so no
 		 * write requests running. We should be safe
 		 */
-		log_init(conf, rdev, false);
+		ret = log_init(conf, rdev, false);
+		if (ret)
+			return ret;
+
+		ret = r5l_start(conf->log);
+		if (ret)
+			return ret;
+
 		return 0;
 	}
 	if (mddev->recovery_disabled == conf->recovery_disabled)

@@ -9,21 +9,12 @@
 #include "xfs_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
-#include "xfs_defer.h"
 #include "xfs_btree.h"
-#include "xfs_bit.h"
-#include "xfs_log_format.h"
-#include "xfs_trans.h"
-#include "xfs_sb.h"
-#include "xfs_alloc.h"
-#include "xfs_ialloc.h"
 #include "xfs_rmap.h"
 #include "xfs_refcount.h"
-#include "scrub/xfs_scrub.h"
 #include "scrub/scrub.h"
 #include "scrub/common.h"
 #include "scrub/btree.h"
-#include "scrub/trace.h"
 
 /*
  * Set us up to scrub reverse mapping btrees.
@@ -101,7 +92,7 @@ xchk_rmapbt_rec(
 {
 	struct xfs_mount	*mp = bs->cur->bc_mp;
 	struct xfs_rmap_irec	irec;
-	xfs_agnumber_t		agno = bs->cur->bc_private.a.agno;
+	xfs_agnumber_t		agno = bs->cur->bc_ag.agno;
 	bool			non_inode;
 	bool			is_unwritten;
 	bool			is_bmbt;

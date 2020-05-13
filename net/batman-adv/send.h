@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2007-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2007-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner, Simon Wunderlich
  */
@@ -10,11 +10,10 @@
 #include "main.h"
 
 #include <linux/compiler.h>
+#include <linux/skbuff.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <uapi/linux/batadv_packet.h>
-
-struct sk_buff;
 
 void batadv_forw_packet_free(struct batadv_forw_packet *forw_packet,
 			     bool dropped);

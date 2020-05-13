@@ -184,8 +184,9 @@ static void mxc_rtc_irq_enable(struct device *dev, unsigned int bit,
 	struct rtc_plat_data *pdata = dev_get_drvdata(dev);
 	void __iomem *ioaddr = pdata->ioaddr;
 	u32 reg;
+	unsigned long flags;
 
-	spin_lock_irq(&pdata->rtc->irq_lock);
+	spin_lock_irqsave(&pdata->rtc->irq_lock, flags);
 	reg = readw(ioaddr + RTC_RTCIENR);
 
 	if (enabled)
@@ -194,7 +195,7 @@ static void mxc_rtc_irq_enable(struct device *dev, unsigned int bit,
 		reg &= ~bit;
 
 	writew(reg, ioaddr + RTC_RTCIENR);
-	spin_unlock_irq(&pdata->rtc->irq_lock);
+	spin_unlock_irqrestore(&pdata->rtc->irq_lock, flags);
 }
 
 /* This function is the RTC interrupt service routine. */
@@ -306,6 +307,14 @@ static const struct rtc_class_ops mxc_rtc_ops = {
 	.alarm_irq_enable	= mxc_rtc_alarm_irq_enable,
 };
 
+static void mxc_rtc_action(void *p)
+{
+	struct rtc_plat_data *pdata = p;
+
+	clk_disable_unprepare(pdata->clk_ref);
+	clk_disable_unprepare(pdata->clk_ipg);
+}
+
 static int mxc_rtc_probe(struct platform_device *pdev)
 {
 	struct rtc_device *rtc;
@@ -365,14 +374,20 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 
 	pdata->clk_ref = devm_clk_get(&pdev->dev, "ref");
 	if (IS_ERR(pdata->clk_ref)) {
+		clk_disable_unprepare(pdata->clk_ipg);
 		dev_err(&pdev->dev, "unable to get ref clock!\n");
-		ret = PTR_ERR(pdata->clk_ref);
-		goto exit_put_clk_ipg;
+		return PTR_ERR(pdata->clk_ref);
 	}
 
 	ret = clk_prepare_enable(pdata->clk_ref);
+	if (ret) {
+		clk_disable_unprepare(pdata->clk_ipg);
+		return ret;
+	}
+
+	ret = devm_add_action_or_reset(&pdev->dev, mxc_rtc_action, pdata);
 	if (ret)
-		goto exit_put_clk_ipg;
+		return ret;
 
 	rate = clk_get_rate(pdata->clk_ref);
 
@@ -384,16 +399,14 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 		reg = RTC_INPUT_CLK_38400HZ;
 	else {
 		dev_err(&pdev->dev, "rtc clock is not valid (%lu)\n", rate);
-		ret = -EINVAL;
-		goto exit_put_clk_ref;
+		return -EINVAL;
 	}
 
 	reg |= RTC_ENABLE_BIT;
 	writew(reg, (pdata->ioaddr + RTC_RTCCTL));
 	if (((readw(pdata->ioaddr + RTC_RTCCTL)) & RTC_ENABLE_BIT) == 0) {
 		dev_err(&pdev->dev, "hardware module can't be enabled!\n");
-		ret = -EIO;
-		goto exit_put_clk_ref;
+		return -EIO;
 	}
 
 	platform_set_drvdata(pdev, pdata);
@@ -416,27 +429,8 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	}
 
 	ret = rtc_register_device(rtc);
-	if (ret)
-		goto exit_put_clk_ref;
-
-	return 0;
-
-exit_put_clk_ref:
-	clk_disable_unprepare(pdata->clk_ref);
-exit_put_clk_ipg:
-	clk_disable_unprepare(pdata->clk_ipg);
 
 	return ret;
-}
-
-static int mxc_rtc_remove(struct platform_device *pdev)
-{
-	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(pdata->clk_ref);
-	clk_disable_unprepare(pdata->clk_ipg);
-
-	return 0;
 }
 
 static struct platform_driver mxc_rtc_driver = {
@@ -446,7 +440,6 @@ static struct platform_driver mxc_rtc_driver = {
 	},
 	.id_table = imx_rtc_devtype,
 	.probe = mxc_rtc_probe,
-	.remove = mxc_rtc_remove,
 };
 
 module_platform_driver(mxc_rtc_driver)

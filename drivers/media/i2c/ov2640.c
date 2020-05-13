@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ov2640 Camera Driver
  *
@@ -7,10 +8,6 @@
  *
  * Copyright 2005-2009 Freescale Semiconductor, Inc. All Rights Reserved.
  * Copyright (C) 2006, OmniVision
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/init.h>
@@ -932,7 +929,7 @@ static int ov2640_get_fmt(struct v4l2_subdev *sd,
 		format->format = *mf;
 		return 0;
 #else
-		return -ENOTTY;
+		return -EINVAL;
 #endif
 	}
 
@@ -1193,8 +1190,7 @@ static int ov2640_probe_dt(struct i2c_client *client,
 /*
  * i2c_driver functions
  */
-static int ov2640_probe(struct i2c_client *client,
-			const struct i2c_device_id *did)
+static int ov2640_probe(struct i2c_client *client)
 {
 	struct ov2640_priv	*priv;
 	struct i2c_adapter	*adapter = client->adapter;
@@ -1305,7 +1301,7 @@ static struct i2c_driver ov2640_i2c_driver = {
 		.name = "ov2640",
 		.of_match_table = of_match_ptr(ov2640_of_match),
 	},
-	.probe    = ov2640_probe,
+	.probe_new = ov2640_probe,
 	.remove   = ov2640_remove,
 	.id_table = ov2640_id,
 };

@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Based on arch/arm/include/asm/barrier.h
  *
  * Copyright (C) 2012 ARM Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef __ASM_BARRIER_H
 #define __ASM_BARRIER_H
@@ -39,6 +28,18 @@
 #define spec_bar()	asm volatile(ALTERNATIVE("dsb nsh\nisb\n",		\
 						 SB_BARRIER_INSN"nop\n",	\
 						 ARM64_HAS_SB))
+
+#ifdef CONFIG_ARM64_PSEUDO_NMI
+#define pmr_sync()						\
+	do {							\
+		extern struct static_key_false gic_pmr_sync;	\
+								\
+		if (static_branch_unlikely(&gic_pmr_sync))	\
+			dsb(sy);				\
+	} while(0)
+#else
+#define pmr_sync()	do {} while (0)
+#endif
 
 #define mb()		dsb(sy)
 #define rmb()		dsb(ld)

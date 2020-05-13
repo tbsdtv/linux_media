@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Atomic futex routines
  *
  * Based on the PowerPC implementataion
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Copyright (C) 2013 TangoTec Ltd.
  *
@@ -46,10 +43,10 @@
 #elif XCHAL_HAVE_S32C1I
 #define __futex_atomic_op(insn, ret, old, uaddr, arg)	\
 	__asm__ __volatile(				\
-	"1:	l32i	%[oldval], %[addr], 0\n"	\
+	"1:	l32i	%[oldval], %[mem]\n"		\
 		insn "\n"				\
 	"	wsr	%[oldval], scompare1\n"		\
-	"2:	s32c1i	%[newval], %[addr], 0\n"	\
+	"2:	s32c1i	%[newval], %[mem]\n"		\
 	"	bne	%[newval], %[oldval], 1b\n"	\
 	"	movi	%[newval], 0\n"			\
 	"3:\n"						\
@@ -63,9 +60,9 @@
 	"	.section __ex_table,\"a\"\n"		\
 	"	.long 1b, 5b, 2b, 5b\n"			\
 	"	.previous\n"				\
-	: [oldval] "=&r" (old), [newval] "=&r" (ret)	\
-	: [addr] "r" (uaddr), [oparg] "r" (arg),	\
-	  [fault] "I" (-EFAULT)				\
+	: [oldval] "=&r" (old), [newval] "=&r" (ret),	\
+	  [mem] "+m" (*(uaddr))				\
+	: [oparg] "r" (arg), [fault] "I" (-EFAULT)	\
 	: "memory")
 #endif
 
@@ -75,7 +72,8 @@ static inline int arch_futex_atomic_op_inuser(int op, int oparg, int *oval,
 #if XCHAL_HAVE_S32C1I || XCHAL_HAVE_EXCLUSIVE
 	int oldval = 0, ret;
 
-	pagefault_disable();
+	if (!access_ok(uaddr, sizeof(u32)))
+		return -EFAULT;
 
 	switch (op) {
 	case FUTEX_OP_SET:
@@ -101,8 +99,6 @@ static inline int arch_futex_atomic_op_inuser(int op, int oparg, int *oval,
 	default:
 		ret = -ENOSYS;
 	}
-
-	pagefault_enable();
 
 	if (!ret)
 		*oval = oldval;

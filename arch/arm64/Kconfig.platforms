@@ -37,11 +37,11 @@ config ARCH_BCM2835
 	select PINCTRL
 	select PINCTRL_BCM2835
 	select ARM_AMBA
+	select ARM_GIC
 	select ARM_TIMER_SP804
-	select HAVE_ARM_ARCH_TIMER
 	help
-	  This enables support for the Broadcom BCM2837 SoC.
-	  This SoC is used in the Raspberry Pi 3 device.
+	  This enables support for the Broadcom BCM2837 and BCM2711 SoC.
+	  These SoCs are used in the Raspberry Pi 3 and 4 devices.
 
 config ARCH_BCM_IPROC
 	bool "Broadcom iProc SoC Family"
@@ -66,14 +66,18 @@ config ARCH_BITMAIN
 
 config ARCH_BRCMSTB
 	bool "Broadcom Set-Top-Box SoCs"
+	select ARCH_HAS_RESET_CONTROLLER
+	select BCM7038_L1_IRQ
 	select BRCMSTB_L2_IRQ
 	select GENERIC_IRQ_CHIP
+	select PINCTRL
 	help
 	  This enables support for Broadcom's ARMv8 Set Top Box SoCs
 
 config ARCH_EXYNOS
 	bool "ARMv8 based Samsung Exynos SoC family"
 	select COMMON_CLK_SAMSUNG
+	select EXYNOS_CHIPID
 	select EXYNOS_PM_DOMAINS if PM_GENERIC_DOMAINS
 	select EXYNOS_PMU
 	select HAVE_S3C2410_WATCHDOG if WATCHDOG
@@ -89,6 +93,7 @@ config ARCH_K3
 	bool "Texas Instruments Inc. K3 multicore SoC architecture"
 	select PM_GENERIC_DOMAINS if PM
 	select MAILBOX
+	select SOC_TI
 	select TI_MESSAGE_MANAGER
 	select TI_SCI_PROTOCOL
 	select TI_SCI_INTR_IRQCHIP
@@ -168,6 +173,8 @@ config ARCH_MXC
 	select IMX_GPCV2_PM_DOMAINS
 	select PM
 	select PM_GENERIC_DOMAINS
+	select SOC_BUS
+	select TIMER_IMX_SYS_CTR
 	help
 	  This enables support for the ARMv8 based SoCs in the
 	  NXP i.MX family.
@@ -181,6 +188,7 @@ config ARCH_QCOM
 
 config ARCH_REALTEK
 	bool "Realtek Platforms"
+	select RESET_CONTROLLER
 	help
 	  This enables support for the ARMv8 based Realtek chipsets,
 	  like the RTD1295.
@@ -204,6 +212,11 @@ config ARCH_ROCKCHIP
 	help
 	  This enables support for the ARMv8 based Rockchip chipsets,
 	  like the RK3368.
+
+config ARCH_S32
+	bool "NXP S32 SoC Family"
+	help
+	  This enables support for the NXP S32 family of processors.
 
 config ARCH_SEATTLE
 	bool "AMD Seattle SoC Family"
@@ -235,7 +248,7 @@ config ARCH_TEGRA
 	  This enables support for the NVIDIA Tegra SoC family.
 
 config ARCH_SPRD
-	bool "Spreadtrum SoC platform"
+	tristate "Spreadtrum SoC platform"
 	help
 	  Support for Spreadtrum ARM based SoCs
 
@@ -287,7 +300,6 @@ config ARCH_ZX
 
 config ARCH_ZYNQMP
 	bool "Xilinx ZynqMP Family"
-	select ZYNQMP_FIRMWARE
 	help
 	  This enables support for Xilinx ZynqMP Family
 

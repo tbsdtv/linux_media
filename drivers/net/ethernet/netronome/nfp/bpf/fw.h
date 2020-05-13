@@ -24,6 +24,7 @@ enum bpf_cap_tlv_type {
 	NFP_BPF_CAP_TYPE_QUEUE_SELECT	= 5,
 	NFP_BPF_CAP_TYPE_ADJUST_TAIL	= 6,
 	NFP_BPF_CAP_TYPE_ABI_VERSION	= 7,
+	NFP_BPF_CAP_TYPE_CMSG_MULTI_ENT	= 8,
 };
 
 struct nfp_bpf_cap_tlv_func {
@@ -103,14 +104,14 @@ struct cmsg_req_map_op {
 	__be32 tid;
 	__be32 count;
 	__be32 flags;
-	u8 data[0];
+	u8 data[];
 };
 
 struct cmsg_reply_map_op {
 	struct cmsg_reply_map_simple reply_hdr;
 	__be32 count;
 	__be32 resv;
-	u8 data[0];
+	u8 data[];
 };
 
 struct cmsg_bpf_event {
@@ -119,6 +120,6 @@ struct cmsg_bpf_event {
 	__be64 map_ptr;
 	__be32 data_size;
 	__be32 pkt_size;
-	u8 data[0];
+	u8 data[];
 };
 #endif

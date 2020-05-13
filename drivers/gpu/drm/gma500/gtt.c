@@ -7,11 +7,12 @@
  *	    Alan Cox <alan@linux.intel.com>
  */
 
-#include <drm/drmP.h>
 #include <linux/shmem_fs.h>
+
 #include <asm/set_memory.h>
-#include "psb_drv.h"
+
 #include "blitter.h"
+#include "psb_drv.h"
 
 
 /*
@@ -502,7 +503,7 @@ int psb_gtt_init(struct drm_device *dev, int resume)
 	 *	Map the GTT and the stolen memory area
 	 */
 	if (!resume)
-		dev_priv->gtt_map = ioremap_nocache(pg->gtt_phys_start,
+		dev_priv->gtt_map = ioremap(pg->gtt_phys_start,
 						gtt_pages << PAGE_SHIFT);
 	if (!dev_priv->gtt_map) {
 		dev_err(dev->dev, "Failure to map gtt.\n");

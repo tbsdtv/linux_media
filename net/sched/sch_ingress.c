@@ -78,16 +78,23 @@ static int ingress_init(struct Qdisc *sch, struct nlattr *opt,
 {
 	struct ingress_sched_data *q = qdisc_priv(sch);
 	struct net_device *dev = qdisc_dev(sch);
+	int err;
 
 	net_inc_ingress_queue();
 
 	mini_qdisc_pair_init(&q->miniqp, sch, &dev->miniq_ingress);
 
-	q->block_info.binder_type = TCF_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
+	q->block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->block_info.chain_head_change = clsact_chain_head_change;
 	q->block_info.chain_head_change_priv = &q->miniqp;
 
-	return tcf_block_get_ext(&q->block, sch, &q->block_info, extack);
+	err = tcf_block_get_ext(&q->block, sch, &q->block_info, extack);
+	if (err)
+		return err;
+
+	mini_qdisc_pair_block_init(&q->miniqp, q->block);
+
+	return 0;
 }
 
 static void ingress_destroy(struct Qdisc *sch)
@@ -114,6 +121,7 @@ nla_put_failure:
 }
 
 static const struct Qdisc_class_ops ingress_class_ops = {
+	.flags		=	QDISC_CLASS_OPS_DOIT_UNLOCKED,
 	.leaf		=	ingress_leaf,
 	.find		=	ingress_find,
 	.walk		=	ingress_walk,
@@ -216,7 +224,7 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 
 	mini_qdisc_pair_init(&q->miniqp_ingress, sch, &dev->miniq_ingress);
 
-	q->ingress_block_info.binder_type = TCF_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
+	q->ingress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS;
 	q->ingress_block_info.chain_head_change = clsact_chain_head_change;
 	q->ingress_block_info.chain_head_change_priv = &q->miniqp_ingress;
 
@@ -225,9 +233,11 @@ static int clsact_init(struct Qdisc *sch, struct nlattr *opt,
 	if (err)
 		return err;
 
+	mini_qdisc_pair_block_init(&q->miniqp_ingress, q->ingress_block);
+
 	mini_qdisc_pair_init(&q->miniqp_egress, sch, &dev->miniq_egress);
 
-	q->egress_block_info.binder_type = TCF_BLOCK_BINDER_TYPE_CLSACT_EGRESS;
+	q->egress_block_info.binder_type = FLOW_BLOCK_BINDER_TYPE_CLSACT_EGRESS;
 	q->egress_block_info.chain_head_change = clsact_chain_head_change;
 	q->egress_block_info.chain_head_change_priv = &q->miniqp_egress;
 
@@ -246,6 +256,7 @@ static void clsact_destroy(struct Qdisc *sch)
 }
 
 static const struct Qdisc_class_ops clsact_class_ops = {
+	.flags		=	QDISC_CLASS_OPS_DOIT_UNLOCKED,
 	.leaf		=	ingress_leaf,
 	.find		=	clsact_find,
 	.walk		=	ingress_walk,

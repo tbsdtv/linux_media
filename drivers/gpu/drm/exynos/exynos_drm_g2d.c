@@ -4,21 +4,24 @@
  * Authors: Joonyoung Shim <jy0922.shim@samsung.com>
  */
 
-#include <linux/kernel.h>
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/delay.h>
+#include <linux/dma-mapping.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/kernel.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
+#include <linux/uaccess.h>
 #include <linux/workqueue.h>
-#include <linux/dma-mapping.h>
-#include <linux/of.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_file.h>
 #include <drm/exynos_drm.h>
+
 #include "exynos_drm_drv.h"
 #include "exynos_drm_g2d.h"
 #include "exynos_drm_gem.h"
@@ -229,6 +232,7 @@ struct g2d_runqueue_node {
 
 struct g2d_data {
 	struct device			*dev;
+	void				*dma_priv;
 	struct clk			*gate_clk;
 	void __iomem			*regs;
 	int				irq;
@@ -264,7 +268,7 @@ static inline void g2d_hw_reset(struct g2d_data *g2d)
 static int g2d_init_cmdlist(struct g2d_data *g2d)
 {
 	struct device *dev = g2d->dev;
-	struct g2d_cmdlist_node *node = g2d->cmdlist_node;
+	struct g2d_cmdlist_node *node;
 	int nr;
 	int ret;
 	struct g2d_buf_info *buf_info;
@@ -1406,7 +1410,7 @@ static int g2d_bind(struct device *dev, struct device *master, void *data)
 		return ret;
 	}
 
-	ret = exynos_drm_register_dma(drm_dev, dev);
+	ret = exynos_drm_register_dma(drm_dev, dev, &g2d->dma_priv);
 	if (ret < 0) {
 		dev_err(dev, "failed to enable iommu.\n");
 		g2d_fini_cmdlist(g2d);
@@ -1431,7 +1435,7 @@ static void g2d_unbind(struct device *dev, struct device *master, void *data)
 	priv->g2d_dev = NULL;
 
 	cancel_work_sync(&g2d->runqueue_work);
-	exynos_drm_unregister_dma(g2d->drm_dev, dev);
+	exynos_drm_unregister_dma(g2d->drm_dev, dev, &g2d->dma_priv);
 }
 
 static const struct component_ops g2d_component_ops = {

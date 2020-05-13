@@ -6,6 +6,7 @@
 
 / {
 	model = "Freescale i.MX6 SoloX SDB RevA Board";
+	compatible = "fsl,imx6sx-sdb-reva", "fsl,imx6sx";
 };
 
 &i2c1 {
@@ -153,4 +154,16 @@
 	gpio = <&gpio4 27 GPIO_ACTIVE_HIGH>;
 	enable-active-high;
 	vin-supply = <&reg_can_en>;
+};
+
+&reg_vdd1p1 {
+	vin-supply = <&vgen6_reg>;
+};
+
+&reg_vdd2p5 {
+	vin-supply = <&vgen6_reg>;
+};
+
+&snvs_pwrkey {
+	status = "okay";
 };

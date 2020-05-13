@@ -24,6 +24,8 @@
 
 #include <nouveau_bo.h>
 
+#include <nvif/timer.h>
+
 static void
 ovly827e_image_set(struct nv50_wndw *wndw, struct nv50_wndw_atom *asyw)
 {
@@ -90,11 +92,8 @@ ovly827e_format[] = {
 	DRM_FORMAT_YUYV,
 	DRM_FORMAT_UYVY,
 	DRM_FORMAT_XRGB8888,
-	DRM_FORMAT_ARGB8888,
 	DRM_FORMAT_XRGB1555,
-	DRM_FORMAT_ARGB1555,
 	DRM_FORMAT_XBGR2101010,
-	DRM_FORMAT_ABGR2101010,
 	0
 };
 

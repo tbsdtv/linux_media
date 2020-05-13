@@ -1211,7 +1211,7 @@ static int avl6882fe_snr(struct dvb_frontend *fe, u16 *snr)
 	return ret;
 }
 
-static int avl6882fe_algo(struct dvb_frontend *fe)
+static enum dvbfe_algo avl6882fe_algo(struct dvb_frontend *fe)
 {
 	return DVBFE_ALGO_HW;
 }

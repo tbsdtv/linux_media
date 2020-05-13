@@ -1212,7 +1212,7 @@ static int si2183_tune(struct dvb_frontend *fe, bool re_tune,
 	return si2183_read_status(fe, status);
 }
 
-static int si2183_get_algo(struct dvb_frontend *fe)
+static enum dvbfe_algo si2183_get_algo(struct dvb_frontend *fe)
 {
 	return DVBFE_ALGO_HW;
 }

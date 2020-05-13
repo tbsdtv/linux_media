@@ -149,7 +149,7 @@ static int bats_show_603(struct seq_file *m, void *v)
 
 static int bats_open(struct inode *inode, struct file *file)
 {
-	if (cpu_has_feature(CPU_FTR_601))
+	if (IS_ENABLED(CONFIG_PPC_BOOK3S_601))
 		return single_open(file, bats_show_601, NULL);
 
 	return single_open(file, bats_show_603, NULL);
@@ -164,10 +164,8 @@ static const struct file_operations bats_fops = {
 
 static int __init bats_init(void)
 {
-	struct dentry *debugfs_file;
-
-	debugfs_file = debugfs_create_file("block_address_translation", 0400,
-					   powerpc_debugfs_root, NULL, &bats_fops);
-	return debugfs_file ? 0 : -ENOMEM;
+	debugfs_create_file("block_address_translation", 0400,
+			    powerpc_debugfs_root, NULL, &bats_fops);
+	return 0;
 }
 device_initcall(bats_init);

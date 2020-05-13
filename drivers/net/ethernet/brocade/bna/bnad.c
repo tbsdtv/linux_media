@@ -2504,12 +2504,7 @@ bnad_tso_prepare(struct bnad *bnad, struct sk_buff *skb)
 					   IPPROTO_TCP, 0);
 		BNAD_UPDATE_CTR(bnad, tso4);
 	} else {
-		struct ipv6hdr *ipv6h = ipv6_hdr(skb);
-
-		ipv6h->payload_len = 0;
-		tcp_hdr(skb)->check =
-			~csum_ipv6_magic(&ipv6h->saddr, &ipv6h->daddr, 0,
-					 IPPROTO_TCP, 0);
+		tcp_v6_gso_csum_prep(skb);
 		BNAD_UPDATE_CTR(bnad, tso6);
 	}
 
@@ -3032,7 +3027,7 @@ bnad_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 	head_unmap->nvecs++;
 
 	for (i = 0, vect_id = 0; i < vectors - 1; i++) {
-		const struct skb_frag_struct *frag = &skb_shinfo(skb)->frags[i];
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 		u32		size = skb_frag_size(frag);
 
 		if (unlikely(size == 0)) {
@@ -3477,7 +3472,7 @@ bnad_init(struct bnad *bnad,
 	bnad->pcidev = pdev;
 	bnad->mmio_start = pci_resource_start(pdev, 0);
 	bnad->mmio_len = pci_resource_len(pdev, 0);
-	bnad->bar0 = ioremap_nocache(bnad->mmio_start, bnad->mmio_len);
+	bnad->bar0 = ioremap(bnad->mmio_start, bnad->mmio_len);
 	if (!bnad->bar0) {
 		dev_err(&pdev->dev, "ioremap for bar0 failed\n");
 		return -ENOMEM;
@@ -3847,9 +3842,6 @@ bnad_module_init(void)
 {
 	int err;
 
-	pr_info("bna: QLogic BR-series 10G Ethernet driver - version: %s\n",
-		BNAD_VERSION);
-
 	bfa_nw_ioc_auto_recover(bnad_ioc_auto_recover);
 
 	err = pci_register_driver(&bnad_pci_driver);
@@ -3874,6 +3866,5 @@ module_exit(bnad_module_exit);
 MODULE_AUTHOR("Brocade");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("QLogic BR-series 10G PCIe Ethernet driver");
-MODULE_VERSION(BNAD_VERSION);
 MODULE_FIRMWARE(CNA_FW_FILE_CT);
 MODULE_FIRMWARE(CNA_FW_FILE_CT2);

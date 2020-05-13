@@ -19,7 +19,9 @@ Linux Tracing Technologies
    events-msr
    mmiotrace
    histogram
+   boottime-trace
    hwlat_detector
    intel_th
    stm
    sys-t
+   coresight/index

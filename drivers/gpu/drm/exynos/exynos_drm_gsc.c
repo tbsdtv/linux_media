@@ -6,20 +6,23 @@
  *	Jinyoung Jeon <jy0.jeon@samsung.com>
  *	Sangmin Lee <lsmin.lee@samsung.com>
  */
-#include <linux/kernel.h>
-#include <linux/component.h>
-#include <linux/platform_device.h>
+
 #include <linux/clk.h>
-#include <linux/pm_runtime.h>
+#include <linux/component.h>
+#include <linux/kernel.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of_device.h>
+#include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_print.h>
 #include <drm/exynos_drm.h>
-#include "regs-gsc.h"
+
 #include "exynos_drm_drv.h"
 #include "exynos_drm_ipp.h"
+#include "regs-gsc.h"
 
 /*
  * GSC stands for General SCaler and
@@ -57,7 +60,7 @@
 #define GSC_COEF_DEPTH	3
 #define GSC_AUTOSUSPEND_DELAY		2000
 
-#define get_gsc_context(dev)	platform_get_drvdata(to_platform_device(dev))
+#define get_gsc_context(dev)	dev_get_drvdata(dev)
 #define gsc_read(offset)		readl(ctx->regs + (offset))
 #define gsc_write(cfg, offset)	writel(cfg, ctx->regs + (offset))
 
@@ -94,6 +97,7 @@ struct gsc_scaler {
 struct gsc_context {
 	struct exynos_drm_ipp ipp;
 	struct drm_device *drm_dev;
+	void		*dma_priv;
 	struct device	*dev;
 	struct exynos_drm_ipp_task	*task;
 	struct exynos_drm_ipp_formats	*formats;
@@ -1166,7 +1170,7 @@ static int gsc_bind(struct device *dev, struct device *master, void *data)
 
 	ctx->drm_dev = drm_dev;
 	ctx->drm_dev = drm_dev;
-	exynos_drm_register_dma(drm_dev, dev);
+	exynos_drm_register_dma(drm_dev, dev, &ctx->dma_priv);
 
 	exynos_drm_ipp_register(dev, ipp, &ipp_funcs,
 			DRM_EXYNOS_IPP_CAP_CROP | DRM_EXYNOS_IPP_CAP_ROTATE |
@@ -1186,7 +1190,7 @@ static void gsc_unbind(struct device *dev, struct device *master,
 	struct exynos_drm_ipp *ipp = &ctx->ipp;
 
 	exynos_drm_ipp_unregister(dev, ipp);
-	exynos_drm_unregister_dma(drm_dev, dev);
+	exynos_drm_unregister_dma(drm_dev, dev, &ctx->dma_priv);
 }
 
 static const struct component_ops gsc_component_ops = {
@@ -1310,6 +1314,7 @@ static int gsc_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 
+	component_del(dev, &gsc_component_ops);
 	pm_runtime_dont_use_autosuspend(dev);
 	pm_runtime_disable(dev);
 

@@ -23,13 +23,28 @@
  *
  */
 
-#include <linux/debugfs.h>
+#include <linux/uaccess.h>
+
+#include <drm/drm_debugfs.h>
 
 #include "dc.h"
 #include "amdgpu.h"
 #include "amdgpu_dm.h"
 #include "amdgpu_dm_debugfs.h"
 #include "dm_helpers.h"
+#include "dmub/inc/dmub_srv.h"
+
+struct dmub_debugfs_trace_header {
+	uint32_t entry_count;
+	uint32_t reserved[3];
+};
+
+struct dmub_debugfs_trace_entry {
+	uint32_t trace_code;
+	uint32_t tick_count;
+	uint32_t param0;
+	uint32_t param1;
+};
 
 /* function description
  * get/ set DP configuration: lane_count, link_rate, spread_spectrum
@@ -655,6 +670,7 @@ static ssize_t dp_phy_test_pattern_debugfs_write(struct file *f, const char __us
 	dc_link_set_test_pattern(
 		link,
 		test_pattern,
+		DP_TEST_PATTERN_COLOR_SPACE_RGB,
 		&link_training_settings,
 		custom_pattern,
 		10);
@@ -670,6 +686,138 @@ static ssize_t dp_phy_test_pattern_debugfs_write(struct file *f, const char __us
 	kfree(wr_buf);
 
 	return bytes_from_user;
+}
+
+/**
+ * Returns the DMCUB tracebuffer contents.
+ * Example usage: cat /sys/kernel/debug/dri/0/amdgpu_dm_dmub_tracebuffer
+ */
+static int dmub_tracebuffer_show(struct seq_file *m, void *data)
+{
+	struct amdgpu_device *adev = m->private;
+	struct dmub_srv_fb_info *fb_info = adev->dm.dmub_fb_info;
+	struct dmub_debugfs_trace_entry *entries;
+	uint8_t *tbuf_base;
+	uint32_t tbuf_size, max_entries, num_entries, i;
+
+	if (!fb_info)
+		return 0;
+
+	tbuf_base = (uint8_t *)fb_info->fb[DMUB_WINDOW_5_TRACEBUFF].cpu_addr;
+	if (!tbuf_base)
+		return 0;
+
+	tbuf_size = fb_info->fb[DMUB_WINDOW_5_TRACEBUFF].size;
+	max_entries = (tbuf_size - sizeof(struct dmub_debugfs_trace_header)) /
+		      sizeof(struct dmub_debugfs_trace_entry);
+
+	num_entries =
+		((struct dmub_debugfs_trace_header *)tbuf_base)->entry_count;
+
+	num_entries = min(num_entries, max_entries);
+
+	entries = (struct dmub_debugfs_trace_entry
+			   *)(tbuf_base +
+			      sizeof(struct dmub_debugfs_trace_header));
+
+	for (i = 0; i < num_entries; ++i) {
+		struct dmub_debugfs_trace_entry *entry = &entries[i];
+
+		seq_printf(m,
+			   "trace_code=%u tick_count=%u param0=%u param1=%u\n",
+			   entry->trace_code, entry->tick_count, entry->param0,
+			   entry->param1);
+	}
+
+	return 0;
+}
+
+/**
+ * Returns the DMCUB firmware state contents.
+ * Example usage: cat /sys/kernel/debug/dri/0/amdgpu_dm_dmub_fw_state
+ */
+static int dmub_fw_state_show(struct seq_file *m, void *data)
+{
+	struct amdgpu_device *adev = m->private;
+	struct dmub_srv_fb_info *fb_info = adev->dm.dmub_fb_info;
+	uint8_t *state_base;
+	uint32_t state_size;
+
+	if (!fb_info)
+		return 0;
+
+	state_base = (uint8_t *)fb_info->fb[DMUB_WINDOW_6_FW_STATE].cpu_addr;
+	if (!state_base)
+		return 0;
+
+	state_size = fb_info->fb[DMUB_WINDOW_6_FW_STATE].size;
+
+	return seq_write(m, state_base, state_size);
+}
+
+/*
+ * Returns the current and maximum output bpc for the connector.
+ * Example usage: cat /sys/kernel/debug/dri/0/DP-1/output_bpc
+ */
+static int output_bpc_show(struct seq_file *m, void *data)
+{
+	struct drm_connector *connector = m->private;
+	struct drm_device *dev = connector->dev;
+	struct drm_crtc *crtc = NULL;
+	struct dm_crtc_state *dm_crtc_state = NULL;
+	int res = -ENODEV;
+	unsigned int bpc;
+
+	mutex_lock(&dev->mode_config.mutex);
+	drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
+
+	if (connector->state == NULL)
+		goto unlock;
+
+	crtc = connector->state->crtc;
+	if (crtc == NULL)
+		goto unlock;
+
+	drm_modeset_lock(&crtc->mutex, NULL);
+	if (crtc->state == NULL)
+		goto unlock;
+
+	dm_crtc_state = to_dm_crtc_state(crtc->state);
+	if (dm_crtc_state->stream == NULL)
+		goto unlock;
+
+	switch (dm_crtc_state->stream->timing.display_color_depth) {
+	case COLOR_DEPTH_666:
+		bpc = 6;
+		break;
+	case COLOR_DEPTH_888:
+		bpc = 8;
+		break;
+	case COLOR_DEPTH_101010:
+		bpc = 10;
+		break;
+	case COLOR_DEPTH_121212:
+		bpc = 12;
+		break;
+	case COLOR_DEPTH_161616:
+		bpc = 16;
+		break;
+	default:
+		goto unlock;
+	}
+
+	seq_printf(m, "Current: %u\n", bpc);
+	seq_printf(m, "Maximum: %u\n", connector->display_info.bpc);
+	res = 0;
+
+unlock:
+	if (crtc)
+		drm_modeset_unlock(&crtc->mutex);
+
+	drm_modeset_unlock(&dev->mode_config.connection_mutex);
+	mutex_unlock(&dev->mode_config.mutex);
+
+	return res;
 }
 
 /*
@@ -729,8 +877,6 @@ static ssize_t dp_sdp_message_debugfs_write(struct file *f, const char __user *b
 
 	return write_size;
 }
-
-DEFINE_SHOW_ATTRIBUTE(vrr_range);
 
 static ssize_t dp_dpcd_address_write(struct file *f, const char __user *buf,
 				 size_t size, loff_t *pos)
@@ -814,6 +960,11 @@ static ssize_t dp_dpcd_data_read(struct file *f, char __user *buf,
 	return read_size - r;
 }
 
+DEFINE_SHOW_ATTRIBUTE(dmub_fw_state);
+DEFINE_SHOW_ATTRIBUTE(dmub_tracebuffer);
+DEFINE_SHOW_ATTRIBUTE(output_bpc);
+DEFINE_SHOW_ATTRIBUTE(vrr_range);
+
 static const struct file_operations dp_link_settings_debugfs_fops = {
 	.owner = THIS_MODULE,
 	.read = dp_link_settings_read,
@@ -866,6 +1017,7 @@ static const struct {
 		{"link_settings", &dp_link_settings_debugfs_fops},
 		{"phy_settings", &dp_phy_settings_debugfs_fop},
 		{"test_pattern", &dp_phy_test_pattern_fops},
+		{"output_bpc", &output_bpc_fops},
 		{"vrr_range", &vrr_range_fops},
 		{"sdp_message", &sdp_message_fops},
 		{"aux_dpcd_address", &dp_dpcd_address_debugfs_fops},
@@ -873,25 +1025,74 @@ static const struct {
 		{"aux_dpcd_data", &dp_dpcd_data_debugfs_fops}
 };
 
-int connector_debugfs_init(struct amdgpu_dm_connector *connector)
+/*
+ * Force YUV420 output if available from the given mode
+ */
+static int force_yuv420_output_set(void *data, u64 val)
+{
+	struct amdgpu_dm_connector *connector = data;
+
+	connector->force_yuv420_output = (bool)val;
+
+	return 0;
+}
+
+/*
+ * Check if YUV420 is forced when available from the given mode
+ */
+static int force_yuv420_output_get(void *data, u64 *val)
+{
+	struct amdgpu_dm_connector *connector = data;
+
+	*val = connector->force_yuv420_output;
+
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(force_yuv420_output_fops, force_yuv420_output_get,
+			 force_yuv420_output_set, "%llu\n");
+
+/*
+ *  Read PSR state
+ */
+static int psr_get(void *data, u64 *val)
+{
+	struct amdgpu_dm_connector *connector = data;
+	struct dc_link *link = connector->dc_link;
+	uint32_t psr_state = 0;
+
+	dc_link_get_psr_state(link, &psr_state);
+
+	*val = psr_state;
+
+	return 0;
+}
+
+
+DEFINE_DEBUGFS_ATTRIBUTE(psr_fops, psr_get, NULL, "%llu\n");
+
+void connector_debugfs_init(struct amdgpu_dm_connector *connector)
 {
 	int i;
-	struct dentry *ent, *dir = connector->base.debugfs_entry;
+	struct dentry *dir = connector->base.debugfs_entry;
 
 	if (connector->base.connector_type == DRM_MODE_CONNECTOR_DisplayPort ||
 	    connector->base.connector_type == DRM_MODE_CONNECTOR_eDP) {
 		for (i = 0; i < ARRAY_SIZE(dp_debugfs_entries); i++) {
-			ent = debugfs_create_file(dp_debugfs_entries[i].name,
-						  0644,
-						  dir,
-						  connector,
-						  dp_debugfs_entries[i].fops);
-			if (IS_ERR(ent))
-				return PTR_ERR(ent);
+			debugfs_create_file(dp_debugfs_entries[i].name,
+					    0644, dir, connector,
+					    dp_debugfs_entries[i].fops);
 		}
 	}
+	if (connector->base.connector_type == DRM_MODE_CONNECTOR_eDP)
+		debugfs_create_file_unsafe("psr_state", 0444, dir, connector, &psr_fops);
 
-	return 0;
+	debugfs_create_file_unsafe("force_yuv420_output", 0644, dir, connector,
+				   &force_yuv420_output_fops);
+
+	connector->debugfs_dpcd_address = 0;
+	connector->debugfs_dpcd_size = 0;
+
 }
 
 /*
@@ -990,9 +1191,33 @@ static int target_backlight_read(struct seq_file *m, void *data)
 	return 0;
 }
 
+static int mst_topo(struct seq_file *m, void *unused)
+{
+	struct drm_info_node *node = (struct drm_info_node *)m->private;
+	struct drm_device *dev = node->minor->dev;
+	struct drm_connector *connector;
+	struct drm_connector_list_iter conn_iter;
+	struct amdgpu_dm_connector *aconnector;
+
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
+		if (connector->connector_type != DRM_MODE_CONNECTOR_DisplayPort)
+			continue;
+
+		aconnector = to_amdgpu_dm_connector(connector);
+
+		seq_printf(m, "\nMST topology for connector %d\n", aconnector->connector_id);
+		drm_dp_mst_dump_topology(m, &aconnector->mst_mgr);
+	}
+	drm_connector_list_iter_end(&conn_iter);
+
+	return 0;
+}
+
 static const struct drm_info_list amdgpu_dm_debugfs_list[] = {
 	{"amdgpu_current_backlight_pwm", &current_backlight_read},
 	{"amdgpu_target_backlight_pwm", &target_backlight_read},
+	{"amdgpu_mst_topology", &mst_topo},
 };
 
 /*
@@ -1034,7 +1259,7 @@ int dtn_debugfs_init(struct amdgpu_device *adev)
 	};
 
 	struct drm_minor *minor = adev->ddev->primary;
-	struct dentry *ent, *root = minor->debugfs_root;
+	struct dentry *root = minor->debugfs_root;
 	int ret;
 
 	ret = amdgpu_debugfs_add_files(adev, amdgpu_dm_debugfs_list,
@@ -1042,20 +1267,17 @@ int dtn_debugfs_init(struct amdgpu_device *adev)
 	if (ret)
 		return ret;
 
-	ent = debugfs_create_file(
-		"amdgpu_dm_dtn_log",
-		0644,
-		root,
-		adev,
-		&dtn_log_fops);
+	debugfs_create_file("amdgpu_dm_dtn_log", 0644, root, adev,
+			    &dtn_log_fops);
 
-	if (IS_ERR(ent))
-		return PTR_ERR(ent);
+	debugfs_create_file_unsafe("amdgpu_dm_visual_confirm", 0644, root, adev,
+				   &visual_confirm_fops);
 
-	ent = debugfs_create_file_unsafe("amdgpu_dm_visual_confirm", 0644, root,
-					 adev, &visual_confirm_fops);
-	if (IS_ERR(ent))
-		return PTR_ERR(ent);
+	debugfs_create_file_unsafe("amdgpu_dm_dmub_tracebuffer", 0644, root,
+				   adev, &dmub_tracebuffer_fops);
+
+	debugfs_create_file_unsafe("amdgpu_dm_dmub_fw_state", 0644, root,
+				   adev, &dmub_fw_state_fops);
 
 	return 0;
 }

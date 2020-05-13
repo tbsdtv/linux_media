@@ -3,17 +3,21 @@
  * Copyright (c) 2018, The Linux Foundation. All rights reserved.
  */
 
-#include <drm/drmP.h>
-#include <drm/drm_panel.h>
-#include <drm/drm_mipi_dsi.h>
-
+#include <linux/backlight.h>
+#include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/module.h>
 #include <linux/of_device.h>
 #include <linux/of_graph.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/regulator/consumer.h>
 
 #include <video/mipi_display.h>
+
+#include <drm/drm_mipi_dsi.h>
+#include <drm/drm_modes.h>
+#include <drm/drm_panel.h>
+#include <drm/drm_print.h>
 
 static const char * const regulator_names[] = {
 	"vdda",
@@ -280,6 +284,7 @@ static int truly_35597_power_on(struct truly_nt35597 *ctx)
 	gpiod_set_value(ctx->reset_gpio, 1);
 	usleep_range(10000, 20000);
 	gpiod_set_value(ctx->reset_gpio, 0);
+	usleep_range(10000, 20000);
 
 	return 0;
 }
@@ -449,9 +454,9 @@ static int truly_nt35597_enable(struct drm_panel *panel)
 	return 0;
 }
 
-static int truly_nt35597_get_modes(struct drm_panel *panel)
+static int truly_nt35597_get_modes(struct drm_panel *panel,
+				   struct drm_connector *connector)
 {
-	struct drm_connector *connector = panel->connector;
 	struct truly_nt35597 *ctx = panel_to_ctx(panel);
 	struct drm_display_mode *mode;
 	const struct nt35597_config *config;
@@ -513,9 +518,8 @@ static int truly_nt35597_panel_add(struct truly_nt35597 *ctx)
 	/* dual port */
 	gpiod_set_value(ctx->mode_gpio, 0);
 
-	drm_panel_init(&ctx->panel);
-	ctx->panel.dev = dev;
-	ctx->panel.funcs = &truly_nt35597_drm_funcs;
+	drm_panel_init(&ctx->panel, dev, &truly_nt35597_drm_funcs,
+		       DRM_MODE_CONNECTOR_DSI);
 	drm_panel_add(&ctx->panel);
 
 	return 0;

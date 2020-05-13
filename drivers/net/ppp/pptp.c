@@ -155,7 +155,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0, IPPROTO_GRE,
-				   RT_TOS(0), 0);
+				   RT_TOS(0), sk->sk_bound_dev_if);
 	if (IS_ERR(rt))
 		goto tx_error;
 
@@ -238,7 +238,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	skb_dst_drop(skb);
 	skb_dst_set(skb, &rt->dst);
 
-	nf_reset(skb);
+	nf_reset_ct(skb);
 
 	skb->ip_summed = CHECKSUM_NONE;
 	ip_select_ident(net, skb, NULL);
@@ -358,7 +358,7 @@ static int pptp_rcv(struct sk_buff *skb)
 	po = lookup_chan(htons(header->call_id), iph->saddr);
 	if (po) {
 		skb_dst_drop(skb);
-		nf_reset(skb);
+		nf_reset_ct(skb);
 		return sk_receive_skb(sk_pppox(po), skb, 0);
 	}
 drop:
@@ -444,7 +444,8 @@ static int pptp_connect(struct socket *sock, struct sockaddr *uservaddr,
 				   opt->dst_addr.sin_addr.s_addr,
 				   opt->src_addr.sin_addr.s_addr,
 				   0, 0,
-				   IPPROTO_GRE, RT_CONN_FLAGS(sk), 0);
+				   IPPROTO_GRE, RT_CONN_FLAGS(sk),
+				   sk->sk_bound_dev_if);
 	if (IS_ERR(rt)) {
 		error = -EHOSTUNREACH;
 		goto end;
@@ -623,6 +624,9 @@ static const struct proto_ops pptp_ops = {
 	.recvmsg    = sock_no_recvmsg,
 	.mmap       = sock_no_mmap,
 	.ioctl      = pppox_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = pppox_compat_ioctl,
+#endif
 };
 
 static const struct pppox_proto pppox_pptp_proto = {

@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* (C) 1999-2001 Paul `Rusty' Russell
  * (C) 2002-2004 Netfilter Core Team <coreteam@netfilter.org>
  * (C) 2006-2012 Patrick McHardy <kaber@trash.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/types.h>
@@ -84,6 +81,18 @@ static bool udp_error(struct sk_buff *skb,
 	return false;
 }
 
+static void nf_conntrack_udp_refresh_unreplied(struct nf_conn *ct,
+					       struct sk_buff *skb,
+					       enum ip_conntrack_info ctinfo,
+					       u32 extra_jiffies)
+{
+	if (unlikely(ctinfo == IP_CT_ESTABLISHED_REPLY &&
+		     ct->status & IPS_NAT_CLASH))
+		nf_ct_kill(ct);
+	else
+		nf_ct_refresh_acct(ct, ctinfo, skb, extra_jiffies);
+}
+
 /* Returns verdict for packet, and may modify conntracktype */
 int nf_conntrack_udp_packet(struct nf_conn *ct,
 			    struct sk_buff *skb,
@@ -119,8 +128,8 @@ int nf_conntrack_udp_packet(struct nf_conn *ct,
 		if (!test_and_set_bit(IPS_ASSURED_BIT, &ct->status))
 			nf_conntrack_event_cache(IPCT_ASSURED, ct);
 	} else {
-		nf_ct_refresh_acct(ct, ctinfo, skb,
-				   timeouts[UDP_CT_UNREPLIED]);
+		nf_conntrack_udp_refresh_unreplied(ct, skb, ctinfo,
+						   timeouts[UDP_CT_UNREPLIED]);
 	}
 	return NF_ACCEPT;
 }
@@ -201,8 +210,8 @@ int nf_conntrack_udplite_packet(struct nf_conn *ct,
 		if (!test_and_set_bit(IPS_ASSURED_BIT, &ct->status))
 			nf_conntrack_event_cache(IPCT_ASSURED, ct);
 	} else {
-		nf_ct_refresh_acct(ct, ctinfo, skb,
-				   timeouts[UDP_CT_UNREPLIED]);
+		nf_conntrack_udp_refresh_unreplied(ct, skb, ctinfo,
+						   timeouts[UDP_CT_UNREPLIED]);
 	}
 	return NF_ACCEPT;
 }

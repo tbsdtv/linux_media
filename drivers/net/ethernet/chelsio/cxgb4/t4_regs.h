@@ -487,6 +487,12 @@
 #define ERROR_QID_M    0x1ffffU
 #define ERROR_QID_G(x) (((x) >> ERROR_QID_S) & ERROR_QID_M)
 
+#define SGE_INT_CAUSE5_A        0x110c
+
+#define ERR_T_RXCRC_S    31
+#define ERR_T_RXCRC_V(x) ((x) << ERR_T_RXCRC_S)
+#define ERR_T_RXCRC_F    ERR_T_RXCRC_V(1U)
+
 #define HP_INT_THRESH_S    28
 #define HP_INT_THRESH_M    0xfU
 #define HP_INT_THRESH_V(x) ((x) << HP_INT_THRESH_S)
@@ -1333,6 +1339,10 @@
 #define TP_DBG_LA_CONFIG_A	0x7ed4
 #define TP_OUT_CONFIG_A		0x7d04
 #define TP_GLOBAL_CONFIG_A	0x7d08
+
+#define ACTIVEFILTERCOUNTS_S    22
+#define ACTIVEFILTERCOUNTS_V(x) ((x) << ACTIVEFILTERCOUNTS_S)
+#define ACTIVEFILTERCOUNTS_F    ACTIVEFILTERCOUNTS_V(1U)
 
 #define TP_CMM_TCB_BASE_A 0x7d10
 #define TP_CMM_MM_BASE_A 0x7d14

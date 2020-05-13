@@ -2900,14 +2900,11 @@ int ntfs_setattr(struct dentry *dentry, struct iattr *attr)
 		}
 	}
 	if (ia_valid & ATTR_ATIME)
-		vi->i_atime = timespec64_trunc(attr->ia_atime,
-					       vi->i_sb->s_time_gran);
+		vi->i_atime = attr->ia_atime;
 	if (ia_valid & ATTR_MTIME)
-		vi->i_mtime = timespec64_trunc(attr->ia_mtime,
-					       vi->i_sb->s_time_gran);
+		vi->i_mtime = attr->ia_mtime;
 	if (ia_valid & ATTR_CTIME)
-		vi->i_ctime = timespec64_trunc(attr->ia_ctime,
-					       vi->i_sb->s_time_gran);
+		vi->i_ctime = attr->ia_ctime;
 	mark_inode_dirty(vi);
 out:
 	return err;

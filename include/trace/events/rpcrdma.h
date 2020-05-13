@@ -85,6 +85,44 @@ DECLARE_EVENT_CLASS(xprtrdma_rxprt,
 				),					\
 				TP_ARGS(r_xprt))
 
+DECLARE_EVENT_CLASS(xprtrdma_connect_class,
+	TP_PROTO(
+		const struct rpcrdma_xprt *r_xprt,
+		int rc
+	),
+
+	TP_ARGS(r_xprt, rc),
+
+	TP_STRUCT__entry(
+		__field(const void *, r_xprt)
+		__field(int, rc)
+		__field(int, connect_status)
+		__string(addr, rpcrdma_addrstr(r_xprt))
+		__string(port, rpcrdma_portstr(r_xprt))
+	),
+
+	TP_fast_assign(
+		__entry->r_xprt = r_xprt;
+		__entry->rc = rc;
+		__entry->connect_status = r_xprt->rx_ep->re_connect_status;
+		__assign_str(addr, rpcrdma_addrstr(r_xprt));
+		__assign_str(port, rpcrdma_portstr(r_xprt));
+	),
+
+	TP_printk("peer=[%s]:%s r_xprt=%p: rc=%d connection status=%d",
+		__get_str(addr), __get_str(port), __entry->r_xprt,
+		__entry->rc, __entry->connect_status
+	)
+);
+
+#define DEFINE_CONN_EVENT(name)						\
+		DEFINE_EVENT(xprtrdma_connect_class, xprtrdma_##name,	\
+				TP_PROTO(				\
+					const struct rpcrdma_xprt *r_xprt, \
+					int rc				\
+				),					\
+				TP_ARGS(r_xprt, rc))
+
 DECLARE_EVENT_CLASS(xprtrdma_rdch_event,
 	TP_PROTO(
 		const struct rpc_task *task,
@@ -181,18 +219,6 @@ DECLARE_EVENT_CLASS(xprtrdma_wrch_event,
 				),					\
 				TP_ARGS(task, mr, nsegs))
 
-TRACE_DEFINE_ENUM(FRWR_IS_INVALID);
-TRACE_DEFINE_ENUM(FRWR_IS_VALID);
-TRACE_DEFINE_ENUM(FRWR_FLUSHED_FR);
-TRACE_DEFINE_ENUM(FRWR_FLUSHED_LI);
-
-#define xprtrdma_show_frwr_state(x)					\
-		__print_symbolic(x,					\
-				{ FRWR_IS_INVALID, "INVALID" },		\
-				{ FRWR_IS_VALID, "VALID" },		\
-				{ FRWR_FLUSHED_FR, "FLUSHED_FR" },	\
-				{ FRWR_FLUSHED_LI, "FLUSHED_LI" })
-
 DECLARE_EVENT_CLASS(xprtrdma_frwr_done,
 	TP_PROTO(
 		const struct ib_wc *wc,
@@ -202,23 +228,20 @@ DECLARE_EVENT_CLASS(xprtrdma_frwr_done,
 	TP_ARGS(wc, frwr),
 
 	TP_STRUCT__entry(
-		__field(const void *, mr)
-		__field(unsigned int, state)
+		__field(u32, mr_id)
 		__field(unsigned int, status)
 		__field(unsigned int, vendor_err)
 	),
 
 	TP_fast_assign(
-		__entry->mr = container_of(frwr, struct rpcrdma_mr, frwr);
-		__entry->state = frwr->fr_state;
+		__entry->mr_id = frwr->fr_mr->res.id;
 		__entry->status = wc->status;
 		__entry->vendor_err = __entry->status ? wc->vendor_err : 0;
 	),
 
 	TP_printk(
-		"mr=%p state=%s: %s (%u/0x%x)",
-		__entry->mr, xprtrdma_show_frwr_state(__entry->state),
-		rdma_show_wc_status(__entry->status),
+		"mr.id=%u: %s (%u/0x%x)",
+		__entry->mr_id, rdma_show_wc_status(__entry->status),
 		__entry->status, __entry->vendor_err
 	)
 );
@@ -251,7 +274,8 @@ DECLARE_EVENT_CLASS(xprtrdma_mr,
 	TP_ARGS(mr),
 
 	TP_STRUCT__entry(
-		__field(const void *, mr)
+		__field(u32, mr_id)
+		__field(int, nents)
 		__field(u32, handle)
 		__field(u32, length)
 		__field(u64, offset)
@@ -259,15 +283,16 @@ DECLARE_EVENT_CLASS(xprtrdma_mr,
 	),
 
 	TP_fast_assign(
-		__entry->mr = mr;
+		__entry->mr_id  = mr->frwr.fr_mr->res.id;
+		__entry->nents  = mr->mr_nents;
 		__entry->handle = mr->mr_handle;
 		__entry->length = mr->mr_length;
 		__entry->offset = mr->mr_offset;
 		__entry->dir    = mr->mr_dir;
 	),
 
-	TP_printk("mr=%p %u@0x%016llx:0x%08x (%s)",
-		__entry->mr, __entry->length,
+	TP_printk("mr.id=%u nents=%d %u@0x%016llx:0x%08x (%s)",
+		__entry->mr_id, __entry->nents, __entry->length,
 		(unsigned long long)__entry->offset, __entry->handle,
 		xprtrdma_show_direction(__entry->dir)
 	)
@@ -317,107 +342,141 @@ DECLARE_EVENT_CLASS(xprtrdma_cb_event,
  ** Connection events
  **/
 
-TRACE_EVENT(xprtrdma_cm_event,
+TRACE_EVENT(xprtrdma_inline_thresh,
 	TP_PROTO(
-		const struct rpcrdma_xprt *r_xprt,
-		struct rdma_cm_event *event
+		const struct rpcrdma_ep *ep
 	),
 
-	TP_ARGS(r_xprt, event),
+	TP_ARGS(ep),
 
 	TP_STRUCT__entry(
-		__field(const void *, r_xprt)
-		__field(unsigned int, event)
-		__field(int, status)
-		__string(addr, rpcrdma_addrstr(r_xprt))
-		__string(port, rpcrdma_portstr(r_xprt))
+		__field(unsigned int, inline_send)
+		__field(unsigned int, inline_recv)
+		__field(unsigned int, max_send)
+		__field(unsigned int, max_recv)
+		__array(unsigned char, srcaddr, sizeof(struct sockaddr_in6))
+		__array(unsigned char, dstaddr, sizeof(struct sockaddr_in6))
 	),
 
 	TP_fast_assign(
-		__entry->r_xprt = r_xprt;
-		__entry->event = event->event;
-		__entry->status = event->status;
-		__assign_str(addr, rpcrdma_addrstr(r_xprt));
-		__assign_str(port, rpcrdma_portstr(r_xprt));
+		const struct rdma_cm_id *id = ep->re_id;
+
+		__entry->inline_send = ep->re_inline_send;
+		__entry->inline_recv = ep->re_inline_recv;
+		__entry->max_send = ep->re_max_inline_send;
+		__entry->max_recv = ep->re_max_inline_recv;
+		memcpy(__entry->srcaddr, &id->route.addr.src_addr,
+		       sizeof(struct sockaddr_in6));
+		memcpy(__entry->dstaddr, &id->route.addr.dst_addr,
+		       sizeof(struct sockaddr_in6));
 	),
 
-	TP_printk("peer=[%s]:%s r_xprt=%p: %s (%u/%d)",
-		__get_str(addr), __get_str(port),
-		__entry->r_xprt, rdma_show_cm_event(__entry->event),
-		__entry->event, __entry->status
+	TP_printk("%pISpc -> %pISpc neg send/recv=%u/%u, calc send/recv=%u/%u",
+		__entry->srcaddr, __entry->dstaddr,
+		__entry->inline_send, __entry->inline_recv,
+		__entry->max_send, __entry->max_recv
 	)
 );
 
-TRACE_EVENT(xprtrdma_disconnect,
-	TP_PROTO(
-		const struct rpcrdma_xprt *r_xprt,
-		int status
-	),
+DEFINE_CONN_EVENT(connect);
+DEFINE_CONN_EVENT(disconnect);
+DEFINE_CONN_EVENT(flush_dct);
 
-	TP_ARGS(r_xprt, status),
-
-	TP_STRUCT__entry(
-		__field(const void *, r_xprt)
-		__field(int, status)
-		__field(int, connected)
-		__string(addr, rpcrdma_addrstr(r_xprt))
-		__string(port, rpcrdma_portstr(r_xprt))
-	),
-
-	TP_fast_assign(
-		__entry->r_xprt = r_xprt;
-		__entry->status = status;
-		__entry->connected = r_xprt->rx_ep.rep_connected;
-		__assign_str(addr, rpcrdma_addrstr(r_xprt));
-		__assign_str(port, rpcrdma_portstr(r_xprt));
-	),
-
-	TP_printk("peer=[%s]:%s r_xprt=%p: status=%d %sconnected",
-		__get_str(addr), __get_str(port),
-		__entry->r_xprt, __entry->status,
-		__entry->connected == 1 ? "still " : "dis"
-	)
-);
-
-DEFINE_RXPRT_EVENT(xprtrdma_conn_start);
-DEFINE_RXPRT_EVENT(xprtrdma_conn_tout);
 DEFINE_RXPRT_EVENT(xprtrdma_create);
 DEFINE_RXPRT_EVENT(xprtrdma_op_destroy);
-DEFINE_RXPRT_EVENT(xprtrdma_remove);
-DEFINE_RXPRT_EVENT(xprtrdma_reinsert);
-DEFINE_RXPRT_EVENT(xprtrdma_reconnect);
 DEFINE_RXPRT_EVENT(xprtrdma_op_inject_dsc);
 DEFINE_RXPRT_EVENT(xprtrdma_op_close);
-DEFINE_RXPRT_EVENT(xprtrdma_op_connect);
+DEFINE_RXPRT_EVENT(xprtrdma_op_setport);
+
+TRACE_EVENT(xprtrdma_op_connect,
+	TP_PROTO(
+		const struct rpcrdma_xprt *r_xprt,
+		unsigned long delay
+	),
+
+	TP_ARGS(r_xprt, delay),
+
+	TP_STRUCT__entry(
+		__field(const void *, r_xprt)
+		__field(unsigned long, delay)
+		__string(addr, rpcrdma_addrstr(r_xprt))
+		__string(port, rpcrdma_portstr(r_xprt))
+	),
+
+	TP_fast_assign(
+		__entry->r_xprt = r_xprt;
+		__entry->delay = delay;
+		__assign_str(addr, rpcrdma_addrstr(r_xprt));
+		__assign_str(port, rpcrdma_portstr(r_xprt));
+	),
+
+	TP_printk("peer=[%s]:%s r_xprt=%p delay=%lu",
+		__get_str(addr), __get_str(port), __entry->r_xprt,
+		__entry->delay
+	)
+);
+
+
+TRACE_EVENT(xprtrdma_op_set_cto,
+	TP_PROTO(
+		const struct rpcrdma_xprt *r_xprt,
+		unsigned long connect,
+		unsigned long reconnect
+	),
+
+	TP_ARGS(r_xprt, connect, reconnect),
+
+	TP_STRUCT__entry(
+		__field(const void *, r_xprt)
+		__field(unsigned long, connect)
+		__field(unsigned long, reconnect)
+		__string(addr, rpcrdma_addrstr(r_xprt))
+		__string(port, rpcrdma_portstr(r_xprt))
+	),
+
+	TP_fast_assign(
+		__entry->r_xprt = r_xprt;
+		__entry->connect = connect;
+		__entry->reconnect = reconnect;
+		__assign_str(addr, rpcrdma_addrstr(r_xprt));
+		__assign_str(port, rpcrdma_portstr(r_xprt));
+	),
+
+	TP_printk("peer=[%s]:%s r_xprt=%p: connect=%lu reconnect=%lu",
+		__get_str(addr), __get_str(port), __entry->r_xprt,
+		__entry->connect / HZ, __entry->reconnect / HZ
+	)
+);
 
 TRACE_EVENT(xprtrdma_qp_event,
 	TP_PROTO(
-		const struct rpcrdma_xprt *r_xprt,
+		const struct rpcrdma_ep *ep,
 		const struct ib_event *event
 	),
 
-	TP_ARGS(r_xprt, event),
+	TP_ARGS(ep, event),
 
 	TP_STRUCT__entry(
-		__field(const void *, r_xprt)
-		__field(unsigned int, event)
+		__field(unsigned long, event)
 		__string(name, event->device->name)
-		__string(addr, rpcrdma_addrstr(r_xprt))
-		__string(port, rpcrdma_portstr(r_xprt))
+		__array(unsigned char, srcaddr, sizeof(struct sockaddr_in6))
+		__array(unsigned char, dstaddr, sizeof(struct sockaddr_in6))
 	),
 
 	TP_fast_assign(
-		__entry->r_xprt = r_xprt;
+		const struct rdma_cm_id *id = ep->re_id;
+
 		__entry->event = event->event;
 		__assign_str(name, event->device->name);
-		__assign_str(addr, rpcrdma_addrstr(r_xprt));
-		__assign_str(port, rpcrdma_portstr(r_xprt));
+		memcpy(__entry->srcaddr, &id->route.addr.src_addr,
+		       sizeof(struct sockaddr_in6));
+		memcpy(__entry->dstaddr, &id->route.addr.dst_addr,
+		       sizeof(struct sockaddr_in6));
 	),
 
-	TP_printk("peer=[%s]:%s r_xprt=%p: dev %s: %s (%u)",
-		__get_str(addr), __get_str(port), __entry->r_xprt,
-		__get_str(name), rdma_show_ib_event(__entry->event),
-		__entry->event
+	TP_printk("%pISpc -> %pISpc device=%s %s (%lu)",
+		__entry->srcaddr, __entry->dstaddr, __get_str(name),
+		rdma_show_ib_event(__entry->event), __entry->event
 	)
 );
 
@@ -435,26 +494,89 @@ TRACE_EVENT(xprtrdma_createmrs,
 
 	TP_STRUCT__entry(
 		__field(const void *, r_xprt)
+		__string(addr, rpcrdma_addrstr(r_xprt))
+		__string(port, rpcrdma_portstr(r_xprt))
 		__field(unsigned int, count)
 	),
 
 	TP_fast_assign(
 		__entry->r_xprt = r_xprt;
 		__entry->count = count;
+		__assign_str(addr, rpcrdma_addrstr(r_xprt));
+		__assign_str(port, rpcrdma_portstr(r_xprt));
 	),
 
-	TP_printk("r_xprt=%p: created %u MRs",
-		__entry->r_xprt, __entry->count
+	TP_printk("peer=[%s]:%s r_xprt=%p: created %u MRs",
+		__get_str(addr), __get_str(port), __entry->r_xprt,
+		__entry->count
 	)
 );
 
-DEFINE_RXPRT_EVENT(xprtrdma_nomrs);
+TRACE_EVENT(xprtrdma_mr_get,
+	TP_PROTO(
+		const struct rpcrdma_req *req
+	),
+
+	TP_ARGS(req),
+
+	TP_STRUCT__entry(
+		__field(const void *, req)
+		__field(unsigned int, task_id)
+		__field(unsigned int, client_id)
+		__field(u32, xid)
+	),
+
+	TP_fast_assign(
+		const struct rpc_rqst *rqst = &req->rl_slot;
+
+		__entry->req = req;
+		__entry->task_id = rqst->rq_task->tk_pid;
+		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
+		__entry->xid = be32_to_cpu(rqst->rq_xid);
+	),
+
+	TP_printk("task:%u@%u xid=0x%08x req=%p",
+		__entry->task_id, __entry->client_id, __entry->xid,
+		__entry->req
+	)
+);
+
+TRACE_EVENT(xprtrdma_nomrs,
+	TP_PROTO(
+		const struct rpcrdma_req *req
+	),
+
+	TP_ARGS(req),
+
+	TP_STRUCT__entry(
+		__field(const void *, req)
+		__field(unsigned int, task_id)
+		__field(unsigned int, client_id)
+		__field(u32, xid)
+	),
+
+	TP_fast_assign(
+		const struct rpc_rqst *rqst = &req->rl_slot;
+
+		__entry->req = req;
+		__entry->task_id = rqst->rq_task->tk_pid;
+		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
+		__entry->xid = be32_to_cpu(rqst->rq_xid);
+	),
+
+	TP_printk("task:%u@%u xid=0x%08x req=%p",
+		__entry->task_id, __entry->client_id, __entry->xid,
+		__entry->req
+	)
+);
 
 DEFINE_RDCH_EVENT(read);
 DEFINE_WRCH_EVENT(write);
 DEFINE_WRCH_EVENT(reply);
 
 TRACE_DEFINE_ENUM(rpcrdma_noch);
+TRACE_DEFINE_ENUM(rpcrdma_noch_pullup);
+TRACE_DEFINE_ENUM(rpcrdma_noch_mapped);
 TRACE_DEFINE_ENUM(rpcrdma_readch);
 TRACE_DEFINE_ENUM(rpcrdma_areadch);
 TRACE_DEFINE_ENUM(rpcrdma_writech);
@@ -463,6 +585,8 @@ TRACE_DEFINE_ENUM(rpcrdma_replych);
 #define xprtrdma_show_chunktype(x)					\
 		__print_symbolic(x,					\
 				{ rpcrdma_noch, "inline" },		\
+				{ rpcrdma_noch_pullup, "pullup" },	\
+				{ rpcrdma_noch_mapped, "mapped" },	\
 				{ rpcrdma_readch, "read list" },	\
 				{ rpcrdma_areadch, "*read list" },	\
 				{ rpcrdma_writech, "write list" },	\
@@ -470,13 +594,12 @@ TRACE_DEFINE_ENUM(rpcrdma_replych);
 
 TRACE_EVENT(xprtrdma_marshal,
 	TP_PROTO(
-		const struct rpc_rqst *rqst,
-		unsigned int hdrlen,
+		const struct rpcrdma_req *req,
 		unsigned int rtype,
 		unsigned int wtype
 	),
 
-	TP_ARGS(rqst, hdrlen, rtype, wtype),
+	TP_ARGS(req, rtype, wtype),
 
 	TP_STRUCT__entry(
 		__field(unsigned int, task_id)
@@ -491,10 +614,12 @@ TRACE_EVENT(xprtrdma_marshal,
 	),
 
 	TP_fast_assign(
+		const struct rpc_rqst *rqst = &req->rl_slot;
+
 		__entry->task_id = rqst->rq_task->tk_pid;
 		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
 		__entry->xid = be32_to_cpu(rqst->rq_xid);
-		__entry->hdrlen = hdrlen;
+		__entry->hdrlen = req->rl_hdrbuf.len;
 		__entry->headlen = rqst->rq_snd_buf.head[0].iov_len;
 		__entry->pagelen = rqst->rq_snd_buf.page_len;
 		__entry->taillen = rqst->rq_snd_buf.tail[0].iov_len;
@@ -538,6 +663,33 @@ TRACE_EVENT(xprtrdma_marshal_failed,
 	)
 );
 
+TRACE_EVENT(xprtrdma_prepsend_failed,
+	TP_PROTO(const struct rpc_rqst *rqst,
+		 int ret
+	),
+
+	TP_ARGS(rqst, ret),
+
+	TP_STRUCT__entry(
+		__field(unsigned int, task_id)
+		__field(unsigned int, client_id)
+		__field(u32, xid)
+		__field(int, ret)
+	),
+
+	TP_fast_assign(
+		__entry->task_id = rqst->rq_task->tk_pid;
+		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
+		__entry->xid = be32_to_cpu(rqst->rq_xid);
+		__entry->ret = ret;
+	),
+
+	TP_printk("task:%u@%u xid=0x%08x: ret=%d",
+		__entry->task_id, __entry->client_id, __entry->xid,
+		__entry->ret
+	)
+);
+
 TRACE_EVENT(xprtrdma_post_send,
 	TP_PROTO(
 		const struct rpcrdma_req *req,
@@ -548,6 +700,7 @@ TRACE_EVENT(xprtrdma_post_send,
 
 	TP_STRUCT__entry(
 		__field(const void *, req)
+		__field(const void *, sc)
 		__field(unsigned int, task_id)
 		__field(unsigned int, client_id)
 		__field(int, num_sge)
@@ -559,17 +712,18 @@ TRACE_EVENT(xprtrdma_post_send,
 		const struct rpc_rqst *rqst = &req->rl_slot;
 
 		__entry->task_id = rqst->rq_task->tk_pid;
-		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
+		__entry->client_id = rqst->rq_task->tk_client ?
+				     rqst->rq_task->tk_client->cl_clid : -1;
 		__entry->req = req;
-		__entry->num_sge = req->rl_sendctx->sc_wr.num_sge;
-		__entry->signaled = req->rl_sendctx->sc_wr.send_flags &
-				    IB_SEND_SIGNALED;
+		__entry->sc = req->rl_sendctx;
+		__entry->num_sge = req->rl_wr.num_sge;
+		__entry->signaled = req->rl_wr.send_flags & IB_SEND_SIGNALED;
 		__entry->status = status;
 	),
 
-	TP_printk("task:%u@%u req=%p (%d SGE%s) %sstatus=%d",
+	TP_printk("task:%u@%u req=%p sc=%p (%d SGE%s) %sstatus=%d",
 		__entry->task_id, __entry->client_id,
-		__entry->req, __entry->num_sge,
+		__entry->req, __entry->sc, __entry->num_sge,
 		(__entry->num_sge == 1 ? "" : "s"),
 		(__entry->signaled ? "signaled " : ""),
 		__entry->status
@@ -578,21 +732,21 @@ TRACE_EVENT(xprtrdma_post_send,
 
 TRACE_EVENT(xprtrdma_post_recv,
 	TP_PROTO(
-		const struct ib_cqe *cqe
+		const struct rpcrdma_rep *rep
 	),
 
-	TP_ARGS(cqe),
+	TP_ARGS(rep),
 
 	TP_STRUCT__entry(
-		__field(const void *, cqe)
+		__field(const void *, rep)
 	),
 
 	TP_fast_assign(
-		__entry->cqe = cqe;
+		__entry->rep = rep;
 	),
 
-	TP_printk("cqe=%p",
-		__entry->cqe
+	TP_printk("rep=%p",
+		__entry->rep
 	)
 );
 
@@ -618,7 +772,7 @@ TRACE_EVENT(xprtrdma_post_recvs,
 		__entry->r_xprt = r_xprt;
 		__entry->count = count;
 		__entry->status = status;
-		__entry->posted = r_xprt->rx_ep.rep_receive_count;
+		__entry->posted = r_xprt->rx_ep->re_receive_count;
 		__assign_str(addr, rpcrdma_addrstr(r_xprt));
 		__assign_str(port, rpcrdma_portstr(r_xprt));
 	),
@@ -626,6 +780,31 @@ TRACE_EVENT(xprtrdma_post_recvs,
 	TP_printk("peer=[%s]:%s r_xprt=%p: %u new recvs, %d active (rc %d)",
 		__get_str(addr), __get_str(port), __entry->r_xprt,
 		__entry->count, __entry->posted, __entry->status
+	)
+);
+
+TRACE_EVENT(xprtrdma_post_linv,
+	TP_PROTO(
+		const struct rpcrdma_req *req,
+		int status
+	),
+
+	TP_ARGS(req, status),
+
+	TP_STRUCT__entry(
+		__field(const void *, req)
+		__field(int, status)
+		__field(u32, xid)
+	),
+
+	TP_fast_assign(
+		__entry->req = req;
+		__entry->status = status;
+		__entry->xid = be32_to_cpu(req->rl_slot.rq_xid);
+	),
+
+	TP_printk("req=%p xid=0x%08x status=%d",
+		__entry->req, __entry->xid, __entry->status
 	)
 );
 
@@ -643,6 +822,7 @@ TRACE_EVENT(xprtrdma_wc_send,
 
 	TP_STRUCT__entry(
 		__field(const void *, req)
+		__field(const void *, sc)
 		__field(unsigned int, unmap_count)
 		__field(unsigned int, status)
 		__field(unsigned int, vendor_err)
@@ -650,13 +830,14 @@ TRACE_EVENT(xprtrdma_wc_send,
 
 	TP_fast_assign(
 		__entry->req = sc->sc_req;
+		__entry->sc = sc;
 		__entry->unmap_count = sc->sc_unmap_count;
 		__entry->status = wc->status;
 		__entry->vendor_err = __entry->status ? wc->vendor_err : 0;
 	),
 
-	TP_printk("req=%p, unmapped %u pages: %s (%u/0x%x)",
-		__entry->req, __entry->unmap_count,
+	TP_printk("req=%p sc=%p unmapped=%u: %s (%u/0x%x)",
+		__entry->req, __entry->sc, __entry->unmap_count,
 		rdma_show_wc_status(__entry->status),
 		__entry->status, __entry->vendor_err
 	)
@@ -670,14 +851,15 @@ TRACE_EVENT(xprtrdma_wc_receive,
 	TP_ARGS(wc),
 
 	TP_STRUCT__entry(
-		__field(const void *, cqe)
+		__field(const void *, rep)
 		__field(u32, byte_len)
 		__field(unsigned int, status)
 		__field(u32, vendor_err)
 	),
 
 	TP_fast_assign(
-		__entry->cqe = wc->wr_cqe;
+		__entry->rep = container_of(wc->wr_cqe, struct rpcrdma_rep,
+					    rr_cqe);
 		__entry->status = wc->status;
 		if (wc->status) {
 			__entry->byte_len = 0;
@@ -688,8 +870,8 @@ TRACE_EVENT(xprtrdma_wc_receive,
 		}
 	),
 
-	TP_printk("cqe=%p %u bytes: %s (%u/0x%x)",
-		__entry->cqe, __entry->byte_len,
+	TP_printk("rep=%p %u bytes: %s (%u/0x%x)",
+		__entry->rep, __entry->byte_len,
 		rdma_show_wc_status(__entry->status),
 		__entry->status, __entry->vendor_err
 	)
@@ -698,6 +880,7 @@ TRACE_EVENT(xprtrdma_wc_receive,
 DEFINE_FRWR_DONE_EVENT(xprtrdma_wc_fastreg);
 DEFINE_FRWR_DONE_EVENT(xprtrdma_wc_li);
 DEFINE_FRWR_DONE_EVENT(xprtrdma_wc_li_wake);
+DEFINE_FRWR_DONE_EVENT(xprtrdma_wc_li_done);
 
 TRACE_EVENT(xprtrdma_frwr_alloc,
 	TP_PROTO(
@@ -708,17 +891,17 @@ TRACE_EVENT(xprtrdma_frwr_alloc,
 	TP_ARGS(mr, rc),
 
 	TP_STRUCT__entry(
-		__field(const void *, mr)
+		__field(u32, mr_id)
 		__field(int, rc)
 	),
 
 	TP_fast_assign(
-		__entry->mr = mr;
-		__entry->rc	= rc;
+		__entry->mr_id = mr->frwr.fr_mr->res.id;
+		__entry->rc = rc;
 	),
 
-	TP_printk("mr=%p: rc=%d",
-		__entry->mr, __entry->rc
+	TP_printk("mr.id=%u: rc=%d",
+		__entry->mr_id, __entry->rc
 	)
 );
 
@@ -731,7 +914,8 @@ TRACE_EVENT(xprtrdma_frwr_dereg,
 	TP_ARGS(mr, rc),
 
 	TP_STRUCT__entry(
-		__field(const void *, mr)
+		__field(u32, mr_id)
+		__field(int, nents)
 		__field(u32, handle)
 		__field(u32, length)
 		__field(u64, offset)
@@ -740,7 +924,8 @@ TRACE_EVENT(xprtrdma_frwr_dereg,
 	),
 
 	TP_fast_assign(
-		__entry->mr = mr;
+		__entry->mr_id  = mr->frwr.fr_mr->res.id;
+		__entry->nents  = mr->mr_nents;
 		__entry->handle = mr->mr_handle;
 		__entry->length = mr->mr_length;
 		__entry->offset = mr->mr_offset;
@@ -748,8 +933,8 @@ TRACE_EVENT(xprtrdma_frwr_dereg,
 		__entry->rc	= rc;
 	),
 
-	TP_printk("mr=%p %u@0x%016llx:0x%08x (%s): rc=%d",
-		__entry->mr, __entry->length,
+	TP_printk("mr.id=%u nents=%d %u@0x%016llx:0x%08x (%s): rc=%d",
+		__entry->mr_id, __entry->nents, __entry->length,
 		(unsigned long long)__entry->offset, __entry->handle,
 		xprtrdma_show_direction(__entry->dir),
 		__entry->rc
@@ -765,21 +950,21 @@ TRACE_EVENT(xprtrdma_frwr_sgerr,
 	TP_ARGS(mr, sg_nents),
 
 	TP_STRUCT__entry(
-		__field(const void *, mr)
+		__field(u32, mr_id)
 		__field(u64, addr)
 		__field(u32, dir)
 		__field(int, nents)
 	),
 
 	TP_fast_assign(
-		__entry->mr = mr;
+		__entry->mr_id = mr->frwr.fr_mr->res.id;
 		__entry->addr = mr->mr_sg->dma_address;
 		__entry->dir = mr->mr_dir;
 		__entry->nents = sg_nents;
 	),
 
-	TP_printk("mr=%p dma addr=0x%llx (%s) sg_nents=%d",
-		__entry->mr, __entry->addr,
+	TP_printk("mr.id=%u DMA addr=0x%llx (%s) sg_nents=%d",
+		__entry->mr_id, __entry->addr,
 		xprtrdma_show_direction(__entry->dir),
 		__entry->nents
 	)
@@ -794,7 +979,7 @@ TRACE_EVENT(xprtrdma_frwr_maperr,
 	TP_ARGS(mr, num_mapped),
 
 	TP_STRUCT__entry(
-		__field(const void *, mr)
+		__field(u32, mr_id)
 		__field(u64, addr)
 		__field(u32, dir)
 		__field(int, num_mapped)
@@ -802,15 +987,15 @@ TRACE_EVENT(xprtrdma_frwr_maperr,
 	),
 
 	TP_fast_assign(
-		__entry->mr = mr;
+		__entry->mr_id = mr->frwr.fr_mr->res.id;
 		__entry->addr = mr->mr_sg->dma_address;
 		__entry->dir = mr->mr_dir;
 		__entry->num_mapped = num_mapped;
 		__entry->nents = mr->mr_nents;
 	),
 
-	TP_printk("mr=%p dma addr=0x%llx (%s) nents=%d of %d",
-		__entry->mr, __entry->addr,
+	TP_printk("mr.id=%u DMA addr=0x%llx (%s) nents=%d of %d",
+		__entry->mr_id, __entry->addr,
 		xprtrdma_show_direction(__entry->dir),
 		__entry->num_mapped, __entry->nents
 	)
@@ -819,7 +1004,7 @@ TRACE_EVENT(xprtrdma_frwr_maperr,
 DEFINE_MR_EVENT(localinv);
 DEFINE_MR_EVENT(map);
 DEFINE_MR_EVENT(unmap);
-DEFINE_MR_EVENT(remoteinv);
+DEFINE_MR_EVENT(reminv);
 DEFINE_MR_EVENT(recycle);
 
 TRACE_EVENT(xprtrdma_dma_maperr,
@@ -913,66 +1098,32 @@ DEFINE_REPLY_EVENT(xprtrdma_reply_hdr);
 TRACE_EVENT(xprtrdma_fixup,
 	TP_PROTO(
 		const struct rpc_rqst *rqst,
-		int len,
-		int hdrlen
+		unsigned long fixup
 	),
 
-	TP_ARGS(rqst, len, hdrlen),
+	TP_ARGS(rqst, fixup),
 
 	TP_STRUCT__entry(
 		__field(unsigned int, task_id)
 		__field(unsigned int, client_id)
-		__field(const void *, base)
-		__field(int, len)
-		__field(int, hdrlen)
+		__field(unsigned long, fixup)
+		__field(size_t, headlen)
+		__field(unsigned int, pagelen)
+		__field(size_t, taillen)
 	),
 
 	TP_fast_assign(
 		__entry->task_id = rqst->rq_task->tk_pid;
 		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
-		__entry->base = rqst->rq_rcv_buf.head[0].iov_base;
-		__entry->len = len;
-		__entry->hdrlen = hdrlen;
+		__entry->fixup = fixup;
+		__entry->headlen = rqst->rq_rcv_buf.head[0].iov_len;
+		__entry->pagelen = rqst->rq_rcv_buf.page_len;
+		__entry->taillen = rqst->rq_rcv_buf.tail[0].iov_len;
 	),
 
-	TP_printk("task:%u@%u base=%p len=%d hdrlen=%d",
-		__entry->task_id, __entry->client_id,
-		__entry->base, __entry->len, __entry->hdrlen
-	)
-);
-
-TRACE_EVENT(xprtrdma_fixup_pg,
-	TP_PROTO(
-		const struct rpc_rqst *rqst,
-		int pageno,
-		const void *pos,
-		int len,
-		int curlen
-	),
-
-	TP_ARGS(rqst, pageno, pos, len, curlen),
-
-	TP_STRUCT__entry(
-		__field(unsigned int, task_id)
-		__field(unsigned int, client_id)
-		__field(const void *, pos)
-		__field(int, pageno)
-		__field(int, len)
-		__field(int, curlen)
-	),
-
-	TP_fast_assign(
-		__entry->task_id = rqst->rq_task->tk_pid;
-		__entry->client_id = rqst->rq_task->tk_client->cl_clid;
-		__entry->pos = pos;
-		__entry->pageno = pageno;
-		__entry->len = len;
-		__entry->curlen = curlen;
-	),
-
-	TP_printk("task:%u@%u pageno=%d pos=%p len=%d curlen=%d",
-		__entry->task_id, __entry->client_id,
-		__entry->pageno, __entry->pos, __entry->len, __entry->curlen
+	TP_printk("task:%u@%u fixup=%lu xdr=%zu/%u/%zu",
+		__entry->task_id, __entry->client_id, __entry->fixup,
+		__entry->headlen, __entry->pagelen, __entry->taillen
 	)
 );
 
@@ -1291,7 +1442,7 @@ DECLARE_EVENT_CLASS(svcrdma_segment_event,
 );
 
 #define DEFINE_SEGMENT_EVENT(name)					\
-		DEFINE_EVENT(svcrdma_segment_event, svcrdma_encode_##name,\
+		DEFINE_EVENT(svcrdma_segment_event, svcrdma_##name,\
 				TP_PROTO(				\
 					u32 handle,			\
 					u32 length,			\
@@ -1299,8 +1450,11 @@ DECLARE_EVENT_CLASS(svcrdma_segment_event,
 				),					\
 				TP_ARGS(handle, length, offset))
 
-DEFINE_SEGMENT_EVENT(rseg);
-DEFINE_SEGMENT_EVENT(wseg);
+DEFINE_SEGMENT_EVENT(decode_wseg);
+DEFINE_SEGMENT_EVENT(encode_rseg);
+DEFINE_SEGMENT_EVENT(send_rseg);
+DEFINE_SEGMENT_EVENT(encode_wseg);
+DEFINE_SEGMENT_EVENT(send_wseg);
 
 DECLARE_EVENT_CLASS(svcrdma_chunk_event,
 	TP_PROTO(
@@ -1323,17 +1477,19 @@ DECLARE_EVENT_CLASS(svcrdma_chunk_event,
 );
 
 #define DEFINE_CHUNK_EVENT(name)					\
-		DEFINE_EVENT(svcrdma_chunk_event, svcrdma_encode_##name,\
+		DEFINE_EVENT(svcrdma_chunk_event, svcrdma_##name,	\
 				TP_PROTO(				\
 					u32 length			\
 				),					\
 				TP_ARGS(length))
 
-DEFINE_CHUNK_EVENT(pzr);
-DEFINE_CHUNK_EVENT(write);
-DEFINE_CHUNK_EVENT(reply);
+DEFINE_CHUNK_EVENT(send_pzr);
+DEFINE_CHUNK_EVENT(encode_write_chunk);
+DEFINE_CHUNK_EVENT(send_write_chunk);
+DEFINE_CHUNK_EVENT(encode_read_chunk);
+DEFINE_CHUNK_EVENT(send_reply_chunk);
 
-TRACE_EVENT(svcrdma_encode_read,
+TRACE_EVENT(svcrdma_send_read_chunk,
 	TP_PROTO(
 		u32 length,
 		u32 position
@@ -1390,30 +1546,46 @@ DEFINE_ERROR_EVENT(chunk);
  ** Server-side RDMA API events
  **/
 
-TRACE_EVENT(svcrdma_dma_map_page,
+DECLARE_EVENT_CLASS(svcrdma_dma_map_class,
 	TP_PROTO(
 		const struct svcxprt_rdma *rdma,
-		const void *page
+		u64 dma_addr,
+		u32 length
 	),
 
-	TP_ARGS(rdma, page),
+	TP_ARGS(rdma, dma_addr, length),
 
 	TP_STRUCT__entry(
-		__field(const void *, page);
+		__field(u64, dma_addr)
+		__field(u32, length)
 		__string(device, rdma->sc_cm_id->device->name)
 		__string(addr, rdma->sc_xprt.xpt_remotebuf)
 	),
 
 	TP_fast_assign(
-		__entry->page = page;
+		__entry->dma_addr = dma_addr;
+		__entry->length = length;
 		__assign_str(device, rdma->sc_cm_id->device->name);
 		__assign_str(addr, rdma->sc_xprt.xpt_remotebuf);
 	),
 
-	TP_printk("addr=%s device=%s page=%p",
-		__get_str(addr), __get_str(device), __entry->page
+	TP_printk("addr=%s device=%s dma_addr=%llu length=%u",
+		__get_str(addr), __get_str(device),
+		__entry->dma_addr, __entry->length
 	)
 );
+
+#define DEFINE_SVC_DMA_EVENT(name)					\
+		DEFINE_EVENT(svcrdma_dma_map_class, svcrdma_##name,	\
+				TP_PROTO(				\
+					const struct svcxprt_rdma *rdma,\
+					u64 dma_addr,			\
+					u32 length			\
+				),					\
+				TP_ARGS(rdma, dma_addr, length))
+
+DEFINE_SVC_DMA_EVENT(dma_map_page);
+DEFINE_SVC_DMA_EVENT(dma_unmap_page);
 
 TRACE_EVENT(svcrdma_dma_map_rwctx,
 	TP_PROTO(
@@ -1438,6 +1610,24 @@ TRACE_EVENT(svcrdma_dma_map_rwctx,
 	TP_printk("addr=%s device=%s status=%d",
 		__get_str(addr), __get_str(device), __entry->status
 	)
+);
+
+TRACE_EVENT(svcrdma_send_pullup,
+	TP_PROTO(
+		unsigned int len
+	),
+
+	TP_ARGS(len),
+
+	TP_STRUCT__entry(
+		__field(unsigned int, len)
+	),
+
+	TP_fast_assign(
+		__entry->len = len;
+	),
+
+	TP_printk("len=%u", __entry->len)
 );
 
 TRACE_EVENT(svcrdma_send_failed,
@@ -1618,34 +1808,6 @@ TRACE_EVENT(svcrdma_post_rw,
 
 DEFINE_SENDCOMP_EVENT(read);
 DEFINE_SENDCOMP_EVENT(write);
-
-TRACE_EVENT(svcrdma_cm_event,
-	TP_PROTO(
-		const struct rdma_cm_event *event,
-		const struct sockaddr *sap
-	),
-
-	TP_ARGS(event, sap),
-
-	TP_STRUCT__entry(
-		__field(unsigned int, event)
-		__field(int, status)
-		__array(__u8, addr, INET6_ADDRSTRLEN + 10)
-	),
-
-	TP_fast_assign(
-		__entry->event = event->event;
-		__entry->status = event->status;
-		snprintf(__entry->addr, sizeof(__entry->addr) - 1,
-			 "%pISpc", sap);
-	),
-
-	TP_printk("addr=%s event=%s (%u/%d)",
-		__entry->addr,
-		rdma_show_cm_event(__entry->event),
-		__entry->event, __entry->status
-	)
-);
 
 TRACE_EVENT(svcrdma_qp_error,
 	TP_PROTO(

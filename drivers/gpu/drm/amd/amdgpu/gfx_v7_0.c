@@ -20,8 +20,10 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  *
  */
+
 #include <linux/firmware.h>
-#include <drm/drmP.h>
+#include <linux/module.h>
+
 #include "amdgpu.h"
 #include "amdgpu_ih.h"
 #include "amdgpu_gfx.h"
@@ -1877,6 +1879,33 @@ static void gfx_v7_0_init_compute_vmid(struct amdgpu_device *adev)
 	}
 	cik_srbm_select(adev, 0, 0, 0, 0);
 	mutex_unlock(&adev->srbm_mutex);
+
+	/* Initialize all compute VMIDs to have no GDS, GWS, or OA
+	   acccess. These should be enabled by FW for target VMIDs. */
+	for (i = FIRST_COMPUTE_VMID; i < LAST_COMPUTE_VMID; i++) {
+		WREG32(amdgpu_gds_reg_offset[i].mem_base, 0);
+		WREG32(amdgpu_gds_reg_offset[i].mem_size, 0);
+		WREG32(amdgpu_gds_reg_offset[i].gws, 0);
+		WREG32(amdgpu_gds_reg_offset[i].oa, 0);
+	}
+}
+
+static void gfx_v7_0_init_gds_vmid(struct amdgpu_device *adev)
+{
+	int vmid;
+
+	/*
+	 * Initialize all compute and user-gfx VMIDs to have no GDS, GWS, or OA
+	 * access. Compute VMIDs should be enabled by FW for target VMIDs,
+	 * the driver can enable them for graphics. VMID0 should maintain
+	 * access so that HWS firmware can save/restore entries.
+	 */
+	for (vmid = 1; vmid < 16; vmid++) {
+		WREG32(amdgpu_gds_reg_offset[vmid].mem_base, 0);
+		WREG32(amdgpu_gds_reg_offset[vmid].mem_size, 0);
+		WREG32(amdgpu_gds_reg_offset[vmid].gws, 0);
+		WREG32(amdgpu_gds_reg_offset[vmid].oa, 0);
+	}
 }
 
 static void gfx_v7_0_config_init(struct amdgpu_device *adev)
@@ -1957,6 +1986,7 @@ static void gfx_v7_0_constants_init(struct amdgpu_device *adev)
 	mutex_unlock(&adev->srbm_mutex);
 
 	gfx_v7_0_init_compute_vmid(adev);
+	gfx_v7_0_init_gds_vmid(adev);
 
 	WREG32(mmSX_DEBUG_1, 0x20);
 
@@ -2080,7 +2110,7 @@ static int gfx_v7_0_ring_test_ring(struct amdgpu_ring *ring)
 		tmp = RREG32(scratch);
 		if (tmp == 0xDEADBEEF)
 			break;
-		DRM_UDELAY(1);
+		udelay(1);
 	}
 	if (i >= adev->usec_timeout)
 		r = -ETIMEDOUT;
@@ -3316,6 +3346,10 @@ static int gfx_v7_0_rlc_init(struct amdgpu_device *adev)
 			return r;
 	}
 
+	/* init spm vmid with 0xf */
+	if (adev->gfx.rlc.funcs->update_spm_vmid)
+		adev->gfx.rlc.funcs->update_spm_vmid(adev, 0xf);
+
 	return 0;
 }
 
@@ -3538,6 +3572,18 @@ static int gfx_v7_0_rlc_resume(struct amdgpu_device *adev)
 	adev->gfx.rlc.funcs->start(adev);
 
 	return 0;
+}
+
+static void gfx_v7_0_update_spm_vmid(struct amdgpu_device *adev, unsigned vmid)
+{
+	u32 data;
+
+	data = RREG32(mmRLC_SPM_VMID);
+
+	data &= ~RLC_SPM_VMID__RLC_SPM_VMID_MASK;
+	data |= (vmid & RLC_SPM_VMID__RLC_SPM_VMID_MASK) << RLC_SPM_VMID__RLC_SPM_VMID__SHIFT;
+
+	WREG32(mmRLC_SPM_VMID, data);
 }
 
 static void gfx_v7_0_enable_cgcg(struct amdgpu_device *adev, bool enable)
@@ -4167,9 +4213,9 @@ static void gfx_v7_0_read_wave_sgprs(struct amdgpu_device *adev, uint32_t simd,
 }
 
 static void gfx_v7_0_select_me_pipe_q(struct amdgpu_device *adev,
-				  u32 me, u32 pipe, u32 q)
+				  u32 me, u32 pipe, u32 q, u32 vm)
 {
-	cik_srbm_select(adev, me, pipe, q, 0);
+	cik_srbm_select(adev, me, pipe, q, vm);
 }
 
 static const struct amdgpu_gfx_funcs gfx_v7_0_gfx_funcs = {
@@ -4191,7 +4237,8 @@ static const struct amdgpu_rlc_funcs gfx_v7_0_rlc_funcs = {
 	.resume = gfx_v7_0_rlc_resume,
 	.stop = gfx_v7_0_rlc_stop,
 	.reset = gfx_v7_0_rlc_reset,
-	.start = gfx_v7_0_rlc_start
+	.start = gfx_v7_0_rlc_start,
+	.update_spm_vmid = gfx_v7_0_update_spm_vmid
 };
 
 static int gfx_v7_0_early_init(void *handle)
@@ -4228,7 +4275,7 @@ static int gfx_v7_0_late_init(void *handle)
 static void gfx_v7_0_gpu_early_init(struct amdgpu_device *adev)
 {
 	u32 gb_addr_config;
-	u32 mc_shared_chmap, mc_arb_ramcfg;
+	u32 mc_arb_ramcfg;
 	u32 dimm00_addr_map, dimm01_addr_map, dimm10_addr_map, dimm11_addr_map;
 	u32 tmp;
 
@@ -4305,9 +4352,13 @@ static void gfx_v7_0_gpu_early_init(struct amdgpu_device *adev)
 		break;
 	}
 
-	mc_shared_chmap = RREG32(mmMC_SHARED_CHMAP);
 	adev->gfx.config.mc_arb_ramcfg = RREG32(mmMC_ARB_RAMCFG);
 	mc_arb_ramcfg = adev->gfx.config.mc_arb_ramcfg;
+
+	adev->gfx.config.num_banks = REG_GET_FIELD(mc_arb_ramcfg,
+				MC_ARB_RAMCFG, NOOFBANK);
+	adev->gfx.config.num_ranks = REG_GET_FIELD(mc_arb_ramcfg,
+				MC_ARB_RAMCFG, NOOFRANKS);
 
 	adev->gfx.config.num_tile_pipes = adev->gfx.config.max_tile_pipes;
 	adev->gfx.config.mem_max_burst_length_bytes = 256;
@@ -4460,7 +4511,7 @@ static int gfx_v7_0_sw_init(void *handle)
 		ring->ring_obj = NULL;
 		sprintf(ring->name, "gfx");
 		r = amdgpu_ring_init(adev, ring, 1024,
-				     &adev->gfx.eop_irq, AMDGPU_CP_IRQ_GFX_EOP);
+				     &adev->gfx.eop_irq, AMDGPU_CP_IRQ_GFX_ME0_PIPE0_EOP);
 		if (r)
 			return r;
 	}
@@ -4493,12 +4544,8 @@ static int gfx_v7_0_sw_init(void *handle)
 
 static int gfx_v7_0_sw_fini(void *handle)
 {
-	int i;
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
-
-	amdgpu_bo_free_kernel(&adev->gds.oa_gfx_bo, NULL, NULL);
-	amdgpu_bo_free_kernel(&adev->gds.gws_gfx_bo, NULL, NULL);
-	amdgpu_bo_free_kernel(&adev->gds.gds_gfx_bo, NULL, NULL);
+	int i;
 
 	for (i = 0; i < adev->gfx.num_gfx_rings; i++)
 		amdgpu_ring_fini(&adev->gfx.gfx_ring[i]);
@@ -4528,6 +4575,8 @@ static int gfx_v7_0_hw_init(void *handle)
 
 	gfx_v7_0_constants_init(adev);
 
+	/* init CSB */
+	adev->gfx.rlc.funcs->get_csb_buffer(adev, adev->gfx.rlc.cs_ptr);
 	/* init rlc */
 	r = adev->gfx.rlc.funcs->resume(adev);
 	if (r)
@@ -4801,7 +4850,7 @@ static int gfx_v7_0_set_eop_interrupt_state(struct amdgpu_device *adev,
 					    enum amdgpu_interrupt_state state)
 {
 	switch (type) {
-	case AMDGPU_CP_IRQ_GFX_EOP:
+	case AMDGPU_CP_IRQ_GFX_ME0_PIPE0_EOP:
 		gfx_v7_0_set_gfx_eop_interrupt_state(adev, state);
 		break;
 	case AMDGPU_CP_IRQ_COMPUTE_MEC1_PIPE0_EOP:
@@ -5070,30 +5119,10 @@ static void gfx_v7_0_set_irq_funcs(struct amdgpu_device *adev)
 static void gfx_v7_0_set_gds_init(struct amdgpu_device *adev)
 {
 	/* init asci gds info */
-	adev->gds.mem.total_size = RREG32(mmGDS_VMID0_SIZE);
-	adev->gds.gws.total_size = 64;
-	adev->gds.oa.total_size = 16;
+	adev->gds.gds_size = RREG32(mmGDS_VMID0_SIZE);
+	adev->gds.gws_size = 64;
+	adev->gds.oa_size = 16;
 	adev->gds.gds_compute_max_wave_id = RREG32(mmGDS_COMPUTE_MAX_WAVE_ID);
-
-	if (adev->gds.mem.total_size == 64 * 1024) {
-		adev->gds.mem.gfx_partition_size = 4096;
-		adev->gds.mem.cs_partition_size = 4096;
-
-		adev->gds.gws.gfx_partition_size = 4;
-		adev->gds.gws.cs_partition_size = 4;
-
-		adev->gds.oa.gfx_partition_size = 4;
-		adev->gds.oa.cs_partition_size = 1;
-	} else {
-		adev->gds.mem.gfx_partition_size = 1024;
-		adev->gds.mem.cs_partition_size = 1024;
-
-		adev->gds.gws.gfx_partition_size = 16;
-		adev->gds.gws.cs_partition_size = 16;
-
-		adev->gds.oa.gfx_partition_size = 4;
-		adev->gds.oa.cs_partition_size = 4;
-	}
 }
 
 

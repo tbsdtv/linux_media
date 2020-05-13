@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2007-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2007-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner, Simon Wunderlich
  */
@@ -9,6 +9,7 @@
 
 #include "main.h"
 
+#include <linux/atomic.h>
 #include <linux/bitops.h>
 #include <linux/compiler.h>
 #include <linux/printk.h>
@@ -73,7 +74,7 @@ __printf(2, 3);
  * @bat_priv: the bat priv with all the soft interface information
  * @ratelimited: whether output should be rate limited
  * @fmt: format string
- * @arg...: variable arguments
+ * @arg: variable arguments
  */
 #define _batadv_dbg(type, bat_priv, ratelimited, fmt, arg...)		\
 	do {								\
@@ -97,7 +98,7 @@ static inline void _batadv_dbg(int type __always_unused,
  * batadv_dbg() - Store debug output without ratelimiting
  * @type: type of debug message
  * @bat_priv: the bat priv with all the soft interface information
- * @arg...: format string and variable arguments
+ * @arg: format string and variable arguments
  */
 #define batadv_dbg(type, bat_priv, arg...) \
 	_batadv_dbg(type, bat_priv, 0, ## arg)
@@ -106,7 +107,7 @@ static inline void _batadv_dbg(int type __always_unused,
  * batadv_dbg_ratelimited() - Store debug output with ratelimiting
  * @type: type of debug message
  * @bat_priv: the bat priv with all the soft interface information
- * @arg...: format string and variable arguments
+ * @arg: format string and variable arguments
  */
 #define batadv_dbg_ratelimited(type, bat_priv, arg...) \
 	_batadv_dbg(type, bat_priv, 1, ## arg)
@@ -115,7 +116,7 @@ static inline void _batadv_dbg(int type __always_unused,
  * batadv_info() - Store message in debug buffer and print it to kmsg buffer
  * @net_dev: the soft interface net device
  * @fmt: format string
- * @arg...: variable arguments
+ * @arg: variable arguments
  */
 #define batadv_info(net_dev, fmt, arg...)				\
 	do {								\
@@ -129,7 +130,7 @@ static inline void _batadv_dbg(int type __always_unused,
  * batadv_err() - Store error in debug buffer and print it to kmsg buffer
  * @net_dev: the soft interface net device
  * @fmt: format string
- * @arg...: variable arguments
+ * @arg: variable arguments
  */
 #define batadv_err(net_dev, fmt, arg...)				\
 	do {								\

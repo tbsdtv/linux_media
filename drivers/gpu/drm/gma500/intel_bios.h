@@ -9,8 +9,7 @@
 #ifndef _INTEL_BIOS_H_
 #define _INTEL_BIOS_H_
 
-#include <drm/drmP.h>
-#include <drm/drm_dp_helper.h>
+struct drm_device;
 
 struct vbt_header {
 	u8 signature[20];		/**< Always starts with 'VBT$' */
@@ -228,7 +227,7 @@ struct bdb_general_definitions {
 	 * number = (block_size - sizeof(bdb_general_definitions))/
 	 *	     sizeof(child_device_config);
 	 */
-	struct child_device_config devices[0];
+	struct child_device_config devices[];
 };
 
 struct bdb_lvds_options {

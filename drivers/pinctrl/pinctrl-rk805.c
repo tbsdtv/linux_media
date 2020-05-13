@@ -184,7 +184,7 @@ static int rk805_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
 
 	/* default output*/
 	if (!pci->pin_cfg[offset].dir_msk)
-		return 0;
+		return GPIO_LINE_DIRECTION_OUT;
 
 	ret = regmap_read(pci->rk808->regmap,
 			  pci->pin_cfg[offset].reg,
@@ -194,10 +194,13 @@ static int rk805_gpio_get_direction(struct gpio_chip *chip, unsigned int offset)
 		return ret;
 	}
 
-	return !(val & pci->pin_cfg[offset].dir_msk);
+	if (val & pci->pin_cfg[offset].dir_msk)
+		return GPIO_LINE_DIRECTION_OUT;
+
+	return GPIO_LINE_DIRECTION_IN;
 }
 
-static struct gpio_chip rk805_gpio_chip = {
+static const struct gpio_chip rk805_gpio_chip = {
 	.label			= "rk805-gpio",
 	.request		= gpiochip_generic_request,
 	.free			= gpiochip_generic_free,
@@ -404,7 +407,7 @@ static const struct pinconf_ops rk805_pinconf_ops = {
 	.pin_config_set = rk805_pinconf_set,
 };
 
-static struct pinctrl_desc rk805_pinctrl_desc = {
+static const struct pinctrl_desc rk805_pinctrl_desc = {
 	.name = "rk805-pinctrl",
 	.pctlops = &rk805_pinctrl_ops,
 	.pmxops = &rk805_pinmux_ops,

@@ -521,7 +521,7 @@ static u32 i2c_dw_read_clear_intrbits(struct dw_i2c_dev *dev)
 
 	/*
 	 * The IC_INTR_STAT register just indicates "enabled" interrupts.
-	 * Ths unmasked raw version of interrupt status bits are available
+	 * The unmasked raw version of interrupt status bits is available
 	 * in the IC_RAW_INTR_STAT register.
 	 *
 	 * That is,
@@ -655,15 +655,11 @@ static int i2c_dw_init_recovery_info(struct dw_i2c_dev *dev)
 	struct i2c_bus_recovery_info *rinfo = &dev->rinfo;
 	struct i2c_adapter *adap = &dev->adapter;
 	struct gpio_desc *gpio;
-	int r;
 
-	gpio = devm_gpiod_get(dev->dev, "scl", GPIOD_OUT_HIGH);
-	if (IS_ERR(gpio)) {
-		r = PTR_ERR(gpio);
-		if (r == -ENOENT || r == -ENOSYS)
-			return 0;
-		return r;
-	}
+	gpio = devm_gpiod_get_optional(dev->dev, "scl", GPIOD_OUT_HIGH);
+	if (IS_ERR_OR_NULL(gpio))
+		return PTR_ERR_OR_ZERO(gpio);
+
 	rinfo->scl_gpiod = gpio;
 
 	gpio = devm_gpiod_get_optional(dev->dev, "sda", GPIOD_IN);
@@ -701,6 +697,8 @@ int i2c_dw_probe(struct dw_i2c_dev *dev)
 	ret = i2c_dw_set_timings_master(dev);
 	if (ret)
 		return ret;
+
+	i2c_dw_set_fifo_size(dev);
 
 	ret = dev->init(dev);
 	if (ret)

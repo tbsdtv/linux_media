@@ -560,9 +560,7 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv,
 	if (f->index != 0)
 		return -EINVAL;
 
-	strscpy(f->description, "4:2:2, packed, UYVY", sizeof(f->description));
 	f->pixelformat = V4L2_PIX_FMT_UYVY;
-	f->flags = 0;
 	return 0;
 }
 
@@ -1071,7 +1069,7 @@ static int sta2x11_vip_init_one(struct pci_dev *pdev,
 	vip->video_dev.lock = &vip->v4l_lock;
 	video_set_drvdata(&vip->video_dev, vip);
 
-	ret = video_register_device(&vip->video_dev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(&vip->video_dev, VFL_TYPE_VIDEO, -1);
 	if (ret)
 		goto vrelease;
 

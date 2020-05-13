@@ -1319,7 +1319,7 @@ int tbs_video_register(struct tbs_pcie_dev *dev)
 			goto fail;
 		}
 
-		err = video_register_device(vdev, VFL_TYPE_GRABBER,-1);
+		err = video_register_device(vdev, VFL_TYPE_VIDEO,-1);
 		if(err!=0){
 			printk(KERN_ERR " v4l2_device_register failed!\n");
 			goto fail;
@@ -1549,7 +1549,7 @@ int tbs_audio_register(struct tbs_pcie_dev *dev)
 		dev->audio[i].dev=dev;
 		pcm->private_data = &dev->audio[i];		
 		snd_pcm_set_ops(pcm,SNDRV_PCM_STREAM_CAPTURE,&tbs_pcie_pcm_ops);
-		snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,snd_dma_pci_data(dev->pdev), TBS_AUDIO_CELL_SIZE*4, TBS_AUDIO_CELL_SIZE*4);
+		snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,&dev->pdev->dev, TBS_AUDIO_CELL_SIZE*4, TBS_AUDIO_CELL_SIZE*4);
 		ret = snd_card_register(card);
 		if ( ret < 0) {
 			printk(KERN_ERR "%s() ERROR: snd_card_register failed\n",__func__);

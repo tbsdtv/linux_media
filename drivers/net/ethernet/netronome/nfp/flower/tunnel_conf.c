@@ -15,6 +15,24 @@
 
 #define NFP_FL_MAX_ROUTES               32
 
+#define NFP_TUN_PRE_TUN_RULE_LIMIT	32
+#define NFP_TUN_PRE_TUN_RULE_DEL	0x1
+#define NFP_TUN_PRE_TUN_IDX_BIT		0x8
+
+/**
+ * struct nfp_tun_pre_run_rule - rule matched before decap
+ * @flags:		options for the rule offset
+ * @port_idx:		index of destination MAC address for the rule
+ * @vlan_tci:		VLAN info associated with MAC
+ * @host_ctx_id:	stats context of rule to update
+ */
+struct nfp_tun_pre_tun_rule {
+	__be32 flags;
+	__be16 port_idx;
+	__be16 vlan_tci;
+	__be32 host_ctx_id;
+};
+
 /**
  * struct nfp_tun_active_tuns - periodic message of active tunnels
  * @seq:		sequence number of the message
@@ -37,6 +55,25 @@ struct nfp_tun_active_tuns {
 };
 
 /**
+ * struct nfp_tun_active_tuns_v6 - periodic message of active IPv6 tunnels
+ * @seq:		sequence number of the message
+ * @count:		number of tunnels report in message
+ * @flags:		options part of the request
+ * @tun_info.ipv6:		dest IPv6 address of active route
+ * @tun_info.egress_port:	port the encapsulated packet egressed
+ * @tun_info:		tunnels that have sent traffic in reported period
+ */
+struct nfp_tun_active_tuns_v6 {
+	__be32 seq;
+	__be32 count;
+	__be32 flags;
+	struct route_ip_info_v6 {
+		struct in6_addr ipv6;
+		__be32 egress_port;
+	} tun_info[];
+};
+
+/**
  * struct nfp_tun_neigh - neighbour/route entry on the NFP
  * @dst_ipv4:	destination IPv4 address
  * @src_ipv4:	source IPv4 address
@@ -47,6 +84,22 @@ struct nfp_tun_active_tuns {
 struct nfp_tun_neigh {
 	__be32 dst_ipv4;
 	__be32 src_ipv4;
+	u8 dst_addr[ETH_ALEN];
+	u8 src_addr[ETH_ALEN];
+	__be32 port_id;
+};
+
+/**
+ * struct nfp_tun_neigh_v6 - neighbour/route entry on the NFP
+ * @dst_ipv6:	destination IPv6 address
+ * @src_ipv6:	source IPv6 address
+ * @dst_addr:	destination MAC address
+ * @src_addr:	source MAC address
+ * @port_id:	NFP port to output packet on - associated with source IPv6
+ */
+struct nfp_tun_neigh_v6 {
+	struct in6_addr dst_ipv6;
+	struct in6_addr src_ipv6;
 	u8 dst_addr[ETH_ALEN];
 	u8 src_addr[ETH_ALEN];
 	__be32 port_id;
@@ -65,13 +118,23 @@ struct nfp_tun_req_route_ipv4 {
 };
 
 /**
- * struct nfp_ipv4_route_entry - routes that are offloaded to the NFP
- * @ipv4_addr:	destination of route
- * @list:	list pointer
+ * struct nfp_tun_req_route_ipv6 - NFP requests an IPv6 route/neighbour lookup
+ * @ingress_port:	ingress port of packet that signalled request
+ * @ipv6_addr:		destination ipv6 address for route
  */
-struct nfp_ipv4_route_entry {
-	__be32 ipv4_addr;
+struct nfp_tun_req_route_ipv6 {
+	__be32 ingress_port;
+	struct in6_addr ipv6_addr;
+};
+
+/**
+ * struct nfp_offloaded_route - routes that are offloaded to the NFP
+ * @list:	list pointer
+ * @ip_add:	destination of route - can be IPv4 or IPv6
+ */
+struct nfp_offloaded_route {
 	struct list_head list;
+	u8 ip_add[];
 };
 
 #define NFP_FL_IPV4_ADDRS_MAX        32
@@ -96,6 +159,18 @@ struct nfp_ipv4_addr_entry {
 	__be32 ipv4_addr;
 	int ref_count;
 	struct list_head list;
+};
+
+#define NFP_FL_IPV6_ADDRS_MAX        4
+
+/**
+ * struct nfp_tun_ipv6_addr - set the IP address list on the NFP
+ * @count:	number of IPs populated in the array
+ * @ipv6_addr:	array of IPV6_ADDRS_MAX 128 bit IPv6 addresses
+ */
+struct nfp_tun_ipv6_addr {
+	__be32 count;
+	struct in6_addr ipv6_addr[NFP_FL_IPV6_ADDRS_MAX];
 };
 
 #define NFP_TUN_MAC_OFFLOAD_DEL_FLAG	0x2
@@ -124,11 +199,12 @@ enum nfp_flower_mac_offload_cmd {
 
 /**
  * struct nfp_tun_offloaded_mac - hashtable entry for an offloaded MAC
- * @ht_node:	Hashtable entry
- * @addr:	Offloaded MAC address
- * @index:	Offloaded index for given MAC address
- * @ref_count:	Number of devs using this MAC address
- * @repr_list:	List of reprs sharing this MAC address
+ * @ht_node:		Hashtable entry
+ * @addr:		Offloaded MAC address
+ * @index:		Offloaded index for given MAC address
+ * @ref_count:		Number of devs using this MAC address
+ * @repr_list:		List of reprs sharing this MAC address
+ * @bridge_count:	Number of bridge/internal devs with MAC
  */
 struct nfp_tun_offloaded_mac {
 	struct rhash_head ht_node;
@@ -136,6 +212,7 @@ struct nfp_tun_offloaded_mac {
 	u16 index;
 	int ref_count;
 	struct list_head repr_list;
+	int bridge_count;
 };
 
 static const struct rhashtable_params offloaded_macs_params = {
@@ -162,8 +239,7 @@ void nfp_tunnel_keep_alive(struct nfp_app *app, struct sk_buff *skb)
 	}
 
 	pay_len = nfp_flower_cmsg_get_data_len(skb);
-	if (pay_len != sizeof(struct nfp_tun_active_tuns) +
-	    sizeof(struct route_ip_info) * count) {
+	if (pay_len != struct_size(payload, tun_info, count)) {
 		nfp_flower_cmsg_warn(app, "Corruption in tunnel keep-alive message.\n");
 		return;
 	}
@@ -187,6 +263,49 @@ void nfp_tunnel_keep_alive(struct nfp_app *app, struct sk_buff *skb)
 	rcu_read_unlock();
 }
 
+void nfp_tunnel_keep_alive_v6(struct nfp_app *app, struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_IPV6)
+	struct nfp_tun_active_tuns_v6 *payload;
+	struct net_device *netdev;
+	int count, i, pay_len;
+	struct neighbour *n;
+	void *ipv6_add;
+	u32 port;
+
+	payload = nfp_flower_cmsg_get_data(skb);
+	count = be32_to_cpu(payload->count);
+	if (count > NFP_FL_IPV6_ADDRS_MAX) {
+		nfp_flower_cmsg_warn(app, "IPv6 tunnel keep-alive request exceeds max routes.\n");
+		return;
+	}
+
+	pay_len = nfp_flower_cmsg_get_data_len(skb);
+	if (pay_len != struct_size(payload, tun_info, count)) {
+		nfp_flower_cmsg_warn(app, "Corruption in tunnel keep-alive message.\n");
+		return;
+	}
+
+	rcu_read_lock();
+	for (i = 0; i < count; i++) {
+		ipv6_add = &payload->tun_info[i].ipv6;
+		port = be32_to_cpu(payload->tun_info[i].egress_port);
+		netdev = nfp_app_dev_get(app, port, NULL);
+		if (!netdev)
+			continue;
+
+		n = neigh_lookup(&nd_tbl, ipv6_add, netdev);
+		if (!n)
+			continue;
+
+		/* Update the used timestamp of neighbour */
+		neigh_event_send(n, NULL);
+		neigh_release(n);
+	}
+	rcu_read_unlock();
+#endif
+}
+
 static int
 nfp_flower_xmit_tun_conf(struct nfp_app *app, u8 mtype, u16 plen, void *pdata,
 			 gfp_t flag)
@@ -205,71 +324,126 @@ nfp_flower_xmit_tun_conf(struct nfp_app *app, u8 mtype, u16 plen, void *pdata,
 	return 0;
 }
 
-static bool nfp_tun_has_route(struct nfp_app *app, __be32 ipv4_addr)
+static bool
+__nfp_tun_has_route(struct list_head *route_list, spinlock_t *list_lock,
+		    void *add, int add_len)
 {
-	struct nfp_flower_priv *priv = app->priv;
-	struct nfp_ipv4_route_entry *entry;
-	struct list_head *ptr, *storage;
+	struct nfp_offloaded_route *entry;
 
-	spin_lock_bh(&priv->tun.neigh_off_lock);
-	list_for_each_safe(ptr, storage, &priv->tun.neigh_off_list) {
-		entry = list_entry(ptr, struct nfp_ipv4_route_entry, list);
-		if (entry->ipv4_addr == ipv4_addr) {
-			spin_unlock_bh(&priv->tun.neigh_off_lock);
+	spin_lock_bh(list_lock);
+	list_for_each_entry(entry, route_list, list)
+		if (!memcmp(entry->ip_add, add, add_len)) {
+			spin_unlock_bh(list_lock);
 			return true;
 		}
-	}
-	spin_unlock_bh(&priv->tun.neigh_off_lock);
+	spin_unlock_bh(list_lock);
 	return false;
 }
 
-static void nfp_tun_add_route_to_cache(struct nfp_app *app, __be32 ipv4_addr)
+static int
+__nfp_tun_add_route_to_cache(struct list_head *route_list,
+			     spinlock_t *list_lock, void *add, int add_len)
 {
-	struct nfp_flower_priv *priv = app->priv;
-	struct nfp_ipv4_route_entry *entry;
-	struct list_head *ptr, *storage;
+	struct nfp_offloaded_route *entry;
 
-	spin_lock_bh(&priv->tun.neigh_off_lock);
-	list_for_each_safe(ptr, storage, &priv->tun.neigh_off_list) {
-		entry = list_entry(ptr, struct nfp_ipv4_route_entry, list);
-		if (entry->ipv4_addr == ipv4_addr) {
-			spin_unlock_bh(&priv->tun.neigh_off_lock);
-			return;
+	spin_lock_bh(list_lock);
+	list_for_each_entry(entry, route_list, list)
+		if (!memcmp(entry->ip_add, add, add_len)) {
+			spin_unlock_bh(list_lock);
+			return 0;
 		}
-	}
-	entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+
+	entry = kmalloc(sizeof(*entry) + add_len, GFP_ATOMIC);
 	if (!entry) {
-		spin_unlock_bh(&priv->tun.neigh_off_lock);
-		nfp_flower_cmsg_warn(app, "Mem error when storing new route.\n");
-		return;
+		spin_unlock_bh(list_lock);
+		return -ENOMEM;
 	}
 
-	entry->ipv4_addr = ipv4_addr;
-	list_add_tail(&entry->list, &priv->tun.neigh_off_list);
-	spin_unlock_bh(&priv->tun.neigh_off_lock);
+	memcpy(entry->ip_add, add, add_len);
+	list_add_tail(&entry->list, route_list);
+	spin_unlock_bh(list_lock);
+
+	return 0;
 }
 
-static void nfp_tun_del_route_from_cache(struct nfp_app *app, __be32 ipv4_addr)
+static void
+__nfp_tun_del_route_from_cache(struct list_head *route_list,
+			       spinlock_t *list_lock, void *add, int add_len)
 {
-	struct nfp_flower_priv *priv = app->priv;
-	struct nfp_ipv4_route_entry *entry;
-	struct list_head *ptr, *storage;
+	struct nfp_offloaded_route *entry;
 
-	spin_lock_bh(&priv->tun.neigh_off_lock);
-	list_for_each_safe(ptr, storage, &priv->tun.neigh_off_list) {
-		entry = list_entry(ptr, struct nfp_ipv4_route_entry, list);
-		if (entry->ipv4_addr == ipv4_addr) {
+	spin_lock_bh(list_lock);
+	list_for_each_entry(entry, route_list, list)
+		if (!memcmp(entry->ip_add, add, add_len)) {
 			list_del(&entry->list);
 			kfree(entry);
 			break;
 		}
-	}
-	spin_unlock_bh(&priv->tun.neigh_off_lock);
+	spin_unlock_bh(list_lock);
+}
+
+static bool nfp_tun_has_route_v4(struct nfp_app *app, __be32 *ipv4_addr)
+{
+	struct nfp_flower_priv *priv = app->priv;
+
+	return __nfp_tun_has_route(&priv->tun.neigh_off_list_v4,
+				   &priv->tun.neigh_off_lock_v4, ipv4_addr,
+				   sizeof(*ipv4_addr));
+}
+
+static bool
+nfp_tun_has_route_v6(struct nfp_app *app, struct in6_addr *ipv6_addr)
+{
+	struct nfp_flower_priv *priv = app->priv;
+
+	return __nfp_tun_has_route(&priv->tun.neigh_off_list_v6,
+				   &priv->tun.neigh_off_lock_v6, ipv6_addr,
+				   sizeof(*ipv6_addr));
 }
 
 static void
-nfp_tun_write_neigh(struct net_device *netdev, struct nfp_app *app,
-		    struct flowi4 *flow, struct neighbour *neigh, gfp_t flag)
+nfp_tun_add_route_to_cache_v4(struct nfp_app *app, __be32 *ipv4_addr)
+{
+	struct nfp_flower_priv *priv = app->priv;
+
+	__nfp_tun_add_route_to_cache(&priv->tun.neigh_off_list_v4,
+				     &priv->tun.neigh_off_lock_v4, ipv4_addr,
+				     sizeof(*ipv4_addr));
+}
+
+static void
+nfp_tun_add_route_to_cache_v6(struct nfp_app *app, struct in6_addr *ipv6_addr)
+{
+	struct nfp_flower_priv *priv = app->priv;
+
+	__nfp_tun_add_route_to_cache(&priv->tun.neigh_off_list_v6,
+				     &priv->tun.neigh_off_lock_v6, ipv6_addr,
+				     sizeof(*ipv6_addr));
+}
+
+static void
+nfp_tun_del_route_from_cache_v4(struct nfp_app *app, __be32 *ipv4_addr)
+{
+	struct nfp_flower_priv *priv = app->priv;
+
+	__nfp_tun_del_route_from_cache(&priv->tun.neigh_off_list_v4,
+				       &priv->tun.neigh_off_lock_v4, ipv4_addr,
+				       sizeof(*ipv4_addr));
+}
+
+static void
+nfp_tun_del_route_from_cache_v6(struct nfp_app *app, struct in6_addr *ipv6_addr)
+{
+	struct nfp_flower_priv *priv = app->priv;
+
+	__nfp_tun_del_route_from_cache(&priv->tun.neigh_off_list_v6,
+				       &priv->tun.neigh_off_lock_v6, ipv6_addr,
+				       sizeof(*ipv6_addr));
+}
+
+static void
+nfp_tun_write_neigh_v4(struct net_device *netdev, struct nfp_app *app,
+		       struct flowi4 *flow, struct neighbour *neigh, gfp_t flag)
 {
 	struct nfp_tun_neigh payload;
 	u32 port_id;
@@ -283,7 +457,7 @@ nfp_tun_write_neigh(struct net_device *netdev, struct nfp_app *app,
 
 	/* If entry has expired send dst IP with all other fields 0. */
 	if (!(neigh->nud_state & NUD_VALID) || neigh->dead) {
-		nfp_tun_del_route_from_cache(app, payload.dst_ipv4);
+		nfp_tun_del_route_from_cache_v4(app, &payload.dst_ipv4);
 		/* Trigger ARP to verify invalid neighbour state. */
 		neigh_event_send(neigh, NULL);
 		goto send_msg;
@@ -295,11 +469,47 @@ nfp_tun_write_neigh(struct net_device *netdev, struct nfp_app *app,
 	neigh_ha_snapshot(payload.dst_addr, neigh, netdev);
 	payload.port_id = cpu_to_be32(port_id);
 	/* Add destination of new route to NFP cache. */
-	nfp_tun_add_route_to_cache(app, payload.dst_ipv4);
+	nfp_tun_add_route_to_cache_v4(app, &payload.dst_ipv4);
 
 send_msg:
 	nfp_flower_xmit_tun_conf(app, NFP_FLOWER_CMSG_TYPE_TUN_NEIGH,
 				 sizeof(struct nfp_tun_neigh),
+				 (unsigned char *)&payload, flag);
+}
+
+static void
+nfp_tun_write_neigh_v6(struct net_device *netdev, struct nfp_app *app,
+		       struct flowi6 *flow, struct neighbour *neigh, gfp_t flag)
+{
+	struct nfp_tun_neigh_v6 payload;
+	u32 port_id;
+
+	port_id = nfp_flower_get_port_id_from_netdev(app, netdev);
+	if (!port_id)
+		return;
+
+	memset(&payload, 0, sizeof(struct nfp_tun_neigh_v6));
+	payload.dst_ipv6 = flow->daddr;
+
+	/* If entry has expired send dst IP with all other fields 0. */
+	if (!(neigh->nud_state & NUD_VALID) || neigh->dead) {
+		nfp_tun_del_route_from_cache_v6(app, &payload.dst_ipv6);
+		/* Trigger probe to verify invalid neighbour state. */
+		neigh_event_send(neigh, NULL);
+		goto send_msg;
+	}
+
+	/* Have a valid neighbour so populate rest of entry. */
+	payload.src_ipv6 = flow->saddr;
+	ether_addr_copy(payload.src_addr, netdev->dev_addr);
+	neigh_ha_snapshot(payload.dst_addr, neigh, netdev);
+	payload.port_id = cpu_to_be32(port_id);
+	/* Add destination of new route to NFP cache. */
+	nfp_tun_add_route_to_cache_v6(app, &payload.dst_ipv6);
+
+send_msg:
+	nfp_flower_xmit_tun_conf(app, NFP_FLOWER_CMSG_TYPE_TUN_NEIGH_V6,
+				 sizeof(struct nfp_tun_neigh_v6),
 				 (unsigned char *)&payload, flag);
 }
 
@@ -309,10 +519,12 @@ nfp_tun_neigh_event_handler(struct notifier_block *nb, unsigned long event,
 {
 	struct nfp_flower_priv *app_priv;
 	struct netevent_redirect *redir;
-	struct flowi4 flow = {};
+	struct flowi4 flow4 = {};
+	struct flowi6 flow6 = {};
 	struct neighbour *n;
 	struct nfp_app *app;
 	struct rtable *rt;
+	bool ipv6 = false;
 	int err;
 
 	switch (event) {
@@ -327,38 +539,62 @@ nfp_tun_neigh_event_handler(struct notifier_block *nb, unsigned long event,
 		return NOTIFY_DONE;
 	}
 
-	flow.daddr = *(__be32 *)n->primary_key;
+	if (n->tbl->family == AF_INET6)
+		ipv6 = true;
 
-	/* Only concerned with route changes for representors. */
-	if (!nfp_netdev_is_nfp_repr(n->dev))
-		return NOTIFY_DONE;
+	if (ipv6)
+		flow6.daddr = *(struct in6_addr *)n->primary_key;
+	else
+		flow4.daddr = *(__be32 *)n->primary_key;
 
 	app_priv = container_of(nb, struct nfp_flower_priv, tun.neigh_nb);
 	app = app_priv->app;
 
+	if (!nfp_netdev_is_nfp_repr(n->dev) &&
+	    !nfp_flower_internal_port_can_offload(app, n->dev))
+		return NOTIFY_DONE;
+
 	/* Only concerned with changes to routes already added to NFP. */
-	if (!nfp_tun_has_route(app, flow.daddr))
+	if ((ipv6 && !nfp_tun_has_route_v6(app, &flow6.daddr)) ||
+	    (!ipv6 && !nfp_tun_has_route_v4(app, &flow4.daddr)))
 		return NOTIFY_DONE;
 
 #if IS_ENABLED(CONFIG_INET)
-	/* Do a route lookup to populate flow data. */
-	rt = ip_route_output_key(dev_net(n->dev), &flow);
-	err = PTR_ERR_OR_ZERO(rt);
-	if (err)
-		return NOTIFY_DONE;
+	if (ipv6) {
+#if IS_ENABLED(CONFIG_IPV6)
+		struct dst_entry *dst;
 
-	ip_rt_put(rt);
+		dst = ipv6_stub->ipv6_dst_lookup_flow(dev_net(n->dev), NULL,
+						      &flow6, NULL);
+		if (IS_ERR(dst))
+			return NOTIFY_DONE;
+
+		dst_release(dst);
+		flow6.flowi6_proto = IPPROTO_UDP;
+		nfp_tun_write_neigh_v6(n->dev, app, &flow6, n, GFP_ATOMIC);
+#else
+		return NOTIFY_DONE;
+#endif /* CONFIG_IPV6 */
+	} else {
+		/* Do a route lookup to populate flow data. */
+		rt = ip_route_output_key(dev_net(n->dev), &flow4);
+		err = PTR_ERR_OR_ZERO(rt);
+		if (err)
+			return NOTIFY_DONE;
+
+		ip_rt_put(rt);
+
+		flow4.flowi4_proto = IPPROTO_UDP;
+		nfp_tun_write_neigh_v4(n->dev, app, &flow4, n, GFP_ATOMIC);
+	}
 #else
 	return NOTIFY_DONE;
-#endif
-
-	flow.flowi4_proto = IPPROTO_UDP;
-	nfp_tun_write_neigh(n->dev, app, &flow, n, GFP_ATOMIC);
+#endif /* CONFIG_INET */
 
 	return NOTIFY_OK;
 }
 
-void nfp_tunnel_request_route(struct nfp_app *app, struct sk_buff *skb)
+void nfp_tunnel_request_route_v4(struct nfp_app *app, struct sk_buff *skb)
 {
 	struct nfp_tun_req_route_ipv4 *payload;
 	struct net_device *netdev;
@@ -392,7 +628,7 @@ void nfp_tunnel_request_route(struct nfp_app *app, struct sk_buff *skb)
 	ip_rt_put(rt);
 	if (!n)
 		goto fail_rcu_unlock;
-	nfp_tun_write_neigh(n->dev, app, &flow, n, GFP_ATOMIC);
+	nfp_tun_write_neigh_v4(n->dev, app, &flow, n, GFP_ATOMIC);
 	neigh_release(n);
 	rcu_read_unlock();
 	return;
@@ -400,6 +636,48 @@ void nfp_tunnel_request_route(struct nfp_app *app, struct sk_buff *skb)
 fail_rcu_unlock:
 	rcu_read_unlock();
 	nfp_flower_cmsg_warn(app, "Requested route not found.\n");
+}
+
+void nfp_tunnel_request_route_v6(struct nfp_app *app, struct sk_buff *skb)
+{
+	struct nfp_tun_req_route_ipv6 *payload;
+	struct net_device *netdev;
+	struct flowi6 flow = {};
+	struct dst_entry *dst;
+	struct neighbour *n;
+
+	payload = nfp_flower_cmsg_get_data(skb);
+
+	rcu_read_lock();
+	netdev = nfp_app_dev_get(app, be32_to_cpu(payload->ingress_port), NULL);
+	if (!netdev)
+		goto fail_rcu_unlock;
+
+	flow.daddr = payload->ipv6_addr;
+	flow.flowi6_proto = IPPROTO_UDP;
+
+#if IS_ENABLED(CONFIG_INET) && IS_ENABLED(CONFIG_IPV6)
+	dst = ipv6_stub->ipv6_dst_lookup_flow(dev_net(netdev), NULL, &flow,
+					      NULL);
+	if (IS_ERR(dst))
+		goto fail_rcu_unlock;
+#else
+	goto fail_rcu_unlock;
+#endif
+
+	n = dst_neigh_lookup(dst, &flow.daddr);
+	dst_release(dst);
+	if (!n)
+		goto fail_rcu_unlock;
+
+	nfp_tun_write_neigh_v6(n->dev, app, &flow, n, GFP_ATOMIC);
+	neigh_release(n);
+	rcu_read_unlock();
+	return;
+
+fail_rcu_unlock:
+	rcu_read_unlock();
+	nfp_flower_cmsg_warn(app, "Requested IPv6 route not found.\n");
 }
 
 static void nfp_tun_write_ipv4_list(struct nfp_app *app)
@@ -483,6 +761,78 @@ void nfp_tunnel_del_ipv4_off(struct nfp_app *app, __be32 ipv4)
 	nfp_tun_write_ipv4_list(app);
 }
 
+static void nfp_tun_write_ipv6_list(struct nfp_app *app)
+{
+	struct nfp_flower_priv *priv = app->priv;
+	struct nfp_ipv6_addr_entry *entry;
+	struct nfp_tun_ipv6_addr payload;
+	int count = 0;
+
+	memset(&payload, 0, sizeof(struct nfp_tun_ipv6_addr));
+	mutex_lock(&priv->tun.ipv6_off_lock);
+	list_for_each_entry(entry, &priv->tun.ipv6_off_list, list) {
+		if (count >= NFP_FL_IPV6_ADDRS_MAX) {
+			nfp_flower_cmsg_warn(app, "Too many IPv6 tunnel endpoint addresses, some cannot be offloaded.\n");
+			break;
+		}
+		payload.ipv6_addr[count++] = entry->ipv6_addr;
+	}
+	mutex_unlock(&priv->tun.ipv6_off_lock);
+	payload.count = cpu_to_be32(count);
+
+	nfp_flower_xmit_tun_conf(app, NFP_FLOWER_CMSG_TYPE_TUN_IPS_V6,
+				 sizeof(struct nfp_tun_ipv6_addr),
+				 &payload, GFP_KERNEL);
+}
+
+struct nfp_ipv6_addr_entry *
+nfp_tunnel_add_ipv6_off(struct nfp_app *app, struct in6_addr *ipv6)
+{
+	struct nfp_flower_priv *priv = app->priv;
+	struct nfp_ipv6_addr_entry *entry;
+
+	mutex_lock(&priv->tun.ipv6_off_lock);
+	list_for_each_entry(entry, &priv->tun.ipv6_off_list, list)
+		if (!memcmp(&entry->ipv6_addr, ipv6, sizeof(*ipv6))) {
+			entry->ref_count++;
+			mutex_unlock(&priv->tun.ipv6_off_lock);
+			return entry;
+		}
+
+	entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+	if (!entry) {
+		mutex_unlock(&priv->tun.ipv6_off_lock);
+		nfp_flower_cmsg_warn(app, "Mem error when offloading IP address.\n");
+		return NULL;
+	}
+	entry->ipv6_addr = *ipv6;
+	entry->ref_count = 1;
+	list_add_tail(&entry->list, &priv->tun.ipv6_off_list);
+	mutex_unlock(&priv->tun.ipv6_off_lock);
+
+	nfp_tun_write_ipv6_list(app);
+
+	return entry;
+}
+
+void
+nfp_tunnel_put_ipv6_off(struct nfp_app *app, struct nfp_ipv6_addr_entry *entry)
+{
+	struct nfp_flower_priv *priv = app->priv;
+	bool freed = false;
+
+	mutex_lock(&priv->tun.ipv6_off_lock);
+	if (!--entry->ref_count) {
+		list_del(&entry->list);
+		kfree(entry);
+		freed = true;
+	}
+	mutex_unlock(&priv->tun.ipv6_off_lock);
+
+	if (freed)
+		nfp_tun_write_ipv6_list(app);
+}
+
 static int
 __nfp_tunnel_offload_mac(struct nfp_app *app, u8 *mac, u16 idx, bool del)
 {
@@ -557,6 +907,8 @@ nfp_tunnel_offloaded_macs_inc_ref_and_link(struct nfp_tun_offloaded_mac *entry,
 			list_del(&repr_priv->mac_list);
 
 		list_add_tail(&repr_priv->mac_list, &entry->repr_list);
+	} else if (nfp_flower_is_supported_bridge(netdev)) {
+		entry->bridge_count++;
 	}
 
 	entry->ref_count++;
@@ -573,20 +925,35 @@ nfp_tunnel_add_shared_mac(struct nfp_app *app, struct net_device *netdev,
 
 	entry = nfp_tunnel_lookup_offloaded_macs(app, netdev->dev_addr);
 	if (entry && nfp_tunnel_is_mac_idx_global(entry->index)) {
-		nfp_tunnel_offloaded_macs_inc_ref_and_link(entry, netdev, mod);
-		return 0;
+		if (entry->bridge_count ||
+		    !nfp_flower_is_supported_bridge(netdev)) {
+			nfp_tunnel_offloaded_macs_inc_ref_and_link(entry,
+								   netdev, mod);
+			return 0;
+		}
+
+		/* MAC is global but matches need to go to pre_tun table. */
+		nfp_mac_idx = entry->index | NFP_TUN_PRE_TUN_IDX_BIT;
 	}
 
-	/* Assign a global index if non-repr or MAC address is now shared. */
-	if (entry || !port) {
-		ida_idx = ida_simple_get(&priv->tun.mac_off_ids, 0,
-					 NFP_MAX_MAC_INDEX, GFP_KERNEL);
-		if (ida_idx < 0)
-			return ida_idx;
+	if (!nfp_mac_idx) {
+		/* Assign a global index if non-repr or MAC is now shared. */
+		if (entry || !port) {
+			ida_idx = ida_simple_get(&priv->tun.mac_off_ids, 0,
+						 NFP_MAX_MAC_INDEX, GFP_KERNEL);
+			if (ida_idx < 0)
+				return ida_idx;
 
-		nfp_mac_idx = nfp_tunnel_get_global_mac_idx_from_ida(ida_idx);
-	} else {
-		nfp_mac_idx = nfp_tunnel_get_mac_idx_from_phy_port_id(port);
+			nfp_mac_idx =
+				nfp_tunnel_get_global_mac_idx_from_ida(ida_idx);
+
+			if (nfp_flower_is_supported_bridge(netdev))
+				nfp_mac_idx |= NFP_TUN_PRE_TUN_IDX_BIT;
+
+		} else {
+			nfp_mac_idx =
+				nfp_tunnel_get_mac_idx_from_phy_port_id(port);
+		}
 	}
 
 	if (!entry) {
@@ -655,6 +1022,25 @@ nfp_tunnel_del_shared_mac(struct nfp_app *app, struct net_device *netdev,
 		list_del(&repr_priv->mac_list);
 	}
 
+	if (nfp_flower_is_supported_bridge(netdev)) {
+		entry->bridge_count--;
+
+		if (!entry->bridge_count && entry->ref_count) {
+			u16 nfp_mac_idx;
+
+			nfp_mac_idx = entry->index & ~NFP_TUN_PRE_TUN_IDX_BIT;
+			if (__nfp_tunnel_offload_mac(app, mac, nfp_mac_idx,
+						     false)) {
+				nfp_flower_cmsg_warn(app, "MAC offload index revert failed on %s.\n",
+						     netdev_name(netdev));
+				return 0;
+			}
+
+			entry->index = nfp_mac_idx;
+			return 0;
+		}
+	}
+
 	/* If MAC is now used by 1 repr set the offloaded MAC index to port. */
 	if (entry->ref_count == 1 && list_is_singular(&entry->repr_list)) {
 		u16 nfp_mac_idx;
@@ -714,6 +1100,9 @@ nfp_tunnel_offload_mac(struct nfp_app *app, struct net_device *netdev,
 			return 0;
 
 		repr_priv = repr->app_priv;
+		if (repr_priv->on_bridge)
+			return 0;
+
 		mac_offloaded = &repr_priv->mac_offloaded;
 		off_mac = &repr_priv->offloaded_mac_addr[0];
 		port = nfp_repr_get_port_id(netdev);
@@ -829,8 +1218,117 @@ int nfp_tunnel_mac_event_handler(struct nfp_app *app,
 		if (err)
 			nfp_flower_cmsg_warn(app, "Failed to offload MAC change on %s.\n",
 					     netdev_name(netdev));
+	} else if (event == NETDEV_CHANGEUPPER) {
+		/* If a repr is attached to a bridge then tunnel packets
+		 * entering the physical port are directed through the bridge
+		 * datapath and cannot be directly detunneled. Therefore,
+		 * associated offloaded MACs and indexes should not be used
+		 * by fw for detunneling.
+		 */
+		struct netdev_notifier_changeupper_info *info = ptr;
+		struct net_device *upper = info->upper_dev;
+		struct nfp_flower_repr_priv *repr_priv;
+		struct nfp_repr *repr;
+
+		if (!nfp_netdev_is_nfp_repr(netdev) ||
+		    !nfp_flower_is_supported_bridge(upper))
+			return NOTIFY_OK;
+
+		repr = netdev_priv(netdev);
+		if (repr->app != app)
+			return NOTIFY_OK;
+
+		repr_priv = repr->app_priv;
+
+		if (info->linking) {
+			if (nfp_tunnel_offload_mac(app, netdev,
+						   NFP_TUNNEL_MAC_OFFLOAD_DEL))
+				nfp_flower_cmsg_warn(app, "Failed to delete offloaded MAC on %s.\n",
+						     netdev_name(netdev));
+			repr_priv->on_bridge = true;
+		} else {
+			repr_priv->on_bridge = false;
+
+			if (!(netdev->flags & IFF_UP))
+				return NOTIFY_OK;
+
+			if (nfp_tunnel_offload_mac(app, netdev,
+						   NFP_TUNNEL_MAC_OFFLOAD_ADD))
+				nfp_flower_cmsg_warn(app, "Failed to offload MAC on %s.\n",
+						     netdev_name(netdev));
+		}
 	}
 	return NOTIFY_OK;
+}
+
+int nfp_flower_xmit_pre_tun_flow(struct nfp_app *app,
+				 struct nfp_fl_payload *flow)
+{
+	struct nfp_flower_priv *app_priv = app->priv;
+	struct nfp_tun_offloaded_mac *mac_entry;
+	struct nfp_tun_pre_tun_rule payload;
+	struct net_device *internal_dev;
+	int err;
+
+	if (app_priv->pre_tun_rule_cnt == NFP_TUN_PRE_TUN_RULE_LIMIT)
+		return -ENOSPC;
+
+	memset(&payload, 0, sizeof(struct nfp_tun_pre_tun_rule));
+
+	internal_dev = flow->pre_tun_rule.dev;
+	payload.vlan_tci = flow->pre_tun_rule.vlan_tci;
+	payload.host_ctx_id = flow->meta.host_ctx_id;
+
+	/* Lookup MAC index for the pre-tunnel rule egress device.
+	 * Note that because the device is always an internal port, it will
+	 * have a constant global index so does not need to be tracked.
+	 */
+	mac_entry = nfp_tunnel_lookup_offloaded_macs(app,
+						     internal_dev->dev_addr);
+	if (!mac_entry)
+		return -ENOENT;
+
+	payload.port_idx = cpu_to_be16(mac_entry->index);
+
+	/* Copy mac id and vlan to flow - dev may not exist at delete time. */
+	flow->pre_tun_rule.vlan_tci = payload.vlan_tci;
+	flow->pre_tun_rule.port_idx = payload.port_idx;
+
+	err = nfp_flower_xmit_tun_conf(app, NFP_FLOWER_CMSG_TYPE_PRE_TUN_RULE,
+				       sizeof(struct nfp_tun_pre_tun_rule),
+				       (unsigned char *)&payload, GFP_KERNEL);
+	if (err)
+		return err;
+
+	app_priv->pre_tun_rule_cnt++;
+
+	return 0;
+}
+
+int nfp_flower_xmit_pre_tun_del_flow(struct nfp_app *app,
+				     struct nfp_fl_payload *flow)
+{
+	struct nfp_flower_priv *app_priv = app->priv;
+	struct nfp_tun_pre_tun_rule payload;
+	u32 tmp_flags = 0;
+	int err;
+
+	memset(&payload, 0, sizeof(struct nfp_tun_pre_tun_rule));
+
+	tmp_flags |= NFP_TUN_PRE_TUN_RULE_DEL;
+	payload.flags = cpu_to_be32(tmp_flags);
+	payload.vlan_tci = flow->pre_tun_rule.vlan_tci;
+	payload.port_idx = flow->pre_tun_rule.port_idx;
+
+	err = nfp_flower_xmit_tun_conf(app, NFP_FLOWER_CMSG_TYPE_PRE_TUN_RULE,
+				       sizeof(struct nfp_tun_pre_tun_rule),
+				       (unsigned char *)&payload, GFP_KERNEL);
+	if (err)
+		return err;
+
+	app_priv->pre_tun_rule_cnt--;
+
+	return 0;
 }
 
 int nfp_tunnel_config_start(struct nfp_app *app)
@@ -846,13 +1344,17 @@ int nfp_tunnel_config_start(struct nfp_app *app)
 
 	ida_init(&priv->tun.mac_off_ids);
 
-	/* Initialise priv data for IPv4 offloading. */
+	/* Initialise priv data for IPv4/v6 offloading. */
 	mutex_init(&priv->tun.ipv4_off_lock);
 	INIT_LIST_HEAD(&priv->tun.ipv4_off_list);
+	mutex_init(&priv->tun.ipv6_off_lock);
+	INIT_LIST_HEAD(&priv->tun.ipv6_off_list);
 
 	/* Initialise priv data for neighbour offloading. */
-	spin_lock_init(&priv->tun.neigh_off_lock);
-	INIT_LIST_HEAD(&priv->tun.neigh_off_list);
+	spin_lock_init(&priv->tun.neigh_off_lock_v4);
+	INIT_LIST_HEAD(&priv->tun.neigh_off_list_v4);
+	spin_lock_init(&priv->tun.neigh_off_lock_v6);
+	INIT_LIST_HEAD(&priv->tun.neigh_off_list_v6);
 	priv->tun.neigh_nb.notifier_call = nfp_tun_neigh_event_handler;
 
 	err = register_netevent_notifier(&priv->tun.neigh_nb);
@@ -867,9 +1369,11 @@ int nfp_tunnel_config_start(struct nfp_app *app)
 
 void nfp_tunnel_config_stop(struct nfp_app *app)
 {
+	struct nfp_offloaded_route *route_entry, *temp;
 	struct nfp_flower_priv *priv = app->priv;
-	struct nfp_ipv4_route_entry *route_entry;
 	struct nfp_ipv4_addr_entry *ip_entry;
+	struct nfp_tun_neigh_v6 ipv6_route;
+	struct nfp_tun_neigh ipv4_route;
 	struct list_head *ptr, *storage;
 
 	unregister_netevent_notifier(&priv->tun.neigh_nb);
@@ -883,12 +1387,35 @@ void nfp_tunnel_config_stop(struct nfp_app *app)
 		kfree(ip_entry);
 	}
 
-	/* Free any memory that may be occupied by the route list. */
-	list_for_each_safe(ptr, storage, &priv->tun.neigh_off_list) {
-		route_entry = list_entry(ptr, struct nfp_ipv4_route_entry,
-					 list);
+	mutex_destroy(&priv->tun.ipv6_off_lock);
+
+	/* Free memory in the route list and remove entries from fw cache. */
+	list_for_each_entry_safe(route_entry, temp,
+				 &priv->tun.neigh_off_list_v4, list) {
+		memset(&ipv4_route, 0, sizeof(ipv4_route));
+		memcpy(&ipv4_route.dst_ipv4, &route_entry->ip_add,
+		       sizeof(ipv4_route.dst_ipv4));
 		list_del(&route_entry->list);
 		kfree(route_entry);
+
+		nfp_flower_xmit_tun_conf(app, NFP_FLOWER_CMSG_TYPE_TUN_NEIGH,
+					 sizeof(struct nfp_tun_neigh),
+					 (unsigned char *)&ipv4_route,
+					 GFP_KERNEL);
+	}
+
+	list_for_each_entry_safe(route_entry, temp,
+				 &priv->tun.neigh_off_list_v6, list) {
+		memset(&ipv6_route, 0, sizeof(ipv6_route));
+		memcpy(&ipv6_route.dst_ipv6, &route_entry->ip_add,
+		       sizeof(ipv6_route.dst_ipv6));
+		list_del(&route_entry->list);
+		kfree(route_entry);
+
+		nfp_flower_xmit_tun_conf(app, NFP_FLOWER_CMSG_TYPE_TUN_NEIGH_V6,
+					 sizeof(struct nfp_tun_neigh),
+					 (unsigned char *)&ipv6_route,
+					 GFP_KERNEL);
 	}
 
 	/* Destroy rhash. Entries should be cleaned on netdev notifier unreg. */

@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright 2002-2005, Devicescape Software, Inc.
  * Copyright 2013-2014  Intel Mobile Communications GmbH
  * Copyright(c) 2015-2017 Intel Deutschland GmbH
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef STA_INFO_H
@@ -101,6 +98,7 @@ enum ieee80211_sta_info_flags {
 	WLAN_STA_MPSP_OWNER,
 	WLAN_STA_MPSP_RECIPIENT,
 	WLAN_STA_PS_DELIVER,
+	WLAN_STA_USES_ENCRYPTION,
 
 	NUM_WLAN_STA_FLAGS,
 };
@@ -135,7 +133,14 @@ struct airtime_info {
 	u64 rx_airtime;
 	u64 tx_airtime;
 	s64 deficit;
+	atomic_t aql_tx_pending; /* Estimated airtime for frames pending */
+	u32 aql_limit_low;
+	u32 aql_limit_high;
 };
+
+void ieee80211_sta_update_pending_airtime(struct ieee80211_local *local,
+					  struct sta_info *sta, u8 ac,
+					  u16 tx_airtime, bool tx_completed);
 
 struct sta_info;
 
@@ -469,6 +474,7 @@ struct ieee80211_sta_rx_stats {
  *	the station when it leaves powersave or polls for frames
  * @driver_buffered_tids: bitmap of TIDs the driver has data buffered on
  * @txq_buffered_tids: bitmap of TIDs that mac80211 has txq data buffered on
+ * @assoc_at: clock boottime (in ns) of last association
  * @last_connected: time (in seconds) when a station got connected
  * @last_seq_ctrl: last received seq/frag number from this STA (per TID
  *	plus one for non-QoS frames)
@@ -528,7 +534,9 @@ struct sta_info {
 	u8 addr[ETH_ALEN];
 	struct ieee80211_local *local;
 	struct ieee80211_sub_if_data *sdata;
-	struct ieee80211_key __rcu *gtk[NUM_DEFAULT_KEYS + NUM_DEFAULT_MGMT_KEYS];
+	struct ieee80211_key __rcu *gtk[NUM_DEFAULT_KEYS +
+					NUM_DEFAULT_MGMT_KEYS +
+					NUM_DEFAULT_BEACON_KEYS];
 	struct ieee80211_key __rcu *ptk[NUM_DEFAULT_KEYS];
 	u8 ptk_idx;
 	struct rate_control_ref *rate_ctrl;
@@ -565,6 +573,7 @@ struct sta_info {
 	unsigned long driver_buffered_tids;
 	unsigned long txq_buffered_tids;
 
+	u64 assoc_at;
 	long last_connected;
 
 	/* Updated from RX path only, no locking requirements */
@@ -725,6 +734,10 @@ struct sta_info *sta_info_get(struct ieee80211_sub_if_data *sdata,
 
 struct sta_info *sta_info_get_bss(struct ieee80211_sub_if_data *sdata,
 				  const u8 *addr);
+
+/* user must hold sta_mtx or be in RCU critical section */
+struct sta_info *sta_info_get_by_addrs(struct ieee80211_local *local,
+				       const u8 *sta_addr, const u8 *vif_addr);
 
 #define for_each_sta_info(local, _addr, _sta, _tmp)			\
 	rhl_for_each_entry_rcu(_sta, _tmp,				\

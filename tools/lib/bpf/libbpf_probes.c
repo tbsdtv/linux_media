@@ -17,6 +17,9 @@
 #include "libbpf.h"
 #include "libbpf_internal.h"
 
+/* make sure libbpf doesn't use kernel-only integer typedefs */
+#pragma GCC poison u8 u16 u32 u64 s8 s16 s32 s64
+
 static bool grep(const char *buffer, const char *pattern)
 {
 	return !!strstr(buffer, pattern);
@@ -101,6 +104,11 @@ probe_load(enum bpf_prog_type prog_type, const struct bpf_insn *insns,
 	case BPF_PROG_TYPE_SK_REUSEPORT:
 	case BPF_PROG_TYPE_FLOW_DISSECTOR:
 	case BPF_PROG_TYPE_CGROUP_SYSCTL:
+	case BPF_PROG_TYPE_CGROUP_SOCKOPT:
+	case BPF_PROG_TYPE_TRACING:
+	case BPF_PROG_TYPE_STRUCT_OPS:
+	case BPF_PROG_TYPE_EXT:
+	case BPF_PROG_TYPE_LSM:
 	default:
 		break;
 	}
@@ -133,8 +141,8 @@ bool bpf_probe_prog_type(enum bpf_prog_type prog_type, __u32 ifindex)
 	return errno != EINVAL && errno != EOPNOTSUPP;
 }
 
-int libbpf__probe_raw_btf(const char *raw_types, size_t types_len,
-			  const char *str_sec, size_t str_len)
+int libbpf__load_raw_btf(const char *raw_types, size_t types_len,
+			 const char *str_sec, size_t str_len)
 {
 	struct btf_header hdr = {
 		.magic = BTF_MAGIC,
@@ -157,14 +165,9 @@ int libbpf__probe_raw_btf(const char *raw_types, size_t types_len,
 	memcpy(raw_btf + hdr.hdr_len + hdr.type_len, str_sec, hdr.str_len);
 
 	btf_fd = bpf_load_btf(raw_btf, btf_len, NULL, 0, false);
-	if (btf_fd < 0) {
-		free(raw_btf);
-		return 0;
-	}
 
-	close(btf_fd);
 	free(raw_btf);
-	return 1;
+	return btf_fd;
 }
 
 static int load_sk_storage_btf(void)
@@ -190,7 +193,7 @@ static int load_sk_storage_btf(void)
 		BTF_MEMBER_ENC(23, 2, 32),/* struct bpf_spin_lock l; */
 	};
 
-	return libbpf__probe_raw_btf((char *)types, sizeof(types),
+	return libbpf__load_raw_btf((char *)types, sizeof(types),
 				     strs, sizeof(strs));
 }
 
@@ -248,11 +251,13 @@ bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex)
 	case BPF_MAP_TYPE_ARRAY_OF_MAPS:
 	case BPF_MAP_TYPE_HASH_OF_MAPS:
 	case BPF_MAP_TYPE_DEVMAP:
+	case BPF_MAP_TYPE_DEVMAP_HASH:
 	case BPF_MAP_TYPE_SOCKMAP:
 	case BPF_MAP_TYPE_CPUMAP:
 	case BPF_MAP_TYPE_XSKMAP:
 	case BPF_MAP_TYPE_SOCKHASH:
 	case BPF_MAP_TYPE_REUSEPORT_SOCKARRAY:
+	case BPF_MAP_TYPE_STRUCT_OPS:
 	default:
 		break;
 	}
@@ -322,4 +327,25 @@ bool bpf_probe_helper(enum bpf_func_id id, enum bpf_prog_type prog_type,
 	}
 
 	return res;
+}
+
+/*
+ * Probe for availability of kernel commit (5.3):
+ *
+ * c04c0d2b968a ("bpf: increase complexity limit and maximum program size")
+ */
+bool bpf_probe_large_insn_limit(__u32 ifindex)
+{
+	struct bpf_insn insns[BPF_MAXINSNS + 1];
+	int i;
+
+	for (i = 0; i < BPF_MAXINSNS; i++)
+		insns[i] = BPF_MOV64_IMM(BPF_REG_0, 1);
+	insns[BPF_MAXINSNS] = BPF_EXIT_INSN();
+
+	errno = 0;
+	probe_load(BPF_PROG_TYPE_SCHED_CLS, insns, ARRAY_SIZE(insns), NULL, 0,
+		   ifindex);
+
+	return errno != E2BIG && errno != EINVAL;
 }

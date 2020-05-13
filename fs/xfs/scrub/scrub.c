@@ -9,36 +9,17 @@
 #include "xfs_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
-#include "xfs_defer.h"
-#include "xfs_btree.h"
-#include "xfs_bit.h"
 #include "xfs_log_format.h"
 #include "xfs_trans.h"
-#include "xfs_sb.h"
 #include "xfs_inode.h"
-#include "xfs_icache.h"
-#include "xfs_itable.h"
-#include "xfs_alloc.h"
-#include "xfs_alloc_btree.h"
-#include "xfs_bmap.h"
-#include "xfs_bmap_btree.h"
-#include "xfs_ialloc.h"
-#include "xfs_ialloc_btree.h"
-#include "xfs_refcount.h"
-#include "xfs_refcount_btree.h"
-#include "xfs_rmap.h"
-#include "xfs_rmap_btree.h"
 #include "xfs_quota.h"
 #include "xfs_qm.h"
 #include "xfs_errortag.h"
 #include "xfs_error.h"
-#include "xfs_log.h"
-#include "xfs_trans_priv.h"
-#include "scrub/xfs_scrub.h"
+#include "xfs_scrub.h"
 #include "scrub/scrub.h"
 #include "scrub/common.h"
 #include "scrub/trace.h"
-#include "scrub/btree.h"
 #include "scrub/repair.h"
 #include "scrub/health.h"
 
@@ -187,6 +168,7 @@ xchk_teardown(
 			xfs_irele(sc->ip);
 		sc->ip = NULL;
 	}
+	sb_end_write(sc->mp->m_super);
 	if (sc->flags & XCHK_REAPING_DISABLED)
 		xchk_start_reaping(sc);
 	if (sc->flags & XCHK_HAS_QUOTAOFFLOCK) {
@@ -509,6 +491,14 @@ xfs_scrub_metadata(
 	sc.ops = &meta_scrub_ops[sm->sm_type];
 	sc.sick_mask = xchk_health_mask_for_scrub_type(sm->sm_type);
 retry_op:
+	/*
+	 * If freeze runs concurrently with a scrub, the freeze can be delayed
+	 * indefinitely as we walk the filesystem and iterate over metadata
+	 * buffers.  Freeze quiesces the log (which waits for the buffer LRU to
+	 * be emptied) and that won't happen while checking is running.
+	 */
+	sb_start_write(mp->m_super);
+
 	/* Set up for the operation. */
 	error = sc.ops->setup(&sc, ip);
 	if (error)

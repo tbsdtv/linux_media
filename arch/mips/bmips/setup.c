@@ -10,11 +10,11 @@
 #include <linux/init.h>
 #include <linux/bitops.h>
 #include <linux/memblock.h>
-#include <linux/clk-provider.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/of.h>
+#include <linux/of_clk.h>
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
 #include <linux/libfdt.h>
@@ -162,7 +162,7 @@ void __init plat_mem_setup(void)
 	ioport_resource.start = 0;
 	ioport_resource.end = ~0;
 
-	/* intended to somewhat resemble ARM; see Documentation/arm/Booting */
+	/* intended to somewhat resemble ARM; see Documentation/arm/booting.rst */
 	if (fw_arg0 == 0 && fw_arg1 == 0xffffffff)
 		dtb = phys_to_virt(fw_arg2);
 	else if (fw_passed_dtb) /* UHI interface or appended dtb */

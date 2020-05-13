@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright 2010 MontaVista Software, LLC.
  *
  * Author: Anton Vorontsov <avorontsov@ru.mvista.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _DRIVERS_MMC_SDHCI_PLTFM_H
@@ -28,7 +25,7 @@ struct sdhci_pltfm_host {
 	unsigned int clock;
 	u16 xfer_mode_shadow;
 
-	unsigned long private[0] ____cacheline_aligned;
+	unsigned long private[] ____cacheline_aligned;
 };
 
 #ifdef CONFIG_MMC_SDHCI_BIG_ENDIAN_32BIT_BYTE_SWAPPER

@@ -20,6 +20,7 @@ int default_wake_function(struct wait_queue_entry *wq_entry, unsigned mode, int 
 #define WQ_FLAG_EXCLUSIVE	0x01
 #define WQ_FLAG_WOKEN		0x02
 #define WQ_FLAG_BOOKMARK	0x04
+#define WQ_FLAG_CUSTOM		0x08
 
 /*
  * A single wait-queue entry structure:
@@ -127,6 +128,19 @@ static inline int waitqueue_active(struct wait_queue_head *wq_head)
 }
 
 /**
+ * wq_has_single_sleeper - check if there is only one sleeper
+ * @wq_head: wait queue head
+ *
+ * Returns true of wq_head has only one sleeper on the list.
+ *
+ * Please refer to the comment for waitqueue_active.
+ */
+static inline bool wq_has_single_sleeper(struct wait_queue_head *wq_head)
+{
+	return list_is_singular(&wq_head->head);
+}
+
+/**
  * wq_has_sleeper - check if there are any waiting processes
  * @wq_head: wait queue head
  *
@@ -188,9 +202,10 @@ void __wake_up(struct wait_queue_head *wq_head, unsigned int mode, int nr, void 
 void __wake_up_locked_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
 void __wake_up_locked_key_bookmark(struct wait_queue_head *wq_head,
 		unsigned int mode, void *key, wait_queue_entry_t *bookmark);
-void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode, int nr, void *key);
+void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
+void __wake_up_locked_sync_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
 void __wake_up_locked(struct wait_queue_head *wq_head, unsigned int mode, int nr);
-void __wake_up_sync(struct wait_queue_head *wq_head, unsigned int mode, int nr);
+void __wake_up_sync(struct wait_queue_head *wq_head, unsigned int mode);
 
 #define wake_up(x)			__wake_up(x, TASK_NORMAL, 1, NULL)
 #define wake_up_nr(x, nr)		__wake_up(x, TASK_NORMAL, nr, NULL)
@@ -201,7 +216,7 @@ void __wake_up_sync(struct wait_queue_head *wq_head, unsigned int mode, int nr);
 #define wake_up_interruptible(x)	__wake_up(x, TASK_INTERRUPTIBLE, 1, NULL)
 #define wake_up_interruptible_nr(x, nr)	__wake_up(x, TASK_INTERRUPTIBLE, nr, NULL)
 #define wake_up_interruptible_all(x)	__wake_up(x, TASK_INTERRUPTIBLE, 0, NULL)
-#define wake_up_interruptible_sync(x)	__wake_up_sync((x), TASK_INTERRUPTIBLE, 1)
+#define wake_up_interruptible_sync(x)	__wake_up_sync((x), TASK_INTERRUPTIBLE)
 
 /*
  * Wakeup macros to be used to report events to the targets.
@@ -215,7 +230,9 @@ void __wake_up_sync(struct wait_queue_head *wq_head, unsigned int mode, int nr);
 #define wake_up_interruptible_poll(x, m)					\
 	__wake_up(x, TASK_INTERRUPTIBLE, 1, poll_to_key(m))
 #define wake_up_interruptible_sync_poll(x, m)					\
-	__wake_up_sync_key((x), TASK_INTERRUPTIBLE, 1, poll_to_key(m))
+	__wake_up_sync_key((x), TASK_INTERRUPTIBLE, poll_to_key(m))
+#define wake_up_interruptible_sync_poll_locked(x, m)				\
+	__wake_up_locked_sync_key((x), TASK_INTERRUPTIBLE, poll_to_key(m))
 
 #define ___wait_cond_timeout(condition)						\
 ({										\
@@ -488,8 +505,8 @@ do {										\
 	int __ret = 0;								\
 	struct hrtimer_sleeper __t;						\
 										\
-	hrtimer_init_on_stack(&__t.timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);	\
-	hrtimer_init_sleeper(&__t, current);					\
+	hrtimer_init_sleeper_on_stack(&__t, CLOCK_MONOTONIC,			\
+				      HRTIMER_MODE_REL);			\
 	if ((timeout) != KTIME_MAX)						\
 		hrtimer_start_range_ns(&__t.timer, timeout,			\
 				       current->timer_slack_ns,			\

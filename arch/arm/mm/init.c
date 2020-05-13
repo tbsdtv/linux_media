@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/mm/init.c
  *
  *  Copyright (C) 1995-2005 Russell King
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -24,6 +21,7 @@
 #include <linux/dma-contiguous.h>
 #include <linux/sizes.h>
 #include <linux/stop_machine.h>
+#include <linux/swiotlb.h>
 
 #include <asm/cp15.h>
 #include <asm/mach-types.h>
@@ -32,6 +30,7 @@
 #include <asm/prom.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
+#include <asm/set_memory.h>
 #include <asm/system_info.h>
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
@@ -177,7 +176,12 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max_low,
 #ifdef CONFIG_HAVE_ARCH_PFN_VALID
 int pfn_valid(unsigned long pfn)
 {
-	return memblock_is_map_memory(__pfn_to_phys(pfn));
+	phys_addr_t addr = __pfn_to_phys(pfn);
+
+	if (__phys_to_pfn(addr) != pfn)
+		return 0;
+
+	return memblock_is_map_memory(addr);
 }
 EXPORT_SYMBOL(pfn_valid);
 #endif
@@ -242,6 +246,22 @@ static void __init arm_initrd_init(void)
 #endif
 }
 
+#ifdef CONFIG_CPU_ICACHE_MISMATCH_WORKAROUND
+void check_cpu_icache_size(int cpuid)
+{
+	u32 size, ctr;
+
+	asm("mrc p15, 0, %0, c0, c0, 1" : "=r" (ctr));
+
+	size = 1 << ((ctr & 0xf) + 2);
+	if (cpuid != 0 && icache_size != size)
+		pr_info("CPU%u: detected I-Cache line size mismatch, workaround enabled\n",
+			cpuid);
+	if (icache_size > size)
+		icache_size = size;
+}
+#endif
+
 void __init arm_memblock_init(const struct machine_desc *mdesc)
 {
 	/* Register the kernel text, kernel data and initrd with memblock. */
@@ -304,7 +324,7 @@ static inline void poison_init_mem(void *s, size_t count)
 		*p++ = 0xe7fddef0;
 }
 
-static inline void
+static inline void __init
 free_memmap(unsigned long start_pfn, unsigned long end_pfn)
 {
 	struct page *start_pg, *end_pg;
@@ -450,10 +470,8 @@ static void __init free_highpages(void)
  */
 void __init mem_init(void)
 {
-#ifdef CONFIG_HAVE_TCM
-	/* These pointers are filled in on TCM detection */
-	extern u32 dtcm_end;
-	extern u32 itcm_end;
+#ifdef CONFIG_ARM_LPAE
+	swiotlb_init(1);
 #endif
 
 	set_max_mapnr(pfn_to_page(max_pfn) - mem_map);
@@ -576,8 +594,8 @@ static inline bool arch_has_strict_perms(void)
 	return !!(get_cr() & CR_XP);
 }
 
-void set_section_perms(struct section_perm *perms, int n, bool set,
-			struct mm_struct *mm)
+static void set_section_perms(struct section_perm *perms, int n, bool set,
+			      struct mm_struct *mm)
 {
 	size_t i;
 	unsigned long addr;
@@ -616,7 +634,8 @@ static void update_sections_early(struct section_perm perms[], int n)
 		if (t->flags & PF_KTHREAD)
 			continue;
 		for_each_thread(t, s)
-			set_section_perms(perms, n, true, s->mm);
+			if (s->mm)
+				set_section_perms(perms, n, true, s->mm);
 	}
 	set_section_perms(perms, n, true, current->active_mm);
 	set_section_perms(perms, n, true, &init_mm);

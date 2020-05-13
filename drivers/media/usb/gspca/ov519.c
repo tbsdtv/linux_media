@@ -2073,6 +2073,11 @@ static int reg_r(struct sd *sd, u16 index)
 	} else {
 		gspca_err(gspca_dev, "reg_r %02x failed %d\n", index, ret);
 		sd->gspca_dev.usb_err = ret;
+		/*
+		 * Make sure the result is zeroed to avoid uninitialized
+		 * values.
+		 */
+		gspca_dev->usb_buf[0] = 0;
 	}
 
 	return ret;
@@ -2101,6 +2106,11 @@ static int reg_r8(struct sd *sd,
 	} else {
 		gspca_err(gspca_dev, "reg_r8 %02x failed %d\n", index, ret);
 		sd->gspca_dev.usb_err = ret;
+		/*
+		 * Make sure the buffer is zeroed to avoid uninitialized
+		 * values.
+		 */
+		memset(gspca_dev->usb_buf, 0, 8);
 	}
 
 	return ret;
@@ -3467,6 +3477,11 @@ static void ov511_mode_init_regs(struct sd *sd)
 		return;
 	}
 
+	if (alt->desc.bNumEndpoints < 1) {
+		sd->gspca_dev.usb_err = -ENODEV;
+		return;
+	}
+
 	packet_size = le16_to_cpu(alt->endpoint[0].desc.wMaxPacketSize);
 	reg_w(sd, R51x_FIFO_PSIZE, packet_size >> 5);
 
@@ -3590,6 +3605,11 @@ static void ov518_mode_init_regs(struct sd *sd)
 	if (!alt) {
 		gspca_err(gspca_dev, "Couldn't get altsetting\n");
 		sd->gspca_dev.usb_err = -EIO;
+		return;
+	}
+
+	if (alt->desc.bNumEndpoints < 1) {
+		sd->gspca_dev.usb_err = -ENODEV;
 		return;
 	}
 

@@ -33,6 +33,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/io-64-nonatomic-lo-hi.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -1317,7 +1318,7 @@ static int fza_probe(struct device *bdev)
 	}
 
 	/* MMIO mapping setup. */
-	mmio = ioremap_nocache(start, len);
+	mmio = ioremap(start, len);
 	if (!mmio) {
 		pr_err("%s: cannot map MMIO\n", fp->name);
 		ret = -ENOMEM;

@@ -161,7 +161,7 @@ static void	tlan_set_multicast_list(struct net_device *);
 static int	tlan_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
 static int      tlan_probe1(struct pci_dev *pdev, long ioaddr,
 			    int irq, int rev, const struct pci_device_id *ent);
-static void	tlan_tx_timeout(struct net_device *dev);
+static void	tlan_tx_timeout(struct net_device *dev, unsigned int txqueue);
 static void	tlan_tx_timeout_work(struct work_struct *work);
 static int	tlan_init_one(struct pci_dev *pdev,
 			      const struct pci_device_id *ent);
@@ -855,7 +855,6 @@ static int tlan_init(struct net_device *dev)
 		       dev->name);
 		return -ENOMEM;
 	}
-	memset(priv->dma_storage, 0, dma_size);
 	priv->rx_list = (struct tlan_list *)
 		ALIGN((unsigned long)priv->dma_storage, 8);
 	priv->rx_list_dma = ALIGN(priv->dma_storage_dma, 8);
@@ -998,7 +997,7 @@ static int tlan_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
  *
  **************************************************************/
 
-static void tlan_tx_timeout(struct net_device *dev)
+static void tlan_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 
 	TLAN_DBG(TLAN_DEBUG_GNRL, "%s: Transmit timed out.\n", dev->name);
@@ -1029,7 +1028,7 @@ static void tlan_tx_timeout_work(struct work_struct *work)
 	struct tlan_priv	*priv =
 		container_of(work, struct tlan_priv, tlan_tqueue);
 
-	tlan_tx_timeout(priv->dev);
+	tlan_tx_timeout(priv->dev, UINT_MAX);
 }
 
 

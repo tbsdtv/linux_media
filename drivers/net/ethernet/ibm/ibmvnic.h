@@ -20,6 +20,7 @@
 #define IBMVNIC_INVALID_MAP	-1
 #define IBMVNIC_STATS_TIMEOUT	1
 #define IBMVNIC_INIT_FAILED	2
+#define IBMVNIC_OPEN_FAILED	3
 
 /* basic structures plus 100 2k buffers */
 #define IBMVNIC_IO_ENTITLEMENT_DEFAULT	610305
@@ -37,6 +38,8 @@
 
 #define IBMVNIC_MAX_LTB_SIZE ((1 << (MAX_ORDER - 1)) * PAGE_SIZE)
 #define IBMVNIC_BUFFER_HLEN 500
+
+#define IBMVNIC_RESET_DELAY 100
 
 static const char ibmvnic_priv_flags[][ETH_GSTRING_LEN] = {
 #define IBMVNIC_USE_SERVER_MAXES 0x1
@@ -938,7 +941,8 @@ enum vnic_state {VNIC_PROBING = 1,
 		 VNIC_CLOSING,
 		 VNIC_CLOSED,
 		 VNIC_REMOVING,
-		 VNIC_REMOVED};
+		 VNIC_REMOVED,
+		 VNIC_RESETTING};
 
 enum ibmvnic_reset_reason {VNIC_RESET_FAILOVER = 1,
 			   VNIC_RESET_MOBILITY,
@@ -1023,6 +1027,8 @@ struct ibmvnic_adapter {
 	int init_done_rc;
 
 	struct completion fw_done;
+	/* Used for serialization of device commands */
+	struct mutex fw_lock;
 	int fw_done_rc;
 
 	struct completion reset_done;
@@ -1076,7 +1082,8 @@ struct ibmvnic_adapter {
 	spinlock_t rwi_lock;
 	struct list_head rwi_list;
 	struct work_struct ibmvnic_reset;
-	bool resetting;
+	struct delayed_work ibmvnic_delayed_reset;
+	unsigned long resetting;
 	bool napi_enabled, from_passive_init;
 
 	bool failover_pending;
@@ -1084,4 +1091,7 @@ struct ibmvnic_adapter {
 
 	struct ibmvnic_tunables desired;
 	struct ibmvnic_tunables fallback;
+
+	/* Used for serializatin of state field */
+	spinlock_t state_lock;
 };

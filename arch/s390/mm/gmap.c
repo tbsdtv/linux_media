@@ -9,7 +9,7 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/mm.h>
+#include <linux/pagewalk.h>
 #include <linux/swap.h>
 #include <linux/smp.h>
 #include <linux/spinlock.h>
@@ -67,7 +67,7 @@ static struct gmap *gmap_alloc(unsigned long limit)
 	INIT_RADIX_TREE(&gmap->host_to_rmap, GFP_ATOMIC);
 	spin_lock_init(&gmap->guest_table_lock);
 	spin_lock_init(&gmap->shadow_lock);
-	atomic_set(&gmap->ref_count, 1);
+	refcount_set(&gmap->ref_count, 1);
 	page = alloc_pages(GFP_KERNEL, CRST_ALLOC_ORDER);
 	if (!page)
 		goto out_free;
@@ -214,7 +214,7 @@ static void gmap_free(struct gmap *gmap)
  */
 struct gmap *gmap_get(struct gmap *gmap)
 {
-	atomic_inc(&gmap->ref_count);
+	refcount_inc(&gmap->ref_count);
 	return gmap;
 }
 EXPORT_SYMBOL_GPL(gmap_get);
@@ -227,7 +227,7 @@ EXPORT_SYMBOL_GPL(gmap_get);
  */
 void gmap_put(struct gmap *gmap)
 {
-	if (atomic_dec_return(&gmap->ref_count) == 0)
+	if (refcount_dec_and_test(&gmap->ref_count))
 		gmap_free(gmap);
 }
 EXPORT_SYMBOL_GPL(gmap_put);
@@ -787,14 +787,18 @@ static void gmap_call_notifier(struct gmap *gmap, unsigned long start,
 static inline unsigned long *gmap_table_walk(struct gmap *gmap,
 					     unsigned long gaddr, int level)
 {
+	const int asce_type = gmap->asce & _ASCE_TYPE_MASK;
 	unsigned long *table;
 
 	if ((gmap->asce & _ASCE_TYPE_MASK) + 4 < (level * 4))
 		return NULL;
 	if (gmap_is_shadow(gmap) && gmap->removed)
 		return NULL;
-	if (gaddr & (-1UL << (31 + ((gmap->asce & _ASCE_TYPE_MASK) >> 2)*11)))
+
+	if (asce_type != _ASCE_TYPE_REGION1 &&
+	    gaddr & (-1UL << (31 + (asce_type >> 2) * 11)))
 		return NULL;
+
 	table = gmap->table;
 	switch (gmap->asce & _ASCE_TYPE_MASK) {
 	case _ASCE_TYPE_REGION1:
@@ -804,7 +808,7 @@ static inline unsigned long *gmap_table_walk(struct gmap *gmap,
 		if (*table & _REGION_ENTRY_INVALID)
 			return NULL;
 		table = (unsigned long *)(*table & _REGION_ENTRY_ORIGIN);
-		/* Fallthrough */
+		fallthrough;
 	case _ASCE_TYPE_REGION2:
 		table += (gaddr & _REGION2_INDEX) >> _REGION2_SHIFT;
 		if (level == 3)
@@ -812,7 +816,7 @@ static inline unsigned long *gmap_table_walk(struct gmap *gmap,
 		if (*table & _REGION_ENTRY_INVALID)
 			return NULL;
 		table = (unsigned long *)(*table & _REGION_ENTRY_ORIGIN);
-		/* Fallthrough */
+		fallthrough;
 	case _ASCE_TYPE_REGION3:
 		table += (gaddr & _REGION3_INDEX) >> _REGION3_SHIFT;
 		if (level == 2)
@@ -820,7 +824,7 @@ static inline unsigned long *gmap_table_walk(struct gmap *gmap,
 		if (*table & _REGION_ENTRY_INVALID)
 			return NULL;
 		table = (unsigned long *)(*table & _REGION_ENTRY_ORIGIN);
-		/* Fallthrough */
+		fallthrough;
 	case _ASCE_TYPE_SEGMENT:
 		table += (gaddr & _SEGMENT_INDEX) >> _SEGMENT_SHIFT;
 		if (level == 1)
@@ -1594,7 +1598,7 @@ static struct gmap *gmap_find_shadow(struct gmap *parent, unsigned long asce,
 			continue;
 		if (!sg->initialized)
 			return ERR_PTR(-EAGAIN);
-		atomic_inc(&sg->ref_count);
+		refcount_inc(&sg->ref_count);
 		return sg;
 	}
 	return NULL;
@@ -1682,7 +1686,7 @@ struct gmap *gmap_shadow(struct gmap *parent, unsigned long asce,
 			}
 		}
 	}
-	atomic_set(&new->ref_count, 2);
+	refcount_set(&new->ref_count, 2);
 	list_add(&new->list, &parent->children);
 	if (asce & _ASCE_REAL_SPACE) {
 		/* nothing to protect, return right away */
@@ -1840,6 +1844,7 @@ int gmap_shadow_r3t(struct gmap *sg, unsigned long saddr, unsigned long r3t,
 		goto out_free;
 	} else if (*table & _REGION_ENTRY_ORIGIN) {
 		rc = -EAGAIN;		/* Race with shadow */
+		goto out_free;
 	}
 	crst_table_init(s_r3t, _REGION3_ENTRY_EMPTY);
 	/* mark as invalid as long as the parent table is not protected */
@@ -2424,8 +2429,8 @@ EXPORT_SYMBOL_GPL(gmap_pmdp_idte_global);
  * This function is assumed to be called with the guest_table_lock
  * held.
  */
-bool gmap_test_and_clear_dirty_pmd(struct gmap *gmap, pmd_t *pmdp,
-				   unsigned long gaddr)
+static bool gmap_test_and_clear_dirty_pmd(struct gmap *gmap, pmd_t *pmdp,
+					  unsigned long gaddr)
 {
 	if (pmd_val(*pmdp) & _SEGMENT_ENTRY_INVALID)
 		return false;
@@ -2521,13 +2526,9 @@ static int __zap_zero_pages(pmd_t *pmd, unsigned long start,
 	return 0;
 }
 
-static inline void zap_zero_pages(struct mm_struct *mm)
-{
-	struct mm_walk walk = { .pmd_entry = __zap_zero_pages };
-
-	walk.mm = mm;
-	walk_page_range(0, TASK_SIZE, &walk);
-}
+static const struct mm_walk_ops zap_zero_walk_ops = {
+	.pmd_entry	= __zap_zero_pages,
+};
 
 /*
  * switch on pgstes for its userspace process (for kvm)
@@ -2546,11 +2547,28 @@ int s390_enable_sie(void)
 	mm->context.has_pgste = 1;
 	/* split thp mappings and disable thp for future mappings */
 	thp_split_mm(mm);
-	zap_zero_pages(mm);
+	walk_page_range(mm, 0, TASK_SIZE, &zap_zero_walk_ops, NULL);
 	up_write(&mm->mmap_sem);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(s390_enable_sie);
+
+int gmap_mark_unmergeable(void)
+{
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma;
+	int ret;
+
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+		ret = ksm_madvise(vma, vma->vm_start, vma->vm_end,
+				  MADV_UNMERGEABLE, &vma->vm_flags);
+		if (ret)
+			return ret;
+	}
+	mm->def_flags &= ~VM_MERGEABLE;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(gmap_mark_unmergeable);
 
 /*
  * Enable storage key handling from now on and initialize the storage
@@ -2589,14 +2607,14 @@ static int __s390_enable_skey_hugetlb(pte_t *pte, unsigned long addr,
 	return 0;
 }
 
+static const struct mm_walk_ops enable_skey_walk_ops = {
+	.hugetlb_entry		= __s390_enable_skey_hugetlb,
+	.pte_entry		= __s390_enable_skey_pte,
+};
+
 int s390_enable_skey(void)
 {
-	struct mm_walk walk = {
-		.hugetlb_entry = __s390_enable_skey_hugetlb,
-		.pte_entry = __s390_enable_skey_pte,
-	};
 	struct mm_struct *mm = current->mm;
-	struct vm_area_struct *vma;
 	int rc = 0;
 
 	down_write(&mm->mmap_sem);
@@ -2604,18 +2622,12 @@ int s390_enable_skey(void)
 		goto out_up;
 
 	mm->context.uses_skeys = 1;
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if (ksm_madvise(vma, vma->vm_start, vma->vm_end,
-				MADV_UNMERGEABLE, &vma->vm_flags)) {
-			mm->context.uses_skeys = 0;
-			rc = -ENOMEM;
-			goto out_up;
-		}
+	rc = gmap_mark_unmergeable();
+	if (rc) {
+		mm->context.uses_skeys = 0;
+		goto out_up;
 	}
-	mm->def_flags &= ~VM_MERGEABLE;
-
-	walk.mm = mm;
-	walk_page_range(0, TASK_SIZE, &walk);
+	walk_page_range(mm, 0, TASK_SIZE, &enable_skey_walk_ops, NULL);
 
 out_up:
 	up_write(&mm->mmap_sem);
@@ -2633,13 +2645,49 @@ static int __s390_reset_cmma(pte_t *pte, unsigned long addr,
 	return 0;
 }
 
+static const struct mm_walk_ops reset_cmma_walk_ops = {
+	.pte_entry		= __s390_reset_cmma,
+};
+
 void s390_reset_cmma(struct mm_struct *mm)
 {
-	struct mm_walk walk = { .pte_entry = __s390_reset_cmma };
-
 	down_write(&mm->mmap_sem);
-	walk.mm = mm;
-	walk_page_range(0, TASK_SIZE, &walk);
+	walk_page_range(mm, 0, TASK_SIZE, &reset_cmma_walk_ops, NULL);
 	up_write(&mm->mmap_sem);
 }
 EXPORT_SYMBOL_GPL(s390_reset_cmma);
+
+/*
+ * make inaccessible pages accessible again
+ */
+static int __s390_reset_acc(pte_t *ptep, unsigned long addr,
+			    unsigned long next, struct mm_walk *walk)
+{
+	pte_t pte = READ_ONCE(*ptep);
+
+	if (pte_present(pte))
+		WARN_ON_ONCE(uv_convert_from_secure(pte_val(pte) & PAGE_MASK));
+	return 0;
+}
+
+static const struct mm_walk_ops reset_acc_walk_ops = {
+	.pte_entry		= __s390_reset_acc,
+};
+
+#include <linux/sched/mm.h>
+void s390_reset_acc(struct mm_struct *mm)
+{
+	/*
+	 * we might be called during
+	 * reset:                             we walk the pages and clear
+	 * close of all kvm file descriptors: we walk the pages and clear
+	 * exit of process on fd closure:     vma already gone, do nothing
+	 */
+	if (!mmget_not_zero(mm))
+		return;
+	down_read(&mm->mmap_sem);
+	walk_page_range(mm, 0, TASK_SIZE, &reset_acc_walk_ops, NULL);
+	up_read(&mm->mmap_sem);
+	mmput(mm);
+}
+EXPORT_SYMBOL_GPL(s390_reset_acc);

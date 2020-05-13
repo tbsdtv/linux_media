@@ -683,7 +683,7 @@ static void softing_netdev_cleanup(struct net_device *netdev)
 static ssize_t show_##name(struct device *dev, \
 		struct device_attribute *attr, char *buf) \
 { \
-	struct softing *card = platform_get_drvdata(to_platform_device(dev)); \
+	struct softing *card = dev_get_drvdata(dev); \
 	return sprintf(buf, "%u\n", card->member); \
 } \
 static DEVICE_ATTR(name, 0444, show_##name, NULL)
@@ -692,7 +692,7 @@ static DEVICE_ATTR(name, 0444, show_##name, NULL)
 static ssize_t show_##name(struct device *dev, \
 		struct device_attribute *attr, char *buf) \
 { \
-	struct softing *card = platform_get_drvdata(to_platform_device(dev)); \
+	struct softing *card = dev_get_drvdata(dev); \
 	return sprintf(buf, "%s\n", card->member); \
 } \
 static DEVICE_ATTR(name, 0444, show_##name, NULL)
@@ -777,7 +777,7 @@ static int softing_pdev_probe(struct platform_device *pdev)
 		goto platform_resource_failed;
 	card->dpram_phys = pres->start;
 	card->dpram_size = resource_size(pres);
-	card->dpram = ioremap_nocache(card->dpram_phys, card->dpram_size);
+	card->dpram = ioremap(card->dpram_phys, card->dpram_size);
 	if (!card->dpram) {
 		dev_alert(&card->pdev->dev, "dpram ioremap failed\n");
 		goto ioremap_failed;

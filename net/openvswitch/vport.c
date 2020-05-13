@@ -96,7 +96,8 @@ struct vport *ovs_vport_locate(const struct net *net, const char *name)
 	struct hlist_head *bucket = hash_bucket(net, name);
 	struct vport *vport;
 
-	hlist_for_each_entry_rcu(vport, bucket, hash_node)
+	hlist_for_each_entry_rcu(vport, bucket, hash_node,
+				lockdep_ovsl_is_held())
 		if (!strcmp(name, ovs_vport_name(vport)) &&
 		    net_eq(ovs_dp_get_net(vport->dp), net))
 			return vport;
@@ -248,8 +249,6 @@ int ovs_vport_set_options(struct vport *vport, struct nlattr *options)
  */
 void ovs_vport_del(struct vport *vport)
 {
-	ASSERT_OVSL();
-
 	hlist_del_rcu(&vport->hash_node);
 	module_put(vport->ops->owner);
 	vport->ops->destroy(vport);
@@ -405,8 +404,9 @@ u32 ovs_vport_find_upcall_portid(const struct vport *vport, struct sk_buff *skb)
 
 	ids = rcu_dereference(vport->upcall_portids);
 
-	if (ids->n_ids == 1 && ids->ids[0] == 0)
-		return 0;
+	/* If there is only one portid, select it in the fast-path. */
+	if (ids->n_ids == 1)
+		return ids->ids[0];
 
 	hash = skb_get_hash(skb);
 	ids_index = hash - ids->n_ids * reciprocal_divide(hash, ids->rn_ids);

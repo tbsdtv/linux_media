@@ -137,7 +137,7 @@ enum qspi_clocks {
 struct qcom_qspi {
 	void __iomem *base;
 	struct device *dev;
-	struct clk_bulk_data clks[QSPI_NUM_CLKS];
+	struct clk_bulk_data *clks;
 	struct qspi_xfer xfer;
 	/* Lock to protect xfer and IRQ accessed registers */
 	spinlock_t lock;
@@ -424,7 +424,6 @@ static int qcom_qspi_probe(struct platform_device *pdev)
 {
 	int ret;
 	struct device *dev;
-	struct resource *res;
 	struct spi_master *master;
 	struct qcom_qspi *ctrl;
 
@@ -440,10 +439,16 @@ static int qcom_qspi_probe(struct platform_device *pdev)
 
 	spin_lock_init(&ctrl->lock);
 	ctrl->dev = dev;
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	ctrl->base = devm_ioremap_resource(dev, res);
+	ctrl->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(ctrl->base)) {
 		ret = PTR_ERR(ctrl->base);
+		goto exit_probe_master_put;
+	}
+
+	ctrl->clks = devm_kcalloc(dev, QSPI_NUM_CLKS,
+				  sizeof(*ctrl->clks), GFP_KERNEL);
+	if (!ctrl->clks) {
+		ret = -ENOMEM;
 		goto exit_probe_master_put;
 	}
 
@@ -454,10 +459,8 @@ static int qcom_qspi_probe(struct platform_device *pdev)
 		goto exit_probe_master_put;
 
 	ret = platform_get_irq(pdev, 0);
-	if (ret < 0) {
-		dev_err(dev, "Failed to get irq %d\n", ret);
+	if (ret < 0)
 		goto exit_probe_master_put;
-	}
 	ret = devm_request_irq(dev, ret, qcom_qspi_irq,
 			IRQF_TRIGGER_HIGH, dev_name(dev), ctrl);
 	if (ret) {

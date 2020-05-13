@@ -5,7 +5,7 @@
 #include <linux/clk.h>
 #include <linux/reset.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
+#include <linux/pm_domain.h>
 #include <linux/regulator/consumer.h>
 
 #include "panfrost_device.h"
@@ -14,6 +14,7 @@
 #include "panfrost_gpu.h"
 #include "panfrost_job.h"
 #include "panfrost_mmu.h"
+#include "panfrost_perfcnt.h"
 
 static int panfrost_reset_init(struct panfrost_device *pfdev)
 {
@@ -55,31 +56,59 @@ static int panfrost_clk_init(struct panfrost_device *pfdev)
 	if (err)
 		return err;
 
+	pfdev->bus_clock = devm_clk_get_optional(pfdev->dev, "bus");
+	if (IS_ERR(pfdev->bus_clock)) {
+		dev_err(pfdev->dev, "get bus_clock failed %ld\n",
+			PTR_ERR(pfdev->bus_clock));
+		return PTR_ERR(pfdev->bus_clock);
+	}
+
+	if (pfdev->bus_clock) {
+		rate = clk_get_rate(pfdev->bus_clock);
+		dev_info(pfdev->dev, "bus_clock rate = %lu\n", rate);
+
+		err = clk_prepare_enable(pfdev->bus_clock);
+		if (err)
+			goto disable_clock;
+	}
+
 	return 0;
+
+disable_clock:
+	clk_disable_unprepare(pfdev->clock);
+
+	return err;
 }
 
 static void panfrost_clk_fini(struct panfrost_device *pfdev)
 {
+	clk_disable_unprepare(pfdev->bus_clock);
 	clk_disable_unprepare(pfdev->clock);
 }
 
 static int panfrost_regulator_init(struct panfrost_device *pfdev)
 {
-	int ret;
+	int ret, i;
 
-	pfdev->regulator = devm_regulator_get_optional(pfdev->dev, "mali");
-	if (IS_ERR(pfdev->regulator)) {
-		ret = PTR_ERR(pfdev->regulator);
-		pfdev->regulator = NULL;
-		if (ret == -ENODEV)
-			return 0;
-		dev_err(pfdev->dev, "failed to get regulator: %d\n", ret);
+	if (WARN(pfdev->comp->num_supplies > ARRAY_SIZE(pfdev->regulators),
+			"Too many supplies in compatible structure.\n"))
+		return -EINVAL;
+
+	for (i = 0; i < pfdev->comp->num_supplies; i++)
+		pfdev->regulators[i].supply = pfdev->comp->supply_names[i];
+
+	ret = devm_regulator_bulk_get(pfdev->dev,
+				      pfdev->comp->num_supplies,
+				      pfdev->regulators);
+	if (ret < 0) {
+		dev_err(pfdev->dev, "failed to get regulators: %d\n", ret);
 		return ret;
 	}
 
-	ret = regulator_enable(pfdev->regulator);
+	ret = regulator_bulk_enable(pfdev->comp->num_supplies,
+				    pfdev->regulators);
 	if (ret < 0) {
-		dev_err(pfdev->dev, "failed to enable regulator: %d\n", ret);
+		dev_err(pfdev->dev, "failed to enable regulators: %d\n", ret);
 		return ret;
 	}
 
@@ -88,8 +117,81 @@ static int panfrost_regulator_init(struct panfrost_device *pfdev)
 
 static void panfrost_regulator_fini(struct panfrost_device *pfdev)
 {
-	if (pfdev->regulator)
-		regulator_disable(pfdev->regulator);
+	regulator_bulk_disable(pfdev->comp->num_supplies,
+			pfdev->regulators);
+}
+
+static void panfrost_pm_domain_fini(struct panfrost_device *pfdev)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(pfdev->pm_domain_devs); i++) {
+		if (!pfdev->pm_domain_devs[i])
+			break;
+
+		if (pfdev->pm_domain_links[i])
+			device_link_del(pfdev->pm_domain_links[i]);
+
+		dev_pm_domain_detach(pfdev->pm_domain_devs[i], true);
+	}
+}
+
+static int panfrost_pm_domain_init(struct panfrost_device *pfdev)
+{
+	int err;
+	int i, num_domains;
+
+	num_domains = of_count_phandle_with_args(pfdev->dev->of_node,
+						 "power-domains",
+						 "#power-domain-cells");
+
+	/*
+	 * Single domain is handled by the core, and, if only a single power
+	 * the power domain is requested, the property is optional.
+	 */
+	if (num_domains < 2 && pfdev->comp->num_pm_domains < 2)
+		return 0;
+
+	if (num_domains != pfdev->comp->num_pm_domains) {
+		dev_err(pfdev->dev,
+			"Incorrect number of power domains: %d provided, %d needed\n",
+			num_domains, pfdev->comp->num_pm_domains);
+		return -EINVAL;
+	}
+
+	if (WARN(num_domains > ARRAY_SIZE(pfdev->pm_domain_devs),
+			"Too many supplies in compatible structure.\n"))
+		return -EINVAL;
+
+	for (i = 0; i < num_domains; i++) {
+		pfdev->pm_domain_devs[i] =
+			dev_pm_domain_attach_by_name(pfdev->dev,
+					pfdev->comp->pm_domain_names[i]);
+		if (IS_ERR_OR_NULL(pfdev->pm_domain_devs[i])) {
+			err = PTR_ERR(pfdev->pm_domain_devs[i]) ? : -ENODATA;
+			pfdev->pm_domain_devs[i] = NULL;
+			dev_err(pfdev->dev,
+				"failed to get pm-domain %s(%d): %d\n",
+				pfdev->comp->pm_domain_names[i], i, err);
+			goto err;
+		}
+
+		pfdev->pm_domain_links[i] = device_link_add(pfdev->dev,
+				pfdev->pm_domain_devs[i], DL_FLAG_PM_RUNTIME |
+				DL_FLAG_STATELESS | DL_FLAG_RPM_ACTIVE);
+		if (!pfdev->pm_domain_links[i]) {
+			dev_err(pfdev->pm_domain_devs[i],
+				"adding device link failed!\n");
+			err = -ENODEV;
+			goto err;
+		}
+	}
+
+	return 0;
+
+err:
+	panfrost_pm_domain_fini(pfdev);
+	return err;
 }
 
 int panfrost_device_init(struct panfrost_device *pfdev)
@@ -100,8 +202,9 @@ int panfrost_device_init(struct panfrost_device *pfdev)
 	mutex_init(&pfdev->sched_lock);
 	mutex_init(&pfdev->reset_lock);
 	INIT_LIST_HEAD(&pfdev->scheduled_jobs);
+	INIT_LIST_HEAD(&pfdev->as_lru_list);
 
-	spin_lock_init(&pfdev->hwaccess_lock);
+	spin_lock_init(&pfdev->as_lock);
 
 	err = panfrost_clk_init(pfdev);
 	if (err) {
@@ -121,39 +224,43 @@ int panfrost_device_init(struct panfrost_device *pfdev)
 		goto err_out1;
 	}
 
+	err = panfrost_pm_domain_init(pfdev);
+	if (err)
+		goto err_out2;
+
 	res = platform_get_resource(pfdev->pdev, IORESOURCE_MEM, 0);
 	pfdev->iomem = devm_ioremap_resource(pfdev->dev, res);
 	if (IS_ERR(pfdev->iomem)) {
 		dev_err(pfdev->dev, "failed to ioremap iomem\n");
 		err = PTR_ERR(pfdev->iomem);
-		goto err_out2;
+		goto err_out3;
 	}
 
 	err = panfrost_gpu_init(pfdev);
 	if (err)
-		goto err_out2;
+		goto err_out3;
 
 	err = panfrost_mmu_init(pfdev);
 	if (err)
-		goto err_out3;
+		goto err_out4;
 
 	err = panfrost_job_init(pfdev);
 	if (err)
-		goto err_out4;
+		goto err_out5;
 
-	/* runtime PM will wake us up later */
-	panfrost_gpu_power_off(pfdev);
-
-	pm_runtime_set_active(pfdev->dev);
-	pm_runtime_get_sync(pfdev->dev);
-	pm_runtime_mark_last_busy(pfdev->dev);
-	pm_runtime_put_autosuspend(pfdev->dev);
+	err = panfrost_perfcnt_init(pfdev);
+	if (err)
+		goto err_out6;
 
 	return 0;
-err_out4:
+err_out6:
+	panfrost_job_fini(pfdev);
+err_out5:
 	panfrost_mmu_fini(pfdev);
-err_out3:
+err_out4:
 	panfrost_gpu_fini(pfdev);
+err_out3:
+	panfrost_pm_domain_fini(pfdev);
 err_out2:
 	panfrost_reset_fini(pfdev);
 err_out1:
@@ -165,9 +272,11 @@ err_out0:
 
 void panfrost_device_fini(struct panfrost_device *pfdev)
 {
+	panfrost_perfcnt_fini(pfdev);
 	panfrost_job_fini(pfdev);
 	panfrost_mmu_fini(pfdev);
 	panfrost_gpu_fini(pfdev);
+	panfrost_pm_domain_fini(pfdev);
 	panfrost_reset_fini(pfdev);
 	panfrost_regulator_fini(pfdev);
 	panfrost_clk_fini(pfdev);
@@ -224,18 +333,22 @@ const char *panfrost_exception_name(struct panfrost_device *pfdev, u32 exception
 	return "UNKNOWN";
 }
 
+void panfrost_device_reset(struct panfrost_device *pfdev)
+{
+	panfrost_gpu_soft_reset(pfdev);
+
+	panfrost_gpu_power_on(pfdev);
+	panfrost_mmu_reset(pfdev);
+	panfrost_job_enable_interrupts(pfdev);
+}
+
 #ifdef CONFIG_PM
 int panfrost_device_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct panfrost_device *pfdev = platform_get_drvdata(pdev);
 
-	panfrost_gpu_soft_reset(pfdev);
-
-	/* TODO: Re-enable all other address spaces */
-	panfrost_gpu_power_on(pfdev);
-	panfrost_mmu_enable(pfdev, 0);
-	panfrost_job_enable_interrupts(pfdev);
+	panfrost_device_reset(pfdev);
 	panfrost_devfreq_resume(pfdev);
 
 	return 0;

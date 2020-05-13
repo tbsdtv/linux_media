@@ -75,9 +75,9 @@
  *
  *	On SMP we have one ICMP socket per-cpu.
  */
-static inline struct sock *icmpv6_sk(struct net *net)
+static struct sock *icmpv6_sk(struct net *net)
 {
-	return *this_cpu_ptr(net->ipv6.icmp_sk);
+	return this_cpu_read(*net->ipv6.icmp_sk);
 }
 
 static int icmpv6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
@@ -224,6 +224,25 @@ static bool icmpv6_xrlim_allow(struct sock *sk, u8 type,
 		res = inet_peer_xrlim_allow(peer, tmo);
 		if (peer)
 			inet_putpeer(peer);
+	}
+	dst_release(dst);
+	return res;
+}
+
+static bool icmpv6_rt_has_prefsrc(struct sock *sk, u8 type,
+				  struct flowi6 *fl6)
+{
+	struct net *net = sock_net(sk);
+	struct dst_entry *dst;
+	bool res = false;
+
+	dst = ip6_route_output(net, sk, fl6);
+	if (!dst->error) {
+		struct rt6_info *rt = (struct rt6_info *)dst;
+		struct in6_addr prefsrc;
+
+		rt6_get_prefsrc(rt, &prefsrc);
+		res = !ipv6_addr_any(&prefsrc);
 	}
 	dst_release(dst);
 	return res;
@@ -393,23 +412,28 @@ relookup_failed:
 	return ERR_PTR(err);
 }
 
-static int icmp6_iif(const struct sk_buff *skb)
+static struct net_device *icmp6_dev(const struct sk_buff *skb)
 {
-	int iif = skb->dev->ifindex;
+	struct net_device *dev = skb->dev;
 
 	/* for local traffic to local address, skb dev is the loopback
 	 * device. Check if there is a dst attached to the skb and if so
 	 * get the real device index. Same is needed for replies to a link
 	 * local address on a device enslaved to an L3 master device
 	 */
-	if (unlikely(iif == LOOPBACK_IFINDEX || netif_is_l3_master(skb->dev))) {
+	if (unlikely(dev->ifindex == LOOPBACK_IFINDEX || netif_is_l3_master(skb->dev))) {
 		const struct rt6_info *rt6 = skb_rt6_info(skb);
 
 		if (rt6)
-			iif = rt6->rt6i_idev->dev->ifindex;
+			dev = rt6->rt6i_idev->dev;
 	}
 
-	return iif;
+	return dev;
+}
+
+static int icmp6_iif(const struct sk_buff *skb)
+{
+	return icmp6_dev(skb)->ifindex;
 }
 
 /*
@@ -511,13 +535,29 @@ static void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 
 	mip6_addr_swap(skb);
 
+	sk = icmpv6_xmit_lock(net);
+	if (!sk)
+		goto out_bh_enable;
+
 	memset(&fl6, 0, sizeof(fl6));
 	fl6.flowi6_proto = IPPROTO_ICMPV6;
 	fl6.daddr = hdr->saddr;
 	if (force_saddr)
 		saddr = force_saddr;
-	if (saddr)
+	if (saddr) {
 		fl6.saddr = *saddr;
+	} else if (!icmpv6_rt_has_prefsrc(sk, type, &fl6)) {
+		/* select a more meaningful saddr from input if */
+		struct net_device *in_netdev;
+
+		in_netdev = dev_get_by_index(net, IP6CB(skb)->iif);
+		if (in_netdev) {
+			ipv6_dev_get_saddr(net, in_netdev, &fl6.daddr,
+					   inet6_sk(sk)->srcprefs,
+					   &fl6.saddr);
+			dev_put(in_netdev);
+		}
+	}
 	fl6.flowi6_mark = mark;
 	fl6.flowi6_oif = iif;
 	fl6.fl6_icmp_type = type;
@@ -525,10 +565,6 @@ static void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 	fl6.flowi6_uid = sock_net_uid(net, NULL);
 	fl6.mp_hash = rt6_multipath_hash(net, &fl6, skb, NULL);
 	security_skb_classify_flow(skb, flowi6_to_flowi(&fl6));
-
-	sk = icmpv6_xmit_lock(net);
-	if (!sk)
-		goto out_bh_enable;
 
 	sk->sk_mark = mark;
 	np = inet6_sk(sk);
@@ -698,6 +734,9 @@ static void icmpv6_echo_reply(struct sk_buff *skb)
 	tmp_hdr.icmp6_type = ICMPV6_ECHO_REPLY;
 
 	memset(&fl6, 0, sizeof(fl6));
+	if (net->ipv6.sysctl.flowlabel_reflect & FLOWLABEL_REFLECT_ICMPV6_ECHO_REPLIES)
+		fl6.flowlabel = ip6_flowlabel(ipv6_hdr(skb));
+
 	fl6.flowi6_proto = IPPROTO_ICMPV6;
 	fl6.daddr = ipv6_hdr(skb)->saddr;
 	if (saddr)
@@ -810,7 +849,7 @@ out:
 static int icmpv6_rcv(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);
-	struct net_device *dev = skb->dev;
+	struct net_device *dev = icmp6_dev(skb);
 	struct inet6_dev *idev = __in6_dev_get(dev);
 	const struct in6_addr *saddr, *daddr;
 	struct icmp6hdr *hdr;
@@ -878,7 +917,7 @@ static int icmpv6_rcv(struct sk_buff *skb)
 		hdr = icmp6_hdr(skb);
 
 		/* to notify */
-		/* fall through */
+		fallthrough;
 	case ICMPV6_DEST_UNREACH:
 	case ICMPV6_TIME_EXCEED:
 	case ICMPV6_PARAMPROB:

@@ -25,14 +25,12 @@
  *
  **************************************************************************/
 
-
-#include <drm/drmP.h>
-#include "vmwgfx_drv.h"
-
 #include <drm/ttm/ttm_placement.h>
 
 #include "device_include/svga_overlay.h"
 #include "device_include/svga_escape.h"
+
+#include "vmwgfx_drv.h"
 
 #define VMW_MAX_NUM_STREAMS 1
 #define VMW_OVERLAY_CAP_MASK (SVGA_FIFO_CAP_VIDEO | SVGA_FIFO_CAP_ESCAPE)
@@ -351,37 +349,6 @@ static int vmw_overlay_update_stream(struct vmw_private *dev_priv,
 	stream->saved = *arg;
 	/* stream is no longer stopped/paused */
 	stream->paused = false;
-
-	return 0;
-}
-
-/**
- * Stop all streams.
- *
- * Used by the fb code when starting.
- *
- * Takes the overlay lock.
- */
-int vmw_overlay_stop_all(struct vmw_private *dev_priv)
-{
-	struct vmw_overlay *overlay = dev_priv->overlay_priv;
-	int i, ret;
-
-	if (!overlay)
-		return 0;
-
-	mutex_lock(&overlay->mutex);
-
-	for (i = 0; i < VMW_MAX_NUM_STREAMS; i++) {
-		struct vmw_stream *stream = &overlay->stream[i];
-		if (!stream->buf)
-			continue;
-
-		ret = vmw_overlay_stop(dev_priv, i, false, false);
-		WARN_ON(ret != 0);
-	}
-
-	mutex_unlock(&overlay->mutex);
 
 	return 0;
 }

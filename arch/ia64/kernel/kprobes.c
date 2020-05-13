@@ -841,7 +841,7 @@ static int __kprobes pre_kprobes_handler(struct die_args *args)
 		return 1;
 	}
 
-#if !defined(CONFIG_PREEMPT)
+#if !defined(CONFIG_PREEMPTION)
 	if (p->ainsn.inst_flag == INST_FLAG_BOOSTABLE && !p->post_handler) {
 		/* Boost up -- we can execute copied instructions directly */
 		ia64_psr(regs)->ri = p->ainsn.slot;
@@ -977,32 +977,6 @@ int __kprobes kprobe_exceptions_notify(struct notifier_block *self,
 		break;
 	}
 	return ret;
-}
-
-struct param_bsp_cfm {
-	unsigned long ip;
-	unsigned long *bsp;
-	unsigned long cfm;
-};
-
-static void ia64_get_bsp_cfm(struct unw_frame_info *info, void *arg)
-{
-	unsigned long ip;
-	struct param_bsp_cfm *lp = arg;
-
-	do {
-		unw_get_ip(info, &ip);
-		if (ip == 0)
-			break;
-		if (ip == lp->ip) {
-			unw_get_bsp(info, (unsigned long*)&lp->bsp);
-			unw_get_cfm(info, (unsigned long*)&lp->cfm);
-			return;
-		}
-	} while (unw_unwind(info) >= 0);
-	lp->bsp = NULL;
-	lp->cfm = 0;
-	return;
 }
 
 unsigned long arch_deref_entry_point(void *entry)

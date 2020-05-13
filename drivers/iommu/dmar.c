@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/iommu.h>
 #include <linux/numa.h>
+#include <linux/limits.h>
 #include <asm/irq_remapping.h>
 #include <asm/iommu_table.h>
 
@@ -127,6 +128,13 @@ dmar_alloc_pci_notify_info(struct pci_dev *dev, unsigned long event)
 	struct dmar_pci_notify_info *info;
 
 	BUG_ON(dev->is_virtfn);
+
+	/*
+	 * Ignore devices that have a domain number higher than what can
+	 * be looked up in DMAR, e.g. VMD subdevices with domain 0x10000
+	 */
+	if (pci_domain_nr(dev->bus) > U16_MAX)
+		return NULL;
 
 	/* Only generate path[] for device addition event */
 	if (event == BUS_NOTIFY_ADD_DEVICE)
@@ -244,7 +252,7 @@ int dmar_insert_dev_scope(struct dmar_pci_notify_info *info,
 		     info->dev->hdr_type != PCI_HEADER_TYPE_NORMAL) ||
 		    (scope->entry_type == ACPI_DMAR_SCOPE_TYPE_BRIDGE &&
 		     (info->dev->hdr_type == PCI_HEADER_TYPE_NORMAL &&
-		      info->dev->class >> 8 != PCI_CLASS_BRIDGE_OTHER))) {
+		      info->dev->class >> 16 != PCI_BASE_CLASS_BRIDGE))) {
 			pr_warn("Device scope type does not match for %s\n",
 				pci_name(info->dev));
 			return -EINVAL;
@@ -363,7 +371,8 @@ dmar_find_dmaru(struct acpi_dmar_hardware_unit *drhd)
 {
 	struct dmar_drhd_unit *dmaru;
 
-	list_for_each_entry_rcu(dmaru, &dmar_drhd_units, list)
+	list_for_each_entry_rcu(dmaru, &dmar_drhd_units, list,
+				dmar_rcu_check())
 		if (dmaru->segment == drhd->segment &&
 		    dmaru->reg_base_addr == drhd->address)
 			return dmaru;
@@ -440,12 +449,13 @@ static int __init dmar_parse_one_andd(struct acpi_dmar_header *header,
 
 	/* Check for NUL termination within the designated length */
 	if (strnlen(andd->device_name, header->length - 8) == header->length - 8) {
-		WARN_TAINT(1, TAINT_FIRMWARE_WORKAROUND,
+		pr_warn(FW_BUG
 			   "Your BIOS is broken; ANDD object name is not NUL-terminated\n"
 			   "BIOS vendor: %s; Ver: %s; Product Version: %s\n",
 			   dmi_get_system_info(DMI_BIOS_VENDOR),
 			   dmi_get_system_info(DMI_BIOS_VERSION),
 			   dmi_get_system_info(DMI_PRODUCT_VERSION));
+		add_taint(TAINT_FIRMWARE_WORKAROUND, LOCKDEP_STILL_OK);
 		return -EINVAL;
 	}
 	pr_info("ANDD device: %x name: %s\n", andd->device_number,
@@ -471,14 +481,14 @@ static int dmar_parse_one_rhsa(struct acpi_dmar_header *header, void *arg)
 			return 0;
 		}
 	}
-	WARN_TAINT(
-		1, TAINT_FIRMWARE_WORKAROUND,
+	pr_warn(FW_BUG
 		"Your BIOS is broken; RHSA refers to non-existent DMAR unit at %llx\n"
 		"BIOS vendor: %s; Ver: %s; Product Version: %s\n",
-		drhd->reg_base_addr,
+		rhsa->base_address,
 		dmi_get_system_info(DMI_BIOS_VENDOR),
 		dmi_get_system_info(DMI_BIOS_VERSION),
 		dmi_get_system_info(DMI_PRODUCT_VERSION));
+	add_taint(TAINT_FIRMWARE_WORKAROUND, LOCKDEP_STILL_OK);
 
 	return 0;
 }
@@ -827,14 +837,14 @@ int __init dmar_table_init(void)
 
 static void warn_invalid_dmar(u64 addr, const char *message)
 {
-	WARN_TAINT_ONCE(
-		1, TAINT_FIRMWARE_WORKAROUND,
+	pr_warn_once(FW_BUG
 		"Your BIOS is broken; DMAR reported at address %llx%s!\n"
 		"BIOS vendor: %s; Ver: %s; Product Version: %s\n",
 		addr, message,
 		dmi_get_system_info(DMI_BIOS_VENDOR),
 		dmi_get_system_info(DMI_BIOS_VERSION),
 		dmi_get_system_info(DMI_PRODUCT_VERSION));
+	add_taint(TAINT_FIRMWARE_WORKAROUND, LOCKDEP_STILL_OK);
 }
 
 static int __ref
@@ -895,8 +905,11 @@ int __init detect_intel_iommu(void)
 	}
 
 #ifdef CONFIG_X86
-	if (!ret)
+	if (!ret) {
 		x86_init.iommu.iommu_init = intel_iommu_init;
+		x86_platform.iommu_shutdown = intel_iommu_shutdown;
+	}
+
 #endif
 
 	if (dmar_tbl) {
@@ -1351,7 +1364,6 @@ void qi_flush_dev_iotlb(struct intel_iommu *iommu, u16 sid, u16 pfsid,
 	struct qi_desc desc;
 
 	if (mask) {
-		WARN_ON_ONCE(addr & ((1ULL << (VTD_PAGE_SHIFT + mask)) - 1));
 		addr |= (1ULL << (VTD_PAGE_SHIFT + mask - 1)) - 1;
 		desc.qw1 = QI_DEV_IOTLB_ADDR(addr) | QI_DEV_IOTLB_SIZE;
 	} else
@@ -1364,6 +1376,47 @@ void qi_flush_dev_iotlb(struct intel_iommu *iommu, u16 sid, u16 pfsid,
 		   QI_DIOTLB_TYPE | QI_DEV_IOTLB_PFSID(pfsid);
 	desc.qw2 = 0;
 	desc.qw3 = 0;
+
+	qi_submit_sync(&desc, iommu);
+}
+
+/* PASID-based IOTLB invalidation */
+void qi_flush_piotlb(struct intel_iommu *iommu, u16 did, u32 pasid, u64 addr,
+		     unsigned long npages, bool ih)
+{
+	struct qi_desc desc = {.qw2 = 0, .qw3 = 0};
+
+	/*
+	 * npages == -1 means a PASID-selective invalidation, otherwise,
+	 * a positive value for Page-selective-within-PASID invalidation.
+	 * 0 is not a valid input.
+	 */
+	if (WARN_ON(!npages)) {
+		pr_err("Invalid input npages = %ld\n", npages);
+		return;
+	}
+
+	if (npages == -1) {
+		desc.qw0 = QI_EIOTLB_PASID(pasid) |
+				QI_EIOTLB_DID(did) |
+				QI_EIOTLB_GRAN(QI_GRAN_NONG_PASID) |
+				QI_EIOTLB_TYPE;
+		desc.qw1 = 0;
+	} else {
+		int mask = ilog2(__roundup_pow_of_two(npages));
+		unsigned long align = (1ULL << (VTD_PAGE_SHIFT + mask));
+
+		if (WARN_ON_ONCE(!ALIGN(addr, align)))
+			addr &= ~(align - 1);
+
+		desc.qw0 = QI_EIOTLB_PASID(pasid) |
+				QI_EIOTLB_DID(did) |
+				QI_EIOTLB_GRAN(QI_GRAN_PSI_PASID) |
+				QI_EIOTLB_TYPE;
+		desc.qw1 = QI_EIOTLB_ADDR(addr) |
+				QI_EIOTLB_IH(ih) |
+				QI_EIOTLB_AM(mask);
+	}
 
 	qi_submit_sync(&desc, iommu);
 }
@@ -1519,6 +1572,64 @@ static const char *dma_remap_fault_reasons[] =
 	"PCE for translation request specifies blocking",
 };
 
+static const char * const dma_remap_sm_fault_reasons[] = {
+	"SM: Invalid Root Table Address",
+	"SM: TTM 0 for request with PASID",
+	"SM: TTM 0 for page group request",
+	"Unknown", "Unknown", "Unknown", "Unknown", "Unknown", /* 0x33-0x37 */
+	"SM: Error attempting to access Root Entry",
+	"SM: Present bit in Root Entry is clear",
+	"SM: Non-zero reserved field set in Root Entry",
+	"Unknown", "Unknown", "Unknown", "Unknown", "Unknown", /* 0x3B-0x3F */
+	"SM: Error attempting to access Context Entry",
+	"SM: Present bit in Context Entry is clear",
+	"SM: Non-zero reserved field set in the Context Entry",
+	"SM: Invalid Context Entry",
+	"SM: DTE field in Context Entry is clear",
+	"SM: PASID Enable field in Context Entry is clear",
+	"SM: PASID is larger than the max in Context Entry",
+	"SM: PRE field in Context-Entry is clear",
+	"SM: RID_PASID field error in Context-Entry",
+	"Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", /* 0x49-0x4F */
+	"SM: Error attempting to access the PASID Directory Entry",
+	"SM: Present bit in Directory Entry is clear",
+	"SM: Non-zero reserved field set in PASID Directory Entry",
+	"Unknown", "Unknown", "Unknown", "Unknown", "Unknown", /* 0x53-0x57 */
+	"SM: Error attempting to access PASID Table Entry",
+	"SM: Present bit in PASID Table Entry is clear",
+	"SM: Non-zero reserved field set in PASID Table Entry",
+	"SM: Invalid Scalable-Mode PASID Table Entry",
+	"SM: ERE field is clear in PASID Table Entry",
+	"SM: SRE field is clear in PASID Table Entry",
+	"Unknown", "Unknown",/* 0x5E-0x5F */
+	"Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", /* 0x60-0x67 */
+	"Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", /* 0x68-0x6F */
+	"SM: Error attempting to access first-level paging entry",
+	"SM: Present bit in first-level paging entry is clear",
+	"SM: Non-zero reserved field set in first-level paging entry",
+	"SM: Error attempting to access FL-PML4 entry",
+	"SM: First-level entry address beyond MGAW in Nested translation",
+	"SM: Read permission error in FL-PML4 entry in Nested translation",
+	"SM: Read permission error in first-level paging entry in Nested translation",
+	"SM: Write permission error in first-level paging entry in Nested translation",
+	"SM: Error attempting to access second-level paging entry",
+	"SM: Read/Write permission error in second-level paging entry",
+	"SM: Non-zero reserved field set in second-level paging entry",
+	"SM: Invalid second-level page table pointer",
+	"SM: A/D bit update needed in second-level entry when set up in no snoop",
+	"Unknown", "Unknown", "Unknown", /* 0x7D-0x7F */
+	"SM: Address in first-level translation is not canonical",
+	"SM: U/S set 0 for first-level translation with user privilege",
+	"SM: No execute permission for request with PASID and ER=1",
+	"SM: Address beyond the DMA hardware max",
+	"SM: Second-level entry address beyond the max",
+	"SM: No write permission for Write/AtomicOp request",
+	"SM: No read permission for Read/AtomicOp request",
+	"SM: Invalid address-interrupt address",
+	"Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", "Unknown", /* 0x88-0x8F */
+	"SM: A/D bit update needed in first-level entry when set up in no snoop",
+};
+
 static const char *irq_remap_fault_reasons[] =
 {
 	"Detected reserved fields in the decoded interrupt-remapped request",
@@ -1536,6 +1647,10 @@ static const char *dmar_get_fault_reason(u8 fault_reason, int *fault_type)
 					ARRAY_SIZE(irq_remap_fault_reasons))) {
 		*fault_type = INTR_REMAP;
 		return irq_remap_fault_reasons[fault_reason - 0x20];
+	} else if (fault_reason >= 0x30 && (fault_reason - 0x30 <
+			ARRAY_SIZE(dma_remap_sm_fault_reasons))) {
+		*fault_type = DMA_REMAP;
+		return dma_remap_sm_fault_reasons[fault_reason - 0x30];
 	} else if (fault_reason < ARRAY_SIZE(dma_remap_fault_reasons)) {
 		*fault_type = DMA_REMAP;
 		return dma_remap_fault_reasons[fault_reason];
@@ -1611,7 +1726,8 @@ void dmar_msi_read(int irq, struct msi_msg *msg)
 }
 
 static int dmar_fault_do_one(struct intel_iommu *iommu, int type,
-		u8 fault_reason, u16 source_id, unsigned long long addr)
+		u8 fault_reason, int pasid, u16 source_id,
+		unsigned long long addr)
 {
 	const char *reason;
 	int fault_type;
@@ -1624,10 +1740,11 @@ static int dmar_fault_do_one(struct intel_iommu *iommu, int type,
 			PCI_FUNC(source_id & 0xFF), addr >> 48,
 			fault_reason, reason);
 	else
-		pr_err("[%s] Request device [%02x:%02x.%d] fault addr %llx [fault reason %02d] %s\n",
+		pr_err("[%s] Request device [%02x:%02x.%d] PASID %x fault addr %llx [fault reason %02d] %s\n",
 		       type ? "DMA Read" : "DMA Write",
 		       source_id >> 8, PCI_SLOT(source_id & 0xFF),
-		       PCI_FUNC(source_id & 0xFF), addr, fault_reason, reason);
+		       PCI_FUNC(source_id & 0xFF), pasid, addr,
+		       fault_reason, reason);
 	return 0;
 }
 
@@ -1659,8 +1776,9 @@ irqreturn_t dmar_fault(int irq, void *dev_id)
 		u8 fault_reason;
 		u16 source_id;
 		u64 guest_addr;
-		int type;
+		int type, pasid;
 		u32 data;
+		bool pasid_present;
 
 		/* highest 32 bits */
 		data = readl(iommu->reg + reg +
@@ -1672,10 +1790,12 @@ irqreturn_t dmar_fault(int irq, void *dev_id)
 			fault_reason = dma_frcd_fault_reason(data);
 			type = dma_frcd_type(data);
 
+			pasid = dma_frcd_pasid_value(data);
 			data = readl(iommu->reg + reg +
 				     fault_index * PRIMARY_FAULT_REG_LEN + 8);
 			source_id = dma_frcd_source_id(data);
 
+			pasid_present = dma_frcd_pasid_present(data);
 			guest_addr = dmar_readq(iommu->reg + reg +
 					fault_index * PRIMARY_FAULT_REG_LEN);
 			guest_addr = dma_frcd_page_addr(guest_addr);
@@ -1688,7 +1808,9 @@ irqreturn_t dmar_fault(int irq, void *dev_id)
 		raw_spin_unlock_irqrestore(&iommu->register_lock, flag);
 
 		if (!ratelimited)
+			/* Using pasid -1 if pasid is not present */
 			dmar_fault_do_one(iommu, type, fault_reason,
+					  pasid_present ? pasid : -1,
 					  source_id, guest_addr);
 
 		fault_index++;

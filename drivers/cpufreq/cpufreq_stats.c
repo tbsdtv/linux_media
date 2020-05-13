@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  drivers/cpufreq/cpufreq_stats.c
  *
  *  Copyright (C) 2003-2004 Venkatesh Pallipadi <venkatesh.pallipadi@intel.com>.
  *  (C) 2004 Zou Nan hai <nanhai.zou@intel.com>.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/cpu.h>
@@ -93,35 +90,35 @@ static ssize_t show_trans_table(struct cpufreq_policy *policy, char *buf)
 	if (policy->fast_switch_enabled)
 		return 0;
 
-	len += snprintf(buf + len, PAGE_SIZE - len, "   From  :    To\n");
-	len += snprintf(buf + len, PAGE_SIZE - len, "         : ");
+	len += scnprintf(buf + len, PAGE_SIZE - len, "   From  :    To\n");
+	len += scnprintf(buf + len, PAGE_SIZE - len, "         : ");
 	for (i = 0; i < stats->state_num; i++) {
 		if (len >= PAGE_SIZE)
 			break;
-		len += snprintf(buf + len, PAGE_SIZE - len, "%9u ",
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%9u ",
 				stats->freq_table[i]);
 	}
 	if (len >= PAGE_SIZE)
 		return PAGE_SIZE;
 
-	len += snprintf(buf + len, PAGE_SIZE - len, "\n");
+	len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
 
 	for (i = 0; i < stats->state_num; i++) {
 		if (len >= PAGE_SIZE)
 			break;
 
-		len += snprintf(buf + len, PAGE_SIZE - len, "%9u: ",
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%9u: ",
 				stats->freq_table[i]);
 
 		for (j = 0; j < stats->state_num; j++) {
 			if (len >= PAGE_SIZE)
 				break;
-			len += snprintf(buf + len, PAGE_SIZE - len, "%9u ",
+			len += scnprintf(buf + len, PAGE_SIZE - len, "%9u ",
 					stats->trans_table[i*stats->max_state+j]);
 		}
 		if (len >= PAGE_SIZE)
 			break;
-		len += snprintf(buf + len, PAGE_SIZE - len, "\n");
+		len += scnprintf(buf + len, PAGE_SIZE - len, "\n");
 	}
 
 	if (len >= PAGE_SIZE) {

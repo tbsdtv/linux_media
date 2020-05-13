@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Based on arch/arm/include/asm/cmpxchg.h
  *
  * Copyright (C) 2012 ARM Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef __ASM_CMPXCHG_H
 #define __ASM_CMPXCHG_H
@@ -21,7 +10,6 @@
 #include <linux/build_bug.h>
 #include <linux/compiler.h>
 
-#include <asm/atomic.h>
 #include <asm/barrier.h>
 #include <asm/lse.h>
 
@@ -74,7 +62,7 @@ __XCHG_CASE( ,  ,  mb_, 64, dmb ish, nop,  , a, l, "memory")
 #undef __XCHG_CASE
 
 #define __XCHG_GEN(sfx)							\
-static inline unsigned long __xchg##sfx(unsigned long x,		\
+static __always_inline  unsigned long __xchg##sfx(unsigned long x,	\
 					volatile void *ptr,		\
 					int size)			\
 {									\
@@ -115,8 +103,52 @@ __XCHG_GEN(_mb)
 #define arch_xchg_release(...)	__xchg_wrapper(_rel, __VA_ARGS__)
 #define arch_xchg(...)		__xchg_wrapper( _mb, __VA_ARGS__)
 
+#define __CMPXCHG_CASE(name, sz)			\
+static inline u##sz __cmpxchg_case_##name##sz(volatile void *ptr,	\
+					      u##sz old,		\
+					      u##sz new)		\
+{									\
+	return __lse_ll_sc_body(_cmpxchg_case_##name##sz,		\
+				ptr, old, new);				\
+}
+
+__CMPXCHG_CASE(    ,  8)
+__CMPXCHG_CASE(    , 16)
+__CMPXCHG_CASE(    , 32)
+__CMPXCHG_CASE(    , 64)
+__CMPXCHG_CASE(acq_,  8)
+__CMPXCHG_CASE(acq_, 16)
+__CMPXCHG_CASE(acq_, 32)
+__CMPXCHG_CASE(acq_, 64)
+__CMPXCHG_CASE(rel_,  8)
+__CMPXCHG_CASE(rel_, 16)
+__CMPXCHG_CASE(rel_, 32)
+__CMPXCHG_CASE(rel_, 64)
+__CMPXCHG_CASE(mb_,  8)
+__CMPXCHG_CASE(mb_, 16)
+__CMPXCHG_CASE(mb_, 32)
+__CMPXCHG_CASE(mb_, 64)
+
+#undef __CMPXCHG_CASE
+
+#define __CMPXCHG_DBL(name)						\
+static inline long __cmpxchg_double##name(unsigned long old1,		\
+					 unsigned long old2,		\
+					 unsigned long new1,		\
+					 unsigned long new2,		\
+					 volatile void *ptr)		\
+{									\
+	return __lse_ll_sc_body(_cmpxchg_double##name, 			\
+				old1, old2, new1, new2, ptr);		\
+}
+
+__CMPXCHG_DBL(   )
+__CMPXCHG_DBL(_mb)
+
+#undef __CMPXCHG_DBL
+
 #define __CMPXCHG_GEN(sfx)						\
-static inline unsigned long __cmpxchg##sfx(volatile void *ptr,		\
+static __always_inline unsigned long __cmpxchg##sfx(volatile void *ptr,	\
 					   unsigned long old,		\
 					   unsigned long new,		\
 					   int size)			\
@@ -223,7 +255,7 @@ __CMPWAIT_CASE( ,  , 64);
 #undef __CMPWAIT_CASE
 
 #define __CMPWAIT_GEN(sfx)						\
-static inline void __cmpwait##sfx(volatile void *ptr,			\
+static __always_inline void __cmpwait##sfx(volatile void *ptr,		\
 				  unsigned long val,			\
 				  int size)				\
 {									\

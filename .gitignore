@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # NOTE! Don't add files that are generated in specific
 # subdirectories here. Add them in the ".gitignore" file
@@ -30,10 +31,10 @@
 *.lz4
 *.lzma
 *.lzo
+*.mod
 *.mod.c
 *.o
 *.o.*
-*.order
 *.patch
 *.s
 *.so
@@ -45,6 +46,7 @@
 *.xz
 Module.symvers
 modules.builtin
+modules.order
 
 #
 # Top-level generic files
@@ -59,6 +61,7 @@ modules.builtin
 /System.map
 /Module.markers
 /modules.builtin.modinfo
+/modules.nsdeps
 
 #
 # RPM spec file (make rpm-pkg)
@@ -141,3 +144,6 @@ x509.genkey
 
 # Kdevelop4
 *.kdev4
+
+# Clang's compilation database file
+/compile_commands.json

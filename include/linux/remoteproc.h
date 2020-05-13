@@ -100,7 +100,9 @@ struct fw_rsc_hdr {
  *		    the remote processor will be writing logs.
  * @RSC_VDEV:       declare support for a virtio device, and serve as its
  *		    virtio header.
- * @RSC_LAST:       just keep this one at the end
+ * @RSC_LAST:       just keep this one at the end of standard resources
+ * @RSC_VENDOR_START:	start of the vendor specific resource types range
+ * @RSC_VENDOR_END:	end of the vendor specific resource types range
  *
  * For more details regarding a specific resource type, please see its
  * dedicated structure below.
@@ -111,11 +113,13 @@ struct fw_rsc_hdr {
  * please update it as needed.
  */
 enum fw_resource_type {
-	RSC_CARVEOUT	= 0,
-	RSC_DEVMEM	= 1,
-	RSC_TRACE	= 2,
-	RSC_VDEV	= 3,
-	RSC_LAST	= 4,
+	RSC_CARVEOUT		= 0,
+	RSC_DEVMEM		= 1,
+	RSC_TRACE		= 2,
+	RSC_VDEV		= 3,
+	RSC_LAST		= 4,
+	RSC_VENDOR_START	= 128,
+	RSC_VENDOR_END		= 512,
 };
 
 #define FW_RSC_ADDR_ANY (-1)
@@ -325,7 +329,7 @@ struct rproc;
 struct rproc_mem_entry {
 	void *va;
 	dma_addr_t dma;
-	int len;
+	size_t len;
 	u32 da;
 	void *priv;
 	char name[32];
@@ -340,29 +344,48 @@ struct rproc_mem_entry {
 struct firmware;
 
 /**
+ * enum rsc_handling_status - return status of rproc_ops handle_rsc hook
+ * @RSC_HANDLED:	resource was handled
+ * @RSC_IGNORED:	resource was ignored
+ */
+enum rsc_handling_status {
+	RSC_HANDLED	= 0,
+	RSC_IGNORED	= 1,
+};
+
+/**
  * struct rproc_ops - platform-specific device handlers
  * @start:	power on the device and boot it
  * @stop:	power off the device
  * @kick:	kick a virtqueue (virtqueue id given as a parameter)
  * @da_to_va:	optional platform hook to perform address translations
  * @parse_fw:	parse firmware to extract information (e.g. resource table)
+ * @handle_rsc:	optional platform hook to handle vendor resources. Should return
+ * RSC_HANDLED if resource was handled, RSC_IGNORED if not handled and a
+ * negative value on error
+ * @load_rsc_table:	load resource table from firmware image
  * @find_loaded_rsc_table: find the loaded resouce table
  * @load:		load firmware to memory, where the remote processor
  *			expects to find it
  * @sanity_check:	sanity check the fw image
  * @get_boot_addr:	get boot address to entry point specified in firmware
+ * @panic:	optional callback to react to system panic, core will delay
+ *		panic at least the returned number of milliseconds
  */
 struct rproc_ops {
 	int (*start)(struct rproc *rproc);
 	int (*stop)(struct rproc *rproc);
 	void (*kick)(struct rproc *rproc, int vqid);
-	void * (*da_to_va)(struct rproc *rproc, u64 da, int len);
+	void * (*da_to_va)(struct rproc *rproc, u64 da, size_t len);
 	int (*parse_fw)(struct rproc *rproc, const struct firmware *fw);
+	int (*handle_rsc)(struct rproc *rproc, u32 rsc_type, void *rsc,
+			  int offset, int avail);
 	struct resource_table *(*find_loaded_rsc_table)(
 				struct rproc *rproc, const struct firmware *fw);
 	int (*load)(struct rproc *rproc, const struct firmware *fw);
 	int (*sanity_check)(struct rproc *rproc, const struct firmware *fw);
-	u32 (*get_boot_addr)(struct rproc *rproc, const struct firmware *fw);
+	u64 (*get_boot_addr)(struct rproc *rproc, const struct firmware *fw);
+	unsigned long (*panic)(struct rproc *rproc);
 };
 
 /**
@@ -478,7 +501,7 @@ struct rproc {
 	int num_traces;
 	struct list_head carveouts;
 	struct list_head mappings;
-	u32 bootaddr;
+	u64 bootaddr;
 	struct list_head rvdevs;
 	struct list_head subdevs;
 	struct idr notifyids;
@@ -494,6 +517,7 @@ struct rproc {
 	bool auto_boot;
 	struct list_head dump_segments;
 	int nb_vdev;
+	u8 elf_class;
 };
 
 /**
@@ -579,13 +603,13 @@ void rproc_add_carveout(struct rproc *rproc, struct rproc_mem_entry *mem);
 
 struct rproc_mem_entry *
 rproc_mem_entry_init(struct device *dev,
-		     void *va, dma_addr_t dma, int len, u32 da,
+		     void *va, dma_addr_t dma, size_t len, u32 da,
 		     int (*alloc)(struct rproc *, struct rproc_mem_entry *),
 		     int (*release)(struct rproc *, struct rproc_mem_entry *),
 		     const char *name, ...);
 
 struct rproc_mem_entry *
-rproc_of_resm_mem_entry_init(struct device *dev, u32 of_resm_idx, int len,
+rproc_of_resm_mem_entry_init(struct device *dev, u32 of_resm_idx, size_t len,
 			     u32 da, const char *name, ...);
 
 int rproc_boot(struct rproc *rproc);

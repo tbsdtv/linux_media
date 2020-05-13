@@ -220,31 +220,31 @@ static int ocfs2_osb_dump(struct ocfs2_super *osb, char *buf, int len)
 	int i, out = 0;
 	unsigned long flags;
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => Id: %-s  Uuid: %-s  Gen: 0x%X  Label: %-s\n",
 			"Device", osb->dev_str, osb->uuid_str,
 			osb->fs_generation, osb->vol_label);
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => State: %d  Flags: 0x%lX\n", "Volume",
 			atomic_read(&osb->vol_state), osb->osb_flags);
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => Block: %lu  Cluster: %d\n", "Sizes",
 			osb->sb->s_blocksize, osb->s_clustersize);
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => Compat: 0x%X  Incompat: 0x%X  "
 			"ROcompat: 0x%X\n",
 			"Features", osb->s_feature_compat,
 			osb->s_feature_incompat, osb->s_feature_ro_compat);
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => Opts: 0x%lX  AtimeQuanta: %u\n", "Mount",
 			osb->s_mount_opt, osb->s_atime_quantum);
 
 	if (cconn) {
-		out += snprintf(buf + out, len - out,
+		out += scnprintf(buf + out, len - out,
 				"%10s => Stack: %s  Name: %*s  "
 				"Version: %d.%d\n", "Cluster",
 				(*osb->osb_cluster_stack == '\0' ?
@@ -255,7 +255,7 @@ static int ocfs2_osb_dump(struct ocfs2_super *osb, char *buf, int len)
 	}
 
 	spin_lock_irqsave(&osb->dc_task_lock, flags);
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => Pid: %d  Count: %lu  WakeSeq: %lu  "
 			"WorkSeq: %lu\n", "DownCnvt",
 			(osb->dc_task ?  task_pid_nr(osb->dc_task) : -1),
@@ -264,32 +264,32 @@ static int ocfs2_osb_dump(struct ocfs2_super *osb, char *buf, int len)
 	spin_unlock_irqrestore(&osb->dc_task_lock, flags);
 
 	spin_lock(&osb->osb_lock);
-	out += snprintf(buf + out, len - out, "%10s => Pid: %d  Nodes:",
+	out += scnprintf(buf + out, len - out, "%10s => Pid: %d  Nodes:",
 			"Recovery",
 			(osb->recovery_thread_task ?
 			 task_pid_nr(osb->recovery_thread_task) : -1));
 	if (rm->rm_used == 0)
-		out += snprintf(buf + out, len - out, " None\n");
+		out += scnprintf(buf + out, len - out, " None\n");
 	else {
 		for (i = 0; i < rm->rm_used; i++)
-			out += snprintf(buf + out, len - out, " %d",
+			out += scnprintf(buf + out, len - out, " %d",
 					rm->rm_entries[i]);
-		out += snprintf(buf + out, len - out, "\n");
+		out += scnprintf(buf + out, len - out, "\n");
 	}
 	spin_unlock(&osb->osb_lock);
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => Pid: %d  Interval: %lu\n", "Commit",
 			(osb->commit_task ? task_pid_nr(osb->commit_task) : -1),
 			osb->osb_commit_interval);
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => State: %d  TxnId: %lu  NumTxns: %d\n",
 			"Journal", osb->journal->j_state,
 			osb->journal->j_trans_id,
 			atomic_read(&osb->journal->j_num_trans));
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => GlobalAllocs: %d  LocalAllocs: %d  "
 			"SubAllocs: %d  LAWinMoves: %d  SAExtends: %d\n",
 			"Stats",
@@ -299,7 +299,7 @@ static int ocfs2_osb_dump(struct ocfs2_super *osb, char *buf, int len)
 			atomic_read(&osb->alloc_stats.moves),
 			atomic_read(&osb->alloc_stats.bg_extends));
 
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => State: %u  Descriptor: %llu  Size: %u bits  "
 			"Default: %u bits\n",
 			"LocalAlloc", osb->local_alloc_state,
@@ -307,7 +307,7 @@ static int ocfs2_osb_dump(struct ocfs2_super *osb, char *buf, int len)
 			osb->local_alloc_bits, osb->local_alloc_default_bits);
 
 	spin_lock(&osb->osb_lock);
-	out += snprintf(buf + out, len - out,
+	out += scnprintf(buf + out, len - out,
 			"%10s => InodeSlot: %d  StolenInodes: %d, "
 			"MetaSlot: %d  StolenMeta: %d\n", "Steal",
 			osb->s_inode_steal_slot,
@@ -316,20 +316,20 @@ static int ocfs2_osb_dump(struct ocfs2_super *osb, char *buf, int len)
 			atomic_read(&osb->s_num_meta_stolen));
 	spin_unlock(&osb->osb_lock);
 
-	out += snprintf(buf + out, len - out, "OrphanScan => ");
-	out += snprintf(buf + out, len - out, "Local: %u  Global: %u ",
+	out += scnprintf(buf + out, len - out, "OrphanScan => ");
+	out += scnprintf(buf + out, len - out, "Local: %u  Global: %u ",
 			os->os_count, os->os_seqno);
-	out += snprintf(buf + out, len - out, " Last Scan: ");
+	out += scnprintf(buf + out, len - out, " Last Scan: ");
 	if (atomic_read(&os->os_state) == ORPHAN_SCAN_INACTIVE)
-		out += snprintf(buf + out, len - out, "Disabled\n");
+		out += scnprintf(buf + out, len - out, "Disabled\n");
 	else
-		out += snprintf(buf + out, len - out, "%lu seconds ago\n",
+		out += scnprintf(buf + out, len - out, "%lu seconds ago\n",
 				(unsigned long)(ktime_get_seconds() - os->os_scantime));
 
-	out += snprintf(buf + out, len - out, "%10s => %3s  %10s\n",
+	out += scnprintf(buf + out, len - out, "%10s => %3s  %10s\n",
 			"Slots", "Num", "RecoGen");
 	for (i = 0; i < osb->max_slots; ++i) {
-		out += snprintf(buf + out, len - out,
+		out += scnprintf(buf + out, len - out,
 				"%10s  %c %3d  %10d\n",
 				" ",
 				(i == osb->slot_num ? '*' : ' '),
@@ -926,8 +926,8 @@ static int ocfs2_enable_quotas(struct ocfs2_super *osb)
 			status = -ENOENT;
 			goto out_quota_off;
 		}
-		status = dquot_enable(inode[type], type, QFMT_OCFS2,
-				      DQUOT_USAGE_ENABLED);
+		status = dquot_load_quota_inode(inode[type], type, QFMT_OCFS2,
+						DQUOT_USAGE_ENABLED);
 		if (status < 0)
 			goto out_quota_off;
 	}
@@ -1079,33 +1079,13 @@ static int ocfs2_fill_super(struct super_block *sb, void *data, int silent)
 
 	osb->osb_debug_root = debugfs_create_dir(osb->uuid_str,
 						 ocfs2_debugfs_root);
-	if (!osb->osb_debug_root) {
-		status = -EINVAL;
-		mlog(ML_ERROR, "Unable to create per-mount debugfs root.\n");
-		goto read_super_error;
-	}
 
-	osb->osb_ctxt = debugfs_create_file("fs_state", S_IFREG|S_IRUSR,
-					    osb->osb_debug_root,
-					    osb,
-					    &ocfs2_osb_debug_fops);
-	if (!osb->osb_ctxt) {
-		status = -EINVAL;
-		mlog_errno(status);
-		goto read_super_error;
-	}
+	debugfs_create_file("fs_state", S_IFREG|S_IRUSR, osb->osb_debug_root,
+			    osb, &ocfs2_osb_debug_fops);
 
-	if (ocfs2_meta_ecc(osb)) {
-		status = ocfs2_blockcheck_stats_debugfs_install(
-						&osb->osb_ecc_stats,
-						osb->osb_debug_root);
-		if (status) {
-			mlog(ML_ERROR,
-			     "Unable to create blockcheck statistics "
-			     "files\n");
-			goto read_super_error;
-		}
-	}
+	if (ocfs2_meta_ecc(osb))
+		ocfs2_blockcheck_stats_debugfs_install( &osb->osb_ecc_stats,
+							osb->osb_debug_root);
 
 	status = ocfs2_mount_volume(sb);
 	if (status < 0)
@@ -1592,11 +1572,6 @@ static int __init ocfs2_init(void)
 		goto out2;
 
 	ocfs2_debugfs_root = debugfs_create_dir("ocfs2", NULL);
-	if (!ocfs2_debugfs_root) {
-		status = -ENOMEM;
-		mlog(ML_ERROR, "Unable to create ocfs2 debugfs root.\n");
-		goto out3;
-	}
 
 	ocfs2_set_locking_protocol();
 
@@ -1884,8 +1859,6 @@ static void ocfs2_dismount_volume(struct super_block *sb, int mnt_err)
 
 	kset_unregister(osb->osb_dev_kset);
 
-	debugfs_remove(osb->osb_ctxt);
-
 	/* Orphan scan should be stopped as early as possible */
 	ocfs2_orphan_scan_stop(osb);
 
@@ -1941,7 +1914,7 @@ static void ocfs2_dismount_volume(struct super_block *sb, int mnt_err)
 		ocfs2_dlm_shutdown(osb, hangup_needed);
 
 	ocfs2_blockcheck_stats_debugfs_remove(&osb->osb_ecc_stats);
-	debugfs_remove(osb->osb_debug_root);
+	debugfs_remove_recursive(osb->osb_debug_root);
 
 	if (hangup_needed)
 		ocfs2_cluster_hangup(osb->uuid_str, strlen(osb->uuid_str));

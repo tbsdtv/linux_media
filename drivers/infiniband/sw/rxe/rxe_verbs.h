@@ -85,8 +85,8 @@ struct rxe_cqe {
 };
 
 struct rxe_cq {
-	struct rxe_pool_entry	pelem;
 	struct ib_cq		ibcq;
+	struct rxe_pool_entry	pelem;
 	struct rxe_queue	*queue;
 	spinlock_t		cq_lock;
 	u8			notify;
@@ -213,6 +213,7 @@ struct rxe_resp_info {
 	struct rxe_mem		*mr;
 	u32			resid;
 	u32			rkey;
+	u32			length;
 	u64			atomic_orig;
 
 	/* SRQ only */
@@ -383,6 +384,7 @@ struct rxe_port {
 struct rxe_dev {
 	struct ib_device	ib_dev;
 	struct ib_device_attr	attr;
+	struct device_dma_parameters dma_parms;
 	int			max_ucontext;
 	int			max_inline_data;
 	struct mutex	usdev_lock;
@@ -406,7 +408,7 @@ struct rxe_dev {
 	struct list_head	pending_mmaps;
 
 	spinlock_t		mmap_offset_lock; /* guard mmap_offset */
-	int			mmap_offset;
+	u64			mmap_offset;
 
 	atomic64_t		stats_counters[RXE_NUM_OF_COUNTERS];
 

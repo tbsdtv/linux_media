@@ -23,11 +23,14 @@
  *          Alon Levy
  */
 
+#include <linux/io-mapping.h>
+#include <linux/pci.h>
+
+#include <drm/drm_drv.h>
+#include <drm/drm_probe_helper.h>
+
 #include "qxl_drv.h"
 #include "qxl_object.h"
-
-#include <drm/drm_probe_helper.h>
-#include <linux/io-mapping.h>
 
 int qxl_log_level;
 
@@ -181,7 +184,7 @@ int qxl_device_init(struct qxl_device *qdev,
 
 	if (!qxl_check_device(qdev)) {
 		r = -ENODEV;
-		goto surface_mapping_free;
+		goto rom_unmap;
 	}
 
 	r = qxl_bo_init(qdev);
@@ -296,12 +299,12 @@ void qxl_device_fini(struct qxl_device *qdev)
 {
 	qxl_bo_unref(&qdev->current_release_bo[0]);
 	qxl_bo_unref(&qdev->current_release_bo[1]);
+	qxl_gem_fini(qdev);
+	qxl_bo_fini(qdev);
 	flush_work(&qdev->gc_work);
 	qxl_ring_free(qdev->command_ring);
 	qxl_ring_free(qdev->cursor_ring);
 	qxl_ring_free(qdev->release_ring);
-	qxl_gem_fini(qdev);
-	qxl_bo_fini(qdev);
 	io_mapping_free(qdev->surface_mapping);
 	io_mapping_free(qdev->vram_mapping);
 	iounmap(qdev->ram_header);

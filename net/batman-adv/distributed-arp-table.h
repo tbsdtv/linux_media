@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2011-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2011-2020  B.A.T.M.A.N. contributors:
  *
  * Antonio Quartulli
  */
@@ -11,14 +11,13 @@
 
 #include <linux/compiler.h>
 #include <linux/netdevice.h>
+#include <linux/netlink.h>
+#include <linux/seq_file.h>
+#include <linux/skbuff.h>
 #include <linux/types.h>
 #include <uapi/linux/batadv_packet.h>
 
 #include "originator.h"
-
-struct netlink_callback;
-struct seq_file;
-struct sk_buff;
 
 #ifdef CONFIG_BATMAN_ADV_DAT
 

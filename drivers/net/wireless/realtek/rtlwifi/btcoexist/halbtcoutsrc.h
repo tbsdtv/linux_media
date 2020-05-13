@@ -679,7 +679,7 @@ struct btc_coexist {
 	bool auto_report_2ant;
 	bool dbg_mode_1ant;
 	bool dbg_mode_2ant;
-	bool initilized;
+	bool initialized;
 	bool stop_coex_dm;
 	bool manual_control;
 	struct btc_statistics statistics;
@@ -764,7 +764,6 @@ void exhalbtc_special_packet_notify(struct btc_coexist *btcoexist, u8 pkt_type);
 void exhalbtc_bt_info_notify(struct btc_coexist *btcoexist, u8 *tmp_buf,
 			     u8 length);
 void exhalbtc_rf_status_notify(struct btc_coexist *btcoexist, u8 type);
-void exhalbtc_stack_operation_notify(struct btc_coexist *btcoexist, u8 type);
 void exhalbtc_halt_notify(struct btc_coexist *btcoexist);
 void exhalbtc_pnp_notify(struct btc_coexist *btcoexist, u8 pnp_state);
 void exhalbtc_coex_dm_switch(struct btc_coexist *btcoexist);

@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* 10G controller driver for Samsung SoCs
  *
  * Copyright (C) 2013 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *
  * Author: Siva Reddy Kallam <siva.kallam@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -33,7 +30,7 @@ struct sxgbe_stats {
 #define SXGBE_STAT(m)						\
 {								\
 	#m,							\
-	FIELD_SIZEOF(struct sxgbe_extra_stats, m),		\
+	sizeof_field(struct sxgbe_extra_stats, m),		\
 	offsetof(struct sxgbe_priv_data, xstats.m)		\
 }
 
@@ -479,6 +476,7 @@ static int sxgbe_get_regs_len(struct net_device *dev)
 }
 
 static const struct ethtool_ops sxgbe_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS,
 	.get_drvinfo = sxgbe_getdrvinfo,
 	.get_msglevel = sxgbe_getmsglevel,
 	.set_msglevel = sxgbe_setmsglevel,

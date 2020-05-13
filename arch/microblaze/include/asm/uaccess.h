@@ -1,18 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (C) 2008-2009 Michal Simek <monstr@monstr.eu>
  * Copyright (C) 2008-2009 PetaLogix
  * Copyright (C) 2006 Atmark Techno, Inc.
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License. See the file "COPYING" in the main directory of this archive
- * for more details.
  */
 
 #ifndef _ASM_MICROBLAZE_UACCESS_H
 #define _ASM_MICROBLAZE_UACCESS_H
 
 #include <linux/kernel.h>
-#include <linux/mm.h>
 
 #include <asm/mmu.h>
 #include <asm/page.h>
@@ -163,44 +159,15 @@ extern long __user_bad(void);
  * Returns zero on success, or -EFAULT on error.
  * On error, the variable @x is set to zero.
  */
-#define get_user(x, ptr)						\
-	__get_user_check((x), (ptr), sizeof(*(ptr)))
-
-#define __get_user_check(x, ptr, size)					\
-({									\
-	unsigned long __gu_val = 0;					\
-	const typeof(*(ptr)) __user *__gu_addr = (ptr);			\
-	int __gu_err = 0;						\
-									\
-	if (access_ok(__gu_addr, size)) {			\
-		switch (size) {						\
-		case 1:							\
-			__get_user_asm("lbu", __gu_addr, __gu_val,	\
-				       __gu_err);			\
-			break;						\
-		case 2:							\
-			__get_user_asm("lhu", __gu_addr, __gu_val,	\
-				       __gu_err);			\
-			break;						\
-		case 4:							\
-			__get_user_asm("lw", __gu_addr, __gu_val,	\
-				       __gu_err);			\
-			break;						\
-		default:						\
-			__gu_err = __user_bad();			\
-			break;						\
-		}							\
-	} else {							\
-		__gu_err = -EFAULT;					\
-	}								\
-	x = (__force typeof(*(ptr)))__gu_val;				\
-	__gu_err;							\
+#define get_user(x, ptr) ({				\
+	const typeof(*(ptr)) __user *__gu_ptr = (ptr);	\
+	access_ok(__gu_ptr, sizeof(*__gu_ptr)) ?	\
+		__get_user(x, __gu_ptr) : -EFAULT;	\
 })
 
 #define __get_user(x, ptr)						\
 ({									\
 	unsigned long __gu_val = 0;					\
-	/*unsigned long __gu_ptr = (unsigned long)(ptr);*/		\
 	long __gu_err;							\
 	switch (sizeof(*(ptr))) {					\
 	case 1:								\
@@ -211,6 +178,11 @@ extern long __user_bad(void);
 		break;							\
 	case 4:								\
 		__get_user_asm("lw", (ptr), __gu_val, __gu_err);	\
+		break;							\
+	case 8:								\
+		__gu_err = __copy_from_user(&__gu_val, ptr, 8);		\
+		if (__gu_err)						\
+			__gu_err = -EFAULT;				\
 		break;							\
 	default:							\
 		/* __gu_val = 0; __gu_err = -EINVAL;*/ __gu_err = __user_bad();\

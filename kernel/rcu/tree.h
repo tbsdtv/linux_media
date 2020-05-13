@@ -16,7 +16,6 @@
 #include <linux/cpumask.h>
 #include <linux/seqlock.h>
 #include <linux/swait.h>
-#include <linux/stop_machine.h>
 #include <linux/rcu_node_tree.h>
 
 #include "rcu_segcblist.h"
@@ -69,6 +68,8 @@ struct rcu_node {
 				/* Online CPUs for next expedited GP. */
 				/*  Any CPU that has ever been online will */
 				/*  have its bit set. */
+	unsigned long cbovldmask;
+				/* CPUs experiencing callback overload. */
 	unsigned long ffmask;	/* Fully functional CPUs. */
 	unsigned long grpmask;	/* Mask to apply to parent qsmask. */
 				/*  Only one bit will be set in this mask. */
@@ -154,13 +155,15 @@ struct rcu_data {
 	bool		core_needs_qs;	/* Core waits for quiesc state. */
 	bool		beenonline;	/* CPU online at least once. */
 	bool		gpwrap;		/* Possible ->gp_seq wrap. */
-	bool		deferred_qs;	/* This CPU awaiting a deferred QS? */
+	bool		exp_deferred_qs; /* This CPU awaiting a deferred QS? */
 	struct rcu_node *mynode;	/* This CPU's leaf of hierarchy */
 	unsigned long grpmask;		/* Mask to apply to leaf qsmask. */
 	unsigned long	ticks_this_gp;	/* The number of scheduling-clock */
 					/*  ticks this CPU has handled */
 					/*  during and after the last grace */
 					/* period it is aware of. */
+	struct irq_work defer_qs_iw;	/* Obtain later scheduler attention. */
+	bool defer_qs_iw_pending;	/* Scheduler attention pending? */
 
 	/* 2) batch handling */
 	struct rcu_segcblist cblist;	/* Segmented callback list, with */
@@ -179,8 +182,9 @@ struct rcu_data {
 	atomic_t dynticks;		/* Even value for idle, else odd. */
 	bool rcu_need_heavy_qs;		/* GP old, so heavy quiescent state! */
 	bool rcu_urgent_qs;		/* GP old need light quiescent state. */
+	bool rcu_forced_tick;		/* Forced tick to provide QS. */
+	bool rcu_forced_tick_exp;	/*   ... provide QS to expedited GP. */
 #ifdef CONFIG_RCU_FAST_NO_HZ
-	bool all_lazy;			/* All CPU's CBs lazy at idle start? */
 	unsigned long last_accelerate;	/* Last jiffy CBs were accelerated. */
 	unsigned long last_advance_all;	/* Last jiffy CBs were all advanced. */
 	int tick_nohz_enabled_snap;	/* Previously seen value from sysfs. */
@@ -192,29 +196,38 @@ struct rcu_data {
 
 	/* 5) Callback offloading. */
 #ifdef CONFIG_RCU_NOCB_CPU
-	struct rcu_head *nocb_head;	/* CBs waiting for kthread. */
-	struct rcu_head **nocb_tail;
-	atomic_long_t nocb_q_count;	/* # CBs waiting for nocb */
-	atomic_long_t nocb_q_count_lazy; /*  invocation (all stages). */
-	struct rcu_head *nocb_follower_head; /* CBs ready to invoke. */
-	struct rcu_head **nocb_follower_tail;
-	struct swait_queue_head nocb_wq; /* For nocb kthreads to sleep on. */
-	struct task_struct *nocb_kthread;
+	struct swait_queue_head nocb_cb_wq; /* For nocb kthreads to sleep on. */
+	struct task_struct *nocb_gp_kthread;
 	raw_spinlock_t nocb_lock;	/* Guard following pair of fields. */
+	atomic_t nocb_lock_contended;	/* Contention experienced. */
 	int nocb_defer_wakeup;		/* Defer wakeup of nocb_kthread. */
 	struct timer_list nocb_timer;	/* Enforce finite deferral. */
+	unsigned long nocb_gp_adv_time;	/* Last call_rcu() CB adv (jiffies). */
 
-	/* The following fields are used by the leader, hence own cacheline. */
-	struct rcu_head *nocb_gp_head ____cacheline_internodealigned_in_smp;
-					/* CBs waiting for GP. */
-	struct rcu_head **nocb_gp_tail;
-	bool nocb_leader_sleep;		/* Is the nocb leader thread asleep? */
-	struct rcu_data *nocb_next_follower;
-					/* Next follower in wakeup chain. */
+	/* The following fields are used by call_rcu, hence own cacheline. */
+	raw_spinlock_t nocb_bypass_lock ____cacheline_internodealigned_in_smp;
+	struct rcu_cblist nocb_bypass;	/* Lock-contention-bypass CB list. */
+	unsigned long nocb_bypass_first; /* Time (jiffies) of first enqueue. */
+	unsigned long nocb_nobypass_last; /* Last ->cblist enqueue (jiffies). */
+	int nocb_nobypass_count;	/* # ->cblist enqueues at ^^^ time. */
 
-	/* The following fields are used by the follower, hence new cachline. */
-	struct rcu_data *nocb_leader ____cacheline_internodealigned_in_smp;
-					/* Leader CPU takes GP-end wakeups. */
+	/* The following fields are used by GP kthread, hence own cacheline. */
+	raw_spinlock_t nocb_gp_lock ____cacheline_internodealigned_in_smp;
+	struct timer_list nocb_bypass_timer; /* Force nocb_bypass flush. */
+	u8 nocb_gp_sleep;		/* Is the nocb GP thread asleep? */
+	u8 nocb_gp_bypass;		/* Found a bypass on last scan? */
+	u8 nocb_gp_gp;			/* GP to wait for on last scan? */
+	unsigned long nocb_gp_seq;	/*  If so, ->gp_seq to wait for. */
+	unsigned long nocb_gp_loops;	/* # passes through wait code. */
+	struct swait_queue_head nocb_gp_wq; /* For nocb kthreads to sleep on. */
+	bool nocb_cb_sleep;		/* Is the nocb CB thread asleep? */
+	struct task_struct *nocb_cb_kthread;
+	struct rcu_data *nocb_next_cb_rdp;
+					/* Next rcu_data in wakeup chain. */
+
+	/* The following fields are used by CB kthread, hence new cacheline. */
+	struct rcu_data *nocb_gp_rdp ____cacheline_internodealigned_in_smp;
+					/* GP rdp takes GP-end wakeups. */
 #endif /* #ifdef CONFIG_RCU_NOCB_CPU */
 
 	/* 6) RCU priority boosting. */
@@ -310,6 +323,8 @@ struct rcu_state {
 	atomic_t expedited_need_qs;		/* # CPUs left to check in. */
 	struct swait_queue_head expedited_wq;	/* Wait for check-ins. */
 	int ncpus_snap;				/* # CPUs seen last time. */
+	u8 cbovld;				/* Callback overload now? */
+	u8 cbovldnext;				/* ^        ^  next time? */
 
 	unsigned long jiffies_force_qs;		/* Time at which to invoke */
 						/*  force_quiescent_state(). */
@@ -356,18 +371,6 @@ struct rcu_state {
 #define RCU_GP_CLEANUP   7	/* Grace-period cleanup started. */
 #define RCU_GP_CLEANED   8	/* Grace-period cleanup complete. */
 
-static const char * const gp_state_names[] = {
-	"RCU_GP_IDLE",
-	"RCU_GP_WAIT_GPS",
-	"RCU_GP_DONE_GPS",
-	"RCU_GP_ONOFF",
-	"RCU_GP_INIT",
-	"RCU_GP_WAIT_FQS",
-	"RCU_GP_DOING_FQS",
-	"RCU_GP_CLEANUP",
-	"RCU_GP_CLEANED",
-};
-
 /*
  * In order to export the rcu_state name to the tracing tools, it
  * needs to be added in the __tracepoint_string section.
@@ -391,8 +394,6 @@ static const char *tp_rcu_varname __used __tracepoint_string = rcu_name;
 #define RCU_NAME rcu_name
 #endif /* #else #ifdef CONFIG_TRACING */
 
-int rcu_dynticks_snap(struct rcu_data *rdp);
-
 /* Forward declarations for tree_plugin.h */
 static void rcu_bootup_announce(void);
 static void rcu_qs(void);
@@ -403,12 +404,11 @@ static bool rcu_preempt_has_tasks(struct rcu_node *rnp);
 static int rcu_print_task_exp_stall(struct rcu_node *rnp);
 static void rcu_preempt_check_blocked_tasks(struct rcu_node *rnp);
 static void rcu_flavor_sched_clock_irq(int user);
-void call_rcu(struct rcu_head *head, rcu_callback_t func);
 static void dump_blkd_tasks(struct rcu_node *rnp, int ncheck);
 static void rcu_initiate_boost(struct rcu_node *rnp, unsigned long flags);
 static void rcu_preempt_boost_start_gp(struct rcu_node *rnp);
-static void invoke_rcu_callbacks_kthread(void);
 static bool rcu_is_callbacks_kthread(void);
+static void rcu_cpu_kthread_setup(unsigned int cpu);
 static void __init rcu_spawn_boost_kthreads(void);
 static void rcu_prepare_kthreads(int cpu);
 static void rcu_cleanup_after_idle(void);
@@ -417,25 +417,39 @@ static bool rcu_preempt_has_tasks(struct rcu_node *rnp);
 static bool rcu_preempt_need_deferred_qs(struct task_struct *t);
 static void rcu_preempt_deferred_qs(struct task_struct *t);
 static void zero_cpu_stall_ticks(struct rcu_data *rdp);
-static bool rcu_nocb_cpu_needs_barrier(int cpu);
 static struct swait_queue_head *rcu_nocb_gp_get(struct rcu_node *rnp);
 static void rcu_nocb_gp_cleanup(struct swait_queue_head *sq);
 static void rcu_init_one_nocb(struct rcu_node *rnp);
-static bool __call_rcu_nocb(struct rcu_data *rdp, struct rcu_head *rhp,
-			    bool lazy, unsigned long flags);
-static bool rcu_nocb_adopt_orphan_cbs(struct rcu_data *my_rdp,
-				      struct rcu_data *rdp,
-				      unsigned long flags);
+static bool rcu_nocb_flush_bypass(struct rcu_data *rdp, struct rcu_head *rhp,
+				  unsigned long j);
+static bool rcu_nocb_try_bypass(struct rcu_data *rdp, struct rcu_head *rhp,
+				bool *was_alldone, unsigned long flags);
+static void __call_rcu_nocb_wake(struct rcu_data *rdp, bool was_empty,
+				 unsigned long flags);
 static int rcu_nocb_need_deferred_wakeup(struct rcu_data *rdp);
 static void do_nocb_deferred_wakeup(struct rcu_data *rdp);
 static void rcu_boot_init_nocb_percpu_data(struct rcu_data *rdp);
 static void rcu_spawn_cpu_nocb_kthread(int cpu);
 static void __init rcu_spawn_nocb_kthreads(void);
+static void show_rcu_nocb_state(struct rcu_data *rdp);
+static void rcu_nocb_lock(struct rcu_data *rdp);
+static void rcu_nocb_unlock(struct rcu_data *rdp);
+static void rcu_nocb_unlock_irqrestore(struct rcu_data *rdp,
+				       unsigned long flags);
+static void rcu_lockdep_assert_cblist_protected(struct rcu_data *rdp);
 #ifdef CONFIG_RCU_NOCB_CPU
 static void __init rcu_organize_nocb_kthreads(void);
-#endif /* #ifdef CONFIG_RCU_NOCB_CPU */
-static bool init_nocb_callback_list(struct rcu_data *rdp);
-static unsigned long rcu_get_n_cbs_nocb_cpu(struct rcu_data *rdp);
+#define rcu_nocb_lock_irqsave(rdp, flags)				\
+do {									\
+	if (!rcu_segcblist_is_offloaded(&(rdp)->cblist))		\
+		local_irq_save(flags);					\
+	else								\
+		raw_spin_lock_irqsave(&(rdp)->nocb_lock, (flags));	\
+} while (0)
+#else /* #ifdef CONFIG_RCU_NOCB_CPU */
+#define rcu_nocb_lock_irqsave(rdp, flags) local_irq_save(flags)
+#endif /* #else #ifdef CONFIG_RCU_NOCB_CPU */
+
 static void rcu_bind_gp_kthread(void);
 static bool rcu_nohz_full_cpu(void);
 static void rcu_dynticks_task_enter(void);

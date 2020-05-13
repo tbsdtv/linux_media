@@ -4,6 +4,7 @@
 
 #include <linux/idr.h>
 #include <linux/blk-mq.h>
+#include <linux/part_stat.h>
 #include <xen/xen.h>
 #include "blk-mq.h"
 #include "blk-mq-sched.h"
@@ -19,6 +20,7 @@ struct blk_flush_queue {
 	unsigned int		flush_queue_delayed:1;
 	unsigned int		flush_pending_idx:1;
 	unsigned int		flush_running_idx:1;
+	blk_status_t 		rq_status;
 	unsigned long		flush_pending_since;
 	struct list_head	flush_queue[2];
 	struct list_head	flush_data_in_flight;
@@ -29,6 +31,7 @@ struct blk_flush_queue {
 	 * at the same time
 	 */
 	struct request		*orig_rq;
+	struct lock_class_key	key;
 	spinlock_t		mq_flush_lock;
 };
 
@@ -47,12 +50,16 @@ static inline void __blk_get_queue(struct request_queue *q)
 	kobject_get(&q->kobj);
 }
 
-struct blk_flush_queue *blk_alloc_flush_queue(struct request_queue *q,
-		int node, int cmd_size, gfp_t flags);
+static inline bool
+is_flush_rq(struct request *req, struct blk_mq_hw_ctx *hctx)
+{
+	return hctx->fq->flush_rq == req;
+}
+
+struct blk_flush_queue *blk_alloc_flush_queue(int node, int cmd_size,
+					      gfp_t flags);
 void blk_free_flush_queue(struct blk_flush_queue *q);
 
-void blk_rq_bio_prep(struct request_queue *q, struct request *rq,
-			struct bio *bio);
 void blk_freeze_queue(struct request_queue *q);
 
 static inline void blk_queue_enter_live(struct request_queue *q)
@@ -101,9 +108,22 @@ static inline bool bvec_gap_to_prev(struct request_queue *q,
 	return __bvec_gap_to_prev(q, bprv, offset);
 }
 
+static inline void blk_rq_bio_prep(struct request *rq, struct bio *bio,
+		unsigned int nr_segs)
+{
+	rq->nr_phys_segments = nr_segs;
+	rq->__data_len = bio->bi_iter.bi_size;
+	rq->bio = rq->biotail = bio;
+	rq->ioprio = bio_prio(bio);
+
+	if (bio->bi_disk)
+		rq->rq_disk = bio->bi_disk;
+}
+
 #ifdef CONFIG_BLK_DEV_INTEGRITY
 void blk_flush_integrity(void);
 bool __bio_integrity_endio(struct bio *);
+void bio_integrity_free(struct bio *bio);
 static inline bool bio_integrity_endio(struct bio *bio)
 {
 	if (bio_integrity(bio))
@@ -130,6 +150,9 @@ static inline bool integrity_req_gap_front_merge(struct request *req,
 	return bvec_gap_to_prev(req->q, &bip->bip_vec[bip->bip_vcnt - 1],
 				bip_next->bip_vec[0].bv_offset);
 }
+
+void blk_integrity_add(struct gendisk *);
+void blk_integrity_del(struct gendisk *);
 #else /* CONFIG_BLK_DEV_INTEGRITY */
 static inline bool integrity_req_gap_back_merge(struct request *req,
 		struct bio *next)
@@ -149,19 +172,28 @@ static inline bool bio_integrity_endio(struct bio *bio)
 {
 	return true;
 }
+static inline void bio_integrity_free(struct bio *bio)
+{
+}
+static inline void blk_integrity_add(struct gendisk *disk)
+{
+}
+static inline void blk_integrity_del(struct gendisk *disk)
+{
+}
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
 
 unsigned long blk_rq_timeout(unsigned long timeout);
 void blk_add_timer(struct request *req);
 
-bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
-			     struct bio *bio);
-bool bio_attempt_back_merge(struct request_queue *q, struct request *req,
-			    struct bio *bio);
+bool bio_attempt_front_merge(struct request *req, struct bio *bio,
+		unsigned int nr_segs);
+bool bio_attempt_back_merge(struct request *req, struct bio *bio,
+		unsigned int nr_segs);
 bool bio_attempt_discard_merge(struct request_queue *q, struct request *req,
 		struct bio *bio);
 bool blk_attempt_plug_merge(struct request_queue *q, struct bio *bio,
-			    struct request **same_queue_rq);
+		unsigned int nr_segs, struct request **same_queue_rq);
 
 void blk_account_io_start(struct request *req, bool new_io);
 void blk_account_io_completion(struct request *req, unsigned int bytes);
@@ -174,21 +206,34 @@ void blk_account_io_done(struct request *req, u64 now);
 
 void blk_insert_flush(struct request *rq);
 
-int elevator_init_mq(struct request_queue *q);
+void elevator_init_mq(struct request_queue *q);
 int elevator_switch_mq(struct request_queue *q,
 			      struct elevator_type *new_e);
 void __elevator_exit(struct request_queue *, struct elevator_queue *);
-int elv_register_queue(struct request_queue *q);
+int elv_register_queue(struct request_queue *q, bool uevent);
 void elv_unregister_queue(struct request_queue *q);
 
 static inline void elevator_exit(struct request_queue *q,
 		struct elevator_queue *e)
 {
+	lockdep_assert_held(&q->sysfs_lock);
+
 	blk_mq_sched_free_requests(q);
 	__elevator_exit(q, e);
 }
 
 struct hd_struct *__disk_get_part(struct gendisk *disk, int partno);
+
+ssize_t part_size_show(struct device *dev, struct device_attribute *attr,
+		char *buf);
+ssize_t part_stat_show(struct device *dev, struct device_attribute *attr,
+		char *buf);
+ssize_t part_inflight_show(struct device *dev, struct device_attribute *attr,
+		char *buf);
+ssize_t part_fail_show(struct device *dev, struct device_attribute *attr,
+		char *buf);
+ssize_t part_fail_store(struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t count);
 
 #ifdef CONFIG_FAIL_IO_TIMEOUT
 int blk_should_fake_timeout(struct request_queue *);
@@ -202,15 +247,17 @@ static inline int blk_should_fake_timeout(struct request_queue *q)
 }
 #endif
 
-int ll_back_merge_fn(struct request_queue *q, struct request *req,
-		     struct bio *bio);
-int ll_front_merge_fn(struct request_queue *q, struct request *req, 
-		      struct bio *bio);
+void __blk_queue_split(struct request_queue *q, struct bio **bio,
+		unsigned int *nr_segs);
+int ll_back_merge_fn(struct request *req, struct bio *bio,
+		unsigned int nr_segs);
+int ll_front_merge_fn(struct request *req,  struct bio *bio,
+		unsigned int nr_segs);
 struct request *attempt_back_merge(struct request_queue *q, struct request *rq);
 struct request *attempt_front_merge(struct request_queue *q, struct request *rq);
 int blk_attempt_req_merge(struct request_queue *q, struct request *rq,
 				struct request *next);
-void blk_recalc_rq_segments(struct request *rq);
+unsigned int blk_recalc_rq_segments(struct request *rq);
 void blk_rq_set_mixed_merge(struct request *rq);
 bool blk_rq_merge_ok(struct request *rq, struct bio *bio);
 enum elv_merge blk_try_merge(struct request *rq, struct bio *bio);
@@ -221,14 +268,11 @@ int blk_dev_init(void);
  * Contribute to IO statistics IFF:
  *
  *	a) it's attached to a gendisk, and
- *	b) the queue had IO stats enabled when this request was started, and
- *	c) it's a file system request
+ *	b) the queue had IO stats enabled when this request was started
  */
 static inline bool blk_do_io_stat(struct request *rq)
 {
-	return rq->rq_disk &&
-	       (rq->rq_flags & RQF_IO_STAT) &&
-		!blk_rq_is_passthrough(rq);
+	return rq->rq_disk && (rq->rq_flags & RQF_IO_STAT);
 }
 
 static inline void req_set_nomerge(struct request_queue *q, struct request *req)
@@ -330,5 +374,118 @@ void blk_queue_free_zone_bitmaps(struct request_queue *q);
 #else
 static inline void blk_queue_free_zone_bitmaps(struct request_queue *q) {}
 #endif
+
+void part_dec_in_flight(struct request_queue *q, struct hd_struct *part,
+			int rw);
+void part_inc_in_flight(struct request_queue *q, struct hd_struct *part,
+			int rw);
+void update_io_ticks(struct hd_struct *part, unsigned long now, bool end);
+struct hd_struct *disk_map_sector_rcu(struct gendisk *disk, sector_t sector);
+
+int blk_alloc_devt(struct hd_struct *part, dev_t *devt);
+void blk_free_devt(dev_t devt);
+void blk_invalidate_devt(dev_t devt);
+char *disk_name(struct gendisk *hd, int partno, char *buf);
+#define ADDPART_FLAG_NONE	0
+#define ADDPART_FLAG_RAID	1
+#define ADDPART_FLAG_WHOLEDISK	2
+struct hd_struct *__must_check add_partition(struct gendisk *disk, int partno,
+		sector_t start, sector_t len, int flags,
+		struct partition_meta_info *info);
+void __delete_partition(struct percpu_ref *ref);
+void delete_partition(struct gendisk *disk, int partno);
+int disk_expand_part_tbl(struct gendisk *disk, int target);
+
+static inline int hd_ref_init(struct hd_struct *part)
+{
+	if (percpu_ref_init(&part->ref, __delete_partition, 0,
+				GFP_KERNEL))
+		return -ENOMEM;
+	return 0;
+}
+
+static inline void hd_struct_get(struct hd_struct *part)
+{
+	percpu_ref_get(&part->ref);
+}
+
+static inline int hd_struct_try_get(struct hd_struct *part)
+{
+	return percpu_ref_tryget_live(&part->ref);
+}
+
+static inline void hd_struct_put(struct hd_struct *part)
+{
+	percpu_ref_put(&part->ref);
+}
+
+static inline void hd_struct_kill(struct hd_struct *part)
+{
+	percpu_ref_kill(&part->ref);
+}
+
+static inline void hd_free_part(struct hd_struct *part)
+{
+	free_part_stats(part);
+	kfree(part->info);
+	percpu_ref_exit(&part->ref);
+}
+
+/*
+ * Any access of part->nr_sects which is not protected by partition
+ * bd_mutex or gendisk bdev bd_mutex, should be done using this
+ * accessor function.
+ *
+ * Code written along the lines of i_size_read() and i_size_write().
+ * CONFIG_PREEMPTION case optimizes the case of UP kernel with preemption
+ * on.
+ */
+static inline sector_t part_nr_sects_read(struct hd_struct *part)
+{
+#if BITS_PER_LONG==32 && defined(CONFIG_SMP)
+	sector_t nr_sects;
+	unsigned seq;
+	do {
+		seq = read_seqcount_begin(&part->nr_sects_seq);
+		nr_sects = part->nr_sects;
+	} while (read_seqcount_retry(&part->nr_sects_seq, seq));
+	return nr_sects;
+#elif BITS_PER_LONG==32 && defined(CONFIG_PREEMPTION)
+	sector_t nr_sects;
+
+	preempt_disable();
+	nr_sects = part->nr_sects;
+	preempt_enable();
+	return nr_sects;
+#else
+	return part->nr_sects;
+#endif
+}
+
+/*
+ * Should be called with mutex lock held (typically bd_mutex) of partition
+ * to provide mutual exlusion among writers otherwise seqcount might be
+ * left in wrong state leaving the readers spinning infinitely.
+ */
+static inline void part_nr_sects_write(struct hd_struct *part, sector_t size)
+{
+#if BITS_PER_LONG==32 && defined(CONFIG_SMP)
+	write_seqcount_begin(&part->nr_sects_seq);
+	part->nr_sects = size;
+	write_seqcount_end(&part->nr_sects_seq);
+#elif BITS_PER_LONG==32 && defined(CONFIG_PREEMPTION)
+	preempt_disable();
+	part->nr_sects = size;
+	preempt_enable();
+#else
+	part->nr_sects = size;
+#endif
+}
+
+struct request_queue *__blk_alloc_queue(int node_id);
+
+int __bio_add_pc_page(struct request_queue *q, struct bio *bio,
+		struct page *page, unsigned int len, unsigned int offset,
+		bool *same_page);
 
 #endif /* BLK_INTERNAL_H */

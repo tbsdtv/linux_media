@@ -54,6 +54,7 @@
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
 #include <rdma/opa_addr.h>
+#include <linux/nospec.h>
 
 #include "hfi.h"
 #include "common.h"
@@ -145,9 +146,6 @@ static int pio_wait(struct rvt_qp *qp,
 
 /* Length of buffer to create verbs txreq cache name */
 #define TXREQ_NAME_LEN 24
-
-/* 16B trailing buffer */
-static const u8 trail_buf[MAX_16B_PADDING];
 
 static uint wss_threshold = 80;
 module_param(wss_threshold, uint, S_IRUGO);
@@ -517,10 +515,11 @@ static inline void hfi1_handle_packet(struct hfi1_packet *packet,
 				       opa_get_lid(packet->dlid, 9B));
 		if (!mcast)
 			goto drop;
+		rcu_read_lock();
 		list_for_each_entry_rcu(p, &mcast->qp_list, list) {
 			packet->qp = p->qp;
 			if (hfi1_do_pkey_check(packet))
-				goto drop;
+				goto unlock_drop;
 			spin_lock_irqsave(&packet->qp->r_lock, flags);
 			packet_handler = qp_ok(packet);
 			if (likely(packet_handler))
@@ -529,6 +528,7 @@ static inline void hfi1_handle_packet(struct hfi1_packet *packet,
 				ibp->rvp.n_pkt_drops++;
 			spin_unlock_irqrestore(&packet->qp->r_lock, flags);
 		}
+		rcu_read_unlock();
 		/*
 		 * Notify rvt_multicast_detach() if it is waiting for us
 		 * to finish.
@@ -638,6 +638,8 @@ static void verbs_sdma_complete(
 		struct hfi1_opa_header *hdr;
 
 		hdr = &tx->phdr.hdr;
+		if (unlikely(status == SDMA_TXREQ_S_ABORTED))
+			hfi1_rc_verbs_aborted(qp, hdr);
 		hfi1_rc_send_complete(qp, hdr);
 	}
 	spin_unlock(&qp->s_lock);
@@ -817,8 +819,8 @@ static int build_verbs_tx_desc(
 
 	/* add icrc, lt byte, and padding to flit */
 	if (extra_bytes)
-		ret = sdma_txadd_kvaddr(sde->dd, &tx->txreq,
-					(void *)trail_buf, extra_bytes);
+		ret = sdma_txadd_daddr(sde->dd, &tx->txreq,
+				       sde->dd->sdma_pad_phys, extra_bytes);
 
 bail_txadd:
 	return ret;
@@ -871,16 +873,17 @@ int hfi1_verbs_send_dma(struct rvt_qp *qp, struct hfi1_pkt_state *ps,
 			else
 				pbc |= (ib_is_sc5(sc5) << PBC_DC_INFO_SHIFT);
 
-			if (unlikely(hfi1_dbg_should_fault_tx(qp, ps->opcode)))
-				pbc = hfi1_fault_tx(qp, ps->opcode, pbc);
 			pbc = create_pbc(ppd,
 					 pbc,
 					 qp->srate_mbps,
 					 vl,
 					 plen);
 
-			/* Update HCRC based on packet opcode */
-			pbc = update_hcrc(ps->opcode, pbc);
+			if (unlikely(hfi1_dbg_should_fault_tx(qp, ps->opcode)))
+				pbc = hfi1_fault_tx(qp, ps->opcode, pbc);
+			else
+				/* Update HCRC based on packet opcode */
+				pbc = update_hcrc(ps->opcode, pbc);
 		}
 		tx->wqe = qp->s_wqe;
 		ret = build_verbs_tx_desc(tx->sde, len, tx, ahg_info, pbc);
@@ -1027,20 +1030,20 @@ int hfi1_verbs_send_pio(struct rvt_qp *qp, struct hfi1_pkt_state *ps,
 		else
 			pbc |= (ib_is_sc5(sc5) << PBC_DC_INFO_SHIFT);
 
+		pbc = create_pbc(ppd, pbc, qp->srate_mbps, vl, plen);
 		if (unlikely(hfi1_dbg_should_fault_tx(qp, ps->opcode)))
 			pbc = hfi1_fault_tx(qp, ps->opcode, pbc);
-		pbc = create_pbc(ppd, pbc, qp->srate_mbps, vl, plen);
-
-		/* Update HCRC based on packet opcode */
-		pbc = update_hcrc(ps->opcode, pbc);
+		else
+			/* Update HCRC based on packet opcode */
+			pbc = update_hcrc(ps->opcode, pbc);
 	}
 	if (cb)
 		iowait_pio_inc(&priv->s_iowait);
 	pbuf = sc_buffer_alloc(sc, plen, cb, qp);
-	if (unlikely(!pbuf)) {
+	if (IS_ERR_OR_NULL(pbuf)) {
 		if (cb)
 			verbs_pio_complete(qp, 0);
-		if (ppd->host_link_state != HLS_UP_ACTIVE) {
+		if (IS_ERR(pbuf)) {
 			/*
 			 * If we have filled the PIO buffers to capacity and are
 			 * not in an active state this request is not going to
@@ -1085,7 +1088,8 @@ int hfi1_verbs_send_pio(struct rvt_qp *qp, struct hfi1_pkt_state *ps,
 		}
 		/* add icrc, lt byte, and padding to flit */
 		if (extra_bytes)
-			seg_pio_copy_mid(pbuf, trail_buf, extra_bytes);
+			seg_pio_copy_mid(pbuf, ppd->dd->sdma_pad_dma,
+					 extra_bytes);
 
 		seg_pio_copy_end(pbuf);
 	}
@@ -1095,15 +1099,15 @@ int hfi1_verbs_send_pio(struct rvt_qp *qp, struct hfi1_pkt_state *ps,
 			       &ps->s_txreq->phdr.hdr, ib_is_sc5(sc5));
 
 pio_bail:
+	spin_lock_irqsave(&qp->s_lock, flags);
 	if (qp->s_wqe) {
-		spin_lock_irqsave(&qp->s_lock, flags);
 		rvt_send_complete(qp, qp->s_wqe, wc_status);
-		spin_unlock_irqrestore(&qp->s_lock, flags);
 	} else if (qp->ibqp.qp_type == IB_QPT_RC) {
-		spin_lock_irqsave(&qp->s_lock, flags);
+		if (unlikely(wc_status == IB_WC_GENERAL_ERR))
+			hfi1_rc_verbs_aborted(qp, &ps->s_txreq->phdr.hdr);
 		hfi1_rc_send_complete(qp, &ps->s_txreq->phdr.hdr);
-		spin_unlock_irqrestore(&qp->s_lock, flags);
 	}
+	spin_unlock_irqrestore(&qp->s_lock, flags);
 
 	ret = 0;
 
@@ -1534,6 +1538,7 @@ static int hfi1_check_ah(struct ib_device *ibdev, struct rdma_ah_attr *ah_attr)
 	sl = rdma_ah_get_sl(ah_attr);
 	if (sl >= ARRAY_SIZE(ibp->sl_to_sc))
 		return -EINVAL;
+	sl = array_index_nospec(sl, ARRAY_SIZE(ibp->sl_to_sc));
 
 	sc5 = ibp->sl_to_sc[sl];
 	if (sc_to_vlt(dd, sc5) > num_vls && sc_to_vlt(dd, sc5) != 0xf)
@@ -1777,6 +1782,9 @@ static int get_hw_stats(struct ib_device *ibdev, struct rdma_hw_stats *stats,
 }
 
 static const struct ib_device_ops hfi1_dev_ops = {
+	.owner = THIS_MODULE,
+	.driver_id = RDMA_DRIVER_HFI1,
+
 	.alloc_hw_stats = alloc_hw_stats,
 	.alloc_rdma_netdev = hfi1_vnic_alloc_rn,
 	.get_dev_fw_str = hfi1_get_dev_fw_str,
@@ -1827,7 +1835,6 @@ int hfi1_register_ib_device(struct hfi1_devdata *dd)
 	 */
 	if (!ib_hfi1_sys_image_guid)
 		ib_hfi1_sys_image_guid = ibdev->node_guid;
-	ibdev->owner = THIS_MODULE;
 	ibdev->phys_port_cnt = dd->num_pports;
 	ibdev->dev.parent = &dd->pcidev->dev;
 
@@ -1921,7 +1928,7 @@ int hfi1_register_ib_device(struct hfi1_devdata *dd)
 	rdma_set_device_sysfs_group(&dd->verbs_dev.rdi.ibdev,
 				    &ib_hfi1_attr_group);
 
-	ret = rvt_register_device(&dd->verbs_dev.rdi, RDMA_DRIVER_HFI1);
+	ret = rvt_register_device(&dd->verbs_dev.rdi);
 	if (ret)
 		goto err_verbs_txreq;
 

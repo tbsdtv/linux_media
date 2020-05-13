@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2011 Samsung Electronics Co., Ltd.
  * MyungJoo.Ham <myungjoo.ham@samsung.com>
@@ -7,9 +8,6 @@
  * monitor charging even in the context of suspend-to-RAM with
  * an interface combining the chargers.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
 **/
 
 #ifndef _CHARGER_MANAGER_H
@@ -250,7 +248,7 @@ struct charger_manager {
 	u64 charging_end_time;
 };
 
-#ifdef CONFIG_CHARGER_MANAGER
+#if IS_ENABLED(CONFIG_CHARGER_MANAGER)
 extern void cm_notify_event(struct power_supply *psy,
 				enum cm_event_types type, char *msg);
 #else

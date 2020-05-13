@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * V4L2 Capture CSI Subdev for Freescale i.MX7 SOC
+ * V4L2 Capture CSI Subdev for Freescale i.MX6UL/L / i.MX7 SOC
  *
  * Copyright (c) 2019 Linaro Ltd
  *
@@ -292,7 +292,7 @@ static void imx7_csi_hw_disable(struct imx7_csi *csi)
 
 static void imx7_csi_dma_reflash(struct imx7_csi *csi)
 {
-	u32 cr3 = imx7_csi_reg_read(csi, CSI_CSICR18);
+	u32 cr3;
 
 	cr3 = imx7_csi_reg_read(csi, CSI_CSICR3);
 	cr3 |= BIT_DMA_REFLASH_RFF;
@@ -765,6 +765,7 @@ static int imx7_csi_configure(struct imx7_csi *csi)
 	struct v4l2_pix_format *out_pix = &vdev->fmt.fmt.pix;
 	__u32 in_code = csi->format_mbus[IMX7_CSI_PAD_SINK].code;
 	u32 cr1, cr18;
+	int width = out_pix->width;
 
 	if (out_pix->field == V4L2_FIELD_INTERLACED) {
 		imx7_csi_deinterlace_enable(csi, true);
@@ -774,15 +775,27 @@ static int imx7_csi_configure(struct imx7_csi *csi)
 		imx7_csi_buf_stride_set(csi, 0);
 	}
 
-	imx7_csi_set_imagpara(csi, out_pix->width, out_pix->height);
+	cr18 = imx7_csi_reg_read(csi, CSI_CSICR18);
 
-	if (!csi->is_csi2)
+	if (!csi->is_csi2) {
+		if (out_pix->pixelformat == V4L2_PIX_FMT_UYVY ||
+		    out_pix->pixelformat == V4L2_PIX_FMT_YUYV)
+			width *= 2;
+
+		imx7_csi_set_imagpara(csi, width, out_pix->height);
+
+		cr18 |= (BIT_BASEADDR_SWITCH_EN | BIT_BASEADDR_SWITCH_SEL |
+			BIT_BASEADDR_CHG_ERR_EN);
+		imx7_csi_reg_write(csi, cr18, CSI_CSICR18);
+
 		return 0;
+	}
+
+	imx7_csi_set_imagpara(csi, width, out_pix->height);
 
 	cr1 = imx7_csi_reg_read(csi, CSI_CSICR1);
 	cr1 &= ~BIT_GCLK_MODE;
 
-	cr18 = imx7_csi_reg_read(csi, CSI_CSICR18);
 	cr18 &= BIT_MIPI_DATA_FORMAT_MASK;
 	cr18 |= BIT_DATA_FROM_MIPI;
 
@@ -790,6 +803,22 @@ static int imx7_csi_configure(struct imx7_csi *csi)
 	case V4L2_PIX_FMT_UYVY:
 	case V4L2_PIX_FMT_YUYV:
 		cr18 |= BIT_MIPI_DATA_FORMAT_YUV422_8B;
+		break;
+	case V4L2_PIX_FMT_GREY:
+		if (in_code == MEDIA_BUS_FMT_Y8_1X8)
+			cr18 |= BIT_MIPI_DATA_FORMAT_RAW8;
+		else if (in_code == MEDIA_BUS_FMT_Y10_1X10)
+			cr18 |= BIT_MIPI_DATA_FORMAT_RAW10;
+		else
+			cr18 |= BIT_MIPI_DATA_FORMAT_RAW12;
+		break;
+	case V4L2_PIX_FMT_Y10:
+		cr18 |= BIT_MIPI_DATA_FORMAT_RAW10;
+		cr1 |= BIT_PIXEL_BIT;
+		break;
+	case V4L2_PIX_FMT_Y12:
+		cr18 |= BIT_MIPI_DATA_FORMAT_RAW12;
+		cr1 |= BIT_PIXEL_BIT;
 		break;
 	case V4L2_PIX_FMT_SBGGR8:
 		cr18 |= BIT_MIPI_DATA_FORMAT_RAW8;
@@ -817,11 +846,9 @@ static void imx7_csi_enable(struct imx7_csi *csi)
 {
 	imx7_csi_sw_reset(csi);
 
-	if (csi->is_csi2) {
-		imx7_csi_dmareq_rff_enable(csi);
-		imx7_csi_hw_enable_irq(csi);
-		imx7_csi_hw_enable(csi);
-	}
+	imx7_csi_dmareq_rff_enable(csi);
+	imx7_csi_hw_enable_irq(csi);
+	imx7_csi_hw_enable(csi);
 }
 
 static void imx7_csi_disable(struct imx7_csi *csi)
@@ -931,8 +958,8 @@ static int imx7_csi_enum_mbus_code(struct v4l2_subdev *sd,
 
 	switch (code->pad) {
 	case IMX7_CSI_PAD_SINK:
-		ret = imx_media_enum_mbus_format(&code->code, code->index,
-						 CS_SEL_ANY, true);
+		ret = imx_media_enum_mbus_formats(&code->code, code->index,
+						  PIXFMT_SEL_ANY);
 		break;
 	case IMX7_CSI_PAD_SRC:
 		if (code->index != 0) {
@@ -992,12 +1019,13 @@ static int imx7_csi_try_fmt(struct imx7_csi *csi,
 
 	switch (sdformat->pad) {
 	case IMX7_CSI_PAD_SRC:
-		in_cc = imx_media_find_mbus_format(in_fmt->code, CS_SEL_ANY,
-						   true);
+		in_cc = imx_media_find_mbus_format(in_fmt->code,
+						   PIXFMT_SEL_ANY);
 
 		sdformat->format.width = in_fmt->width;
 		sdformat->format.height = in_fmt->height;
 		sdformat->format.code = in_fmt->code;
+		sdformat->format.field = in_fmt->field;
 		*cc = in_cc;
 
 		sdformat->format.colorspace = in_fmt->colorspace;
@@ -1007,20 +1035,24 @@ static int imx7_csi_try_fmt(struct imx7_csi *csi,
 		break;
 	case IMX7_CSI_PAD_SINK:
 		*cc = imx_media_find_mbus_format(sdformat->format.code,
-						 CS_SEL_ANY, true);
+						 PIXFMT_SEL_ANY);
 		if (!*cc) {
-			imx_media_enum_mbus_format(&code, 0, CS_SEL_ANY, false);
-			*cc = imx_media_find_mbus_format(code, CS_SEL_ANY,
-							 false);
+			imx_media_enum_mbus_formats(&code, 0,
+						    PIXFMT_SEL_YUV_RGB);
+			*cc = imx_media_find_mbus_format(code,
+							 PIXFMT_SEL_YUV_RGB);
 			sdformat->format.code = (*cc)->codes[0];
 		}
 
-		imx_media_fill_default_mbus_fields(&sdformat->format, in_fmt,
-						   false);
+		if (sdformat->format.field != V4L2_FIELD_INTERLACED)
+			sdformat->format.field = V4L2_FIELD_NONE;
 		break;
 	default:
 		return -EINVAL;
 	}
+
+	imx_media_try_colorimetry(&sdformat->format, false);
+
 	return 0;
 }
 
@@ -1091,9 +1123,6 @@ static int imx7_csi_registered(struct v4l2_subdev *sd)
 	int i;
 
 	for (i = 0; i < IMX7_CSI_PADS_NUM; i++) {
-		csi->pad[i].flags = (i == IMX7_CSI_PAD_SINK) ?
-			MEDIA_PAD_FL_SINK : MEDIA_PAD_FL_SOURCE;
-
 		/* set a default mbus format  */
 		ret = imx_media_init_mbus_fmt(&csi->format_mbus[i],
 					      800, 600, 0, V4L2_FIELD_NONE,
@@ -1106,11 +1135,16 @@ static int imx7_csi_registered(struct v4l2_subdev *sd)
 		csi->frame_interval[i].denominator = 30;
 	}
 
-	ret = media_entity_pads_init(&sd->entity, IMX7_CSI_PADS_NUM, csi->pad);
-	if (ret < 0)
-		return ret;
+	csi->vdev = imx_media_capture_device_init(csi->sd.dev, &csi->sd,
+						  IMX7_CSI_PAD_SRC);
+	if (IS_ERR(csi->vdev))
+		return PTR_ERR(csi->vdev);
 
-	return imx_media_capture_device_register(csi->vdev);
+	ret = imx_media_capture_device_register(csi->vdev);
+	if (ret)
+		imx_media_capture_device_remove(csi->vdev);
+
+	return ret;
 }
 
 static void imx7_csi_unregistered(struct v4l2_subdev *sd)
@@ -1118,6 +1152,7 @@ static void imx7_csi_unregistered(struct v4l2_subdev *sd)
 	struct imx7_csi *csi = v4l2_get_subdevdata(sd);
 
 	imx_media_capture_device_unregister(csi->vdev);
+	imx_media_capture_device_remove(csi->vdev);
 }
 
 static int imx7_csi_init_cfg(struct v4l2_subdev *sd,
@@ -1180,7 +1215,7 @@ static int imx7_csi_probe(struct platform_device *pdev)
 	struct device_node *node = dev->of_node;
 	struct imx_media_dev *imxmd;
 	struct imx7_csi *csi;
-	int ret;
+	int i, ret;
 
 	csi = devm_kzalloc(&pdev->dev, sizeof(*csi), GFP_KERNEL);
 	if (!csi)
@@ -1196,10 +1231,8 @@ static int imx7_csi_probe(struct platform_device *pdev)
 	}
 
 	csi->irq = platform_get_irq(pdev, 0);
-	if (csi->irq < 0) {
-		dev_err(dev, "Missing platform resources data\n");
+	if (csi->irq < 0)
 		return csi->irq;
-	}
 
 	csi->regbase = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(csi->regbase))
@@ -1244,13 +1277,17 @@ static int imx7_csi_probe(struct platform_device *pdev)
 	csi->sd.grp_id = IMX_MEDIA_GRP_ID_CSI;
 	snprintf(csi->sd.name, sizeof(csi->sd.name), "csi");
 
-	csi->vdev = imx_media_capture_device_init(csi->sd.dev, &csi->sd,
-						  IMX7_CSI_PAD_SRC);
-	if (IS_ERR(csi->vdev))
-		return PTR_ERR(csi->vdev);
-
 	v4l2_ctrl_handler_init(&csi->ctrl_hdlr, 0);
 	csi->sd.ctrl_handler = &csi->ctrl_hdlr;
+
+	for (i = 0; i < IMX7_CSI_PADS_NUM; i++)
+		csi->pad[i].flags = (i == IMX7_CSI_PAD_SINK) ?
+			MEDIA_PAD_FL_SINK : MEDIA_PAD_FL_SOURCE;
+
+	ret = media_entity_pads_init(&csi->sd.entity, IMX7_CSI_PADS_NUM,
+				     csi->pad);
+	if (ret < 0)
+		goto free;
 
 	ret = v4l2_async_register_fwnode_subdev(&csi->sd,
 						sizeof(struct v4l2_async_subdev),
@@ -1262,8 +1299,6 @@ static int imx7_csi_probe(struct platform_device *pdev)
 	return 0;
 
 free:
-	imx_media_capture_device_unregister(csi->vdev);
-	imx_media_capture_device_remove(csi->vdev);
 	v4l2_ctrl_handler_free(&csi->ctrl_hdlr);
 
 cleanup:
@@ -1291,9 +1326,6 @@ static int imx7_csi_remove(struct platform_device *pdev)
 	v4l2_device_unregister(&imxmd->v4l2_dev);
 	media_device_cleanup(&imxmd->md);
 
-	imx_media_capture_device_unregister(csi->vdev);
-	imx_media_capture_device_remove(csi->vdev);
-
 	v4l2_async_unregister_subdev(sd);
 	v4l2_ctrl_handler_free(&csi->ctrl_hdlr);
 
@@ -1304,6 +1336,7 @@ static int imx7_csi_remove(struct platform_device *pdev)
 
 static const struct of_device_id imx7_csi_of_match[] = {
 	{ .compatible = "fsl,imx7-csi" },
+	{ .compatible = "fsl,imx6ul-csi" },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, imx7_csi_of_match);

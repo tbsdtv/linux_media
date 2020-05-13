@@ -50,9 +50,6 @@ extern struct mvs_info *tgt_mvi;
 extern const struct mvs_dispatch mvs_64xx_dispatch;
 extern const struct mvs_dispatch mvs_94xx_dispatch;
 
-#define DEV_IS_EXPANDER(type)	\
-	((type == SAS_EDGE_EXPANDER_DEVICE) || (type == SAS_FANOUT_EXPANDER_DEVICE))
-
 #define bit(n) ((u64)1 << n)
 
 #define for_each_phy(__lseq_mask, __mc, __lseq)			\
@@ -397,7 +394,7 @@ struct mvs_info {
 	dma_addr_t bulk_buffer_dma1;
 #define TRASH_BUCKET_SIZE    	0x20000
 	void *dma_pool;
-	struct mvs_slot_info slot_info[0];
+	struct mvs_slot_info slot_info[];
 };
 
 struct mvs_prv_info{

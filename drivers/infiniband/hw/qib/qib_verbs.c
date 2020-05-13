@@ -39,7 +39,6 @@
 #include <linux/utsname.h>
 #include <linux/rculist.h>
 #include <linux/mm.h>
-#include <linux/random.h>
 #include <linux/vmalloc.h>
 #include <rdma/rdma_vt.h>
 
@@ -329,8 +328,10 @@ void qib_ib_rcv(struct qib_ctxtdata *rcd, void *rhdr, void *data, u32 tlen)
 		if (mcast == NULL)
 			goto drop;
 		this_cpu_inc(ibp->pmastats->n_multicast_rcv);
+		rcu_read_lock();
 		list_for_each_entry_rcu(p, &mcast->qp_list, list)
 			qib_qp_rcv(rcd, hdr, 1, data, tlen, p->qp);
+		rcu_read_unlock();
 		/*
 		 * Notify rvt_multicast_detach() if it is waiting for us
 		 * to finish.
@@ -1480,6 +1481,9 @@ static void qib_fill_device_attr(struct qib_devdata *dd)
 }
 
 static const struct ib_device_ops qib_dev_ops = {
+	.owner = THIS_MODULE,
+	.driver_id = RDMA_DRIVER_QIB,
+
 	.init_port = qib_create_port_files,
 	.modify_device = qib_modify_device,
 	.process_mad = qib_process_mad,
@@ -1498,7 +1502,6 @@ int qib_register_ib_device(struct qib_devdata *dd)
 	unsigned i, ctxt;
 	int ret;
 
-	get_random_bytes(&dev->qp_rnd, sizeof(dev->qp_rnd));
 	for (i = 0; i < dd->num_pports; i++)
 		init_ibport(ppd + i);
 
@@ -1543,7 +1546,6 @@ int qib_register_ib_device(struct qib_devdata *dd)
 	if (!ib_qib_sys_image_guid)
 		ib_qib_sys_image_guid = ppd->guid;
 
-	ibdev->owner = THIS_MODULE;
 	ibdev->node_guid = ppd->guid;
 	ibdev->phys_port_cnt = dd->num_pports;
 	ibdev->dev.parent = &dd->pcidev->dev;
@@ -1614,7 +1616,7 @@ int qib_register_ib_device(struct qib_devdata *dd)
 	rdma_set_device_sysfs_group(&dd->verbs_dev.rdi.ibdev, &qib_attr_group);
 
 	ib_set_device_ops(ibdev, &qib_dev_ops);
-	ret = rvt_register_device(&dd->verbs_dev.rdi, RDMA_DRIVER_QIB);
+	ret = rvt_register_device(&dd->verbs_dev.rdi);
 	if (ret)
 		goto err_tx;
 

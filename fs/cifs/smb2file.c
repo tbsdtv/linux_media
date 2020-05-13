@@ -62,12 +62,12 @@ smb2_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
 	smb2_oplock = SMB2_OPLOCK_LEVEL_BATCH;
 
 	rc = SMB2_open(xid, oparms, smb2_path, &smb2_oplock, smb2_data, NULL,
-		       NULL);
+		       NULL, NULL);
 	if (rc)
 		goto out;
 
 
-	 if (oparms->tcon->use_resilient) {
+	if (oparms->tcon->use_resilient) {
 		/* default timeout is 0, servers pick default (120 seconds) */
 		nr_ioctl_req.Timeout =
 			cpu_to_le32(oparms->tcon->handle_timeout);
@@ -88,14 +88,20 @@ smb2_open_file(const unsigned int xid, struct cifs_open_parms *oparms,
 	}
 
 	if (buf) {
-		/* open response does not have IndexNumber field - get it */
-		rc = SMB2_get_srv_num(xid, oparms->tcon, fid->persistent_fid,
+		/* if open response does not have IndexNumber field - get it */
+		if (smb2_data->IndexNumber == 0) {
+			rc = SMB2_get_srv_num(xid, oparms->tcon,
+				      fid->persistent_fid,
 				      fid->volatile_fid,
 				      &smb2_data->IndexNumber);
-		if (rc) {
-			/* let get_inode_info disable server inode numbers */
-			smb2_data->IndexNumber = 0;
-			rc = 0;
+			if (rc) {
+				/*
+				 * let get_inode_info disable server inode
+				 * numbers
+				 */
+				smb2_data->IndexNumber = 0;
+				rc = 0;
+			}
 		}
 		move_smb2_info_to_cifs(buf, smb2_data);
 	}
@@ -139,14 +145,19 @@ smb2_unlock_range(struct cifsFileInfo *cfile, struct file_lock *flock,
 
 	cur = buf;
 
-	down_write(&cinode->lock_sem);
+	cifs_down_write(&cinode->lock_sem);
 	list_for_each_entry_safe(li, tmp, &cfile->llist->locks, llist) {
 		if (flock->fl_start > li->offset ||
 		    (flock->fl_start + length) <
 		    (li->offset + li->length))
 			continue;
 		if (current->tgid != li->pid)
-			continue;
+			/*
+			 * flock and OFD lock are associated with an open
+			 * file description, not the process.
+			 */
+			if (!(flock->fl_flags & (FL_FLOCK | FL_OFDLCK)))
+				continue;
 		if (cinode->can_cache_brlcks) {
 			/*
 			 * We can cache brlock requests - simply remove a lock

@@ -91,6 +91,12 @@ void i3c_bus_normaluse_unlock(struct i3c_bus *bus)
 	up_read(&bus->lock);
 }
 
+static struct i3c_master_controller *
+i3c_bus_to_i3c_master(struct i3c_bus *i3cbus)
+{
+	return container_of(i3cbus, struct i3c_master_controller, bus);
+}
+
 static struct i3c_master_controller *dev_to_i3cmaster(struct device *dev)
 {
 	return container_of(dev, struct i3c_master_controller, dev);
@@ -117,7 +123,7 @@ static struct i3c_dev_desc *dev_to_i3cdesc(struct device *dev)
 	if (dev->type == &i3c_device_type)
 		return dev_to_i3cdev(dev)->desc;
 
-	master = container_of(dev, struct i3c_master_controller, dev);
+	master = dev_to_i3cmaster(dev);
 
 	return master->this;
 }
@@ -235,12 +241,34 @@ out:
 }
 static DEVICE_ATTR_RO(hdrcap);
 
+static ssize_t modalias_show(struct device *dev,
+			     struct device_attribute *da, char *buf)
+{
+	struct i3c_device *i3c = dev_to_i3cdev(dev);
+	struct i3c_device_info devinfo;
+	u16 manuf, part, ext;
+
+	i3c_device_get_info(i3c, &devinfo);
+	manuf = I3C_PID_MANUF_ID(devinfo.pid);
+	part = I3C_PID_PART_ID(devinfo.pid);
+	ext = I3C_PID_EXTRA_INFO(devinfo.pid);
+
+	if (I3C_PID_RND_LOWER_32BITS(devinfo.pid))
+		return sprintf(buf, "i3c:dcr%02Xmanuf%04X", devinfo.dcr,
+			       manuf);
+
+	return sprintf(buf, "i3c:dcr%02Xmanuf%04Xpart%04Xext%04X",
+		       devinfo.dcr, manuf, part, ext);
+}
+static DEVICE_ATTR_RO(modalias);
+
 static struct attribute *i3c_device_attrs[] = {
 	&dev_attr_bcr.attr,
 	&dev_attr_dcr.attr,
 	&dev_attr_pid.attr,
 	&dev_attr_dynamic_address.attr,
 	&dev_attr_hdrcap.attr,
+	&dev_attr_modalias.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(i3c_device);
@@ -261,7 +289,7 @@ static int i3c_device_uevent(struct device *dev, struct kobj_uevent_env *env)
 				      devinfo.dcr, manuf);
 
 	return add_uevent_var(env,
-			      "MODALIAS=i3c:dcr%02Xmanuf%04Xpart%04xext%04x",
+			      "MODALIAS=i3c:dcr%02Xmanuf%04Xpart%04Xext%04X",
 			      devinfo.dcr, manuf, part, ext);
 }
 
@@ -269,51 +297,6 @@ static const struct device_type i3c_device_type = {
 	.groups	= i3c_device_groups,
 	.uevent = i3c_device_uevent,
 };
-
-static const struct i3c_device_id *
-i3c_device_match_id(struct i3c_device *i3cdev,
-		    const struct i3c_device_id *id_table)
-{
-	struct i3c_device_info devinfo;
-	const struct i3c_device_id *id;
-
-	i3c_device_get_info(i3cdev, &devinfo);
-
-	/*
-	 * The lower 32bits of the provisional ID is just filled with a random
-	 * value, try to match using DCR info.
-	 */
-	if (!I3C_PID_RND_LOWER_32BITS(devinfo.pid)) {
-		u16 manuf = I3C_PID_MANUF_ID(devinfo.pid);
-		u16 part = I3C_PID_PART_ID(devinfo.pid);
-		u16 ext_info = I3C_PID_EXTRA_INFO(devinfo.pid);
-
-		/* First try to match by manufacturer/part ID. */
-		for (id = id_table; id->match_flags != 0; id++) {
-			if ((id->match_flags & I3C_MATCH_MANUF_AND_PART) !=
-			    I3C_MATCH_MANUF_AND_PART)
-				continue;
-
-			if (manuf != id->manuf_id || part != id->part_id)
-				continue;
-
-			if ((id->match_flags & I3C_MATCH_EXTRA_INFO) &&
-			    ext_info != id->extra_info)
-				continue;
-
-			return id;
-		}
-	}
-
-	/* Fallback to DCR match. */
-	for (id = id_table; id->match_flags != 0; id++) {
-		if ((id->match_flags & I3C_MATCH_DCR) &&
-		    id->dcr == devinfo.dcr)
-			return id;
-	}
-
-	return NULL;
-}
 
 static int i3c_device_match(struct device *dev, struct device_driver *drv)
 {
@@ -464,6 +447,7 @@ static int i3c_bus_init(struct i3c_bus *i3cbus)
 static const char * const i3c_bus_mode_strings[] = {
 	[I3C_BUS_MODE_PURE] = "pure",
 	[I3C_BUS_MODE_MIXED_FAST] = "mixed-fast",
+	[I3C_BUS_MODE_MIXED_LIMITED] = "mixed-limited",
 	[I3C_BUS_MODE_MIXED_SLOW] = "mixed-slow",
 };
 
@@ -565,19 +549,38 @@ static const struct device_type i3c_masterdev_type = {
 	.groups	= i3c_masterdev_groups,
 };
 
-int i3c_bus_set_mode(struct i3c_bus *i3cbus, enum i3c_bus_mode mode)
+static int i3c_bus_set_mode(struct i3c_bus *i3cbus, enum i3c_bus_mode mode,
+			    unsigned long max_i2c_scl_rate)
 {
+	struct i3c_master_controller *master = i3c_bus_to_i3c_master(i3cbus);
+
 	i3cbus->mode = mode;
 
-	if (!i3cbus->scl_rate.i3c)
-		i3cbus->scl_rate.i3c = I3C_BUS_TYP_I3C_SCL_RATE;
-
-	if (!i3cbus->scl_rate.i2c) {
-		if (i3cbus->mode == I3C_BUS_MODE_MIXED_SLOW)
-			i3cbus->scl_rate.i2c = I3C_BUS_I2C_FM_SCL_RATE;
-		else
-			i3cbus->scl_rate.i2c = I3C_BUS_I2C_FM_PLUS_SCL_RATE;
+	switch (i3cbus->mode) {
+	case I3C_BUS_MODE_PURE:
+		if (!i3cbus->scl_rate.i3c)
+			i3cbus->scl_rate.i3c = I3C_BUS_TYP_I3C_SCL_RATE;
+		break;
+	case I3C_BUS_MODE_MIXED_FAST:
+	case I3C_BUS_MODE_MIXED_LIMITED:
+		if (!i3cbus->scl_rate.i3c)
+			i3cbus->scl_rate.i3c = I3C_BUS_TYP_I3C_SCL_RATE;
+		if (!i3cbus->scl_rate.i2c)
+			i3cbus->scl_rate.i2c = max_i2c_scl_rate;
+		break;
+	case I3C_BUS_MODE_MIXED_SLOW:
+		if (!i3cbus->scl_rate.i2c)
+			i3cbus->scl_rate.i2c = max_i2c_scl_rate;
+		if (!i3cbus->scl_rate.i3c ||
+		    i3cbus->scl_rate.i3c > i3cbus->scl_rate.i2c)
+			i3cbus->scl_rate.i3c = i3cbus->scl_rate.i2c;
+		break;
+	default:
+		return -EINVAL;
 	}
+
+	dev_dbg(&master->dev, "i2c-scl = %ld Hz i3c-scl = %ld Hz\n",
+		i3cbus->scl_rate.i2c, i3cbus->scl_rate.i3c);
 
 	/*
 	 * I3C/I2C frequency may have been overridden, check that user-provided
@@ -619,6 +622,8 @@ i3c_master_alloc_i2c_dev(struct i3c_master_controller *master,
 
 	dev->common.master = master;
 	dev->boardinfo = boardinfo;
+	dev->addr = boardinfo->base.addr;
+	dev->lvr = boardinfo->lvr;
 
 	return dev;
 }
@@ -924,9 +929,8 @@ int i3c_master_defslvs_locked(struct i3c_master_controller *master)
 		ndevs++;
 
 	defslvs = i3c_ccc_cmd_dest_init(&dest, I3C_BROADCAST_ADDR,
-					sizeof(*defslvs) +
-					((ndevs - 1) *
-					 sizeof(struct i3c_ccc_dev_desc)));
+					struct_size(defslvs, slaves,
+						    ndevs - 1));
 	if (!defslvs)
 		return -ENOMEM;
 
@@ -938,8 +942,8 @@ int i3c_master_defslvs_locked(struct i3c_master_controller *master)
 
 	desc = defslvs->slaves;
 	i3c_bus_for_each_i2cdev(bus, i2cdev) {
-		desc->lvr = i2cdev->boardinfo->lvr;
-		desc->static_addr = i2cdev->boardinfo->base.addr << 1;
+		desc->lvr = i2cdev->lvr;
+		desc->static_addr = i2cdev->addr << 1;
 		desc++;
 	}
 
@@ -1059,8 +1063,10 @@ static int i3c_master_getmwl_locked(struct i3c_master_controller *master,
 	if (ret)
 		goto out;
 
-	if (dest.payload.len != sizeof(*mwl))
-		return -EIO;
+	if (dest.payload.len != sizeof(*mwl)) {
+		ret = -EIO;
+		goto out;
+	}
 
 	info->max_write_len = be16_to_cpu(mwl->len);
 
@@ -1606,8 +1612,8 @@ static void i3c_master_detach_free_devs(struct i3c_master_controller *master)
 				 common.node) {
 		i3c_master_detach_i2c_dev(i2cdev);
 		i3c_bus_set_addr_slot_status(&master->bus,
-					i2cdev->boardinfo->base.addr,
-					I3C_ADDR_SLOT_FREE);
+					     i2cdev->addr,
+					     I3C_ADDR_SLOT_FREE);
 		i3c_master_free_i2c_dev(i2cdev);
 	}
 }
@@ -1779,7 +1785,7 @@ static void i3c_master_bus_cleanup(struct i3c_master_controller *master)
 static struct i3c_dev_desc *
 i3c_master_search_i3c_dev_duplicate(struct i3c_dev_desc *refdev)
 {
-	struct i3c_master_controller *master = refdev->common.master;
+	struct i3c_master_controller *master = i3c_dev_get_master(refdev);
 	struct i3c_dev_desc *i3cdev;
 
 	i3c_bus_for_each_i3cdev(&master->bus, i3cdev) {
@@ -1963,11 +1969,18 @@ of_i3c_master_add_i2c_boardinfo(struct i3c_master_controller *master,
 	if (ret)
 		return ret;
 
+	/*
+	 * The I3C Specification does not clearly say I2C devices with 10-bit
+	 * address are supported. These devices can't be passed properly through
+	 * DEFSLVS command.
+	 */
+	if (boardinfo->base.flags & I2C_CLIENT_TEN) {
+		dev_err(dev, "I2C device with 10 bit address not supported.");
+		return -ENOTSUPP;
+	}
+
 	/* LVR is encoded in reg[2]. */
 	boardinfo->lvr = reg[2];
-
-	if (boardinfo->lvr & I3C_LVR_I2C_FM_MODE)
-		master->bus.scl_rate.i2c = I3C_BUS_I2C_FM_SCL_RATE;
 
 	list_add_tail(&boardinfo->node, &master->boardinfo.i2c);
 	of_node_get(node);
@@ -2061,8 +2074,10 @@ static int of_populate_i3c_bus(struct i3c_master_controller *master)
 
 	for_each_available_child_of_node(i3cbus_np, node) {
 		ret = of_i3c_master_add_dev(master, node);
-		if (ret)
+		if (ret) {
+			of_node_put(node);
 			return ret;
+		}
 	}
 
 	/*
@@ -2111,16 +2126,14 @@ static int i3c_master_i2c_adapter_xfer(struct i2c_adapter *adap,
 	return ret ? ret : nxfers;
 }
 
-static u32 i3c_master_i2c_functionalities(struct i2c_adapter *adap)
+static u32 i3c_master_i2c_funcs(struct i2c_adapter *adapter)
 {
-	struct i3c_master_controller *master = i2c_adapter_to_i3c_master(adap);
-
-	return master->ops->i2c_funcs(master);
+	return I2C_FUNC_SMBUS_EMUL | I2C_FUNC_I2C;
 }
 
 static const struct i2c_algorithm i3c_master_i2c_algo = {
 	.master_xfer = i3c_master_i2c_adapter_xfer,
-	.functionality = i3c_master_i2c_functionalities,
+	.functionality = i3c_master_i2c_funcs,
 };
 
 static int i3c_master_i2c_adapter_init(struct i3c_master_controller *master)
@@ -2147,7 +2160,7 @@ static int i3c_master_i2c_adapter_init(struct i3c_master_controller *master)
 	 * correctly even if one or more i2c devices are not registered.
 	 */
 	i3c_bus_for_each_i2cdev(&master->bus, i2cdev)
-		i2cdev->dev = i2c_new_device(adap, &i2cdev->boardinfo->base);
+		i2cdev->dev = i2c_new_client_device(adap, &i2cdev->boardinfo->base);
 
 	return 0;
 }
@@ -2379,8 +2392,7 @@ EXPORT_SYMBOL_GPL(i3c_generic_ibi_recycle_slot);
 static int i3c_master_check_ops(const struct i3c_master_controller_ops *ops)
 {
 	if (!ops || !ops->bus_init || !ops->priv_xfers ||
-	    !ops->send_ccc_cmd || !ops->do_daa || !ops->i2c_xfers ||
-	    !ops->i2c_funcs)
+	    !ops->send_ccc_cmd || !ops->do_daa || !ops->i2c_xfers)
 		return -EINVAL;
 
 	if (ops->request_ibi &&
@@ -2417,6 +2429,7 @@ int i3c_master_register(struct i3c_master_controller *master,
 			const struct i3c_master_controller_ops *ops,
 			bool secondary)
 {
+	unsigned long i2c_scl_rate = I3C_BUS_I2C_FM_PLUS_SCL_RATE;
 	struct i3c_bus *i3cbus = i3c_master_get_bus(master);
 	enum i3c_bus_mode mode = I3C_BUS_MODE_PURE;
 	struct i2c_dev_boardinfo *i2cbi;
@@ -2458,6 +2471,9 @@ int i3c_master_register(struct i3c_master_controller *master,
 				mode = I3C_BUS_MODE_MIXED_FAST;
 			break;
 		case I3C_LVR_I2C_INDEX(1):
+			if (mode < I3C_BUS_MODE_MIXED_LIMITED)
+				mode = I3C_BUS_MODE_MIXED_LIMITED;
+			break;
 		case I3C_LVR_I2C_INDEX(2):
 			if (mode < I3C_BUS_MODE_MIXED_SLOW)
 				mode = I3C_BUS_MODE_MIXED_SLOW;
@@ -2466,9 +2482,12 @@ int i3c_master_register(struct i3c_master_controller *master,
 			ret = -EINVAL;
 			goto err_put_dev;
 		}
+
+		if (i2cbi->lvr & I3C_LVR_I2C_FM_MODE)
+			i2c_scl_rate = I3C_BUS_I2C_FM_SCL_RATE;
 	}
 
-	ret = i3c_bus_set_mode(i3cbus, mode);
+	ret = i3c_bus_set_mode(i3cbus, mode, i2c_scl_rate);
 	if (ret)
 		goto err_put_dev;
 
@@ -2496,7 +2515,7 @@ int i3c_master_register(struct i3c_master_controller *master,
 
 	/*
 	 * We're done initializing the bus and the controller, we can now
-	 * register I3C devices dicovered during the initial DAA.
+	 * register I3C devices discovered during the initial DAA.
 	 */
 	master->init_done = true;
 	i3c_bus_normaluse_lock(&master->bus);

@@ -388,7 +388,10 @@ v9fs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	p9_debug(P9_DEBUG_VFS, "count %zu offset %lld\n",
 		 iov_iter_count(to), iocb->ki_pos);
 
-	ret = p9_client_read(fid, iocb->ki_pos, to, &err);
+	if (iocb->ki_filp->f_flags & O_NONBLOCK)
+		ret = p9_client_read_once(fid, iocb->ki_pos, to, &err);
+	else
+		ret = p9_client_read(fid, iocb->ki_pos, to, &err);
 	if (!ret)
 		return err;
 
@@ -513,6 +516,7 @@ v9fs_mmap_file_mmap(struct file *filp, struct vm_area_struct *vma)
 	v9inode = V9FS_I(inode);
 	mutex_lock(&v9inode->v_mutex);
 	if (!v9inode->writeback_fid &&
+	    (vma->vm_flags & VM_SHARED) &&
 	    (vma->vm_flags & VM_WRITE)) {
 		/*
 		 * clone a fid and add it to writeback_fid
@@ -614,6 +618,8 @@ static void v9fs_mmap_vm_close(struct vm_area_struct *vma)
 			(vma->vm_end - vma->vm_start - 1),
 	};
 
+	if (!(vma->vm_flags & VM_SHARED))
+		return;
 
 	p9_debug(P9_DEBUG_VFS, "9p VMA close, %p, flushing", vma);
 

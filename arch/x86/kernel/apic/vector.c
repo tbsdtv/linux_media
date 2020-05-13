@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Local APIC related interfaces to support IOAPIC, MSI, etc.
  *
@@ -5,10 +6,6 @@
  *	Moved from arch/x86/kernel/apic/io_apic.c.
  * Jiang Liu <jiang.liu@linux.intel.com>
  *	Enable support of hierarchical irqdomains
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -343,7 +340,7 @@ static void clear_irq_vector(struct irq_data *irqd)
 	trace_vector_clear(irqd->irq, vector, apicd->cpu, apicd->prev_vector,
 			   apicd->prev_cpu);
 
-	per_cpu(vector_irq, apicd->cpu)[vector] = VECTOR_UNUSED;
+	per_cpu(vector_irq, apicd->cpu)[vector] = VECTOR_SHUTDOWN;
 	irq_matrix_free(vector_matrix, apicd->cpu, vector, managed);
 	apicd->vector = 0;
 
@@ -352,7 +349,7 @@ static void clear_irq_vector(struct irq_data *irqd)
 	if (!vector)
 		return;
 
-	per_cpu(vector_irq, apicd->prev_cpu)[vector] = VECTOR_UNUSED;
+	per_cpu(vector_irq, apicd->prev_cpu)[vector] = VECTOR_SHUTDOWN;
 	irq_matrix_free(vector_matrix, apicd->prev_cpu, vector, managed);
 	apicd->prev_vector = 0;
 	apicd->move_in_progress = 0;
@@ -401,6 +398,17 @@ static int activate_reserved(struct irq_data *irqd)
 		if (!irqd_can_reserve(irqd))
 			apicd->can_reserve = false;
 	}
+
+	/*
+	 * Check to ensure that the effective affinity mask is a subset
+	 * the user supplied affinity mask, and warn the user if it is not
+	 */
+	if (!cpumask_subset(irq_data_get_effective_affinity_mask(irqd),
+			    irq_data_get_affinity_mask(irqd))) {
+		pr_warn("irq %u: Affinity broken due to vector space exhaustion.\n",
+			irqd->irq);
+	}
+
 	return ret;
 }
 
@@ -548,6 +556,12 @@ static int x86_vector_alloc_irqs(struct irq_domain *domain, unsigned int virq,
 		irqd->chip_data = apicd;
 		irqd->hwirq = virq + i;
 		irqd_set_single_target(irqd);
+		/*
+		 * Prevent that any of these interrupts is invoked in
+		 * non interrupt context via e.g. generic_handle_irq()
+		 * as that can corrupt the affinity move state.
+		 */
+		irqd_set_handle_enforce_irqctx(irqd);
 		/*
 		 * Legacy vectors are already assigned when the IOAPIC
 		 * takes them over. They stay on the same vector. This is
@@ -830,13 +844,15 @@ static void free_moved_vector(struct apic_chip_data *apicd)
 	bool managed = apicd->is_managed;
 
 	/*
-	 * This should never happen. Managed interrupts are not
-	 * migrated except on CPU down, which does not involve the
-	 * cleanup vector. But try to keep the accounting correct
-	 * nevertheless.
+	 * Managed interrupts are usually not migrated away
+	 * from an online CPU, but CPU isolation 'managed_irq'
+	 * can make that happen.
+	 * 1) Activation does not take the isolation into account
+	 *    to keep the code simple
+	 * 2) Migration away from an isolated CPU can happen when
+	 *    a non-isolated CPU which is in the calculated
+	 *    affinity mask comes online.
 	 */
-	WARN_ON_ONCE(managed);
-
 	trace_vector_free_moved(apicd->irq, cpu, vector, managed);
 	irq_matrix_free(vector_matrix, cpu, vector, managed);
 	per_cpu(vector_irq, cpu)[vector] = VECTOR_UNUSED;

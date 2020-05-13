@@ -13,6 +13,7 @@
 #define __STMMAC_PLATFORM_DATA
 
 #include <linux/platform_device.h>
+#include <linux/phy.h>
 
 #define MTL_MAX_RX_QUEUES	8
 #define MTL_MAX_TX_QUEUES	8
@@ -78,14 +79,11 @@
 /* Platfrom data for platform device structure's platform_data field */
 
 struct stmmac_mdio_bus_data {
-	int (*phy_reset)(void *priv);
 	unsigned int phy_mask;
+	unsigned int has_xpcs;
 	int *irqs;
 	int probed_phy_irq;
-#ifdef CONFIG_OF
-	int reset_gpio, active_low;
-	u32 delays[3];
-#endif
+	bool needs_reset;
 };
 
 struct stmmac_dma_cfg {
@@ -96,6 +94,7 @@ struct stmmac_dma_cfg {
 	int fixed_burst;
 	int mixed_burst;
 	bool aal;
+	bool eame;
 };
 
 #define AXI_BLEN	7
@@ -109,6 +108,18 @@ struct stmmac_axi {
 	bool axi_fb;
 	bool axi_mb;
 	bool axi_rb;
+};
+
+#define EST_GCL		1024
+struct stmmac_est {
+	int enable;
+	u32 btr_offset[2];
+	u32 btr[2];
+	u32 ctr[2];
+	u32 ter;
+	u32 gcl_unaligned[EST_GCL];
+	u32 gcl[EST_GCL];
+	u32 gcl_size;
 };
 
 struct stmmac_rxq_cfg {
@@ -129,16 +140,20 @@ struct stmmac_txq_cfg {
 	u32 low_credit;
 	bool use_prio;
 	u32 prio;
+	int tbs_en;
 };
 
 struct plat_stmmacenet_data {
 	int bus_id;
 	int phy_addr;
 	int interface;
+	phy_interface_t phy_interface;
 	struct stmmac_mdio_bus_data *mdio_bus_data;
 	struct device_node *phy_node;
+	struct device_node *phylink_node;
 	struct device_node *mdio_node;
 	struct stmmac_dma_cfg *dma_cfg;
+	struct stmmac_est *est;
 	int clk_csr;
 	int has_gmac;
 	int enh_desc;
@@ -171,11 +186,13 @@ struct plat_stmmacenet_data {
 	struct clk *clk_ptp_ref;
 	unsigned int clk_ptp_rate;
 	unsigned int clk_ref_rate;
+	s32 ptp_max_adj;
 	struct reset_control *stmmac_rst;
 	struct stmmac_axi *axi;
 	int has_gmac4;
 	bool has_sun8i;
 	bool tso_en;
+	int rss_en;
 	int mac_port_sel_speed;
 	bool en_tx_lpi_clockgating;
 	int has_xgmac;

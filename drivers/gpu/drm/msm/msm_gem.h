@@ -1,25 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __MSM_GEM_H__
 #define __MSM_GEM_H__
 
 #include <linux/kref.h>
-#include <linux/reservation.h>
+#include <linux/dma-resv.h>
 #include "msm_drv.h"
 
 /* Additional internal-use only BO flags: */
@@ -141,6 +130,7 @@ void msm_gem_free_work(struct work_struct *work);
 struct msm_gem_submit {
 	struct drm_device *dev;
 	struct msm_gpu *gpu;
+	struct msm_gem_address_space *aspace;
 	struct list_head node;   /* node in ring submit list */
 	struct list_head bo_list;
 	struct ww_acquire_ctx ticket;
@@ -167,7 +157,17 @@ struct msm_gem_submit {
 			uint32_t handle;
 		};
 		uint64_t iova;
-	} bos[0];
+	} bos[];
 };
+
+/* helper to determine of a buffer in submit should be dumped, used for both
+ * devcoredump and debugfs cmdstream dumping:
+ */
+static inline bool
+should_dump(struct msm_gem_submit *submit, int idx)
+{
+	extern bool rd_full;
+	return rd_full || (submit->bos[idx].flags & MSM_SUBMIT_BO_DUMP);
+}
 
 #endif /* __MSM_GEM_H__ */

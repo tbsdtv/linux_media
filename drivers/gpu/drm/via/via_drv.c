@@ -23,12 +23,15 @@
  */
 
 #include <linux/module.h>
+#include <linux/pci.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
+#include <drm/drm_pciids.h>
 #include <drm/via_drm.h>
+
 #include "via_drv.h"
 
-#include <drm/drm_pciids.h>
 
 static int via_driver_open(struct drm_device *dev, struct drm_file *file)
 {

@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * KVM_GET/SET_* tests
  *
  * Copyright (C) 2018, Red Hat, Inc.
- *
- * This work is licensed under the terms of the GNU GPL, version 2.
  *
  * Tests for vCPU state save/restore, including nested guest state.
  */
@@ -140,7 +139,7 @@ int main(int argc, char *argv[])
 		vcpu_alloc_vmx(vm, &vmx_pages_gva);
 		vcpu_args_set(vm, VCPU_ID, 1, vmx_pages_gva);
 	} else {
-		printf("will skip nested state checks\n");
+		pr_info("will skip nested state checks\n");
 		vcpu_args_set(vm, VCPU_ID, 1, 0);
 	}
 
@@ -153,20 +152,20 @@ int main(int argc, char *argv[])
 
 		switch (get_ucall(vm, VCPU_ID, &uc)) {
 		case UCALL_ABORT:
-			TEST_ASSERT(false, "%s at %s:%d", (const char *)uc.args[0],
-				    __FILE__, uc.args[1]);
+			TEST_FAIL("%s at %s:%ld", (const char *)uc.args[0],
+			       	  __FILE__, uc.args[1]);
 			/* NOT REACHED */
 		case UCALL_SYNC:
 			break;
 		case UCALL_DONE:
 			goto done;
 		default:
-			TEST_ASSERT(false, "Unknown ucall 0x%x.", uc.cmd);
+			TEST_FAIL("Unknown ucall %lu", uc.cmd);
 		}
 
 		/* UCALL_SYNC is handled here.  */
 		TEST_ASSERT(!strcmp((const char *)uc.args[0], "hello") &&
-			    uc.args[1] == stage, "Unexpected register values vmexit #%lx, got %lx",
+			    uc.args[1] == stage, "Stage %d: Unexpected register values vmexit, got %lx",
 			    stage, (ulong)uc.args[1]);
 
 		state = vcpu_save_state(vm, VCPU_ID);
@@ -177,7 +176,7 @@ int main(int argc, char *argv[])
 
 		/* Restore state in a new VM.  */
 		kvm_vm_restart(vm, O_RDWR);
-		vm_vcpu_add(vm, VCPU_ID, 0, 0);
+		vm_vcpu_add(vm, VCPU_ID);
 		vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
 		vcpu_load_state(vm, VCPU_ID, state);
 		run = vcpu_state(vm, VCPU_ID);

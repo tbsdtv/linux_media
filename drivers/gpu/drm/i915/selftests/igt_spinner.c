@@ -3,27 +3,28 @@
  *
  * Copyright © 2018 Intel Corporation
  */
+#include "gt/intel_gt.h"
+
+#include "gem/selftests/igt_gem_utils.h"
 
 #include "igt_spinner.h"
 
-int igt_spinner_init(struct igt_spinner *spin, struct drm_i915_private *i915)
+int igt_spinner_init(struct igt_spinner *spin, struct intel_gt *gt)
 {
 	unsigned int mode;
 	void *vaddr;
 	int err;
 
-	GEM_BUG_ON(INTEL_GEN(i915) < 8);
-
 	memset(spin, 0, sizeof(*spin));
-	spin->i915 = i915;
+	spin->gt = gt;
 
-	spin->hws = i915_gem_object_create_internal(i915, PAGE_SIZE);
+	spin->hws = i915_gem_object_create_internal(gt->i915, PAGE_SIZE);
 	if (IS_ERR(spin->hws)) {
 		err = PTR_ERR(spin->hws);
 		goto err;
 	}
 
-	spin->obj = i915_gem_object_create_internal(i915, PAGE_SIZE);
+	spin->obj = i915_gem_object_create_internal(gt->i915, PAGE_SIZE);
 	if (IS_ERR(spin->obj)) {
 		err = PTR_ERR(spin->obj);
 		goto err_hws;
@@ -37,7 +38,7 @@ int igt_spinner_init(struct igt_spinner *spin, struct drm_i915_private *i915)
 	}
 	spin->seqno = memset(vaddr, 0xff, PAGE_SIZE);
 
-	mode = i915_coherent_map_type(i915);
+	mode = i915_coherent_map_type(gt->i915);
 	vaddr = i915_gem_object_pin_map(spin->obj, mode);
 	if (IS_ERR(vaddr)) {
 		err = PTR_ERR(vaddr);
@@ -74,35 +75,38 @@ static int move_to_active(struct i915_vma *vma,
 {
 	int err;
 
-	err = i915_vma_move_to_active(vma, rq, flags);
-	if (err)
-		return err;
+	i915_vma_lock(vma);
+	err = i915_request_await_object(rq, vma->obj,
+					flags & EXEC_OBJECT_WRITE);
+	if (err == 0)
+		err = i915_vma_move_to_active(vma, rq, flags);
+	i915_vma_unlock(vma);
 
-	if (!i915_gem_object_has_active_reference(vma->obj)) {
-		i915_gem_object_get(vma->obj);
-		i915_gem_object_set_active_reference(vma->obj);
-	}
-
-	return 0;
+	return err;
 }
 
 struct i915_request *
 igt_spinner_create_request(struct igt_spinner *spin,
-			   struct i915_gem_context *ctx,
-			   struct intel_engine_cs *engine,
+			   struct intel_context *ce,
 			   u32 arbitration_command)
 {
-	struct i915_address_space *vm = &ctx->ppgtt->vm;
+	struct intel_engine_cs *engine = ce->engine;
 	struct i915_request *rq = NULL;
 	struct i915_vma *hws, *vma;
+	unsigned int flags;
 	u32 *batch;
 	int err;
 
-	vma = i915_vma_instance(spin->obj, vm, NULL);
+	GEM_BUG_ON(spin->gt != ce->vm->gt);
+
+	if (!intel_engine_can_store_dword(ce->engine))
+		return ERR_PTR(-ENODEV);
+
+	vma = i915_vma_instance(spin->obj, ce->vm, NULL);
 	if (IS_ERR(vma))
 		return ERR_CAST(vma);
 
-	hws = i915_vma_instance(spin->hws, vm, NULL);
+	hws = i915_vma_instance(spin->hws, ce->vm, NULL);
 	if (IS_ERR(hws))
 		return ERR_CAST(hws);
 
@@ -114,7 +118,7 @@ igt_spinner_create_request(struct igt_spinner *spin,
 	if (err)
 		goto unpin_vma;
 
-	rq = i915_request_alloc(engine, ctx);
+	rq = intel_context_create_request(ce);
 	if (IS_ERR(rq)) {
 		err = PTR_ERR(rq);
 		goto unpin_hws;
@@ -130,32 +134,56 @@ igt_spinner_create_request(struct igt_spinner *spin,
 
 	batch = spin->batch;
 
-	*batch++ = MI_STORE_DWORD_IMM_GEN4;
-	*batch++ = lower_32_bits(hws_address(hws, rq));
-	*batch++ = upper_32_bits(hws_address(hws, rq));
+	if (INTEL_GEN(rq->i915) >= 8) {
+		*batch++ = MI_STORE_DWORD_IMM_GEN4;
+		*batch++ = lower_32_bits(hws_address(hws, rq));
+		*batch++ = upper_32_bits(hws_address(hws, rq));
+	} else if (INTEL_GEN(rq->i915) >= 6) {
+		*batch++ = MI_STORE_DWORD_IMM_GEN4;
+		*batch++ = 0;
+		*batch++ = hws_address(hws, rq);
+	} else if (INTEL_GEN(rq->i915) >= 4) {
+		*batch++ = MI_STORE_DWORD_IMM_GEN4 | MI_USE_GGTT;
+		*batch++ = 0;
+		*batch++ = hws_address(hws, rq);
+	} else {
+		*batch++ = MI_STORE_DWORD_IMM | MI_MEM_VIRTUAL;
+		*batch++ = hws_address(hws, rq);
+	}
 	*batch++ = rq->fence.seqno;
 
 	*batch++ = arbitration_command;
 
-	*batch++ = MI_BATCH_BUFFER_START | 1 << 8 | 1;
+	if (INTEL_GEN(rq->i915) >= 8)
+		*batch++ = MI_BATCH_BUFFER_START | BIT(8) | 1;
+	else if (IS_HASWELL(rq->i915))
+		*batch++ = MI_BATCH_BUFFER_START | MI_BATCH_PPGTT_HSW;
+	else if (INTEL_GEN(rq->i915) >= 6)
+		*batch++ = MI_BATCH_BUFFER_START;
+	else
+		*batch++ = MI_BATCH_BUFFER_START | MI_BATCH_GTT;
 	*batch++ = lower_32_bits(vma->node.start);
 	*batch++ = upper_32_bits(vma->node.start);
+
 	*batch++ = MI_BATCH_BUFFER_END; /* not reached */
 
-	i915_gem_chipset_flush(spin->i915);
+	intel_gt_chipset_flush(engine->gt);
 
 	if (engine->emit_init_breadcrumb &&
-	    rq->timeline->has_initial_breadcrumb) {
+	    i915_request_timeline(rq)->has_initial_breadcrumb) {
 		err = engine->emit_init_breadcrumb(rq);
 		if (err)
 			goto cancel_rq;
 	}
 
-	err = engine->emit_bb_start(rq, vma->node.start, PAGE_SIZE, 0);
+	flags = 0;
+	if (INTEL_GEN(rq->i915) <= 5)
+		flags |= I915_DISPATCH_SECURE;
+	err = engine->emit_bb_start(rq, vma->node.start, PAGE_SIZE, flags);
 
 cancel_rq:
 	if (err) {
-		i915_request_skip(rq, err);
+		i915_request_set_error_once(rq, err);
 		i915_request_add(rq);
 	}
 unpin_hws:
@@ -176,7 +204,7 @@ hws_seqno(const struct igt_spinner *spin, const struct i915_request *rq)
 void igt_spinner_end(struct igt_spinner *spin)
 {
 	*spin->batch = MI_BATCH_BUFFER_END;
-	i915_gem_chipset_flush(spin->i915);
+	intel_gt_chipset_flush(spin->gt);
 }
 
 void igt_spinner_fini(struct igt_spinner *spin)

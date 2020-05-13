@@ -12,6 +12,7 @@
 
 	aliases {
 		serial0 = &blsp1_uart1;
+		serial1 = &blsp2_uart10;
 	};
 
 	chosen {
@@ -280,10 +281,30 @@
 			};
 		};
 
+		i2c2_pins: i2c2 {
+			mux {
+				pins = "gpio6", "gpio7";
+				function = "blsp_i2c2";
+
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
 		i2c3_pins: i2c3 {
 			mux {
 				pins = "gpio10", "gpio11";
 				function = "blsp_i2c3";
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		i2c11_pins: i2c11 {
+			mux {
+				pins = "gpio83", "gpio84";
+				function = "blsp_i2c11";
+
 				drive-strength = <2>;
 				bias-disable;
 			};
@@ -304,6 +325,86 @@
 				function = "gpio";
 				bias-disable;
 				input-enable;
+			};
+		};
+
+		touch_pin: touch {
+			int {
+				pins = "gpio5";
+				function = "gpio";
+
+				drive-strength = <2>;
+				bias-disable;
+				input-enable;
+			};
+
+			reset {
+				pins = "gpio8";
+				function = "gpio";
+
+				drive-strength = <2>;
+				bias-pull-up;
+			};
+		};
+
+		panel_pin: panel {
+			te {
+				pins = "gpio12";
+				function = "mdp_vsync";
+
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		bt_pin: bt {
+			hostwake {
+				pins = "gpio42";
+				function = "gpio";
+			};
+
+			devwake {
+				pins = "gpio62";
+				function = "gpio";
+			};
+
+			shutdown {
+				pins = "gpio41";
+				function = "gpio";
+			};
+		};
+
+		blsp2_uart10_pin_a: blsp2-uart10-pin-active {
+			tx {
+				pins = "gpio53";
+				function = "blsp_uart10";
+
+				drive-strength = <2>;
+				bias-disable;
+			};
+
+			rx {
+				pins = "gpio54";
+				function = "blsp_uart10";
+
+				drive-strength = <2>;
+				bias-pull-up;
+			};
+
+			cts {
+				pins = "gpio55";
+				function = "blsp_uart10";
+
+				drive-strength = <2>;
+				bias-pull-up;
+			};
+
+			rts {
+				pins = "gpio56";
+				function = "blsp_uart10";
+
+				drive-strength = <2>;
+				bias-disable;
 			};
 		};
 	};
@@ -369,6 +470,49 @@
 		};
 	};
 
+	serial@f9960000 {
+		status = "ok";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&blsp2_uart10_pin_a>;
+
+		bluetooth {
+			compatible = "brcm,bcm43438-bt";
+			max-speed = <3000000>;
+
+			pinctrl-names = "default";
+			pinctrl-0 = <&bt_pin>;
+
+			host-wakeup-gpios = <&msmgpio 42 GPIO_ACTIVE_HIGH>;
+			device-wakeup-gpios = <&msmgpio 62 GPIO_ACTIVE_HIGH>;
+			shutdown-gpios = <&msmgpio 41 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	i2c@f9967000 {
+		status = "ok";
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c11_pins>;
+		clock-frequency = <355000>;
+		qcom,src-freq = <50000000>;
+
+		led-controller@38 {
+			compatible = "ti,lm3630a";
+			status = "ok";
+			reg = <0x38>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			led@0 {
+				reg = <0>;
+				led-sources = <0 1>;
+				label = "lcd-backlight";
+				default-brightness = <200>;
+			};
+		};
+	};
+
 	i2c@f9968000 {
 		status = "ok";
 		pinctrl-names = "default";
@@ -424,6 +568,41 @@
 		};
 	};
 
+	i2c@f9924000 {
+		status = "ok";
+
+		clock-frequency = <355000>;
+		qcom,src-freq = <50000000>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2c2_pins>;
+
+		synaptics@70 {
+			compatible = "syna,rmi4-i2c";
+			reg = <0x70>;
+
+			interrupts-extended = <&msmgpio 5 IRQ_TYPE_EDGE_FALLING>;
+			vdd-supply = <&pm8941_l22>;
+			vio-supply = <&pm8941_lvs3>;
+
+			pinctrl-names = "default";
+			pinctrl-0 = <&touch_pin>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			rmi4-f01@1 {
+				reg = <0x1>;
+				syna,nosleep-mode = <1>;
+			};
+
+			rmi4-f12@12 {
+				reg = <0x12>;
+				syna,sensor-type = <1>;
+			};
+		};
+	};
+
 	i2c@f9925000 {
 		status = "ok";
 		pinctrl-names = "default";
@@ -464,6 +643,54 @@
 
 				qcom,init-seq = /bits/ 8 <0x1 0x64>;
 			};
+		};
+	};
+
+	mdss@fd900000 {
+		status = "ok";
+
+		mdp@fd900000 {
+			status = "ok";
+		};
+
+		dsi@fd922800 {
+			status = "ok";
+
+			vdda-supply = <&pm8941_l2>;
+			vdd-supply = <&pm8941_lvs3>;
+			vddio-supply = <&pm8941_l12>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			ports {
+				port@1 {
+					endpoint {
+						remote-endpoint = <&panel_in>;
+						data-lanes = <0 1 2 3>;
+					};
+				};
+			};
+
+			panel: panel@0 {
+				reg = <0>;
+				compatible = "lg,acx467akm-7";
+
+				pinctrl-names = "default";
+				pinctrl-0 = <&panel_pin>;
+
+				port {
+					panel_in: endpoint {
+						remote-endpoint = <&dsi0_out>;
+					};
+				};
+			};
+		};
+
+		dsi-phy@fd922a00 {
+			status = "ok";
+
+			vddio-supply = <&pm8941_l12>;
 		};
 	};
 };

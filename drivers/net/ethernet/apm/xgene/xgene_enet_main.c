@@ -340,7 +340,8 @@ static int xgene_enet_work_msg(struct sk_buff *skb, u64 *hopinfo)
 				nr_frags = skb_shinfo(skb)->nr_frags;
 
 				for (i = 0; i < 2 && i < nr_frags; i++)
-					len += skb_shinfo(skb)->frags[i].size;
+					len += skb_frag_size(
+						&skb_shinfo(skb)->frags[i]);
 
 				/* HW requires header must reside in 3 buffer */
 				if (unlikely(hdr_len > len)) {
@@ -858,7 +859,7 @@ static int xgene_enet_napi(struct napi_struct *napi, const int budget)
 	return processed;
 }
 
-static void xgene_enet_timeout(struct net_device *ndev)
+static void xgene_enet_timeout(struct net_device *ndev, unsigned int txqueue)
 {
 	struct xgene_enet_pdata *pdata = netdev_priv(ndev);
 	struct netdev_queue *txq;
@@ -1616,7 +1617,6 @@ static int xgene_get_rx_delay(struct xgene_enet_pdata *pdata)
 static int xgene_enet_get_irqs(struct xgene_enet_pdata *pdata)
 {
 	struct platform_device *pdev = pdata->pdev;
-	struct device *dev = &pdev->dev;
 	int i, ret, max_irqs;
 
 	if (phy_interface_mode_is_rgmii(pdata->phy_mode))
@@ -1636,9 +1636,7 @@ static int xgene_enet_get_irqs(struct xgene_enet_pdata *pdata)
 				pdata->cq_cnt = max_irqs / 2;
 				break;
 			}
-			dev_err(dev, "Unable to get ENET IRQ\n");
-			ret = ret ? : -ENXIO;
-			return ret;
+			return ret ? : -ENXIO;
 		}
 		pdata->irqs[i] = ret;
 	}
@@ -2022,7 +2020,7 @@ static int xgene_enet_probe(struct platform_device *pdev)
 	int ret;
 
 	ndev = alloc_etherdev_mqs(sizeof(struct xgene_enet_pdata),
-				  XGENE_NUM_RX_RING, XGENE_NUM_TX_RING);
+				  XGENE_NUM_TX_RING, XGENE_NUM_RX_RING);
 	if (!ndev)
 		return -ENOMEM;
 
@@ -2181,7 +2179,6 @@ static struct platform_driver xgene_enet_driver = {
 module_platform_driver(xgene_enet_driver);
 
 MODULE_DESCRIPTION("APM X-Gene SoC Ethernet driver");
-MODULE_VERSION(XGENE_DRV_VERSION);
 MODULE_AUTHOR("Iyappan Subramanian <isubramanian@apm.com>");
 MODULE_AUTHOR("Keyur Chudgar <kchudgar@apm.com>");
 MODULE_LICENSE("GPL");

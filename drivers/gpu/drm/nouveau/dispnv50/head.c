@@ -29,6 +29,7 @@
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_vblank.h>
 #include "nouveau_connector.h"
 void
 nv50_head_flush_clr(struct nv50_head *head,
@@ -81,18 +82,17 @@ nv50_head_atomic_check_dither(struct nv50_head_atom *armh,
 			      struct nv50_head_atom *asyh,
 			      struct nouveau_conn_atom *asyc)
 {
-	struct drm_connector *connector = asyc->state.connector;
 	u32 mode = 0x00;
 
 	if (asyc->dither.mode == DITHERING_MODE_AUTO) {
-		if (asyh->base.depth > connector->display_info.bpc * 3)
+		if (asyh->base.depth > asyh->or.bpc * 3)
 			mode = DITHERING_MODE_DYNAMIC2X2;
 	} else {
 		mode = asyc->dither.mode;
 	}
 
 	if (asyc->dither.depth == DITHERING_DEPTH_AUTO) {
-		if (connector->display_info.bpc >= 8)
+		if (asyh->or.bpc >= 8)
 			mode |= DITHERING_DEPTH_8BPC;
 	} else {
 		mode |= asyc->dither.depth;
@@ -169,14 +169,34 @@ nv50_head_atomic_check_view(struct nv50_head_atom *armh,
 	 */
 	switch (mode) {
 	case DRM_MODE_SCALE_CENTER:
-		asyh->view.oW = min((u16)umode->hdisplay, asyh->view.oW);
-		asyh->view.oH = min((u16)umode_vdisplay, asyh->view.oH);
-		/* fall-through */
+		/* NOTE: This will cause scaling when the input is
+		 * larger than the output.
+		 */
+		asyh->view.oW = min(asyh->view.iW, asyh->view.oW);
+		asyh->view.oH = min(asyh->view.iH, asyh->view.oH);
+		break;
 	case DRM_MODE_SCALE_ASPECT:
-		if (asyh->view.oH < asyh->view.oW) {
+		/* Determine whether the scaling should be on width or on
+		 * height. This is done by comparing the aspect ratios of the
+		 * sizes. If the output AR is larger than input AR, that means
+		 * we want to change the width (letterboxed on the
+		 * left/right), otherwise on the height (letterboxed on the
+		 * top/bottom).
+		 *
+		 * E.g. 4:3 (1.333) AR image displayed on a 16:10 (1.6) AR
+		 * screen will have letterboxes on the left/right. However a
+		 * 16:9 (1.777) AR image on that same screen will have
+		 * letterboxes on the top/bottom.
+		 *
+		 * inputAR = iW / iH; outputAR = oW / oH
+		 * outputAR > inputAR is equivalent to oW * iH > iW * oH
+		 */
+		if (asyh->view.oW * asyh->view.iH > asyh->view.iW * asyh->view.oH) {
+			/* Recompute output width, i.e. left/right letterbox */
 			u32 r = (asyh->view.iW << 19) / asyh->view.iH;
 			asyh->view.oW = ((asyh->view.oH * r) + (r / 2)) >> 19;
 		} else {
+			/* Recompute output height, i.e. top/bottom letterbox */
 			u32 r = (asyh->view.iH << 19) / asyh->view.iW;
 			asyh->view.oH = ((asyh->view.oW * r) + (r / 2)) >> 19;
 		}
@@ -194,6 +214,7 @@ nv50_head_atomic_check_lut(struct nv50_head *head,
 {
 	struct nv50_disp *disp = nv50_disp(head->base.base.dev);
 	struct drm_property_blob *olut = asyh->state.gamma_lut;
+	int size;
 
 	/* Determine whether core output LUT should be enabled. */
 	if (olut) {
@@ -210,14 +231,23 @@ nv50_head_atomic_check_lut(struct nv50_head *head,
 		}
 	}
 
-	if (!olut && !head->func->olut_identity) {
-		asyh->olut.handle = 0;
-		return 0;
+	if (!olut) {
+		if (!head->func->olut_identity) {
+			asyh->olut.handle = 0;
+			return 0;
+		}
+		size = 0;
+	} else {
+		size = drm_color_lut_size(olut);
 	}
 
+	if (!head->func->olut(head, asyh, size)) {
+		DRM_DEBUG_KMS("Invalid olut\n");
+		return -EINVAL;
+	}
 	asyh->olut.handle = disp->core->chan.vram.handle;
 	asyh->olut.buffer = !asyh->olut.buffer;
-	head->func->olut(head, asyh);
+
 	return 0;
 }
 
@@ -384,6 +414,7 @@ nv50_head_atomic_check(struct drm_crtc *crtc, struct drm_crtc_state *state)
 static const struct drm_crtc_helper_funcs
 nv50_head_help = {
 	.atomic_check = nv50_head_atomic_check,
+	.get_scanout_position = nouveau_display_scanoutpos,
 };
 
 static void
@@ -421,22 +452,15 @@ nv50_head_atomic_duplicate_state(struct drm_crtc *crtc)
 }
 
 static void
-__drm_atomic_helper_crtc_reset(struct drm_crtc *crtc,
-			       struct drm_crtc_state *state)
-{
-	if (crtc->state)
-		crtc->funcs->atomic_destroy_state(crtc, crtc->state);
-	crtc->state = state;
-	crtc->state->crtc = crtc;
-}
-
-static void
 nv50_head_reset(struct drm_crtc *crtc)
 {
 	struct nv50_head_atom *asyh;
 
 	if (WARN_ON(!(asyh = kzalloc(sizeof(*asyh), GFP_KERNEL))))
 		return;
+
+	if (crtc->state)
+		nv50_head_atomic_destroy_state(crtc, crtc->state);
 
 	__drm_atomic_helper_crtc_reset(crtc, &asyh->state);
 }
@@ -459,55 +483,61 @@ nv50_head_func = {
 	.page_flip = drm_atomic_helper_page_flip,
 	.atomic_duplicate_state = nv50_head_atomic_duplicate_state,
 	.atomic_destroy_state = nv50_head_atomic_destroy_state,
+	.enable_vblank = nouveau_display_vblank_enable,
+	.disable_vblank = nouveau_display_vblank_disable,
+	.get_vblank_timestamp = drm_crtc_vblank_helper_get_vblank_timestamp,
 };
 
-int
+struct nv50_head *
 nv50_head_create(struct drm_device *dev, int index)
 {
 	struct nouveau_drm *drm = nouveau_drm(dev);
 	struct nv50_disp *disp = nv50_disp(dev);
 	struct nv50_head *head;
-	struct nv50_wndw *curs, *wndw;
+	struct nv50_wndw *base, *ovly, *curs;
 	struct drm_crtc *crtc;
 	int ret;
 
 	head = kzalloc(sizeof(*head), GFP_KERNEL);
 	if (!head)
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 
 	head->func = disp->core->func->head;
 	head->base.index = index;
 
 	if (disp->disp->object.oclass < GV100_DISP) {
-		ret = nv50_ovly_new(drm, head->base.index, &wndw);
-		ret = nv50_base_new(drm, head->base.index, &wndw);
+		ret = nv50_base_new(drm, head->base.index, &base);
+		ret = nv50_ovly_new(drm, head->base.index, &ovly);
 	} else {
-		ret = nv50_wndw_new(drm, DRM_PLANE_TYPE_OVERLAY,
-				    head->base.index * 2 + 1, &wndw);
 		ret = nv50_wndw_new(drm, DRM_PLANE_TYPE_PRIMARY,
-				    head->base.index * 2 + 0, &wndw);
+				    head->base.index * 2 + 0, &base);
+		ret = nv50_wndw_new(drm, DRM_PLANE_TYPE_OVERLAY,
+				    head->base.index * 2 + 1, &ovly);
 	}
 	if (ret == 0)
 		ret = nv50_curs_new(drm, head->base.index, &curs);
 	if (ret) {
 		kfree(head);
-		return ret;
+		return ERR_PTR(ret);
 	}
 
 	crtc = &head->base.base;
-	drm_crtc_init_with_planes(dev, crtc, &wndw->plane, &curs->plane,
+	drm_crtc_init_with_planes(dev, crtc, &base->plane, &curs->plane,
 				  &nv50_head_func, "head-%d", head->base.index);
 	drm_crtc_helper_add(crtc, &nv50_head_help);
+	/* Keep the legacy gamma size at 256 to avoid compatibility issues */
 	drm_mode_crtc_set_gamma_size(crtc, 256);
+	drm_crtc_enable_color_mgmt(crtc, base->func->ilut_size,
+				   disp->disp->object.oclass >= GF110_DISP,
+				   head->func->olut_size);
 
 	if (head->func->olut_set) {
 		ret = nv50_lut_init(disp, &drm->client.mmu, &head->olut);
-		if (ret)
-			goto out;
+		if (ret) {
+			nv50_head_destroy(crtc);
+			return ERR_PTR(ret);
+		}
 	}
 
-out:
-	if (ret)
-		nv50_head_destroy(crtc);
-	return ret;
+	return head;
 }

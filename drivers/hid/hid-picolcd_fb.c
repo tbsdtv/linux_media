@@ -417,8 +417,7 @@ static int picolcd_set_par(struct fb_info *info)
 	return 0;
 }
 
-/* Note this can't be const because of struct fb_info definition */
-static struct fb_ops picolcdfb_ops = {
+static const struct fb_ops picolcdfb_ops = {
 	.owner        = THIS_MODULE,
 	.fb_destroy   = picolcd_fb_destroy,
 	.fb_read      = fb_sys_read,
@@ -459,9 +458,9 @@ static ssize_t picolcd_fb_update_rate_show(struct device *dev,
 		if (ret >= PAGE_SIZE)
 			break;
 		else if (i == fb_update_rate)
-			ret += snprintf(buf+ret, PAGE_SIZE-ret, "[%u] ", i);
+			ret += scnprintf(buf+ret, PAGE_SIZE-ret, "[%u] ", i);
 		else
-			ret += snprintf(buf+ret, PAGE_SIZE-ret, "%u ", i);
+			ret += scnprintf(buf+ret, PAGE_SIZE-ret, "%u ", i);
 	if (ret > 0)
 		buf[min(ret, (size_t)PAGE_SIZE)-1] = '\n';
 	return ret;
@@ -512,10 +511,8 @@ int picolcd_init_framebuffer(struct picolcd_data *data)
 			sizeof(struct fb_deferred_io) +
 			sizeof(struct picolcd_fb_data) +
 			PICOLCDFB_SIZE, dev);
-	if (info == NULL) {
-		dev_err(dev, "failed to allocate a framebuffer\n");
+	if (!info)
 		goto err_nomem;
-	}
 
 	info->fbdefio = info->par;
 	*info->fbdefio = picolcd_fb_defio;

@@ -73,7 +73,7 @@ void __iomem *__nfit_test_ioremap(resource_size_t offset, unsigned long size,
 	return fallback_fn(offset, size);
 }
 
-void __iomem *__wrap_devm_ioremap_nocache(struct device *dev,
+void __iomem *__wrap_devm_ioremap(struct device *dev,
 		resource_size_t offset, unsigned long size)
 {
 	struct nfit_test_resource *nfit_res = get_nfit_res(offset);
@@ -81,9 +81,9 @@ void __iomem *__wrap_devm_ioremap_nocache(struct device *dev,
 	if (nfit_res)
 		return (void __iomem *) nfit_res->buf + offset
 			- nfit_res->res.start;
-	return devm_ioremap_nocache(dev, offset, size);
+	return devm_ioremap(dev, offset, size);
 }
-EXPORT_SYMBOL(__wrap_devm_ioremap_nocache);
+EXPORT_SYMBOL(__wrap_devm_ioremap);
 
 void *__wrap_devm_memremap(struct device *dev, resource_size_t offset,
 		size_t size, unsigned long flags)
@@ -100,25 +100,59 @@ static void nfit_test_kill(void *_pgmap)
 {
 	struct dev_pagemap *pgmap = _pgmap;
 
-	WARN_ON(!pgmap || !pgmap->ref || !pgmap->kill || !pgmap->cleanup);
-	pgmap->kill(pgmap->ref);
-	pgmap->cleanup(pgmap->ref);
+	WARN_ON(!pgmap || !pgmap->ref);
+
+	if (pgmap->ops && pgmap->ops->kill)
+		pgmap->ops->kill(pgmap);
+	else
+		percpu_ref_kill(pgmap->ref);
+
+	if (pgmap->ops && pgmap->ops->cleanup) {
+		pgmap->ops->cleanup(pgmap);
+	} else {
+		wait_for_completion(&pgmap->done);
+		percpu_ref_exit(pgmap->ref);
+	}
+}
+
+static void dev_pagemap_percpu_release(struct percpu_ref *ref)
+{
+	struct dev_pagemap *pgmap =
+		container_of(ref, struct dev_pagemap, internal_ref);
+
+	complete(&pgmap->done);
 }
 
 void *__wrap_devm_memremap_pages(struct device *dev, struct dev_pagemap *pgmap)
 {
+	int error;
 	resource_size_t offset = pgmap->res.start;
 	struct nfit_test_resource *nfit_res = get_nfit_res(offset);
 
-	if (nfit_res) {
-		int rc;
+	if (!nfit_res)
+		return devm_memremap_pages(dev, pgmap);
 
-		rc = devm_add_action_or_reset(dev, nfit_test_kill, pgmap);
-		if (rc)
-			return ERR_PTR(rc);
-		return nfit_res->buf + offset - nfit_res->res.start;
+	if (!pgmap->ref) {
+		if (pgmap->ops && (pgmap->ops->kill || pgmap->ops->cleanup))
+			return ERR_PTR(-EINVAL);
+
+		init_completion(&pgmap->done);
+		error = percpu_ref_init(&pgmap->internal_ref,
+				dev_pagemap_percpu_release, 0, GFP_KERNEL);
+		if (error)
+			return ERR_PTR(error);
+		pgmap->ref = &pgmap->internal_ref;
+	} else {
+		if (!pgmap->ops || !pgmap->ops->kill || !pgmap->ops->cleanup) {
+			WARN(1, "Missing reference count teardown definition\n");
+			return ERR_PTR(-EINVAL);
+		}
 	}
-	return devm_memremap_pages(dev, pgmap);
+
+	error = devm_add_action_or_reset(dev, nfit_test_kill, pgmap);
+	if (error)
+		return ERR_PTR(error);
+	return nfit_res->buf + offset - nfit_res->res.start;
 }
 EXPORT_SYMBOL_GPL(__wrap_devm_memremap_pages);
 
@@ -153,11 +187,11 @@ void __wrap_devm_memunmap(struct device *dev, void *addr)
 }
 EXPORT_SYMBOL(__wrap_devm_memunmap);
 
-void __iomem *__wrap_ioremap_nocache(resource_size_t offset, unsigned long size)
+void __iomem *__wrap_ioremap(resource_size_t offset, unsigned long size)
 {
-	return __nfit_test_ioremap(offset, size, ioremap_nocache);
+	return __nfit_test_ioremap(offset, size, ioremap);
 }
-EXPORT_SYMBOL(__wrap_ioremap_nocache);
+EXPORT_SYMBOL(__wrap_ioremap);
 
 void __iomem *__wrap_ioremap_wc(resource_size_t offset, unsigned long size)
 {

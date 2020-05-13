@@ -1722,7 +1722,7 @@ struct ncb {
 	**	Miscellaneous configuration and status parameters.
 	**----------------------------------------------------------------
 	*/
-	u_char		disc;		/* Diconnection allowed		*/
+	u_char		disc;		/* Disconnection allowed	*/
 	u_char		scsi_mode;	/* Current SCSI BUS mode	*/
 	u_char		order;		/* Tag order to use		*/
 	u_char		verbose;	/* Verbosity for this controller*/
@@ -2203,7 +2203,7 @@ static	struct script script0 __initdata = {
 	**	Possible data corruption during Memory Write and Invalidate.
 	**	This work-around resets the addressing logic prior to the 
 	**	start of the first MOVE of a DATA IN phase.
-	**	(See Documentation/scsi/ncr53c8xx.txt for more information)
+	**	(See Documentation/scsi/ncr53c8xx.rst for more information)
 	*/
 	SCR_JUMPR ^ IFFALSE (IF (SCR_DATA_IN)),
 		20,
@@ -3910,11 +3910,14 @@ static void __init ncr_prepare_setting(struct ncb *np)
 					np->scsi_mode = SMODE_HVD;
 				break;
 			}
+			/* fall through */
 		case 3:	/* SYMBIOS controllers report HVD through GPIO3 */
 			if (INB(nc_gpreg) & 0x08)
 				break;
+			/* fall through */
 		case 2:	/* Set HVD unconditionally */
 			np->scsi_mode = SMODE_HVD;
+			/* fall through */
 		case 1:	/* Trust previous settings for HVD */
 			if (np->sv_stest2 & 0x20)
 				np->scsi_mode = SMODE_HVD;
@@ -6714,6 +6717,7 @@ void ncr_int_sir (struct ncb *np)
 			OUTL_DSP (scr_to_cpu(tp->lp[0]->jump_ccb[0]));
 			return;
 		}
+		/* fall through */
 	case SIR_RESEL_BAD_TARGET:	/* Will send a TARGET RESET message */
 	case SIR_RESEL_BAD_LUN:		/* Will send a TARGET RESET message */
 	case SIR_RESEL_BAD_I_T_L_Q:	/* Will send an ABORT TAG message   */

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2014-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2014-2020  B.A.T.M.A.N. contributors:
  *
  * Linus Lüssing
  */
@@ -9,9 +9,9 @@
 
 #include "main.h"
 
-struct netlink_callback;
-struct seq_file;
-struct sk_buff;
+#include <linux/netlink.h>
+#include <linux/seq_file.h>
+#include <linux/skbuff.h>
 
 /**
  * enum batadv_forw_mode - the way a packet should be forwarded as

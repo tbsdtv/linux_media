@@ -701,9 +701,12 @@ static int ext2_get_blocks(struct inode *inode,
 		if (!partial) {
 			count++;
 			mutex_unlock(&ei->truncate_mutex);
-			if (err)
-				goto cleanup;
 			goto got_it;
+		}
+
+		if (err) {
+			mutex_unlock(&ei->truncate_mutex);
+			goto cleanup;
 		}
 	}
 
@@ -801,7 +804,7 @@ int ext2_get_block(struct inode *inode, sector_t iblock,
 
 #ifdef CONFIG_FS_DAX
 static int ext2_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
-		unsigned flags, struct iomap *iomap)
+		unsigned flags, struct iomap *iomap, struct iomap *srcmap)
 {
 	unsigned int blkbits = inode->i_blkbits;
 	unsigned long first_block = offset >> blkbits;
@@ -957,8 +960,9 @@ ext2_writepages(struct address_space *mapping, struct writeback_control *wbc)
 static int
 ext2_dax_writepages(struct address_space *mapping, struct writeback_control *wbc)
 {
-	return dax_writeback_mapping_range(mapping,
-			mapping->host->i_sb->s_bdev, wbc);
+	struct ext2_sb_info *sbi = EXT2_SB(mapping->host->i_sb);
+
+	return dax_writeback_mapping_range(mapping, sbi->s_daxdev, wbc);
 }
 
 const struct address_space_operations ext2_aops = {
@@ -1400,7 +1404,7 @@ void ext2_set_file_ops(struct inode *inode)
 struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 {
 	struct ext2_inode_info *ei;
-	struct buffer_head * bh;
+	struct buffer_head * bh = NULL;
 	struct ext2_inode *raw_inode;
 	struct inode *inode;
 	long ret = -EIO;
@@ -1446,7 +1450,6 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	 */
 	if (inode->i_nlink == 0 && (inode->i_mode == 0 || ei->i_dtime)) {
 		/* this inode is deleted */
-		brelse (bh);
 		ret = -ESTALE;
 		goto bad_inode;
 	}
@@ -1463,7 +1466,6 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	    !ext2_data_block_valid(EXT2_SB(sb), ei->i_file_acl, 1)) {
 		ext2_error(sb, "ext2_iget", "bad extended attribute block %u",
 			   ei->i_file_acl);
-		brelse(bh);
 		ret = -EFSCORRUPTED;
 		goto bad_inode;
 	}
@@ -1526,6 +1528,7 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	return inode;
 	
 bad_inode:
+	brelse(bh);
 	iget_failed(inode);
 	return ERR_PTR(ret);
 }
@@ -1640,7 +1643,7 @@ int ext2_write_inode(struct inode *inode, struct writeback_control *wbc)
 }
 
 int ext2_getattr(const struct path *path, struct kstat *stat,
-		u32 request_mask, unsigned int query_falgs)
+		u32 request_mask, unsigned int query_flags)
 {
 	struct inode *inode = d_inode(path->dentry);
 	struct ext2_inode_info *ei = EXT2_I(inode);

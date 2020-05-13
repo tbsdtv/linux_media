@@ -31,7 +31,6 @@
 #include <asm/os_info.h>
 #include <asm/sections.h>
 #include <asm/boot_data.h>
-#include <asm/uv.h>
 #include "entry.h"
 
 #define IPL_PARM_BLOCK_VERSION 0
@@ -144,6 +143,9 @@ static struct ipl_parameter_block *dump_block_fcp;
 static struct ipl_parameter_block *dump_block_ccw;
 
 static struct sclp_ipl_info sclp_ipl_info;
+
+static bool reipl_fcp_clear;
+static bool reipl_ccw_clear;
 
 static inline int __diag308(unsigned long subcode, void *addr)
 {
@@ -286,12 +288,7 @@ static struct kobj_attribute sys_ipl_secure_attr =
 static ssize_t ipl_has_secure_show(struct kobject *kobj,
 				   struct kobj_attribute *attr, char *page)
 {
-	if (MACHINE_IS_LPAR)
-		return sprintf(page, "%i\n", !!sclp.has_sipl);
-	else if (MACHINE_IS_VM)
-		return sprintf(page, "%i\n", !!sclp.has_sipl_g2);
-	else
-		return sprintf(page, "%i\n", 0);
+	return sprintf(page, "%i\n", !!sclp.has_sipl);
 }
 
 static struct kobj_attribute sys_ipl_has_secure_attr =
@@ -697,6 +694,21 @@ static struct kobj_attribute sys_reipl_fcp_loadparm_attr =
 	__ATTR(loadparm, S_IRUGO | S_IWUSR, reipl_fcp_loadparm_show,
 					    reipl_fcp_loadparm_store);
 
+static ssize_t reipl_fcp_clear_show(struct kobject *kobj,
+				    struct kobj_attribute *attr, char *page)
+{
+	return sprintf(page, "%u\n", reipl_fcp_clear);
+}
+
+static ssize_t reipl_fcp_clear_store(struct kobject *kobj,
+				     struct kobj_attribute *attr,
+				     const char *buf, size_t len)
+{
+	if (strtobool(buf, &reipl_fcp_clear) < 0)
+		return -EINVAL;
+	return len;
+}
+
 static struct attribute *reipl_fcp_attrs[] = {
 	&sys_reipl_fcp_device_attr.attr,
 	&sys_reipl_fcp_wwpn_attr.attr,
@@ -711,6 +723,9 @@ static struct attribute_group reipl_fcp_attr_group = {
 	.attrs = reipl_fcp_attrs,
 	.bin_attrs = reipl_fcp_bin_attrs,
 };
+
+static struct kobj_attribute sys_reipl_fcp_clear_attr =
+	__ATTR(clear, 0644, reipl_fcp_clear_show, reipl_fcp_clear_store);
 
 /* CCW reipl device attributes */
 DEFINE_IPL_CCW_ATTR_RW(reipl_ccw, device, reipl_block_ccw->ccw);
@@ -747,16 +762,36 @@ static struct kobj_attribute sys_reipl_ccw_loadparm_attr =
 	__ATTR(loadparm, S_IRUGO | S_IWUSR, reipl_ccw_loadparm_show,
 					    reipl_ccw_loadparm_store);
 
+static ssize_t reipl_ccw_clear_show(struct kobject *kobj,
+				    struct kobj_attribute *attr, char *page)
+{
+	return sprintf(page, "%u\n", reipl_ccw_clear);
+}
+
+static ssize_t reipl_ccw_clear_store(struct kobject *kobj,
+				     struct kobj_attribute *attr,
+				     const char *buf, size_t len)
+{
+	if (strtobool(buf, &reipl_ccw_clear) < 0)
+		return -EINVAL;
+	return len;
+}
+
+static struct kobj_attribute sys_reipl_ccw_clear_attr =
+	__ATTR(clear, 0644, reipl_ccw_clear_show, reipl_ccw_clear_store);
+
 static struct attribute *reipl_ccw_attrs_vm[] = {
 	&sys_reipl_ccw_device_attr.attr,
 	&sys_reipl_ccw_loadparm_attr.attr,
 	&sys_reipl_ccw_vmparm_attr.attr,
+	&sys_reipl_ccw_clear_attr.attr,
 	NULL,
 };
 
 static struct attribute *reipl_ccw_attrs_lpar[] = {
 	&sys_reipl_ccw_device_attr.attr,
 	&sys_reipl_ccw_loadparm_attr.attr,
+	&sys_reipl_ccw_clear_attr.attr,
 	NULL,
 };
 
@@ -897,21 +932,21 @@ static void __reipl_run(void *unused)
 {
 	switch (reipl_type) {
 	case IPL_TYPE_CCW:
-		uv_set_shared(__pa(reipl_block_ccw));
 		diag308(DIAG308_SET, reipl_block_ccw);
-		uv_remove_shared(__pa(reipl_block_ccw));
-		diag308(DIAG308_LOAD_CLEAR, NULL);
+		if (reipl_ccw_clear)
+			diag308(DIAG308_LOAD_CLEAR, NULL);
+		else
+			diag308(DIAG308_LOAD_NORMAL_DUMP, NULL);
 		break;
 	case IPL_TYPE_FCP:
-		uv_set_shared(__pa(reipl_block_fcp));
 		diag308(DIAG308_SET, reipl_block_fcp);
-		uv_remove_shared(__pa(reipl_block_fcp));
-		diag308(DIAG308_LOAD_CLEAR, NULL);
+		if (reipl_fcp_clear)
+			diag308(DIAG308_LOAD_CLEAR, NULL);
+		else
+			diag308(DIAG308_LOAD_NORMAL, NULL);
 		break;
 	case IPL_TYPE_NSS:
-		uv_set_shared(__pa(reipl_block_nss));
 		diag308(DIAG308_SET, reipl_block_nss);
-		uv_remove_shared(__pa(reipl_block_nss));
 		diag308(DIAG308_LOAD_CLEAR, NULL);
 		break;
 	case IPL_TYPE_UNKNOWN:
@@ -1020,11 +1055,16 @@ static int __init reipl_fcp_init(void)
 	}
 
 	rc = sysfs_create_group(&reipl_fcp_kset->kobj, &reipl_fcp_attr_group);
-	if (rc) {
-		kset_unregister(reipl_fcp_kset);
-		free_page((unsigned long) reipl_block_fcp);
-		return rc;
-	}
+	if (rc)
+		goto out1;
+
+	if (test_facility(141)) {
+		rc = sysfs_create_file(&reipl_fcp_kset->kobj,
+				       &sys_reipl_fcp_clear_attr.attr);
+		if (rc)
+			goto out2;
+	} else
+		reipl_fcp_clear = true;
 
 	if (ipl_info.type == IPL_TYPE_FCP) {
 		memcpy(reipl_block_fcp, &ipl_block, sizeof(ipl_block));
@@ -1044,6 +1084,13 @@ static int __init reipl_fcp_init(void)
 	}
 	reipl_capabilities |= IPL_TYPE_FCP;
 	return 0;
+
+out2:
+	sysfs_remove_group(&reipl_fcp_kset->kobj, &reipl_fcp_attr_group);
+out1:
+	kset_unregister(reipl_fcp_kset);
+	free_page((unsigned long) reipl_block_fcp);
+	return rc;
 }
 
 static int __init reipl_type_init(void)
@@ -1181,9 +1228,7 @@ static struct kset *dump_kset;
 
 static void diag308_dump(void *dump_block)
 {
-	uv_set_shared(__pa(dump_block));
 	diag308(DIAG308_SET, dump_block);
-	uv_remove_shared(__pa(dump_block));
 	while (1) {
 		if (diag308(DIAG308_LOAD_NORMAL_DUMP, NULL) != 0x302)
 			break;

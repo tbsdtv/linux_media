@@ -12,7 +12,7 @@
 #ifndef __ASM_S390_PROCESSOR_H
 #define __ASM_S390_PROCESSOR_H
 
-#include <linux/const.h>
+#include <linux/bits.h>
 
 #define CIF_MCCK_PENDING	0	/* machine check handling is pending */
 #define CIF_ASCE_PRIMARY	1	/* primary asce needs fixup / uaccess */
@@ -24,18 +24,19 @@
 #define CIF_MCCK_GUEST		7	/* machine check happening in guest */
 #define CIF_DEDICATED_CPU	8	/* this CPU is dedicated */
 
-#define _CIF_MCCK_PENDING	_BITUL(CIF_MCCK_PENDING)
-#define _CIF_ASCE_PRIMARY	_BITUL(CIF_ASCE_PRIMARY)
-#define _CIF_ASCE_SECONDARY	_BITUL(CIF_ASCE_SECONDARY)
-#define _CIF_NOHZ_DELAY		_BITUL(CIF_NOHZ_DELAY)
-#define _CIF_FPU		_BITUL(CIF_FPU)
-#define _CIF_IGNORE_IRQ		_BITUL(CIF_IGNORE_IRQ)
-#define _CIF_ENABLED_WAIT	_BITUL(CIF_ENABLED_WAIT)
-#define _CIF_MCCK_GUEST		_BITUL(CIF_MCCK_GUEST)
-#define _CIF_DEDICATED_CPU	_BITUL(CIF_DEDICATED_CPU)
+#define _CIF_MCCK_PENDING	BIT(CIF_MCCK_PENDING)
+#define _CIF_ASCE_PRIMARY	BIT(CIF_ASCE_PRIMARY)
+#define _CIF_ASCE_SECONDARY	BIT(CIF_ASCE_SECONDARY)
+#define _CIF_NOHZ_DELAY		BIT(CIF_NOHZ_DELAY)
+#define _CIF_FPU		BIT(CIF_FPU)
+#define _CIF_IGNORE_IRQ		BIT(CIF_IGNORE_IRQ)
+#define _CIF_ENABLED_WAIT	BIT(CIF_ENABLED_WAIT)
+#define _CIF_MCCK_GUEST		BIT(CIF_MCCK_GUEST)
+#define _CIF_DEDICATED_CPU	BIT(CIF_DEDICATED_CPU)
 
 #ifndef __ASSEMBLY__
 
+#include <linux/cpumask.h>
 #include <linux/linkage.h>
 #include <linux/irqflags.h>
 #include <asm/cpu.h>
@@ -83,7 +84,6 @@ void s390_update_cpu_mhz(void);
 void cpu_detect_mhz_feature(void);
 
 extern const struct seq_operations cpuinfo_op;
-extern int sysctl_ieee_emulation_warnings;
 extern void execve_tail(void);
 extern void __bpon(void);
 
@@ -92,15 +92,15 @@ extern void __bpon(void);
  */
 
 #define TASK_SIZE_OF(tsk)	(test_tsk_thread_flag(tsk, TIF_31BIT) ? \
-					(1UL << 31) : -PAGE_SIZE)
+					_REGION3_SIZE : TASK_SIZE_MAX)
 #define TASK_UNMAPPED_BASE	(test_thread_flag(TIF_31BIT) ? \
-					(1UL << 30) : (1UL << 41))
+					(_REGION3_SIZE >> 1) : (_REGION2_SIZE >> 1))
 #define TASK_SIZE		TASK_SIZE_OF(current)
 #define TASK_SIZE_MAX		(-PAGE_SIZE)
 
 #define STACK_TOP		(test_thread_flag(TIF_31BIT) ? \
-					(1UL << 31) : (1UL << 42))
-#define STACK_TOP_MAX		(1UL << 42)
+					_REGION3_SIZE : _REGION2_SIZE)
+#define STACK_TOP_MAX		_REGION2_SIZE
 
 #define HAVE_ARCH_PICK_MMAP_LAYOUT
 
@@ -161,6 +161,7 @@ typedef struct thread_struct thread_struct;
 #define INIT_THREAD {							\
 	.ksp = sizeof(init_stack) + (unsigned long) &init_stack,	\
 	.fpu.regs = (void *) init_task.thread.fpu.fprs,			\
+	.last_break = 1,						\
 }
 
 /*
@@ -177,7 +178,6 @@ typedef struct thread_struct thread_struct;
 	regs->psw.mask	= PSW_USER_BITS | PSW_MASK_BA;			\
 	regs->psw.addr	= new_psw;					\
 	regs->gprs[15]	= new_stackp;					\
-	crst_table_downgrade(current->mm);				\
 	execve_tail();							\
 } while (0)
 
@@ -205,7 +205,7 @@ unsigned long get_wchan(struct task_struct *p);
 /* Has task runtime instrumentation enabled ? */
 #define is_ri_task(tsk) (!!(tsk)->thread.ri_cb)
 
-static inline unsigned long current_stack_pointer(void)
+static __always_inline unsigned long current_stack_pointer(void)
 {
 	unsigned long sp;
 
@@ -220,12 +220,6 @@ static __no_kasan_or_inline unsigned short stap(void)
 	asm volatile("stap %0" : "=Q" (cpu_address));
 	return cpu_address;
 }
-
-/*
- * Give up the time slice of the virtual PU.
- */
-#define cpu_relax_yield cpu_relax_yield
-void cpu_relax_yield(void);
 
 #define cpu_relax() barrier()
 
@@ -315,7 +309,7 @@ void enabled_wait(void);
 /*
  * Function to drop a processor into disabled wait state
  */
-static inline void __noreturn disabled_wait(void)
+static __always_inline void __noreturn disabled_wait(void)
 {
 	psw_t psw;
 
@@ -329,11 +323,9 @@ static inline void __noreturn disabled_wait(void)
  * Basic Machine Check/Program Check Handler.
  */
 
-extern void s390_base_mcck_handler(void);
 extern void s390_base_pgm_handler(void);
 extern void s390_base_ext_handler(void);
 
-extern void (*s390_base_mcck_handler_fn)(void);
 extern void (*s390_base_pgm_handler_fn)(void);
 extern void (*s390_base_ext_handler_fn)(void);
 

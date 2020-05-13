@@ -32,14 +32,18 @@ void __init ceph_flock_init(void)
 
 static void ceph_fl_copy_lock(struct file_lock *dst, struct file_lock *src)
 {
-	struct inode *inode = file_inode(src->fl_file);
+	struct ceph_file_info *fi = dst->fl_file->private_data;
+	struct inode *inode = file_inode(dst->fl_file);
 	atomic_inc(&ceph_inode(inode)->i_filelock_ref);
+	atomic_inc(&fi->num_locks);
 }
 
 static void ceph_fl_release_lock(struct file_lock *fl)
 {
+	struct ceph_file_info *fi = fl->fl_file->private_data;
 	struct inode *inode = file_inode(fl->fl_file);
 	struct ceph_inode_info *ci = ceph_inode(inode);
+	atomic_dec(&fi->num_locks);
 	if (atomic_dec_and_test(&ci->i_filelock_ref)) {
 		/* clear error when all locks are released */
 		spin_lock(&ci->i_ceph_lock);
@@ -73,7 +77,7 @@ static int ceph_lock_message(u8 lock_type, u16 operation, struct inode *inode,
 		 * window. Caller function will decrease the counter.
 		 */
 		fl->fl_ops = &ceph_fl_lock_ops;
-		atomic_inc(&ceph_inode(inode)->i_filelock_ref);
+		fl->fl_ops->fl_copy_lock(fl, NULL);
 	}
 
 	if (operation != CEPH_MDS_OP_SETFILELOCK || cmd == CEPH_LOCK_UNLOCK)
@@ -111,8 +115,7 @@ static int ceph_lock_message(u8 lock_type, u16 operation, struct inode *inode,
 		req->r_wait_for_completion = ceph_lock_wait_for_completion;
 
 	err = ceph_mdsc_do_request(mdsc, inode, req);
-
-	if (operation == CEPH_MDS_OP_GETFILELOCK) {
+	if (!err && operation == CEPH_MDS_OP_GETFILELOCK) {
 		fl->fl_pid = -le64_to_cpu(req->r_reply_info.filelock_reply->pid);
 		if (CEPH_LOCK_SHARED == req->r_reply_info.filelock_reply->type)
 			fl->fl_type = F_RDLCK;
@@ -207,6 +210,21 @@ static int ceph_lock_wait_for_completion(struct ceph_mds_client *mdsc,
 	return 0;
 }
 
+static int try_unlock_file(struct file *file, struct file_lock *fl)
+{
+	int err;
+	unsigned int orig_flags = fl->fl_flags;
+	fl->fl_flags |= FL_EXISTS;
+	err = locks_lock_file_wait(file, fl);
+	fl->fl_flags = orig_flags;
+	if (err == -ENOENT) {
+		if (!(orig_flags & FL_EXISTS))
+			err = 0;
+		return err;
+	}
+	return 1;
+}
+
 /**
  * Attempt to set an fcntl lock.
  * For now, this just goes away to the server. Later it may be more awesome.
@@ -252,9 +270,15 @@ int ceph_lock(struct file *file, int cmd, struct file_lock *fl)
 	else
 		lock_cmd = CEPH_LOCK_UNLOCK;
 
+	if (op == CEPH_MDS_OP_SETFILELOCK && F_UNLCK == fl->fl_type) {
+		err = try_unlock_file(file, fl);
+		if (err <= 0)
+			return err;
+	}
+
 	err = ceph_lock_message(CEPH_LOCK_FCNTL, op, inode, lock_cmd, wait, fl);
 	if (!err) {
-		if (op == CEPH_MDS_OP_SETFILELOCK) {
+		if (op == CEPH_MDS_OP_SETFILELOCK && F_UNLCK != fl->fl_type) {
 			dout("mds locked, locking locally\n");
 			err = posix_lock_file(file, fl, NULL);
 			if (err) {
@@ -308,9 +332,15 @@ int ceph_flock(struct file *file, int cmd, struct file_lock *fl)
 	else
 		lock_cmd = CEPH_LOCK_UNLOCK;
 
+	if (F_UNLCK == fl->fl_type) {
+		err = try_unlock_file(file, fl);
+		if (err <= 0)
+			return err;
+	}
+
 	err = ceph_lock_message(CEPH_LOCK_FLOCK, CEPH_MDS_OP_SETFILELOCK,
 				inode, lock_cmd, wait, fl);
-	if (!err) {
+	if (!err && F_UNLCK != fl->fl_type) {
 		err = locks_lock_file_wait(file, fl);
 		if (err) {
 			ceph_lock_message(CEPH_LOCK_FLOCK,

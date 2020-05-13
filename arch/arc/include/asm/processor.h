@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * vineetg: March 2009
  *  -Implemented task_pt_regs( )
@@ -17,15 +14,8 @@
 #ifndef __ASSEMBLY__
 
 #include <asm/ptrace.h>
-
-#ifdef CONFIG_ARC_FPU_SAVE_RESTORE
-/* These DPFP regs need to be saved/restored across ctx-sw */
-struct arc_fpu {
-	struct {
-		unsigned int l, h;
-	} aux_dpfp[2];
-};
-#endif
+#include <asm/dsp.h>
+#include <asm/fpu.h>
 
 #ifdef CONFIG_ARC_PLAT_EZNPS
 struct eznps_dp {
@@ -42,6 +32,9 @@ struct thread_struct {
 	unsigned long ksp;	/* kernel mode stack pointer */
 	unsigned long callee_reg;	/* pointer to callee regs */
 	unsigned long fault_address;	/* dbls as brkpt holder as well */
+#ifdef CONFIG_ARC_DSP_SAVE_RESTORE_REGS
+	struct dsp_callee_regs dsp;
+#endif
 #ifdef CONFIG_ARC_FPU_SAVE_RESTORE
 	struct arc_fpu fpu;
 #endif

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2013-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2013-2020  B.A.T.M.A.N. contributors:
  *
  * Martin Hundebøll <martin@hundeboll.net>
  */
@@ -11,10 +11,9 @@
 
 #include <linux/compiler.h>
 #include <linux/list.h>
+#include <linux/skbuff.h>
 #include <linux/stddef.h>
 #include <linux/types.h>
-
-struct sk_buff;
 
 void batadv_frag_purge_orig(struct batadv_orig_node *orig,
 			    bool (*check_cb)(struct batadv_frag_table_entry *));

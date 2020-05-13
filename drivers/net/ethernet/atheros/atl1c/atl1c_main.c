@@ -8,9 +8,7 @@
 
 #include "atl1c.h"
 
-#define ATL1C_DRV_VERSION "1.0.1.1-NAPI"
 char atl1c_driver_name[] = "atl1c";
-char atl1c_driver_version[] = ATL1C_DRV_VERSION;
 
 /*
  * atl1c_pci_tbl - PCI Device ID Table
@@ -37,7 +35,6 @@ MODULE_AUTHOR("Jie Yang");
 MODULE_AUTHOR("Qualcomm Atheros Inc., <nic-devel@qualcomm.com>");
 MODULE_DESCRIPTION("Qualcomm Atheros 100/1000M Ethernet Network Driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(ATL1C_DRV_VERSION);
 
 static int atl1c_stop_mac(struct atl1c_hw *hw);
 static void atl1c_disable_l0s_l1(struct atl1c_hw *hw);
@@ -350,7 +347,7 @@ static void atl1c_del_timer(struct atl1c_adapter *adapter)
  * atl1c_tx_timeout - Respond to a Tx Hang
  * @netdev: network interface device structure
  */
-static void atl1c_tx_timeout(struct net_device *netdev)
+static void atl1c_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 {
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
 
@@ -2025,10 +2022,8 @@ static int atl1c_tso_csum(struct atl1c_adapter *adapter,
 						"IPV6 tso with zero data??\n");
 				goto check_sum;
 			} else
-				tcp_hdr(skb)->check = ~csum_ipv6_magic(
-						&ipv6_hdr(skb)->saddr,
-						&ipv6_hdr(skb)->daddr,
-						0, IPPROTO_TCP, 0);
+				tcp_v6_gso_csum_prep(skb);
+
 			etpd->word1 |= 1 << TPD_LSO_EN_SHIFT;
 			etpd->word1 |= 1 << TPD_LSO_VER_SHIFT;
 			etpd->pkt_len = cpu_to_le32(skb->len);
@@ -2150,9 +2145,7 @@ static int atl1c_tx_map(struct atl1c_adapter *adapter,
 	}
 
 	for (f = 0; f < nr_frags; f++) {
-		struct skb_frag_struct *frag;
-
-		frag = &skb_shinfo(skb)->frags[f];
+		skb_frag_t *frag = &skb_shinfo(skb)->frags[f];
 
 		use_tpd = atl1c_get_tpd(adapter, type);
 		memcpy(use_tpd, tpd, sizeof(struct atl1c_tpd_desc));
@@ -2201,7 +2194,7 @@ static netdev_tx_t atl1c_xmit_frame(struct sk_buff *skb,
 					  struct net_device *netdev)
 {
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
-	u16 tpd_req = 1;
+	u16 tpd_req;
 	struct atl1c_tpd_desc *tpd;
 	enum atl1c_trans_queue type = atl1c_trans_normal;
 
@@ -2422,8 +2415,7 @@ static int atl1c_close(struct net_device *netdev)
 
 static int atl1c_suspend(struct device *dev)
 {
-	struct pci_dev *pdev = to_pci_dev(dev);
-	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct net_device *netdev = dev_get_drvdata(dev);
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
 	struct atl1c_hw *hw = &adapter->hw;
 	u32 wufc = adapter->wol;
@@ -2437,7 +2429,7 @@ static int atl1c_suspend(struct device *dev)
 
 	if (wufc)
 		if (atl1c_phy_to_ps_link(hw) != 0)
-			dev_dbg(&pdev->dev, "phy power saving failed");
+			dev_dbg(dev, "phy power saving failed");
 
 	atl1c_power_saving(hw, wufc);
 
@@ -2447,8 +2439,7 @@ static int atl1c_suspend(struct device *dev)
 #ifdef CONFIG_PM_SLEEP
 static int atl1c_resume(struct device *dev)
 {
-	struct pci_dev *pdev = to_pci_dev(dev);
-	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct net_device *netdev = dev_get_drvdata(dev);
 	struct atl1c_adapter *adapter = netdev_priv(netdev);
 
 	AT_WRITE_REG(&adapter->hw, REG_WOL_CTRL, 0);
@@ -2648,8 +2639,6 @@ static int atl1c_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_register;
 	}
 
-	if (netif_msg_probe(adapter))
-		dev_info(&pdev->dev, "version %s\n", ATL1C_DRV_VERSION);
 	cards_found++;
 	return 0;
 

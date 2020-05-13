@@ -105,6 +105,30 @@ qla2x00_clean_dsd_pool(struct qla_hw_data *ha, struct crc_context *ctx)
 	INIT_LIST_HEAD(&ctx->dsd_list);
 }
 
+static inline void
+qla2x00_set_fcport_disc_state(fc_port_t *fcport, int state)
+{
+	int old_val;
+	uint8_t shiftbits, mask;
+
+	/* This will have to change when the max no. of states > 16 */
+	shiftbits = 4;
+	mask = (1 << shiftbits) - 1;
+
+	fcport->disc_state = state;
+	while (1) {
+		old_val = atomic_read(&fcport->shadow_disc_state);
+		if (old_val == atomic_cmpxchg(&fcport->shadow_disc_state,
+		    old_val, (old_val << shiftbits) | state)) {
+			ql_dbg(ql_dbg_disc, fcport->vha, 0x2134,
+			    "FCPort %8phC disc_state transition: %s to %s - portid=%06x.\n",
+			    fcport->port_name, port_dstate_str[old_val & mask],
+			    port_dstate_str[state], fcport->d_id.b24);
+			return;
+		}
+	}
+}
+
 static inline int
 qla2x00_hba_err_chk_enabled(srb_t *sp)
 {
@@ -152,6 +176,18 @@ qla2x00_chip_is_down(scsi_qla_host_t *vha)
 	return (qla2x00_reset_active(vha) || !vha->hw->flags.fw_started);
 }
 
+static void qla2xxx_init_sp(srb_t *sp, scsi_qla_host_t *vha,
+			    struct qla_qpair *qpair, fc_port_t *fcport)
+{
+	memset(sp, 0, sizeof(*sp));
+	sp->fcport = fcport;
+	sp->iocbs = 1;
+	sp->vha = vha;
+	sp->qpair = qpair;
+	sp->cmd_type = TYPE_SRB;
+	INIT_LIST_HEAD(&sp->elem);
+}
+
 static inline srb_t *
 qla2xxx_get_qpair_sp(scsi_qla_host_t *vha, struct qla_qpair *qpair,
     fc_port_t *fcport, gfp_t flag)
@@ -164,19 +200,9 @@ qla2xxx_get_qpair_sp(scsi_qla_host_t *vha, struct qla_qpair *qpair,
 		return NULL;
 
 	sp = mempool_alloc(qpair->srb_mempool, flag);
-	if (!sp)
-		goto done;
-
-	memset(sp, 0, sizeof(*sp));
-	sp->fcport = fcport;
-	sp->iocbs = 1;
-	sp->vha = vha;
-	sp->qpair = qpair;
-	sp->cmd_type = TYPE_SRB;
-	INIT_LIST_HEAD(&sp->elem);
-
-done:
-	if (!sp)
+	if (sp)
+		qla2xxx_init_sp(sp, vha, qpair, fcport);
+	else
 		QLA_QPAIR_MARK_NOT_BUSY(qpair);
 	return sp;
 }
@@ -304,4 +330,16 @@ qla_83xx_start_iocbs(struct qla_qpair *qpair)
 		req->ring_ptr++;
 
 	WRT_REG_DWORD(req->req_q_in, req->ring_index);
+}
+
+static inline int
+qla2xxx_get_fc4_priority(struct scsi_qla_host *vha)
+{
+	uint32_t data;
+
+	data =
+	    ((uint8_t *)vha->hw->nvram)[NVRAM_DUAL_FCP_NVME_FLAG_OFFSET];
+
+
+	return (data >> 6) & BIT_0 ? FC4_PRIORITY_FCP : FC4_PRIORITY_NVME;
 }

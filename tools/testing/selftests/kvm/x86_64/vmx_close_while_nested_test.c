@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * vmx_close_while_nested
  *
  * Copyright (C) 2019, Red Hat, Inc.
- *
- * This work is licensed under the terms of the GNU GPL, version 2.
  *
  * Verify that nothing bad happens if a KVM user exits with open
  * file descriptors while executing a nested guest.
@@ -54,12 +53,8 @@ static void l1_guest_code(struct vmx_pages *vmx_pages)
 int main(int argc, char *argv[])
 {
 	vm_vaddr_t vmx_pages_gva;
-	struct kvm_cpuid_entry2 *entry = kvm_get_supported_cpuid_entry(1);
 
-	if (!(entry->ecx & CPUID_VMX)) {
-		fprintf(stderr, "nested VMX not enabled, skipping test\n");
-		exit(KSFT_SKIP);
-	}
+	nested_vmx_check_supported();
 
 	vm = vm_create_default(VCPU_ID, 0, (void *) l1_guest_code);
 	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
@@ -83,10 +78,10 @@ int main(int argc, char *argv[])
 
 		switch (get_ucall(vm, VCPU_ID, &uc)) {
 		case UCALL_ABORT:
-			TEST_ASSERT(false, "%s", (const char *)uc.args[0]);
+			TEST_FAIL("%s", (const char *)uc.args[0]);
 			/* NOT REACHED */
 		default:
-			TEST_ASSERT(false, "Unknown ucall 0x%x.", uc.cmd);
+			TEST_FAIL("Unknown ucall %lu", uc.cmd);
 		}
 	}
 }

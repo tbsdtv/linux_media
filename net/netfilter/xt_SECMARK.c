@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Module for modifying the secmark field of the skb, for use by
  * security subsystems.
@@ -6,11 +7,6 @@
  * (C) 1999-2001 Marc Boucher <marc@mbsi.ca>
  *
  * (C) 2006,2008 Red Hat, Inc., James Morris <jmorris@redhat.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/module.h>
@@ -24,8 +20,6 @@ MODULE_AUTHOR("James Morris <jmorris@redhat.com>");
 MODULE_DESCRIPTION("Xtables: packet security mark modification");
 MODULE_ALIAS("ipt_SECMARK");
 MODULE_ALIAS("ip6t_SECMARK");
-
-#define PFX "SECMARK: "
 
 static u8 mode;
 

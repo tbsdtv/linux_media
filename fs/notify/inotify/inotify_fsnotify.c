@@ -39,7 +39,7 @@ static bool event_compare(struct fsnotify_event *old_fsn,
 	if (old->mask & FS_IN_IGNORED)
 		return false;
 	if ((old->mask == new->mask) &&
-	    (old_fsn->inode == new_fsn->inode) &&
+	    (old_fsn->objectid == new_fsn->objectid) &&
 	    (old->name_len == new->name_len) &&
 	    (!old->name_len || !strcmp(old->name, new->name)))
 		return true;
@@ -61,6 +61,7 @@ int inotify_handle_event(struct fsnotify_group *group,
 			 const struct qstr *file_name, u32 cookie,
 			 struct fsnotify_iter_info *iter_info)
 {
+	const struct path *path = fsnotify_data_path(data, data_type);
 	struct fsnotify_mark *inode_mark = fsnotify_iter_inode_mark(iter_info);
 	struct inotify_inode_mark *i_mark;
 	struct inotify_event_info *event;
@@ -73,12 +74,9 @@ int inotify_handle_event(struct fsnotify_group *group,
 		return 0;
 
 	if ((inode_mark->mask & FS_EXCL_UNLINK) &&
-	    (data_type == FSNOTIFY_EVENT_PATH)) {
-		const struct path *path = data;
+	    path && d_unlinked(path->dentry))
+		return 0;
 
-		if (d_unlinked(path->dentry))
-			return 0;
-	}
 	if (file_name) {
 		len = file_name->len;
 		alloc_len += len + 1;
@@ -90,9 +88,13 @@ int inotify_handle_event(struct fsnotify_group *group,
 	i_mark = container_of(inode_mark, struct inotify_inode_mark,
 			      fsn_mark);
 
-	/* Whoever is interested in the event, pays for the allocation. */
+	/*
+	 * Whoever is interested in the event, pays for the allocation. Do not
+	 * trigger OOM killer in the target monitoring memcg as it may have
+	 * security repercussion.
+	 */
 	memalloc_use_memcg(group->memcg);
-	event = kmalloc(alloc_len, GFP_KERNEL_ACCOUNT);
+	event = kmalloc(alloc_len, GFP_KERNEL_ACCOUNT | __GFP_RETRY_MAYFAIL);
 	memalloc_unuse_memcg();
 
 	if (unlikely(!event)) {
@@ -114,7 +116,7 @@ int inotify_handle_event(struct fsnotify_group *group,
 		mask &= ~IN_ISDIR;
 
 	fsn_event = &event->fse;
-	fsnotify_init_event(fsn_event, inode);
+	fsnotify_init_event(fsn_event, (unsigned long)inode);
 	event->mask = mask;
 	event->wd = i_mark->wd;
 	event->sync_cookie = cookie;

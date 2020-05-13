@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2007-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2007-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
  */
@@ -314,25 +314,11 @@ static const struct file_operations batadv_fops = {
 /**
  * batadv_socket_setup() - Create debugfs "socket" file
  * @bat_priv: the bat priv with all the soft interface information
- *
- * Return: 0 on success or negative error number in case of failure
  */
-int batadv_socket_setup(struct batadv_priv *bat_priv)
+void batadv_socket_setup(struct batadv_priv *bat_priv)
 {
-	struct dentry *d;
-
-	if (!bat_priv->debug_dir)
-		goto err;
-
-	d = debugfs_create_file(BATADV_ICMP_SOCKET, 0600, bat_priv->debug_dir,
-				bat_priv, &batadv_fops);
-	if (!d)
-		goto err;
-
-	return 0;
-
-err:
-	return -ENOMEM;
+	debugfs_create_file(BATADV_ICMP_SOCKET, 0600, bat_priv->debug_dir,
+			    bat_priv, &batadv_fops);
 }
 
 /**

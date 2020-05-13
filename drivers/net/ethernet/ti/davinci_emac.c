@@ -481,6 +481,7 @@ static int emac_set_coalesce(struct net_device *ndev,
  * Ethtool support for EMAC adapter
  */
 static const struct ethtool_ops ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS,
 	.get_drvinfo = emac_get_drvinfo,
 	.get_link = ethtool_op_get_link,
 	.get_coalesce = emac_get_coalesce,
@@ -983,7 +984,7 @@ fail_tx:
  * error and re-initialize the TX channel for hardware operation
  *
  */
-static void emac_dev_tx_timeout(struct net_device *ndev)
+static void emac_dev_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 {
 	struct emac_priv *priv = netdev_priv(ndev);
 	struct device *emac_dev = &ndev->dev;
@@ -1371,7 +1372,7 @@ static int emac_devioctl(struct net_device *ndev, struct ifreq *ifrq, int cmd)
 		return -EOPNOTSUPP;
 }
 
-static int match_first_device(struct device *dev, void *data)
+static int match_first_device(struct device *dev, const void *data)
 {
 	if (dev->parent && dev->parent->of_node)
 		return of_device_is_compatible(dev->parent->of_node,
@@ -1428,8 +1429,8 @@ static int emac_dev_open(struct net_device *ndev)
 		if (!skb)
 			break;
 
-		ret = cpdma_chan_submit(priv->rxchan, skb, skb->data,
-					skb_tailroom(skb), 0);
+		ret = cpdma_chan_idle_submit(priv->rxchan, skb, skb->data,
+					     skb_tailroom(skb), 0);
 		if (WARN_ON(ret < 0))
 			break;
 	}

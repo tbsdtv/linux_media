@@ -256,6 +256,7 @@
 /* RESET */
 #define CSR_RESET_REG_FLAG_NEVO_RESET                (0x00000001)
 #define CSR_RESET_REG_FLAG_FORCE_NMI                 (0x00000002)
+#define CSR_RESET_REG_FLAG_SW_RESET		     (0x00000080)
 #define CSR_RESET_REG_FLAG_MASTER_DISABLED           (0x00000100)
 #define CSR_RESET_REG_FLAG_STOP_MASTER               (0x00000200)
 #define CSR_RESET_LINK_PWR_MGMT_DISABLED             (0x80000000)
@@ -278,9 +279,34 @@
  *     4:  GOING_TO_SLEEP
  *         Indicates MAC is entering a power-saving sleep power-down.
  *         Not a good time to access device-internal resources.
+ *     3:  MAC_ACCESS_REQ
+ *         Host sets this to request and maintain MAC wakeup, to allow host
+ *         access to device-internal resources.  Host must wait for
+ *         MAC_CLOCK_READY (and !GOING_TO_SLEEP) before accessing non-CSR
+ *         device registers.
+ *     2:  INIT_DONE
+ *         Host sets this to put device into fully operational D0 power mode.
+ *         Host resets this after SW_RESET to put device into low power mode.
+ *     0:  MAC_CLOCK_READY
+ *         Indicates MAC (ucode processor, etc.) is powered up and can run.
+ *         Internal resources are accessible.
+ *         NOTE:  This does not indicate that the processor is actually running.
+ *         NOTE:  This does not indicate that device has completed
+ *                init or post-power-down restore of internal SRAM memory.
+ *                Use CSR_UCODE_DRV_GP1_BIT_MAC_SLEEP as indication that
+ *                SRAM is restored and uCode is in normal operation mode.
+ *                Later devices (5xxx/6xxx/1xxx) use non-volatile SRAM, and
+ *                do not need to save/restore it.
+ *         NOTE:  After device reset, this bit remains "0" until host sets
+ *                INIT_DONE
  */
-#define CSR_GP_CNTRL_REG_FLAG_GOING_TO_SLEEP         (0x00000010)
+#define CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY	     (0x00000001)
+#define CSR_GP_CNTRL_REG_FLAG_INIT_DONE		     (0x00000004)
+#define CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ	     (0x00000008)
+#define CSR_GP_CNTRL_REG_FLAG_GOING_TO_SLEEP	     (0x00000010)
 #define CSR_GP_CNTRL_REG_FLAG_XTAL_ON		     (0x00000400)
+
+#define CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN	     (0x00000001)
 
 #define CSR_GP_CNTRL_REG_MSK_POWER_SAVE_TYPE         (0x07000000)
 #define CSR_GP_CNTRL_REG_FLAG_RFKILL_WAKE_L1A_EN     (0x04000000)
@@ -328,6 +354,8 @@ enum {
 #define CSR_HW_REV_TYPE_NONE		(0x00001F0)
 #define CSR_HW_REV_TYPE_QNJ		(0x0000360)
 #define CSR_HW_REV_TYPE_QNJ_B0		(0x0000364)
+#define CSR_HW_REV_TYPE_QU_B0		(0x0000334)
+#define CSR_HW_REV_TYPE_QU_C0		(0x0000338)
 #define CSR_HW_REV_TYPE_QUZ		(0x0000354)
 #define CSR_HW_REV_TYPE_HR_CDB		(0x0000340)
 #define CSR_HW_REV_TYPE_SO		(0x0000370)
@@ -336,6 +364,7 @@ enum {
 /* RF_ID value */
 #define CSR_HW_RF_ID_TYPE_JF		(0x00105100)
 #define CSR_HW_RF_ID_TYPE_HR		(0x0010A000)
+#define CSR_HW_RF_ID_TYPE_HR1		(0x0010c100)
 #define CSR_HW_RF_ID_TYPE_HRCDB		(0x00109F00)
 #define CSR_HW_RF_ID_TYPE_GF		(0x0010D000)
 #define CSR_HW_RF_ID_TYPE_GF4		(0x0010E000)
@@ -375,7 +404,7 @@ enum {
 
 
 /* CSR GIO */
-#define CSR_GIO_REG_VAL_L0S_ENABLED	(0x00000002)
+#define CSR_GIO_REG_VAL_L0S_DISABLED	(0x00000002)
 
 /*
  * UCODE-DRIVER GP (general purpose) mailbox register 1
@@ -599,9 +628,7 @@ enum msix_fh_int_causes {
 enum msix_hw_int_causes {
 	MSIX_HW_INT_CAUSES_REG_ALIVE		= BIT(0),
 	MSIX_HW_INT_CAUSES_REG_WAKEUP		= BIT(1),
-	MSIX_HW_INT_CAUSES_REG_IPC		= BIT(1),
 	MSIX_HW_INT_CAUSES_REG_IML              = BIT(2),
-	MSIX_HW_INT_CAUSES_REG_SW_ERR_V2	= BIT(5),
 	MSIX_HW_INT_CAUSES_REG_CT_KILL		= BIT(6),
 	MSIX_HW_INT_CAUSES_REG_RF_KILL		= BIT(7),
 	MSIX_HW_INT_CAUSES_REG_PERIODIC		= BIT(8),

@@ -10,6 +10,7 @@
 
 #include <linux/stmmac.h>
 #include "common.h"
+#include "dwmac4.h"
 #include "dwmac4_descs.h"
 
 static int dwmac4_wrback_get_tx_status(void *data, struct stmmac_extra_stats *x,
@@ -83,9 +84,10 @@ static int dwmac4_wrback_get_rx_status(void *data, struct stmmac_extra_stats *x,
 	if (unlikely(rdes3 & RDES3_OWN))
 		return dma_own;
 
-	/* Verify rx error by looking at the last segment. */
-	if (likely(!(rdes3 & RDES3_LAST_DESCRIPTOR)))
+	if (unlikely(rdes3 & RDES3_CONTEXT_DESCRIPTOR))
 		return discard_frame;
+	if (likely(!(rdes3 & RDES3_LAST_DESCRIPTOR)))
+		return rx_not_ls;
 
 	if (unlikely(rdes3 & RDES3_ERROR_SUMMARY)) {
 		if (unlikely(rdes3 & RDES3_GIANT_PACKET))
@@ -188,7 +190,7 @@ static void dwmac4_set_tx_owner(struct dma_desc *p)
 
 static void dwmac4_set_rx_owner(struct dma_desc *p, int disable_rx_ic)
 {
-	p->des3 = cpu_to_le32(RDES3_OWN | RDES3_BUFFER1_VALID_ADDR);
+	p->des3 |= cpu_to_le32(RDES3_OWN | RDES3_BUFFER1_VALID_ADDR);
 
 	if (!disable_rx_ic)
 		p->des3 |= cpu_to_le32(RDES3_INT_ON_COMPLETION_EN);
@@ -431,8 +433,8 @@ static void dwmac4_get_addr(struct dma_desc *p, unsigned int *addr)
 
 static void dwmac4_set_addr(struct dma_desc *p, dma_addr_t addr)
 {
-	p->des0 = cpu_to_le32(addr);
-	p->des1 = 0;
+	p->des0 = cpu_to_le32(lower_32_bits(addr));
+	p->des1 = cpu_to_le32(upper_32_bits(addr));
 }
 
 static void dwmac4_clear(struct dma_desc *p)
@@ -441,6 +443,75 @@ static void dwmac4_clear(struct dma_desc *p)
 	p->des1 = 0;
 	p->des2 = 0;
 	p->des3 = 0;
+}
+
+static void dwmac4_set_sarc(struct dma_desc *p, u32 sarc_type)
+{
+	sarc_type <<= TDES3_SA_INSERT_CTRL_SHIFT;
+
+	p->des3 |= cpu_to_le32(sarc_type & TDES3_SA_INSERT_CTRL_MASK);
+}
+
+static int set_16kib_bfsize(int mtu)
+{
+	int ret = 0;
+
+	if (unlikely(mtu >= BUF_SIZE_8KiB))
+		ret = BUF_SIZE_16KiB;
+	return ret;
+}
+
+static void dwmac4_set_vlan_tag(struct dma_desc *p, u16 tag, u16 inner_tag,
+				u32 inner_type)
+{
+	p->des0 = 0;
+	p->des1 = 0;
+	p->des2 = 0;
+	p->des3 = 0;
+
+	/* Inner VLAN */
+	if (inner_type) {
+		u32 des = inner_tag << TDES2_IVT_SHIFT;
+
+		des &= TDES2_IVT_MASK;
+		p->des2 = cpu_to_le32(des);
+
+		des = inner_type << TDES3_IVTIR_SHIFT;
+		des &= TDES3_IVTIR_MASK;
+		p->des3 = cpu_to_le32(des | TDES3_IVLTV);
+	}
+
+	/* Outer VLAN */
+	p->des3 |= cpu_to_le32(tag & TDES3_VLAN_TAG);
+	p->des3 |= cpu_to_le32(TDES3_VLTV);
+
+	p->des3 |= cpu_to_le32(TDES3_CONTEXT_TYPE);
+}
+
+static void dwmac4_set_vlan(struct dma_desc *p, u32 type)
+{
+	type <<= TDES2_VLAN_TAG_SHIFT;
+	p->des2 |= cpu_to_le32(type & TDES2_VLAN_TAG_MASK);
+}
+
+static int dwmac4_get_rx_header_len(struct dma_desc *p, unsigned int *len)
+{
+	*len = le32_to_cpu(p->des2) & RDES2_HL;
+	return 0;
+}
+
+static void dwmac4_set_sec_addr(struct dma_desc *p, dma_addr_t addr)
+{
+	p->des2 = cpu_to_le32(lower_32_bits(addr));
+	p->des3 = cpu_to_le32(upper_32_bits(addr) | RDES3_BUFFER2_VALID_ADDR);
+}
+
+static void dwmac4_set_tbs(struct dma_edesc *p, u32 sec, u32 nsec)
+{
+	p->des4 = cpu_to_le32((sec & TDES4_LT) | TDES4_LTV);
+	p->des5 = cpu_to_le32(nsec & TDES5_LT);
+	p->des6 = 0;
+	p->des7 = 0;
 }
 
 const struct stmmac_desc_ops dwmac4_desc_ops = {
@@ -467,6 +538,14 @@ const struct stmmac_desc_ops dwmac4_desc_ops = {
 	.get_addr = dwmac4_get_addr,
 	.set_addr = dwmac4_set_addr,
 	.clear = dwmac4_clear,
+	.set_sarc = dwmac4_set_sarc,
+	.set_vlan_tag = dwmac4_set_vlan_tag,
+	.set_vlan = dwmac4_set_vlan,
+	.get_rx_header_len = dwmac4_get_rx_header_len,
+	.set_sec_addr = dwmac4_set_sec_addr,
+	.set_tbs = dwmac4_set_tbs,
 };
 
-const struct stmmac_mode_ops dwmac4_ring_mode_ops = { };
+const struct stmmac_mode_ops dwmac4_ring_mode_ops = {
+	.set_16kib_bfsize = set_16kib_bfsize,
+};

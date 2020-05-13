@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Cluster IP hashmark target
  * (C) 2003-2004 by Harald Welte <laforge@netfilter.org>
  * based on ideas of Fabio Olive Leite <olive@unixforge.org>
  *
  * Development of this code funded by SuSE Linux AG, http://www.suse.com/
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/module.h>
@@ -62,7 +58,7 @@ struct clusterip_config {
 };
 
 #ifdef CONFIG_PROC_FS
-static const struct file_operations clusterip_proc_fops;
+static const struct proc_ops clusterip_proc_ops;
 #endif
 
 struct clusterip_net {
@@ -284,7 +280,7 @@ clusterip_config_init(struct net *net, const struct ipt_clusterip_tgt_info *i,
 		mutex_lock(&cn->mutex);
 		c->pde = proc_create_data(buffer, 0600,
 					  cn->procdir,
-					  &clusterip_proc_fops, c);
+					  &clusterip_proc_ops, c);
 		mutex_unlock(&cn->mutex);
 		if (!c->pde) {
 			err = -ENOMEM;
@@ -420,8 +416,8 @@ clusterip_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	     ctinfo == IP_CT_RELATED_REPLY))
 		return XT_CONTINUE;
 
-	/* ip_conntrack_icmp guarantees us that we only have ICMP_ECHO,
-	 * TIMESTAMP, INFO_REQUEST or ADDRESS type icmp packets from here
+	/* nf_conntrack_proto_icmp guarantees us that we only have ICMP_ECHO,
+	 * TIMESTAMP, INFO_REQUEST or ICMP_ADDRESS type icmp packets from here
 	 * on, which all have an ID field [relevant for hashing]. */
 
 	hash = clusterip_hashfn(skb, cipinfo->config);
@@ -808,12 +804,12 @@ static ssize_t clusterip_proc_write(struct file *file, const char __user *input,
 	return size;
 }
 
-static const struct file_operations clusterip_proc_fops = {
-	.open	 = clusterip_proc_open,
-	.read	 = seq_read,
-	.write	 = clusterip_proc_write,
-	.llseek	 = seq_lseek,
-	.release = clusterip_proc_release,
+static const struct proc_ops clusterip_proc_ops = {
+	.proc_open	= clusterip_proc_open,
+	.proc_read	= seq_read,
+	.proc_write	= clusterip_proc_write,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= clusterip_proc_release,
 };
 
 #endif /* CONFIG_PROC_FS */

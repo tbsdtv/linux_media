@@ -1,21 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for the Atmel Extensible DMA Controller (aka XDMAC on AT91 systems)
  *
  * Copyright (C) 2014 Atmel Corporation
  *
  * Author: Ludovic Desroches <ludovic.desroches@atmel.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <asm/barrier.h>
@@ -1554,9 +1543,6 @@ static void at_xdmac_remove_xfer(struct at_xdmac_chan *atchan,
 static void at_xdmac_advance_work(struct at_xdmac_chan *atchan)
 {
 	struct at_xdmac_desc	*desc;
-	unsigned long		flags;
-
-	spin_lock_irqsave(&atchan->lock, flags);
 
 	/*
 	 * If channel is enabled, do nothing, advance_work will be triggered
@@ -1570,8 +1556,6 @@ static void at_xdmac_advance_work(struct at_xdmac_chan *atchan)
 		if (!desc->active_xfer)
 			at_xdmac_start_xfer(atchan, desc);
 	}
-
-	spin_unlock_irqrestore(&atchan->lock, flags);
 }
 
 static void at_xdmac_handle_cyclic(struct at_xdmac_chan *atchan)
@@ -1579,11 +1563,14 @@ static void at_xdmac_handle_cyclic(struct at_xdmac_chan *atchan)
 	struct at_xdmac_desc		*desc;
 	struct dma_async_tx_descriptor	*txd;
 
-	desc = list_first_entry(&atchan->xfers_list, struct at_xdmac_desc, xfer_node);
-	txd = &desc->tx_dma_desc;
+	if (!list_empty(&atchan->xfers_list)) {
+		desc = list_first_entry(&atchan->xfers_list,
+					struct at_xdmac_desc, xfer_node);
+		txd = &desc->tx_dma_desc;
 
-	if (txd->flags & DMA_PREP_INTERRUPT)
-		dmaengine_desc_get_callback_invoke(txd, NULL);
+		if (txd->flags & DMA_PREP_INTERRUPT)
+			dmaengine_desc_get_callback_invoke(txd, NULL);
+	}
 }
 
 static void at_xdmac_handle_error(struct at_xdmac_chan *atchan)
@@ -1604,7 +1591,7 @@ static void at_xdmac_handle_error(struct at_xdmac_chan *atchan)
 	if (atchan->irq_status & AT_XDMAC_CIS_ROIS)
 		dev_err(chan2dev(&atchan->chan), "request overflow error!!!");
 
-	spin_lock_bh(&atchan->lock);
+	spin_lock_irq(&atchan->lock);
 
 	/* Channel must be disabled first as it's not done automatically */
 	at_xdmac_write(atxdmac, AT_XDMAC_GD, atchan->mask);
@@ -1615,7 +1602,7 @@ static void at_xdmac_handle_error(struct at_xdmac_chan *atchan)
 				    struct at_xdmac_desc,
 				    xfer_node);
 
-	spin_unlock_bh(&atchan->lock);
+	spin_unlock_irq(&atchan->lock);
 
 	/* Print bad descriptor's details if needed */
 	dev_dbg(chan2dev(&atchan->chan),
@@ -1648,31 +1635,31 @@ static void at_xdmac_tasklet(unsigned long data)
 		if (atchan->irq_status & error_mask)
 			at_xdmac_handle_error(atchan);
 
-		spin_lock(&atchan->lock);
+		spin_lock_irq(&atchan->lock);
 		desc = list_first_entry(&atchan->xfers_list,
 					struct at_xdmac_desc,
 					xfer_node);
 		dev_vdbg(chan2dev(&atchan->chan), "%s: desc 0x%p\n", __func__, desc);
 		if (!desc->active_xfer) {
 			dev_err(chan2dev(&atchan->chan), "Xfer not active: exiting");
-			spin_unlock(&atchan->lock);
+			spin_unlock_irq(&atchan->lock);
 			return;
 		}
 
 		txd = &desc->tx_dma_desc;
 
 		at_xdmac_remove_xfer(atchan, desc);
-		spin_unlock(&atchan->lock);
+		spin_unlock_irq(&atchan->lock);
 
-		if (!at_xdmac_chan_is_cyclic(atchan)) {
-			dma_cookie_complete(txd);
-			if (txd->flags & DMA_PREP_INTERRUPT)
-				dmaengine_desc_get_callback_invoke(txd, NULL);
-		}
+		dma_cookie_complete(txd);
+		if (txd->flags & DMA_PREP_INTERRUPT)
+			dmaengine_desc_get_callback_invoke(txd, NULL);
 
 		dma_run_dependencies(txd);
 
+		spin_lock_irq(&atchan->lock);
 		at_xdmac_advance_work(atchan);
+		spin_unlock_irq(&atchan->lock);
 	}
 }
 
@@ -1733,11 +1720,15 @@ static irqreturn_t at_xdmac_interrupt(int irq, void *dev_id)
 static void at_xdmac_issue_pending(struct dma_chan *chan)
 {
 	struct at_xdmac_chan *atchan = to_at_xdmac_chan(chan);
+	unsigned long flags;
 
 	dev_dbg(chan2dev(&atchan->chan), "%s\n", __func__);
 
-	if (!at_xdmac_chan_is_cyclic(atchan))
+	if (!at_xdmac_chan_is_cyclic(atchan)) {
+		spin_lock_irqsave(&atchan->lock, flags);
 		at_xdmac_advance_work(atchan);
+		spin_unlock_irqrestore(&atchan->lock, flags);
+	}
 
 	return;
 }
@@ -1830,26 +1821,21 @@ static int at_xdmac_alloc_chan_resources(struct dma_chan *chan)
 	struct at_xdmac_chan	*atchan = to_at_xdmac_chan(chan);
 	struct at_xdmac_desc	*desc;
 	int			i;
-	unsigned long		flags;
-
-	spin_lock_irqsave(&atchan->lock, flags);
 
 	if (at_xdmac_chan_is_enabled(atchan)) {
 		dev_err(chan2dev(chan),
 			"can't allocate channel resources (channel enabled)\n");
-		i = -EIO;
-		goto spin_unlock;
+		return -EIO;
 	}
 
 	if (!list_empty(&atchan->free_descs_list)) {
 		dev_err(chan2dev(chan),
 			"can't allocate channel resources (channel not free from a previous use)\n");
-		i = -EIO;
-		goto spin_unlock;
+		return -EIO;
 	}
 
 	for (i = 0; i < init_nr_desc_per_channel; i++) {
-		desc = at_xdmac_alloc_desc(chan, GFP_ATOMIC);
+		desc = at_xdmac_alloc_desc(chan, GFP_KERNEL);
 		if (!desc) {
 			dev_warn(chan2dev(chan),
 				"only %d descriptors have been allocated\n", i);
@@ -1862,8 +1848,6 @@ static int at_xdmac_alloc_chan_resources(struct dma_chan *chan)
 
 	dev_dbg(chan2dev(chan), "%s: allocated %d descriptors\n", __func__, i);
 
-spin_unlock:
-	spin_unlock_irqrestore(&atchan->lock, flags);
 	return i;
 }
 
@@ -1965,21 +1949,16 @@ static int atmel_xdmac_resume(struct device *dev)
 
 static int at_xdmac_probe(struct platform_device *pdev)
 {
-	struct resource	*res;
 	struct at_xdmac	*atxdmac;
 	int		irq, size, nr_channels, i, ret;
 	void __iomem	*base;
 	u32		reg;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res)
-		return -EINVAL;
-
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return irq;
 
-	base = devm_ioremap_resource(&pdev->dev, res);
+	base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 

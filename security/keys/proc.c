@@ -139,6 +139,8 @@ static void *proc_keys_next(struct seq_file *p, void *v, loff_t *_pos)
 	n = key_serial_next(p, v);
 	if (n)
 		*_pos = key_node_serial(n);
+	else
+		(*_pos)++;
 	return n;
 }
 
@@ -166,7 +168,8 @@ static int proc_keys_show(struct seq_file *m, void *v)
 		.match_data.cmp		= lookup_user_key_possessed,
 		.match_data.raw_data	= key,
 		.match_data.lookup_type	= KEYRING_SEARCH_LOOKUP_DIRECT,
-		.flags			= KEYRING_SEARCH_NO_STATE_CHECK,
+		.flags			= (KEYRING_SEARCH_NO_STATE_CHECK |
+					   KEYRING_SEARCH_RECURSE),
 	};
 
 	key_ref = make_key_ref(key, 0);
@@ -175,7 +178,9 @@ static int proc_keys_show(struct seq_file *m, void *v)
 	 * skip if the key does not indicate the possessor can view it
 	 */
 	if (key->perm & KEY_POS_VIEW) {
-		skey_ref = search_my_process_keyrings(&ctx);
+		rcu_read_lock();
+		skey_ref = search_cred_keyrings_rcu(&ctx);
+		rcu_read_unlock();
 		if (!IS_ERR(skey_ref)) {
 			key_ref_put(skey_ref);
 			key_ref = make_key_ref(key, 1);

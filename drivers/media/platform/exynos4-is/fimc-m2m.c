@@ -247,7 +247,6 @@ static int fimc_m2m_enum_fmt(struct file *file, void *priv,
 	if (!fmt)
 		return -EINVAL;
 
-	strscpy(f->description, fmt->name, sizeof(f->description));
 	f->pixelformat = fmt->fourcc;
 	return 0;
 }
@@ -747,7 +746,7 @@ int fimc_register_m2m_device(struct fimc_dev *fimc,
 	if (ret)
 		goto err_me;
 
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(vfd, VFL_TYPE_VIDEO, -1);
 	if (ret)
 		goto err_vd;
 

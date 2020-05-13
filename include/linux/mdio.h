@@ -1,10 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * linux/mdio.h: definitions for MDIO (clause 45) transceivers
  * Copyright 2006-2009 Solarflare Communications Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, incorporated herein by reference.
  */
 #ifndef __LINUX_MDIO_H__
 #define __LINUX_MDIO_H__
@@ -70,6 +67,17 @@ struct mdio_driver {
 };
 #define to_mdio_driver(d)						\
 	container_of(to_mdio_common_driver(d), struct mdio_driver, mdiodrv)
+
+/* device driver data */
+static inline void mdiodev_set_drvdata(struct mdio_device *mdio, void *data)
+{
+	dev_set_drvdata(&mdio->dev, data);
+}
+
+static inline void *mdiodev_get_drvdata(struct mdio_device *mdio)
+{
+	return dev_get_drvdata(&mdio->dev);
+}
 
 void mdio_device_free(struct mdio_device *mdiodev);
 struct mdio_device *mdio_device_create(struct mii_bus *bus, int addr);
@@ -308,11 +316,15 @@ static inline void mii_10gbt_stat_mod_linkmode_lpa_t(unsigned long *advertising,
 
 int __mdiobus_read(struct mii_bus *bus, int addr, u32 regnum);
 int __mdiobus_write(struct mii_bus *bus, int addr, u32 regnum, u16 val);
+int __mdiobus_modify_changed(struct mii_bus *bus, int addr, u32 regnum,
+			     u16 mask, u16 set);
 
 int mdiobus_read(struct mii_bus *bus, int addr, u32 regnum);
 int mdiobus_read_nested(struct mii_bus *bus, int addr, u32 regnum);
 int mdiobus_write(struct mii_bus *bus, int addr, u32 regnum, u16 val);
 int mdiobus_write_nested(struct mii_bus *bus, int addr, u32 regnum, u16 val);
+int mdiobus_modify(struct mii_bus *bus, int addr, u32 regnum, u16 mask,
+		   u16 set);
 
 int mdiobus_register_device(struct mdio_device *mdiodev);
 int mdiobus_unregister_device(struct mdio_device *mdiodev);

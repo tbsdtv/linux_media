@@ -15,6 +15,7 @@
 #define PCI_SLOT_ID_PREFIX	(1UL << 63)
 #define PCI_SLOT_ID(phb_id, bdfn)	\
 	(PCI_SLOT_ID_PREFIX | ((uint64_t)(bdfn) << 16) | (phb_id))
+#define PCI_PHB_SLOT_ID(phb_id)		(phb_id)
 
 extern int pnv_pci_get_slot_id(struct device_node *np, uint64_t *id);
 extern int pnv_pci_get_device_tree(uint32_t phandle, void *buf, uint64_t len);
@@ -22,15 +23,9 @@ extern int pnv_pci_get_presence_state(uint64_t id, uint8_t *state);
 extern int pnv_pci_get_power_state(uint64_t id, uint8_t *state);
 extern int pnv_pci_set_power_state(uint64_t id, uint8_t state,
 				   struct opal_msg *msg);
-extern int pnv_pci_set_p2p(struct pci_dev *initiator, struct pci_dev *target,
-			   u64 desc);
 
-extern int pnv_pci_enable_tunnel(struct pci_dev *dev, uint64_t *asnind);
-extern int pnv_pci_disable_tunnel(struct pci_dev *dev);
 extern int pnv_pci_set_tunnel_bar(struct pci_dev *dev, uint64_t addr,
 				  int enable);
-extern int pnv_pci_get_as_notify_info(struct task_struct *task, u32 *lpid,
-				      u32 *pid, u32 *tid);
 int pnv_phb_to_cxl_mode(struct pci_dev *dev, uint64_t mode);
 int pnv_cxl_ioda_msi_setup(struct pci_dev *dev, unsigned int hwirq,
 			   unsigned int virq);

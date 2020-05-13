@@ -20,7 +20,8 @@
 #include <sys/stat.h>
 #include <sys/vfs.h>
 
-#include <bpf.h>
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h> /* libbpf_num_possible_cpus */
 
 #include "main.h"
 
@@ -28,7 +29,7 @@
 #define BPF_FS_MAGIC		0xcafe4a11
 #endif
 
-void __printf(1, 2) p_err(const char *fmt, ...)
+void p_err(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -46,7 +47,7 @@ void __printf(1, 2) p_err(const char *fmt, ...)
 	va_end(ap);
 }
 
-void __printf(1, 2) p_info(const char *fmt, ...)
+void p_info(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -203,42 +204,21 @@ int do_pin_fd(int fd, const char *name)
 	if (err)
 		return err;
 
-	return bpf_obj_pin(fd, name);
+	err = bpf_obj_pin(fd, name);
+	if (err)
+		p_err("can't pin the object (%s): %s", name, strerror(errno));
+
+	return err;
 }
 
-int do_pin_any(int argc, char **argv, int (*get_fd_by_id)(__u32))
+int do_pin_any(int argc, char **argv, int (*get_fd)(int *, char ***))
 {
-	unsigned int id;
-	char *endptr;
 	int err;
 	int fd;
 
-	if (argc < 3) {
-		p_err("too few arguments, id ID and FILE path is required");
-		return -1;
-	} else if (argc > 3) {
-		p_err("too many arguments");
-		return -1;
-	}
-
-	if (!is_prefix(*argv, "id")) {
-		p_err("expected 'id' got %s", *argv);
-		return -1;
-	}
-	NEXT_ARG();
-
-	id = strtoul(*argv, &endptr, 0);
-	if (*endptr) {
-		p_err("can't parse %s as ID", *argv);
-		return -1;
-	}
-	NEXT_ARG();
-
-	fd = get_fd_by_id(id);
-	if (fd < 0) {
-		p_err("can't get prog by id (%u): %s", id, strerror(errno));
-		return -1;
-	}
+	fd = get_fd(&argc, &argv);
+	if (fd < 0)
+		return fd;
 
 	err = do_pin_fd(fd, *argv);
 
@@ -439,57 +419,13 @@ unsigned int get_page_size(void)
 
 unsigned int get_possible_cpus(void)
 {
-	static unsigned int result;
-	char buf[128];
-	long int n;
-	char *ptr;
-	int fd;
+	int cpus = libbpf_num_possible_cpus();
 
-	if (result)
-		return result;
-
-	fd = open("/sys/devices/system/cpu/possible", O_RDONLY);
-	if (fd < 0) {
-		p_err("can't open sysfs possible cpus");
+	if (cpus < 0) {
+		p_err("Can't get # of possible cpus: %s", strerror(-cpus));
 		exit(-1);
 	}
-
-	n = read(fd, buf, sizeof(buf));
-	if (n < 2) {
-		p_err("can't read sysfs possible cpus");
-		exit(-1);
-	}
-	close(fd);
-
-	if (n == sizeof(buf)) {
-		p_err("read sysfs possible cpus overflow");
-		exit(-1);
-	}
-
-	ptr = buf;
-	n = 0;
-	while (*ptr && *ptr != '\n') {
-		unsigned int a, b;
-
-		if (sscanf(ptr, "%u-%u", &a, &b) == 2) {
-			n += b - a + 1;
-
-			ptr = strchr(ptr, '-') + 1;
-		} else if (sscanf(ptr, "%u", &a) == 1) {
-			n++;
-		} else {
-			assert(0);
-		}
-
-		while (isdigit(*ptr))
-			ptr++;
-		if (*ptr == ',')
-			ptr++;
-	}
-
-	result = n;
-
-	return result;
+	return cpus;
 }
 
 static char *
@@ -635,4 +571,11 @@ int parse_u32_arg(int *argc, char ***argv, __u32 *val, const char *what)
 	NEXT_ARGP();
 
 	return 0;
+}
+
+int __printf(2, 0)
+print_all_levels(__maybe_unused enum libbpf_print_level level,
+		 const char *format, va_list args)
+{
+	return vfprintf(stderr, format, args);
 }

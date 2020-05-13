@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Hardware definitions for PalmTX
  *
@@ -9,12 +10,7 @@
  *		Jan Herman <2hp@seznam.cz>
  *		Michal Hrusecky
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  * (find more info at www.hackndev.com)
- *
  */
 
 #include <linux/platform_device.h>
@@ -27,7 +23,6 @@
 #include <linux/gpio.h>
 #include <linux/wm97xx.h>
 #include <linux/power_supply.h>
-#include <linux/usb/gpio_vbus.h>
 #include <linux/mtd/platnand.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/physmap.h>

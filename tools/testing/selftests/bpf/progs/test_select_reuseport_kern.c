@@ -11,8 +11,8 @@
 #include <linux/types.h>
 #include <linux/if_ether.h>
 
-#include "bpf_endian.h"
-#include "bpf_helpers.h"
+#include <bpf/bpf_endian.h>
+#include <bpf/bpf_helpers.h>
 #include "test_select_reuseport_common.h"
 
 int _version SEC("version") = 1;
@@ -21,40 +21,40 @@ int _version SEC("version") = 1;
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #endif
 
-struct bpf_map_def SEC("maps") outer_map = {
-	.type = BPF_MAP_TYPE_ARRAY_OF_MAPS,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(__u32),
-	.max_entries = 1,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
+	__uint(max_entries, 1);
+	__uint(key_size, sizeof(__u32));
+	__uint(value_size, sizeof(__u32));
+} outer_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") result_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(__u32),
-	.max_entries = NR_RESULTS,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, NR_RESULTS);
+	__type(key, __u32);
+	__type(value, __u32);
+} result_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") tmp_index_ovr_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(int),
-	.max_entries = 1,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, int);
+} tmp_index_ovr_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") linum_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(__u32),
-	.max_entries = 1,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} linum_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") data_check_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(struct data_check),
-	.max_entries = 1,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct data_check);
+} data_check_map SEC(".maps");
 
 #define GOTO_DONE(_result) ({			\
 	result = (_result);			\
@@ -62,7 +62,7 @@ struct bpf_map_def SEC("maps") data_check_map = {
 	goto done;				\
 })
 
-SEC("select_by_skb_data")
+SEC("sk_reuseport")
 int _select_by_skb_data(struct sk_reuseport_md *reuse_md)
 {
 	__u32 linum, index = 0, flags = 0, index_zero = 0;
@@ -112,6 +112,12 @@ int _select_by_skb_data(struct sk_reuseport_md *reuse_md)
 
 		data_check.skb_ports[0] = th->source;
 		data_check.skb_ports[1] = th->dest;
+
+		if (th->fin)
+			/* The connection is being torn down at the end of a
+			 * test. It can't contain a cmd, so return early.
+			 */
+			return SK_PASS;
 
 		if ((th->doff << 2) + sizeof(*cmd) > data_check.len)
 			GOTO_DONE(DROP_ERR_SKB_DATA);

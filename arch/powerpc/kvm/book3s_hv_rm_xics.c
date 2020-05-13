@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2012 Michael Ellerman, IBM Corporation.
  * Copyright 2012 Benjamin Herrenschmidt, IBM Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -61,7 +58,7 @@ static inline void icp_send_hcore_msg(int hcore, struct kvm_vcpu *vcpu)
 	hcpu = hcore << threads_shift;
 	kvmppc_host_rm_ops_hv->rm_core[hcore].rm_data = vcpu;
 	smp_muxed_ipi_set_message(hcpu, PPC_MSG_RM_HOST_ACTION);
-	kvmppc_set_host_ipi(hcpu, 1);
+	kvmppc_set_host_ipi(hcpu);
 	smp_mb();
 	kvmhv_rm_send_ipi(hcpu);
 }

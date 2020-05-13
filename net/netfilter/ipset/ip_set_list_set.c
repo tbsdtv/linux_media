@@ -1,9 +1,5 @@
-/* Copyright (C) 2008-2013 Jozsef Kadlecsik <kadlec@blackhole.kfki.hu>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- */
+// SPDX-License-Identifier: GPL-2.0-only
+/* Copyright (C) 2008-2013 Jozsef Kadlecsik <kadlec@netfilter.org> */
 
 /* Kernel module implementing an IP set type: the list:set type */
 
@@ -22,7 +18,7 @@
 #define IPSET_TYPE_REV_MAX	3 /* skbinfo support added */
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Jozsef Kadlecsik <kadlec@blackhole.kfki.hu>");
+MODULE_AUTHOR("Jozsef Kadlecsik <kadlec@netfilter.org>");
 IP_SET_MODULE_DESC("list:set", IPSET_TYPE_REV_MIN, IPSET_TYPE_REV_MAX);
 MODULE_ALIAS("ip_set_list:set");
 
@@ -153,7 +149,7 @@ __list_set_del_rcu(struct rcu_head * rcu)
 	kfree(e);
 }
 
-static inline void
+static void
 list_set_del(struct ip_set *set, struct set_elem *e)
 {
 	struct list_set *map = set->data;
@@ -164,7 +160,7 @@ list_set_del(struct ip_set *set, struct set_elem *e)
 	call_rcu(&e->rcu, __list_set_del_rcu);
 }
 
-static inline void
+static void
 list_set_replace(struct ip_set *set, struct set_elem *e, struct set_elem *old)
 {
 	struct list_set *map = set->data;
@@ -292,7 +288,7 @@ list_set_uadd(struct ip_set *set, void *value, const struct ip_set_ext *ext,
 	if (n &&
 	    !(SET_WITH_TIMEOUT(set) &&
 	      ip_set_timeout_expired(ext_timeout(n, set))))
-		n =  NULL;
+		n = NULL;
 
 	e = kzalloc(set->dsize, GFP_ATOMIC);
 	if (!e)

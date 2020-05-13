@@ -260,9 +260,6 @@ nfp_flower_cmsg_process_one_rx(struct nfp_app *app, struct sk_buff *skb)
 
 	type = cmsg_hdr->type;
 	switch (type) {
-	case NFP_FLOWER_CMSG_TYPE_PORT_REIFY:
-		nfp_flower_cmsg_portreify_rx(app, skb);
-		break;
 	case NFP_FLOWER_CMSG_TYPE_PORT_MOD:
 		nfp_flower_cmsg_portmod_rx(app, skb);
 		break;
@@ -273,10 +270,16 @@ nfp_flower_cmsg_process_one_rx(struct nfp_app *app, struct sk_buff *skb)
 		}
 		goto err_default;
 	case NFP_FLOWER_CMSG_TYPE_NO_NEIGH:
-		nfp_tunnel_request_route(app, skb);
+		nfp_tunnel_request_route_v4(app, skb);
+		break;
+	case NFP_FLOWER_CMSG_TYPE_NO_NEIGH_V6:
+		nfp_tunnel_request_route_v6(app, skb);
 		break;
 	case NFP_FLOWER_CMSG_TYPE_ACTIVE_TUNS:
 		nfp_tunnel_keep_alive(app, skb);
+		break;
+	case NFP_FLOWER_CMSG_TYPE_ACTIVE_TUNS_V6:
+		nfp_tunnel_keep_alive_v6(app, skb);
 		break;
 	case NFP_FLOWER_CMSG_TYPE_QOS_STATS:
 		nfp_flower_stats_rlim_reply(app, skb);
@@ -328,8 +331,7 @@ nfp_flower_queue_ctl_msg(struct nfp_app *app, struct sk_buff *skb, int type)
 	struct nfp_flower_priv *priv = app->priv;
 	struct sk_buff_head *skb_head;
 
-	if (type == NFP_FLOWER_CMSG_TYPE_PORT_REIFY ||
-	    type == NFP_FLOWER_CMSG_TYPE_PORT_MOD)
+	if (type == NFP_FLOWER_CMSG_TYPE_PORT_MOD)
 		skb_head = &priv->cmsg_skbs_high;
 	else
 		skb_head = &priv->cmsg_skbs_low;
@@ -365,8 +367,13 @@ void nfp_flower_cmsg_rx(struct nfp_app *app, struct sk_buff *skb)
 		   nfp_flower_process_mtu_ack(app, skb)) {
 		/* Handle MTU acks outside wq to prevent RTNL conflict. */
 		dev_consume_skb_any(skb);
-	} else if (cmsg_hdr->type == NFP_FLOWER_CMSG_TYPE_TUN_NEIGH) {
+	} else if (cmsg_hdr->type == NFP_FLOWER_CMSG_TYPE_TUN_NEIGH ||
+		   cmsg_hdr->type == NFP_FLOWER_CMSG_TYPE_TUN_NEIGH_V6) {
 		/* Acks from the NFP that the route is added - ignore. */
+		dev_consume_skb_any(skb);
+	} else if (cmsg_hdr->type == NFP_FLOWER_CMSG_TYPE_PORT_REIFY) {
+		/* Handle REIFY acks outside wq to prevent RTNL conflict. */
+		nfp_flower_cmsg_portreify_rx(app, skb);
 		dev_consume_skb_any(skb);
 	} else {
 		nfp_flower_queue_ctl_msg(app, skb, cmsg_hdr->type);

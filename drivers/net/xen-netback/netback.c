@@ -136,12 +136,12 @@ static inline struct xenvif_queue *ubuf_to_queue(const struct ubuf_info *ubuf)
 
 static u16 frag_get_pending_idx(skb_frag_t *frag)
 {
-	return (u16)frag->page_offset;
+	return (u16)skb_frag_off(frag);
 }
 
 static void frag_set_pending_idx(skb_frag_t *frag, u16 pending_idx)
 {
-	frag->page_offset = pending_idx;
+	skb_frag_off_set(frag, pending_idx);
 }
 
 static inline pending_ring_idx_t pending_index(unsigned i)
@@ -925,6 +925,7 @@ static void xenvif_tx_build_gops(struct xenvif_queue *queue,
 			skb_shinfo(skb)->nr_frags = MAX_SKB_FRAGS;
 			nskb = xenvif_alloc_skb(0);
 			if (unlikely(nskb == NULL)) {
+				skb_shinfo(skb)->nr_frags = 0;
 				kfree_skb(skb);
 				xenvif_tx_err(queue, &txreq, extra_count, idx);
 				if (net_ratelimit())
@@ -940,6 +941,7 @@ static void xenvif_tx_build_gops(struct xenvif_queue *queue,
 
 			if (xenvif_set_skb_gso(queue->vif, skb, gso)) {
 				/* Failure in xenvif_set_skb_gso is fatal. */
+				skb_shinfo(skb)->nr_frags = 0;
 				kfree_skb(skb);
 				kfree_skb(nskb);
 				break;
@@ -1055,7 +1057,7 @@ static int xenvif_handle_frag_list(struct xenvif_queue *queue, struct sk_buff *s
 			int j;
 			skb->truesize += skb->data_len;
 			for (j = 0; j < i; j++)
-				put_page(frags[j].page.p);
+				put_page(skb_frag_page(&frags[j]));
 			return -ENOMEM;
 		}
 
@@ -1067,8 +1069,8 @@ static int xenvif_handle_frag_list(struct xenvif_queue *queue, struct sk_buff *s
 			BUG();
 
 		offset += len;
-		frags[i].page.p = page;
-		frags[i].page_offset = 0;
+		__skb_frag_set_page(&frags[i], page);
+		skb_frag_off_set(&frags[i], 0);
 		skb_frag_size_set(&frags[i], len);
 	}
 
@@ -1451,7 +1453,7 @@ int xenvif_map_frontend_data_rings(struct xenvif_queue *queue,
 	void *addr;
 	struct xen_netif_tx_sring *txs;
 	struct xen_netif_rx_sring *rxs;
-
+	RING_IDX rsp_prod, req_prod;
 	int err = -ENOMEM;
 
 	err = xenbus_map_ring_valloc(xenvif_to_xenbus_device(queue->vif),
@@ -1460,7 +1462,14 @@ int xenvif_map_frontend_data_rings(struct xenvif_queue *queue,
 		goto err;
 
 	txs = (struct xen_netif_tx_sring *)addr;
-	BACK_RING_INIT(&queue->tx, txs, XEN_PAGE_SIZE);
+	rsp_prod = READ_ONCE(txs->rsp_prod);
+	req_prod = READ_ONCE(txs->req_prod);
+
+	BACK_RING_ATTACH(&queue->tx, txs, rsp_prod, XEN_PAGE_SIZE);
+
+	err = -EIO;
+	if (req_prod - rsp_prod > RING_SIZE(&queue->tx))
+		goto err;
 
 	err = xenbus_map_ring_valloc(xenvif_to_xenbus_device(queue->vif),
 				     &rx_ring_ref, 1, &addr);
@@ -1468,7 +1477,14 @@ int xenvif_map_frontend_data_rings(struct xenvif_queue *queue,
 		goto err;
 
 	rxs = (struct xen_netif_rx_sring *)addr;
-	BACK_RING_INIT(&queue->rx, rxs, XEN_PAGE_SIZE);
+	rsp_prod = READ_ONCE(rxs->rsp_prod);
+	req_prod = READ_ONCE(rxs->req_prod);
+
+	BACK_RING_ATTACH(&queue->rx, rxs, rsp_prod, XEN_PAGE_SIZE);
+
+	err = -EIO;
+	if (req_prod - rsp_prod > RING_SIZE(&queue->rx))
+		goto err;
 
 	return 0;
 
@@ -1653,9 +1669,6 @@ static int __init netback_init(void)
 
 #ifdef CONFIG_DEBUG_FS
 	xen_netback_dbg_root = debugfs_create_dir("xen-netback", NULL);
-	if (IS_ERR_OR_NULL(xen_netback_dbg_root))
-		pr_warn("Init of debugfs returned %ld!\n",
-			PTR_ERR(xen_netback_dbg_root));
 #endif /* CONFIG_DEBUG_FS */
 
 	return 0;

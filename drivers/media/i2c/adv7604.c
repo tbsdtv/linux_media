@@ -1503,23 +1503,14 @@ static void adv76xx_fill_optional_dv_timings_fields(struct v4l2_subdev *sd,
 
 static unsigned int adv7604_read_hdmi_pixelclock(struct v4l2_subdev *sd)
 {
-	unsigned int freq;
 	int a, b;
 
 	a = hdmi_read(sd, 0x06);
 	b = hdmi_read(sd, 0x3b);
 	if (a < 0 || b < 0)
 		return 0;
-	freq =  a * 1000000 + ((b & 0x30) >> 4) * 250000;
 
-	if (is_hdmi(sd)) {
-		/* adjust for deep color mode */
-		unsigned bits_per_channel = ((hdmi_read(sd, 0x0b) & 0x60) >> 4) + 8;
-
-		freq = freq * 8 / bits_per_channel;
-	}
-
-	return freq;
+	return a * 1000000 + ((b & 0x30) >> 4) * 250000;
 }
 
 static unsigned int adv7611_read_hdmi_pixelclock(struct v4l2_subdev *sd)
@@ -1530,7 +1521,26 @@ static unsigned int adv7611_read_hdmi_pixelclock(struct v4l2_subdev *sd)
 	b = hdmi_read(sd, 0x52);
 	if (a < 0 || b < 0)
 		return 0;
+
 	return ((a << 1) | (b >> 7)) * 1000000 + (b & 0x7f) * 1000000 / 128;
+}
+
+static unsigned int adv76xx_read_hdmi_pixelclock(struct v4l2_subdev *sd)
+{
+	struct adv76xx_state *state = to_state(sd);
+	const struct adv76xx_chip_info *info = state->info;
+	unsigned int freq, bits_per_channel, pixelrepetition;
+
+	freq = info->read_hdmi_pixelclock(sd);
+	if (is_hdmi(sd)) {
+		/* adjust for deep color mode and pixel repetition */
+		bits_per_channel = ((hdmi_read(sd, 0x0b) & 0x60) >> 4) + 8;
+		pixelrepetition = (hdmi_read(sd, 0x05) & 0x0f) + 1;
+
+		freq = freq * 8 / bits_per_channel / pixelrepetition;
+	}
+
+	return freq;
 }
 
 static int adv76xx_query_dv_timings(struct v4l2_subdev *sd,
@@ -1579,7 +1589,7 @@ static int adv76xx_query_dv_timings(struct v4l2_subdev *sd,
 
 		bt->width = w;
 		bt->height = h;
-		bt->pixelclock = info->read_hdmi_pixelclock(sd);
+		bt->pixelclock = adv76xx_read_hdmi_pixelclock(sd);
 		bt->hfrontporch = hdmi_read16(sd, 0x20, info->hfrontporch_mask);
 		bt->hsync = hdmi_read16(sd, 0x22, info->hsync_mask);
 		bt->hbackporch = hdmi_read16(sd, 0x24, info->hbackporch_mask);
@@ -2862,10 +2872,8 @@ static void adv76xx_unregister_clients(struct adv76xx_state *state)
 {
 	unsigned int i;
 
-	for (i = 1; i < ARRAY_SIZE(state->i2c_clients); ++i) {
-		if (state->i2c_clients[i])
-			i2c_unregister_device(state->i2c_clients[i]);
-	}
+	for (i = 1; i < ARRAY_SIZE(state->i2c_clients); ++i)
+		i2c_unregister_device(state->i2c_clients[i]);
 }
 
 static struct i2c_client *adv76xx_dummy_client(struct v4l2_subdev *sd,
@@ -2878,14 +2886,14 @@ static struct i2c_client *adv76xx_dummy_client(struct v4l2_subdev *sd,
 	struct i2c_client *new_client;
 
 	if (pdata && pdata->i2c_addresses[page])
-		new_client = i2c_new_dummy(client->adapter,
+		new_client = i2c_new_dummy_device(client->adapter,
 					   pdata->i2c_addresses[page]);
 	else
-		new_client = i2c_new_secondary_device(client,
+		new_client = i2c_new_ancillary_device(client,
 				adv76xx_default_addresses[page].name,
 				adv76xx_default_addresses[page].default_addr);
 
-	if (new_client)
+	if (!IS_ERR(new_client))
 		io_write(sd, io_reg, new_client->addr << 1);
 
 	return new_client;
@@ -3516,15 +3524,19 @@ static int adv76xx_probe(struct i2c_client *client,
 	}
 
 	for (i = 1; i < ADV76XX_PAGE_MAX; ++i) {
+		struct i2c_client *dummy_client;
+
 		if (!(BIT(i) & state->info->page_mask))
 			continue;
 
-		state->i2c_clients[i] = adv76xx_dummy_client(sd, i);
-		if (!state->i2c_clients[i]) {
-			err = -EINVAL;
+		dummy_client = adv76xx_dummy_client(sd, i);
+		if (IS_ERR(dummy_client)) {
+			err = PTR_ERR(dummy_client);
 			v4l2_err(sd, "failed to create i2c client %u\n", i);
 			goto err_i2c;
 		}
+
+		state->i2c_clients[i] = dummy_client;
 	}
 
 	INIT_DELAYED_WORK(&state->delayed_work_enable_hotplug,

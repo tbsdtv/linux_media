@@ -174,8 +174,8 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 
 /**
  * step_wise_throttle - throttles devices associated with the given zone
- * @tz - thermal_zone_device
- * @trip - trip point index
+ * @tz: thermal_zone_device
+ * @trip: trip point index
  *
  * Throttling Logic: This uses the trend of the thermal zone to throttle.
  * If the thermal zone is 'heating up' this throttles all the cooling
@@ -206,13 +206,4 @@ static struct thermal_governor thermal_gov_step_wise = {
 	.name		= "step_wise",
 	.throttle	= step_wise_throttle,
 };
-
-int thermal_gov_step_wise_register(void)
-{
-	return thermal_register_governor(&thermal_gov_step_wise);
-}
-
-void thermal_gov_step_wise_unregister(void)
-{
-	thermal_unregister_governor(&thermal_gov_step_wise);
-}
+THERMAL_GOVERNOR_DECLARE(thermal_gov_step_wise);

@@ -5,12 +5,6 @@
 #include <uapi/asm/unistd.h>
 
 
-# ifdef CONFIG_X86_X32_ABI
-#  define __SYSCALL_MASK (~(__X32_SYSCALL_BIT))
-# else
-#  define __SYSCALL_MASK (~0)
-# endif
-
 # ifdef CONFIG_X86_32
 
 #  include <asm/unistd_32.h>
@@ -19,10 +13,13 @@
 #  define __ARCH_WANT_SYS_OLD_MMAP
 #  define __ARCH_WANT_SYS_OLD_SELECT
 
+#  define __NR_ia32_syscall_max __NR_syscall_max
+
 # else
 
 #  include <asm/unistd_64.h>
 #  include <asm/unistd_64_x32.h>
+#  include <asm/unistd_32_ia32.h>
 #  define __ARCH_WANT_SYS_TIME
 #  define __ARCH_WANT_SYS_UTIME
 #  define __ARCH_WANT_COMPAT_SYS_PREADV64
@@ -31,6 +28,10 @@
 #  define __ARCH_WANT_COMPAT_SYS_PWRITEV64V2
 
 # endif
+
+# define NR_syscalls (__NR_syscall_max + 1)
+# define X32_NR_syscalls (__NR_x32_syscall_max + 1)
+# define IA32_NR_syscalls (__NR_ia32_syscall_max + 1)
 
 # define __ARCH_WANT_NEW_STAT
 # define __ARCH_WANT_OLD_READDIR
@@ -54,5 +55,6 @@
 # define __ARCH_WANT_SYS_FORK
 # define __ARCH_WANT_SYS_VFORK
 # define __ARCH_WANT_SYS_CLONE
+# define __ARCH_WANT_SYS_CLONE3
 
 #endif /* _ASM_X86_UNISTD_H */

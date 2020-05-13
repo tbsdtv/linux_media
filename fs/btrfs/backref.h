@@ -40,6 +40,10 @@ int iterate_inodes_from_logical(u64 logical, struct btrfs_fs_info *fs_info,
 
 int paths_from_inode(u64 inum, struct inode_fs_paths *ipath);
 
+int btrfs_find_all_leafs(struct btrfs_trans_handle *trans,
+			 struct btrfs_fs_info *fs_info, u64 bytenr,
+			 u64 time_seq, struct ulist **leafs,
+			 const u64 *extent_item_pos, bool ignore_offset);
 int btrfs_find_all_roots(struct btrfs_trans_handle *trans,
 			 struct btrfs_fs_info *fs_info, u64 bytenr,
 			 u64 time_seq, struct ulist **roots, bool ignore_offset);
@@ -57,7 +61,8 @@ int btrfs_find_one_extref(struct btrfs_root *root, u64 inode_objectid,
 			  u64 start_off, struct btrfs_path *path,
 			  struct btrfs_inode_extref **ret_extref,
 			  u64 *found_off);
-int btrfs_check_shared(struct btrfs_root *root, u64 inum, u64 bytenr);
+int btrfs_check_shared(struct btrfs_root *root, u64 inum, u64 bytenr,
+		struct ulist *roots, struct ulist *tmp_ulist);
 
 int __init btrfs_prelim_ref_init(void);
 void __cold btrfs_prelim_ref_exit(void);

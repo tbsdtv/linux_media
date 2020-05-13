@@ -428,10 +428,9 @@ static int nd_intel_test_finish_query(struct nfit_test *t,
 			dev_dbg(dev, "%s: still verifying\n", __func__);
 			break;
 		}
-
 		dev_dbg(dev, "%s: transition out verify\n", __func__);
 		fw->state = FW_STATE_UPDATED;
-		/* we are going to fall through if it's "done" */
+		/* fall through */
 	case FW_STATE_UPDATED:
 		nd_cmd->status = 0;
 		/* bogus test version */
@@ -3165,7 +3164,9 @@ static __init int nfit_test_init(void)
 	mcsafe_test();
 	dax_pmem_test();
 	dax_pmem_core_test();
+#ifdef CONFIG_DEV_DAX_PMEM_COMPAT
 	dax_pmem_compat_test();
+#endif
 
 	nfit_test_setup(nfit_test_lookup, nfit_test_evaluate_dsm);
 

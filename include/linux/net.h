@@ -116,11 +116,11 @@ struct socket {
 
 	unsigned long		flags;
 
-	struct socket_wq	*wq;
-
 	struct file		*file;
 	struct sock		*sk;
 	const struct proto_ops	*ops;
+
+	struct socket_wq	wq;
 };
 
 struct vm_area_struct;
@@ -171,6 +171,7 @@ struct proto_ops {
 	int		(*compat_getsockopt)(struct socket *sock, int level,
 				      int optname, char __user *optval, int __user *optlen);
 #endif
+	void		(*show_fdinfo)(struct seq_file *m, struct socket *sock);
 	int		(*sendmsg)   (struct socket *sock, struct msghdr *m,
 				      size_t total_len);
 	/* Notes for implementing recvmsg:

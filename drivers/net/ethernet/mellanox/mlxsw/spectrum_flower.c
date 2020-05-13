@@ -21,15 +21,25 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 					 struct netlink_ext_ack *extack)
 {
 	const struct flow_action_entry *act;
+	int mirror_act_count = 0;
 	int err, i;
 
 	if (!flow_action_has_entries(flow_action))
 		return 0;
+	if (!flow_action_mixed_hw_stats_check(flow_action, extack))
+		return -EOPNOTSUPP;
 
-	/* Count action is inserted first */
-	err = mlxsw_sp_acl_rulei_act_count(mlxsw_sp, rulei, extack);
-	if (err)
-		return err;
+	act = flow_action_first_entry_get(flow_action);
+	if (act->hw_stats == FLOW_ACTION_HW_STATS_ANY ||
+	    act->hw_stats == FLOW_ACTION_HW_STATS_IMMEDIATE) {
+		/* Count action is inserted first */
+		err = mlxsw_sp_acl_rulei_act_count(mlxsw_sp, rulei, extack);
+		if (err)
+			return err;
+	} else if (act->hw_stats != FLOW_ACTION_HW_STATS_DISABLED) {
+		NL_SET_ERR_MSG_MOD(extack, "Unsupported action HW stats type");
+		return -EOPNOTSUPP;
+	}
 
 	flow_action_for_each(i, act, flow_action) {
 		switch (act->id) {
@@ -40,11 +50,29 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 				return err;
 			}
 			break;
-		case FLOW_ACTION_DROP:
-			err = mlxsw_sp_acl_rulei_act_drop(rulei);
+		case FLOW_ACTION_DROP: {
+			bool ingress;
+
+			if (mlxsw_sp_acl_block_is_mixed_bound(block)) {
+				NL_SET_ERR_MSG_MOD(extack, "Drop action is not supported when block is bound to ingress and egress");
+				return -EOPNOTSUPP;
+			}
+			ingress = mlxsw_sp_acl_block_is_ingress_bound(block);
+			err = mlxsw_sp_acl_rulei_act_drop(rulei, ingress,
+							  act->cookie, extack);
 			if (err) {
 				NL_SET_ERR_MSG_MOD(extack, "Cannot append drop action");
 				return err;
+			}
+
+			/* Forbid block with this rulei to be bound
+			 * to ingress/egress in future. Ingress rule is
+			 * a blocker for egress and vice versa.
+			 */
+			if (ingress)
+				rulei->egress_bind_blocker = 1;
+			else
+				rulei->ingress_bind_blocker = 1;
 			}
 			break;
 		case FLOW_ACTION_TRAP:
@@ -78,6 +106,16 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 			struct mlxsw_sp_fid *fid;
 			u16 fid_index;
 
+			if (mlxsw_sp_acl_block_is_egress_bound(block)) {
+				NL_SET_ERR_MSG_MOD(extack, "Redirect action is not supported on egress");
+				return -EOPNOTSUPP;
+			}
+
+			/* Forbid block with this rulei to be bound
+			 * to egress in future.
+			 */
+			rulei->egress_bind_blocker = 1;
+
 			fid = mlxsw_sp_acl_dummy_fid(mlxsw_sp);
 			fid_index = mlxsw_sp_fid_index(fid);
 			err = mlxsw_sp_acl_rulei_act_fid_set(mlxsw_sp, rulei,
@@ -95,6 +133,11 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 		case FLOW_ACTION_MIRRED: {
 			struct net_device *out_dev = act->dev;
 
+			if (mirror_act_count++) {
+				NL_SET_ERR_MSG_MOD(extack, "Multiple mirror actions per rule are not supported");
+				return -EOPNOTSUPP;
+			}
+
 			err = mlxsw_sp_acl_rulei_act_mirror(mlxsw_sp, rulei,
 							    block, out_dev,
 							    extack);
@@ -107,9 +150,34 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 			u8 prio = act->vlan.prio;
 			u16 vid = act->vlan.vid;
 
-			return mlxsw_sp_acl_rulei_act_vlan(mlxsw_sp, rulei,
-							   act->id, vid,
-							   proto, prio, extack);
+			err = mlxsw_sp_acl_rulei_act_vlan(mlxsw_sp, rulei,
+							  act->id, vid,
+							  proto, prio, extack);
+			if (err)
+				return err;
+			break;
+			}
+		case FLOW_ACTION_PRIORITY:
+			err = mlxsw_sp_acl_rulei_act_priority(mlxsw_sp, rulei,
+							      act->priority,
+							      extack);
+			if (err)
+				return err;
+			break;
+		case FLOW_ACTION_MANGLE: {
+			enum flow_action_mangle_base htype = act->mangle.htype;
+			__be32 be_mask = (__force __be32) act->mangle.mask;
+			__be32 be_val = (__force __be32) act->mangle.val;
+			u32 offset = act->mangle.offset;
+			u32 mask = be32_to_cpu(be_mask);
+			u32 val = be32_to_cpu(be_val);
+
+			err = mlxsw_sp_acl_rulei_act_mangle(mlxsw_sp, rulei,
+							    htype, offset,
+							    mask, val, extack);
+			if (err)
+				return err;
+			break;
 			}
 		default:
 			NL_SET_ERR_MSG_MOD(extack, "Unsupported action");
@@ -120,8 +188,51 @@ static int mlxsw_sp_flower_parse_actions(struct mlxsw_sp *mlxsw_sp,
 	return 0;
 }
 
+static int mlxsw_sp_flower_parse_meta(struct mlxsw_sp_acl_rule_info *rulei,
+				      struct flow_cls_offload *f,
+				      struct mlxsw_sp_acl_block *block)
+{
+	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
+	struct mlxsw_sp_port *mlxsw_sp_port;
+	struct net_device *ingress_dev;
+	struct flow_match_meta match;
+
+	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META))
+		return 0;
+
+	flow_rule_match_meta(rule, &match);
+	if (match.mask->ingress_ifindex != 0xFFFFFFFF) {
+		NL_SET_ERR_MSG_MOD(f->common.extack, "Unsupported ingress ifindex mask");
+		return -EINVAL;
+	}
+
+	ingress_dev = __dev_get_by_index(block->net,
+					 match.key->ingress_ifindex);
+	if (!ingress_dev) {
+		NL_SET_ERR_MSG_MOD(f->common.extack, "Can't find specified ingress port to match on");
+		return -EINVAL;
+	}
+
+	if (!mlxsw_sp_port_dev_check(ingress_dev)) {
+		NL_SET_ERR_MSG_MOD(f->common.extack, "Can't match on non-mlxsw ingress port");
+		return -EINVAL;
+	}
+
+	mlxsw_sp_port = netdev_priv(ingress_dev);
+	if (mlxsw_sp_port->mlxsw_sp != block->mlxsw_sp) {
+		NL_SET_ERR_MSG_MOD(f->common.extack, "Can't match on a port from different device");
+		return -EINVAL;
+	}
+
+	mlxsw_sp_acl_rulei_keymask_u32(rulei,
+				       MLXSW_AFK_ELEMENT_SRC_SYS_PORT,
+				       mlxsw_sp_port->local_port,
+				       0xFFFFFFFF);
+	return 0;
+}
+
 static void mlxsw_sp_flower_parse_ipv4(struct mlxsw_sp_acl_rule_info *rulei,
-				       struct tc_cls_flower_offload *f)
+				       struct flow_cls_offload *f)
 {
 	struct flow_match_ipv4_addrs match;
 
@@ -136,7 +247,7 @@ static void mlxsw_sp_flower_parse_ipv4(struct mlxsw_sp_acl_rule_info *rulei,
 }
 
 static void mlxsw_sp_flower_parse_ipv6(struct mlxsw_sp_acl_rule_info *rulei,
-				       struct tc_cls_flower_offload *f)
+				       struct flow_cls_offload *f)
 {
 	struct flow_match_ipv6_addrs match;
 
@@ -170,10 +281,10 @@ static void mlxsw_sp_flower_parse_ipv6(struct mlxsw_sp_acl_rule_info *rulei,
 
 static int mlxsw_sp_flower_parse_ports(struct mlxsw_sp *mlxsw_sp,
 				       struct mlxsw_sp_acl_rule_info *rulei,
-				       struct tc_cls_flower_offload *f,
+				       struct flow_cls_offload *f,
 				       u8 ip_proto)
 {
-	const struct flow_rule *rule = tc_cls_flower_offload_flow_rule(f);
+	const struct flow_rule *rule = flow_cls_offload_flow_rule(f);
 	struct flow_match_ports match;
 
 	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS))
@@ -197,10 +308,10 @@ static int mlxsw_sp_flower_parse_ports(struct mlxsw_sp *mlxsw_sp,
 
 static int mlxsw_sp_flower_parse_tcp(struct mlxsw_sp *mlxsw_sp,
 				     struct mlxsw_sp_acl_rule_info *rulei,
-				     struct tc_cls_flower_offload *f,
+				     struct flow_cls_offload *f,
 				     u8 ip_proto)
 {
-	const struct flow_rule *rule = tc_cls_flower_offload_flow_rule(f);
+	const struct flow_rule *rule = flow_cls_offload_flow_rule(f);
 	struct flow_match_tcp match;
 
 	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_TCP))
@@ -214,6 +325,12 @@ static int mlxsw_sp_flower_parse_tcp(struct mlxsw_sp *mlxsw_sp,
 
 	flow_rule_match_tcp(rule, &match);
 
+	if (match.mask->flags & htons(0x0E00)) {
+		NL_SET_ERR_MSG_MOD(f->common.extack, "TCP flags match not supported on reserved bits");
+		dev_err(mlxsw_sp->bus_info->dev, "TCP flags match not supported on reserved bits\n");
+		return -EINVAL;
+	}
+
 	mlxsw_sp_acl_rulei_keymask_u32(rulei, MLXSW_AFK_ELEMENT_TCP_FLAGS,
 				       ntohs(match.key->flags),
 				       ntohs(match.mask->flags));
@@ -222,10 +339,10 @@ static int mlxsw_sp_flower_parse_tcp(struct mlxsw_sp *mlxsw_sp,
 
 static int mlxsw_sp_flower_parse_ip(struct mlxsw_sp *mlxsw_sp,
 				    struct mlxsw_sp_acl_rule_info *rulei,
-				    struct tc_cls_flower_offload *f,
+				    struct flow_cls_offload *f,
 				    u16 n_proto)
 {
-	const struct flow_rule *rule = tc_cls_flower_offload_flow_rule(f);
+	const struct flow_rule *rule = flow_cls_offload_flow_rule(f);
 	struct flow_match_ip match;
 
 	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_IP))
@@ -247,8 +364,8 @@ static int mlxsw_sp_flower_parse_ip(struct mlxsw_sp *mlxsw_sp,
 				       match.mask->tos & 0x3);
 
 	mlxsw_sp_acl_rulei_keymask_u32(rulei, MLXSW_AFK_ELEMENT_IP_DSCP,
-				       match.key->tos >> 6,
-				       match.mask->tos >> 6);
+				       match.key->tos >> 2,
+				       match.mask->tos >> 2);
 
 	return 0;
 }
@@ -256,9 +373,9 @@ static int mlxsw_sp_flower_parse_ip(struct mlxsw_sp *mlxsw_sp,
 static int mlxsw_sp_flower_parse(struct mlxsw_sp *mlxsw_sp,
 				 struct mlxsw_sp_acl_block *block,
 				 struct mlxsw_sp_acl_rule_info *rulei,
-				 struct tc_cls_flower_offload *f)
+				 struct flow_cls_offload *f)
 {
-	struct flow_rule *rule = tc_cls_flower_offload_flow_rule(f);
+	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
 	struct flow_dissector *dissector = rule->match.dissector;
 	u16 n_proto_mask = 0;
 	u16 n_proto_key = 0;
@@ -267,7 +384,8 @@ static int mlxsw_sp_flower_parse(struct mlxsw_sp *mlxsw_sp,
 	int err;
 
 	if (dissector->used_keys &
-	    ~(BIT(FLOW_DISSECTOR_KEY_CONTROL) |
+	    ~(BIT(FLOW_DISSECTOR_KEY_META) |
+	      BIT(FLOW_DISSECTOR_KEY_CONTROL) |
 	      BIT(FLOW_DISSECTOR_KEY_BASIC) |
 	      BIT(FLOW_DISSECTOR_KEY_ETH_ADDRS) |
 	      BIT(FLOW_DISSECTOR_KEY_IPV4_ADDRS) |
@@ -282,6 +400,10 @@ static int mlxsw_sp_flower_parse(struct mlxsw_sp *mlxsw_sp,
 	}
 
 	mlxsw_sp_acl_rulei_priority(rulei, f->common.prio);
+
+	err = mlxsw_sp_flower_parse_meta(rulei, f, block);
+	if (err)
+		return err;
 
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
 		struct flow_match_control match;
@@ -342,6 +464,12 @@ static int mlxsw_sp_flower_parse(struct mlxsw_sp *mlxsw_sp,
 			NL_SET_ERR_MSG_MOD(f->common.extack, "vlan_id key is not supported on egress");
 			return -EOPNOTSUPP;
 		}
+
+		/* Forbid block with this rulei to be bound
+		 * to egress in future.
+		 */
+		rulei->egress_bind_blocker = 1;
+
 		if (match.mask->vlan_id != 0)
 			mlxsw_sp_acl_rulei_keymask_u32(rulei,
 						       MLXSW_AFK_ELEMENT_VID,
@@ -378,7 +506,7 @@ static int mlxsw_sp_flower_parse(struct mlxsw_sp *mlxsw_sp,
 
 int mlxsw_sp_flower_replace(struct mlxsw_sp *mlxsw_sp,
 			    struct mlxsw_sp_acl_block *block,
-			    struct tc_cls_flower_offload *f)
+			    struct flow_cls_offload *f)
 {
 	struct mlxsw_sp_acl_rule_info *rulei;
 	struct mlxsw_sp_acl_ruleset *ruleset;
@@ -425,7 +553,7 @@ err_rule_create:
 
 void mlxsw_sp_flower_destroy(struct mlxsw_sp *mlxsw_sp,
 			     struct mlxsw_sp_acl_block *block,
-			     struct tc_cls_flower_offload *f)
+			     struct flow_cls_offload *f)
 {
 	struct mlxsw_sp_acl_ruleset *ruleset;
 	struct mlxsw_sp_acl_rule *rule;
@@ -447,8 +575,9 @@ void mlxsw_sp_flower_destroy(struct mlxsw_sp *mlxsw_sp,
 
 int mlxsw_sp_flower_stats(struct mlxsw_sp *mlxsw_sp,
 			  struct mlxsw_sp_acl_block *block,
-			  struct tc_cls_flower_offload *f)
+			  struct flow_cls_offload *f)
 {
+	enum flow_action_hw_stats used_hw_stats = FLOW_ACTION_HW_STATS_DISABLED;
 	struct mlxsw_sp_acl_ruleset *ruleset;
 	struct mlxsw_sp_acl_rule *rule;
 	u64 packets;
@@ -467,11 +596,11 @@ int mlxsw_sp_flower_stats(struct mlxsw_sp *mlxsw_sp,
 		return -EINVAL;
 
 	err = mlxsw_sp_acl_rule_get_stats(mlxsw_sp, rule, &packets, &bytes,
-					  &lastuse);
+					  &lastuse, &used_hw_stats);
 	if (err)
 		goto err_rule_get_stats;
 
-	flow_stats_update(&f->stats, bytes, packets, lastuse);
+	flow_stats_update(&f->stats, bytes, packets, lastuse, used_hw_stats);
 
 	mlxsw_sp_acl_ruleset_put(mlxsw_sp, ruleset);
 	return 0;
@@ -483,7 +612,7 @@ err_rule_get_stats:
 
 int mlxsw_sp_flower_tmplt_create(struct mlxsw_sp *mlxsw_sp,
 				 struct mlxsw_sp_acl_block *block,
-				 struct tc_cls_flower_offload *f)
+				 struct flow_cls_offload *f)
 {
 	struct mlxsw_sp_acl_ruleset *ruleset;
 	struct mlxsw_sp_acl_rule_info rulei;
@@ -504,7 +633,7 @@ int mlxsw_sp_flower_tmplt_create(struct mlxsw_sp *mlxsw_sp,
 
 void mlxsw_sp_flower_tmplt_destroy(struct mlxsw_sp *mlxsw_sp,
 				   struct mlxsw_sp_acl_block *block,
-				   struct tc_cls_flower_offload *f)
+				   struct flow_cls_offload *f)
 {
 	struct mlxsw_sp_acl_ruleset *ruleset;
 

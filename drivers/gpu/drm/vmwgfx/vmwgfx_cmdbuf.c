@@ -25,6 +25,9 @@
  *
  **************************************************************************/
 
+#include <linux/dmapool.h>
+#include <linux/pci.h>
+
 #include <drm/ttm/ttm_bo_api.h>
 
 #include "vmwgfx_drv.h"
@@ -1238,7 +1241,8 @@ int vmw_cmdbuf_set_pool_size(struct vmw_cmdbuf_man *man,
 		 * actually call into the already enabled manager, when
 		 * binding the MOB.
 		 */
-		if (!(dev_priv->capabilities & SVGA_CAP_DX))
+		if (!(dev_priv->capabilities & SVGA_CAP_DX) ||
+		    !dev_priv->has_mob)
 			return -ENOMEM;
 
 		ret = ttm_bo_create(&dev_priv->bdev, size, ttm_bo_type_device,

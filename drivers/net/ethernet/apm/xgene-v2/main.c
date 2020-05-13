@@ -54,10 +54,8 @@ static int xge_get_resources(struct xge_pdata *pdata)
 	}
 
 	ret = platform_get_irq(pdev, 0);
-	if (ret < 0) {
-		dev_err(dev, "Unable to get irq\n");
+	if (ret < 0)
 		return ret;
-	}
 	pdata->resources.irq = ret;
 
 	return 0;
@@ -577,7 +575,7 @@ static void xge_free_pending_skb(struct net_device *ndev)
 	}
 }
 
-static void xge_timeout(struct net_device *ndev)
+static void xge_timeout(struct net_device *ndev, unsigned int txqueue)
 {
 	struct xge_pdata *pdata = netdev_priv(ndev);
 
@@ -743,5 +741,4 @@ module_platform_driver(xge_driver);
 
 MODULE_DESCRIPTION("APM X-Gene SoC Ethernet v2 driver");
 MODULE_AUTHOR("Iyappan Subramanian <isubramanian@apm.com>");
-MODULE_VERSION(XGENE_ENET_V2_VERSION);
 MODULE_LICENSE("GPL");

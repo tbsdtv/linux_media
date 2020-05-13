@@ -1,7 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation.
  *
  * Copyright 2016 Paul Mackerras, IBM Corp. <paulus@au1.ibm.com>
  */
@@ -21,6 +19,8 @@
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/pte-walk.h>
+#include <asm/ultravisor.h>
+#include <asm/kvm_book3s_uvmem.h>
 
 /*
  * Supported radix tree geometry.
@@ -63,12 +63,10 @@ unsigned long __kvmhv_copy_tofrom_guest_radix(int lpid, int pid,
 	}
 	isync();
 
-	pagefault_disable();
 	if (is_load)
-		ret = raw_copy_from_user(to, from, n);
+		ret = probe_user_read(to, (const void __user *)from, n);
 	else
-		ret = raw_copy_to_user(to, from, n);
-	pagefault_enable();
+		ret = probe_user_write((void __user *)to, from, n);
 
 	/* switch the pid first to avoid running host with unallocated pid */
 	if (quadrant == 1 && pid != old_pid)
@@ -363,12 +361,6 @@ static void kvmppc_pte_free(pte_t *ptep)
 	kmem_cache_free(kvm_pte_cache, ptep);
 }
 
-/* Like pmd_huge() and pmd_large(), but works regardless of config options */
-static inline int pmd_is_leaf(pmd_t pmd)
-{
-	return !!(pmd_val(pmd) & _PAGE_PTE);
-}
-
 static pmd_t *kvmppc_pmd_alloc(void)
 {
 	return kmem_cache_alloc(kvm_pmd_cache, GFP_KERNEL);
@@ -433,7 +425,7 @@ static void kvmppc_unmap_free_pte(struct kvm *kvm, pte_t *pte, bool full,
 				  unsigned int lpid)
 {
 	if (full) {
-		memset(pte, 0, sizeof(long) << PTE_INDEX_SIZE);
+		memset(pte, 0, sizeof(long) << RADIX_PTE_INDEX_SIZE);
 	} else {
 		pte_t *p = pte;
 		unsigned long it;
@@ -489,7 +481,7 @@ static void kvmppc_unmap_free_pud(struct kvm *kvm, pud_t *pud,
 	for (iu = 0; iu < PTRS_PER_PUD; ++iu, ++p) {
 		if (!pud_present(*p))
 			continue;
-		if (pud_huge(*p)) {
+		if (pud_is_leaf(*p)) {
 			pud_clear(p);
 		} else {
 			pmd_t *pmd;
@@ -588,7 +580,7 @@ int kvmppc_create_pte(struct kvm *kvm, pgd_t *pgtable, pte_t pte,
 		new_pud = pud_alloc_one(kvm->mm, gpa);
 
 	pmd = NULL;
-	if (pud && pud_present(*pud) && !pud_huge(*pud))
+	if (pud && pud_present(*pud) && !pud_is_leaf(*pud))
 		pmd = pmd_offset(pud, gpa);
 	else if (level <= 1)
 		new_pmd = kvmppc_pmd_alloc();
@@ -611,7 +603,7 @@ int kvmppc_create_pte(struct kvm *kvm, pgd_t *pgtable, pte_t pte,
 		new_pud = NULL;
 	}
 	pud = pud_offset(pgd, gpa);
-	if (pud_huge(*pud)) {
+	if (pud_is_leaf(*pud)) {
 		unsigned long hgpa = gpa & PUD_MASK;
 
 		/* Check if we raced and someone else has set the same thing */
@@ -923,6 +915,9 @@ int kvmppc_book3s_radix_page_fault(struct kvm_run *run, struct kvm_vcpu *vcpu,
 	if (!(dsisr & DSISR_PRTABLE_FAULT))
 		gpa |= ea & 0xfff;
 
+	if (kvm->arch.secure_guest & KVMPPC_SECURE_INIT_DONE)
+		return kvmppc_send_page_to_uv(kvm, gfn);
+
 	/* Get the corresponding memslot */
 	memslot = gfn_to_memslot(kvm, gfn);
 
@@ -980,6 +975,11 @@ int kvm_unmap_radix(struct kvm *kvm, struct kvm_memory_slot *memslot,
 	unsigned long gpa = gfn << PAGE_SHIFT;
 	unsigned int shift;
 
+	if (kvm->arch.secure_guest & KVMPPC_SECURE_INIT_DONE) {
+		uv_page_inval(kvm->arch.lpid, gpa, PAGE_SHIFT);
+		return 0;
+	}
+
 	ptep = __find_linux_pte(kvm->arch.pgtable, gpa, NULL, &shift);
 	if (ptep && pte_present(*ptep))
 		kvmppc_unmap_pte(kvm, ptep, gpa, shift, memslot,
@@ -996,6 +996,9 @@ int kvm_age_radix(struct kvm *kvm, struct kvm_memory_slot *memslot,
 	unsigned int shift;
 	int ref = 0;
 	unsigned long old, *rmapp;
+
+	if (kvm->arch.secure_guest & KVMPPC_SECURE_INIT_DONE)
+		return ref;
 
 	ptep = __find_linux_pte(kvm->arch.pgtable, gpa, NULL, &shift);
 	if (ptep && pte_present(*ptep) && pte_young(*ptep)) {
@@ -1021,6 +1024,9 @@ int kvm_test_age_radix(struct kvm *kvm, struct kvm_memory_slot *memslot,
 	unsigned int shift;
 	int ref = 0;
 
+	if (kvm->arch.secure_guest & KVMPPC_SECURE_INIT_DONE)
+		return ref;
+
 	ptep = __find_linux_pte(kvm->arch.pgtable, gpa, NULL, &shift);
 	if (ptep && pte_present(*ptep) && pte_young(*ptep))
 		ref = 1;
@@ -1037,6 +1043,9 @@ static int kvm_radix_test_clear_dirty(struct kvm *kvm,
 	unsigned int shift;
 	int ret = 0;
 	unsigned long old, *rmapp;
+
+	if (kvm->arch.secure_guest & KVMPPC_SECURE_INIT_DONE)
+		return ret;
 
 	ptep = __find_linux_pte(kvm->arch.pgtable, gpa, NULL, &shift);
 	if (ptep && pte_present(*ptep) && pte_dirty(*ptep)) {
@@ -1089,6 +1098,12 @@ void kvmppc_radix_flush_memslot(struct kvm *kvm,
 	pte_t *ptep;
 	unsigned long gpa;
 	unsigned int shift;
+
+	if (kvm->arch.secure_guest & KVMPPC_SECURE_INIT_START)
+		kvmppc_uvmem_drop_pages(memslot, kvm, true);
+
+	if (kvm->arch.secure_guest & KVMPPC_SECURE_INIT_DONE)
+		return;
 
 	gpa = memslot->base_gfn << PAGE_SHIFT;
 	spin_lock(&kvm->mmu_lock);
@@ -1361,9 +1376,8 @@ static const struct file_operations debugfs_radix_fops = {
 
 void kvmhv_radix_debugfs_init(struct kvm *kvm)
 {
-	kvm->arch.radix_dentry = debugfs_create_file("radix", 0400,
-						     kvm->arch.debugfs_dir, kvm,
-						     &debugfs_radix_fops);
+	debugfs_create_file("radix", 0400, kvm->arch.debugfs_dir, kvm,
+			    &debugfs_radix_fops);
 }
 
 int kvmppc_radix_init(void)

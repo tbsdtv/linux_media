@@ -5,22 +5,23 @@
  *	Andrzej Pietrasiewicz <andrzejtp2010@gmail.com>
  */
 
-#include <linux/kernel.h>
+#include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/platform_device.h>
-#include <linux/clk.h>
+#include <linux/kernel.h>
 #include <linux/of_device.h>
+#include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_fourcc.h>
 #include <drm/exynos_drm.h>
-#include "regs-scaler.h"
-#include "exynos_drm_fb.h"
+
 #include "exynos_drm_drv.h"
+#include "exynos_drm_fb.h"
 #include "exynos_drm_ipp.h"
+#include "regs-scaler.h"
 
 #define scaler_read(offset)		readl(scaler->regs + (offset))
 #define scaler_write(cfg, offset)	writel(cfg, scaler->regs + (offset))
@@ -38,6 +39,7 @@ struct scaler_data {
 struct scaler_context {
 	struct exynos_drm_ipp		ipp;
 	struct drm_device		*drm_dev;
+	void				*dma_priv;
 	struct device			*dev;
 	void __iomem			*regs;
 	struct clk			*clock[SCALER_MAX_CLK];
@@ -94,12 +96,12 @@ static inline int scaler_reset(struct scaler_context *scaler)
 	scaler_write(SCALER_CFG_SOFT_RESET, SCALER_CFG);
 	do {
 		cpu_relax();
-	} while (retry > 1 &&
+	} while (--retry > 1 &&
 		 scaler_read(SCALER_CFG) & SCALER_CFG_SOFT_RESET);
 	do {
 		cpu_relax();
 		scaler_write(1, SCALER_INT_EN);
-	} while (retry > 0 && scaler_read(SCALER_INT_EN) != 1);
+	} while (--retry > 0 && scaler_read(SCALER_INT_EN) != 1);
 
 	return retry ? 0 : -EIO;
 }
@@ -449,7 +451,7 @@ static int scaler_bind(struct device *dev, struct device *master, void *data)
 
 	scaler->drm_dev = drm_dev;
 	ipp->drm_dev = drm_dev;
-	exynos_drm_register_dma(drm_dev, dev);
+	exynos_drm_register_dma(drm_dev, dev, &scaler->dma_priv);
 
 	exynos_drm_ipp_register(dev, ipp, &ipp_funcs,
 			DRM_EXYNOS_IPP_CAP_CROP | DRM_EXYNOS_IPP_CAP_ROTATE |
@@ -469,7 +471,8 @@ static void scaler_unbind(struct device *dev, struct device *master,
 	struct exynos_drm_ipp *ipp = &scaler->ipp;
 
 	exynos_drm_ipp_unregister(dev, ipp);
-	exynos_drm_unregister_dma(scaler->drm_dev, scaler->dev);
+	exynos_drm_unregister_dma(scaler->drm_dev, scaler->dev,
+				  &scaler->dma_priv);
 }
 
 static const struct component_ops scaler_component_ops = {

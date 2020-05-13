@@ -102,7 +102,7 @@ struct ioat_dca_priv {
 	int			 max_requesters;
 	int			 requester_count;
 	u8			 tag_map[IOAT_TAG_MAP_LEN];
-	struct ioat_dca_slot 	 req_slots[0];
+	struct ioat_dca_slot	 req_slots[];
 };
 
 static int ioat_dca_dev_managed(struct dca_provider *dca,
@@ -286,8 +286,7 @@ struct dca_provider *ioat_dca_init(struct pci_dev *pdev, void __iomem *iobase)
 		return NULL;
 
 	dca = alloc_dca_provider(&ioat_dca_ops,
-				 sizeof(*ioatdca)
-				      + (sizeof(struct ioat_dca_slot) * slots));
+				 struct_size(ioatdca, req_slots, slots));
 	if (!dca)
 		return NULL;
 

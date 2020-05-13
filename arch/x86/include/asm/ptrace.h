@@ -98,12 +98,10 @@ struct cpuinfo_x86;
 struct task_struct;
 
 extern unsigned long profile_pc(struct pt_regs *regs);
-#define profile_pc profile_pc
 
 extern unsigned long
 convert_ip_to_linear(struct task_struct *child, struct pt_regs *regs);
-extern void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
-			 int error_code, int si_code);
+extern void send_sigtrap(struct pt_regs *regs, int error_code, int si_code);
 
 
 static inline unsigned long regs_return_value(struct pt_regs *regs)
@@ -161,25 +159,55 @@ static inline bool user_64bit_mode(struct pt_regs *regs)
 #endif
 }
 
+/*
+ * Determine whether the register set came from any context that is running in
+ * 64-bit mode.
+ */
+static inline bool any_64bit_mode(struct pt_regs *regs)
+{
+#ifdef CONFIG_X86_64
+	return !user_mode(regs) || user_64bit_mode(regs);
+#else
+	return false;
+#endif
+}
+
 #ifdef CONFIG_X86_64
 #define current_user_stack_pointer()	current_pt_regs()->sp
 #define compat_user_stack_pointer()	current_pt_regs()->sp
 #endif
 
-#ifdef CONFIG_X86_32
-extern unsigned long kernel_stack_pointer(struct pt_regs *regs);
-#else
 static inline unsigned long kernel_stack_pointer(struct pt_regs *regs)
 {
 	return regs->sp;
 }
-#endif
 
-#define GET_IP(regs) ((regs)->ip)
-#define GET_FP(regs) ((regs)->bp)
-#define GET_USP(regs) ((regs)->sp)
+static inline unsigned long instruction_pointer(struct pt_regs *regs)
+{
+	return regs->ip;
+}
 
-#include <asm-generic/ptrace.h>
+static inline void instruction_pointer_set(struct pt_regs *regs,
+		unsigned long val)
+{
+	regs->ip = val;
+}
+
+static inline unsigned long frame_pointer(struct pt_regs *regs)
+{
+	return regs->bp;
+}
+
+static inline unsigned long user_stack_pointer(struct pt_regs *regs)
+{
+	return regs->sp;
+}
+
+static inline void user_stack_pointer_set(struct pt_regs *regs,
+		unsigned long val)
+{
+	regs->sp = val;
+}
 
 /* Query offset/name of register from its name/offset */
 extern int regs_query_register_offset(const char *name);
@@ -201,14 +229,6 @@ static inline unsigned long regs_get_register(struct pt_regs *regs,
 	if (unlikely(offset > MAX_REG_OFFSET))
 		return 0;
 #ifdef CONFIG_X86_32
-	/*
-	 * Traps from the kernel do not save sp and ss.
-	 * Use the helper function to retrieve sp.
-	 */
-	if (offset == offsetof(struct pt_regs, sp) &&
-	    regs->cs == __KERNEL_CS)
-		return kernel_stack_pointer(regs);
-
 	/* The selector fields are 16-bit. */
 	if (offset == offsetof(struct pt_regs, cs) ||
 	    offset == offsetof(struct pt_regs, ss) ||
@@ -234,8 +254,7 @@ static inline unsigned long regs_get_register(struct pt_regs *regs,
 static inline int regs_within_kernel_stack(struct pt_regs *regs,
 					   unsigned long addr)
 {
-	return ((addr & ~(THREAD_SIZE - 1))  ==
-		(kernel_stack_pointer(regs) & ~(THREAD_SIZE - 1)));
+	return ((addr & ~(THREAD_SIZE - 1)) == (regs->sp & ~(THREAD_SIZE - 1)));
 }
 
 /**
@@ -249,7 +268,7 @@ static inline int regs_within_kernel_stack(struct pt_regs *regs,
  */
 static inline unsigned long *regs_get_kernel_stack_nth_addr(struct pt_regs *regs, unsigned int n)
 {
-	unsigned long *addr = (unsigned long *)kernel_stack_pointer(regs);
+	unsigned long *addr = (unsigned long *)regs->sp;
 
 	addr += n;
 	if (regs_within_kernel_stack(regs, (unsigned long)addr))
@@ -333,27 +352,17 @@ static inline unsigned long regs_get_kernel_argument(struct pt_regs *regs,
 
 #define ARCH_HAS_USER_SINGLE_STEP_REPORT
 
-/*
- * When hitting ptrace_stop(), we cannot return using SYSRET because
- * that does not restore the full CPU state, only a minimal set.  The
- * ptracer can change arbitrary register values, which is usually okay
- * because the usual ptrace stops run off the signal delivery path which
- * forces IRET; however, ptrace_event() stops happen in arbitrary places
- * in the kernel and don't force IRET path.
- *
- * So force IRET path after a ptrace stop.
- */
-#define arch_ptrace_stop_needed(code, info)				\
-({									\
-	force_iret();							\
-	false;								\
-})
-
 struct user_desc;
 extern int do_get_thread_area(struct task_struct *p, int idx,
 			      struct user_desc __user *info);
 extern int do_set_thread_area(struct task_struct *p, int idx,
 			      struct user_desc __user *info, int can_allocate);
+
+#ifdef CONFIG_X86_64
+# define do_set_thread_area_64(p, s, t)	do_arch_prctl_64(p, s, t)
+#else
+# define do_set_thread_area_64(p, s, t)	(0)
+#endif
 
 #endif /* !__ASSEMBLY__ */
 #endif /* _ASM_X86_PTRACE_H */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/mach-pxa/mainstone.c
  *
@@ -7,10 +8,6 @@
  *  Author:	Nicolas Pitre
  *  Created:	Nov 05, 2002
  *  Copyright:	MontaVista Software Inc.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 #include <linux/gpio.h>
 #include <linux/gpio/gpio-reg.h>
@@ -259,7 +256,6 @@ static struct pwm_lookup mainstone_pwm_lookup[] = {
 static struct platform_pwm_backlight_data mainstone_backlight_data = {
 	.max_brightness	= 1023,
 	.dft_brightness	= 1023,
-	.enable_gpio	= -1,
 };
 
 static struct platform_device mainstone_backlight_device = {

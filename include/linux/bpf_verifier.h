@@ -33,9 +33,11 @@
  */
 enum bpf_reg_liveness {
 	REG_LIVE_NONE = 0, /* reg hasn't been read or written this branch */
-	REG_LIVE_READ, /* reg was read, so we're sensitive to initial value */
-	REG_LIVE_WRITTEN, /* reg was written first, screening off later reads */
-	REG_LIVE_DONE = 4, /* liveness won't be updating this register anymore */
+	REG_LIVE_READ32 = 0x1, /* reg was read, so we're sensitive to initial value */
+	REG_LIVE_READ64 = 0x2, /* likewise, but full 64-bit content matters */
+	REG_LIVE_READ = REG_LIVE_READ32 | REG_LIVE_READ64,
+	REG_LIVE_WRITTEN = 0x4, /* reg was written first, screening off later reads */
+	REG_LIVE_DONE = 0x8, /* liveness won't be updating this register anymore */
 };
 
 struct bpf_reg_state {
@@ -49,6 +51,8 @@ struct bpf_reg_state {
 		 *   PTR_TO_MAP_VALUE_OR_NULL
 		 */
 		struct bpf_map *map_ptr;
+
+		u32 btf_id; /* for PTR_TO_BTF_ID */
 
 		/* Max size from any of the above. */
 		unsigned long raw;
@@ -119,6 +123,10 @@ struct bpf_reg_state {
 	s64 smax_value; /* maximum possible (s64)value */
 	u64 umin_value; /* minimum possible (u64)value */
 	u64 umax_value; /* maximum possible (u64)value */
+	s32 s32_min_value; /* minimum possible (s32)value */
+	s32 s32_max_value; /* maximum possible (s32)value */
+	u32 u32_min_value; /* minimum possible (u32)value */
+	u32 u32_max_value; /* maximum possible (u32)value */
 	/* parentage chain for liveness checking */
 	struct bpf_reg_state *parent;
 	/* Inside the callee two registers can be both PTR_TO_STACK like
@@ -128,7 +136,14 @@ struct bpf_reg_state {
 	 * pointing to bpf_func_state.
 	 */
 	u32 frameno;
+	/* Tracks subreg definition. The stored value is the insn_idx of the
+	 * writing insn. This is safe because subreg_def is used before any insn
+	 * patching which only happens after main verification finished.
+	 */
+	s32 subreg_def;
 	enum bpf_reg_liveness live;
+	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
+	bool precise;
 };
 
 enum bpf_stack_slot_type {
@@ -180,13 +195,77 @@ struct bpf_func_state {
 	struct bpf_stack_state *stack;
 };
 
+struct bpf_idx_pair {
+	u32 prev_idx;
+	u32 idx;
+};
+
 #define MAX_CALL_FRAMES 8
 struct bpf_verifier_state {
 	/* call stack tracking */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
+	struct bpf_verifier_state *parent;
+	/*
+	 * 'branches' field is the number of branches left to explore:
+	 * 0 - all possible paths from this state reached bpf_exit or
+	 * were safely pruned
+	 * 1 - at least one path is being explored.
+	 * This state hasn't reached bpf_exit
+	 * 2 - at least two paths are being explored.
+	 * This state is an immediate parent of two children.
+	 * One is fallthrough branch with branches==1 and another
+	 * state is pushed into stack (to be explored later) also with
+	 * branches==1. The parent of this state has branches==1.
+	 * The verifier state tree connected via 'parent' pointer looks like:
+	 * 1
+	 * 1
+	 * 2 -> 1 (first 'if' pushed into stack)
+	 * 1
+	 * 2 -> 1 (second 'if' pushed into stack)
+	 * 1
+	 * 1
+	 * 1 bpf_exit.
+	 *
+	 * Once do_check() reaches bpf_exit, it calls update_branch_counts()
+	 * and the verifier state tree will look:
+	 * 1
+	 * 1
+	 * 2 -> 1 (first 'if' pushed into stack)
+	 * 1
+	 * 1 -> 1 (second 'if' pushed into stack)
+	 * 0
+	 * 0
+	 * 0 bpf_exit.
+	 * After pop_stack() the do_check() will resume at second 'if'.
+	 *
+	 * If is_state_visited() sees a state with branches > 0 it means
+	 * there is a loop. If such state is exactly equal to the current state
+	 * it's an infinite loop. Note states_equal() checks for states
+	 * equvalency, so two states being 'states_equal' does not mean
+	 * infinite loop. The exact comparison is provided by
+	 * states_maybe_looping() function. It's a stronger pre-check and
+	 * much faster than states_equal().
+	 *
+	 * This algorithm may not find all possible infinite loops or
+	 * loop iteration count may be too high.
+	 * In such cases BPF_COMPLEXITY_LIMIT_INSNS limit kicks in.
+	 */
+	u32 branches;
+	u32 insn_idx;
 	u32 curframe;
 	u32 active_spin_lock;
 	bool speculative;
+
+	/* first and last insn idx of this verifier state */
+	u32 first_insn_idx;
+	u32 last_insn_idx;
+	/* jmp history recorded from first to last.
+	 * backtracking is using it to go from last to first.
+	 * For most states jmp_history_cnt is [0-3].
+	 * For loops can go up to ~40.
+	 */
+	struct bpf_idx_pair *jmp_history;
+	u32 jmp_history_cnt;
 };
 
 #define bpf_get_spilled_reg(slot, frame)				\
@@ -218,7 +297,7 @@ struct bpf_verifier_state_list {
 struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
-		unsigned long map_state;	/* pointer/poison value for maps */
+		unsigned long map_ptr_state;	/* pointer/poison value for maps */
 		s32 call_imm;			/* saved imm field of call insn */
 		u32 alu_limit;			/* limit for add/sub register with pointer */
 		struct {
@@ -226,11 +305,16 @@ struct bpf_insn_aux_data {
 			u32 map_off;		/* offset from value base address */
 		};
 	};
+	u64 map_key_state; /* constant (32 bit) key tracking for maps */
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
 	int sanitize_stack_off; /* stack slot to be cleared */
-	bool seen; /* this insn was processed by the verifier */
+	u32 seen; /* this insn was processed by the verifier at env->pass_cnt */
+	bool zext_dst; /* this insn zero extends dst reg */
 	u8 alu_state; /* used in combination with alu_limit */
+
+	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
+	bool prune_point;
 };
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
@@ -255,15 +339,18 @@ static inline bool bpf_verifier_log_full(const struct bpf_verifier_log *log)
 #define BPF_LOG_STATS	4
 #define BPF_LOG_LEVEL	(BPF_LOG_LEVEL1 | BPF_LOG_LEVEL2)
 #define BPF_LOG_MASK	(BPF_LOG_LEVEL | BPF_LOG_STATS)
+#define BPF_LOG_KERNEL	(BPF_LOG_MASK + 1) /* kernel internal flag */
 
 static inline bool bpf_verifier_log_needed(const struct bpf_verifier_log *log)
 {
-	return log->level && log->ubuf && !bpf_verifier_log_full(log);
+	return (log->level && log->ubuf && !bpf_verifier_log_full(log)) ||
+		log->level == BPF_LOG_KERNEL;
 }
 
 #define BPF_MAX_SUBPROGS 256
 
 struct bpf_subprog_info {
+	/* 'start' has to be the first field otherwise find_subprog() won't work */
 	u32 start; /* insn idx of function entry point */
 	u32 linfo_idx; /* The idx to the main_prog->aux->linfo */
 	u16 stack_depth; /* max. stack depth used by this function */
@@ -280,6 +367,7 @@ struct bpf_verifier_env {
 	struct bpf_verifier_stack_elem *head; /* stack of verifier states to be processed */
 	int stack_size;			/* number of states to be processed */
 	bool strict_alignment;		/* perform strict pointer alignment checks */
+	bool test_state_freq;		/* test verifier with different pruning frequency */
 	struct bpf_verifier_state *cur_state; /* current verifier state */
 	struct bpf_verifier_state_list **explored_states; /* search pruning optimization */
 	struct bpf_verifier_state_list *free_list;
@@ -297,9 +385,12 @@ struct bpf_verifier_env {
 		int *insn_stack;
 		int cur_stack;
 	} cfg;
+	u32 pass_cnt; /* number of times do_check() was called */
 	u32 subprog_cnt;
 	/* number of instructions analyzed by the verifier */
-	u32 insn_processed;
+	u32 prev_insn_processed, insn_processed;
+	/* number of jmps, calls, exits analyzed so far */
+	u32 prev_jmps_processed, jmps_processed;
 	/* total verification time */
 	u64 verification_time;
 	/* maximum number of verifier states kept in 'branching' instructions */
@@ -319,6 +410,8 @@ __printf(2, 0) void bpf_verifier_vlog(struct bpf_verifier_log *log,
 				      const char *fmt, va_list args);
 __printf(2, 3) void bpf_verifier_log_write(struct bpf_verifier_env *env,
 					   const char *fmt, ...);
+__printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
+			    const char *fmt, ...);
 
 static inline struct bpf_func_state *cur_func(struct bpf_verifier_env *env)
 {
@@ -341,5 +434,8 @@ bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
 			      struct bpf_insn *insn);
 void
 bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt);
+
+int check_ctx_reg(struct bpf_verifier_env *env,
+		  const struct bpf_reg_state *reg, int regno);
 
 #endif /* _LINUX_BPF_VERIFIER_H */

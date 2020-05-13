@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2018 Chelsio Communications, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __CHTLS_H__
@@ -24,6 +21,7 @@
 #include <crypto/internal/hash.h>
 #include <linux/tls.h>
 #include <net/tls.h>
+#include <net/tls_toe.h>
 
 #include "t4fw_api.h"
 #include "t4_msg.h"
@@ -121,7 +119,7 @@ struct tls_scmd {
 };
 
 struct chtls_dev {
-	struct tls_device tlsdev;
+	struct tls_toe_device tlsdev;
 	struct list_head list;
 	struct cxgb4_lld_info *lldi;
 	struct pci_dev *pdev;
@@ -181,7 +179,10 @@ struct chtls_hws {
 	u32 copied_seq;
 	u64 tx_seq_no;
 	struct tls_scmd scmd;
-	struct tls12_crypto_info_aes_gcm_128 crypto_info;
+	union {
+		struct tls12_crypto_info_aes_gcm_128 aes_gcm_128;
+		struct tls12_crypto_info_aes_gcm_256 aes_gcm_256;
+	} crypto_info;
 };
 
 struct chtls_sock {
@@ -365,7 +366,7 @@ enum {
 #define TCP_PAGE(sk)   (sk->sk_frag.page)
 #define TCP_OFF(sk)    (sk->sk_frag.offset)
 
-static inline struct chtls_dev *to_chtls_dev(struct tls_device *tlsdev)
+static inline struct chtls_dev *to_chtls_dev(struct tls_toe_device *tlsdev)
 {
 	return container_of(tlsdev, struct chtls_dev, tlsdev);
 }
@@ -484,7 +485,7 @@ int send_tx_flowc_wr(struct sock *sk, int compl,
 void chtls_tcp_push(struct sock *sk, int flags);
 int chtls_push_frames(struct chtls_sock *csk, int comp);
 int chtls_set_tcb_tflag(struct sock *sk, unsigned int bit_pos, int val);
-int chtls_setkey(struct chtls_sock *csk, u32 keylen, u32 mode);
+int chtls_setkey(struct chtls_sock *csk, u32 keylen, u32 mode, int cipher_type);
 void skb_entail(struct sock *sk, struct sk_buff *skb, int flags);
 unsigned int keyid_to_addr(int start_addr, int keyid);
 void free_tls_keyid(struct sock *sk);

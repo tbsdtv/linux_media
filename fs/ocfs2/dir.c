@@ -676,7 +676,7 @@ static struct buffer_head *ocfs2_find_entry_el(const char *name, int namelen,
 	int ra_ptr = 0;		/* Current index into readahead
 				   buffer */
 	int num = 0;
-	int nblocks, i, err;
+	int nblocks, i;
 
 	sb = dir->i_sb;
 
@@ -708,7 +708,7 @@ restart:
 				num++;
 
 				bh = NULL;
-				err = ocfs2_read_dir_block(dir, b++, &bh,
+				ocfs2_read_dir_block(dir, b++, &bh,
 							   OCFS2_BH_READAHEAD);
 				bh_use[ra_max] = bh;
 			}
@@ -3636,7 +3636,7 @@ static void ocfs2_dx_dir_transfer_leaf(struct inode *dir, u32 split_hash,
 	int i, j, num_used;
 	u32 major_hash;
 	struct ocfs2_dx_leaf *orig_dx_leaf, *new_dx_leaf;
-	struct ocfs2_dx_entry_list *orig_list, *new_list, *tmp_list;
+	struct ocfs2_dx_entry_list *orig_list, *tmp_list;
 	struct ocfs2_dx_entry *dx_entry;
 
 	tmp_list = &tmp_dx_leaf->dl_list;
@@ -3645,7 +3645,6 @@ static void ocfs2_dx_dir_transfer_leaf(struct inode *dir, u32 split_hash,
 		orig_dx_leaf = (struct ocfs2_dx_leaf *) orig_dx_leaves[i]->b_data;
 		orig_list = &orig_dx_leaf->dl_list;
 		new_dx_leaf = (struct ocfs2_dx_leaf *) new_dx_leaves[i]->b_data;
-		new_list = &new_dx_leaf->dl_list;
 
 		num_used = le16_to_cpu(orig_list->de_num_used);
 

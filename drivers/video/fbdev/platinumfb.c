@@ -96,7 +96,7 @@ static int platinum_var_to_par(struct fb_var_screeninfo *var,
  * Interface used by the world
  */
 
-static struct fb_ops platinumfb_ops = {
+static const struct fb_ops platinumfb_ops = {
 	.owner =	THIS_MODULE,
 	.fb_check_var	= platinumfb_check_var,
 	.fb_set_par	= platinumfb_set_par,
@@ -538,10 +538,9 @@ static int platinumfb_probe(struct platform_device* odev)
 	dev_info(&odev->dev, "Found Apple Platinum video hardware\n");
 
 	info = framebuffer_alloc(sizeof(*pinfo), &odev->dev);
-	if (info == NULL) {
-		dev_err(&odev->dev, "Failed to allocate fbdev !\n");
+	if (!info)
 		return -ENOMEM;
-	}
+
 	pinfo = info->par;
 
 	if (of_address_to_resource(dp, 0, &pinfo->rsrc_reg) ||

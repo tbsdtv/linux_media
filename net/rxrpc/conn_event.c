@@ -376,21 +376,7 @@ static void rxrpc_secure_connection(struct rxrpc_connection *conn)
 	_enter("{%d}", conn->debug_id);
 
 	ASSERT(conn->security_ix != 0);
-
-	if (!conn->params.key) {
-		_debug("set up security");
-		ret = rxrpc_init_server_conn_security(conn);
-		switch (ret) {
-		case 0:
-			break;
-		case -ENOENT:
-			abort_code = RX_CALL_DEAD;
-			goto abort;
-		default:
-			abort_code = RXKADNOAUTH;
-			goto abort;
-		}
-	}
+	ASSERT(conn->server_key);
 
 	if (conn->security->issue_challenge(conn) < 0) {
 		abort_code = RX_CALL_DEAD;
@@ -452,15 +438,11 @@ again:
 /*
  * connection-level event processor
  */
-void rxrpc_process_connection(struct work_struct *work)
+static void rxrpc_do_process_connection(struct rxrpc_connection *conn)
 {
-	struct rxrpc_connection *conn =
-		container_of(work, struct rxrpc_connection, processor);
 	struct sk_buff *skb;
 	u32 abort_code = RX_PROTOCOL_ERROR;
 	int ret;
-
-	rxrpc_see_connection(conn);
 
 	if (test_and_clear_bit(RXRPC_CONN_EV_CHALLENGE, &conn->events))
 		rxrpc_secure_connection(conn);
@@ -472,7 +454,7 @@ void rxrpc_process_connection(struct work_struct *work)
 	/* go through the conn-level event packets, releasing the ref on this
 	 * connection that each one has when we've finished with it */
 	while ((skb = skb_dequeue(&conn->rx_queue))) {
-		rxrpc_see_skb(skb, rxrpc_skb_rx_seen);
+		rxrpc_see_skb(skb, rxrpc_skb_seen);
 		ret = rxrpc_process_event(conn, skb, &abort_code);
 		switch (ret) {
 		case -EPROTO:
@@ -484,23 +466,37 @@ void rxrpc_process_connection(struct work_struct *work)
 			goto requeue_and_leave;
 		case -ECONNABORTED:
 		default:
-			rxrpc_free_skb(skb, rxrpc_skb_rx_freed);
+			rxrpc_free_skb(skb, rxrpc_skb_freed);
 			break;
 		}
 	}
 
-out:
-	rxrpc_put_connection(conn);
-	_leave("");
 	return;
 
 requeue_and_leave:
 	skb_queue_head(&conn->rx_queue, skb);
-	goto out;
+	return;
 
 protocol_error:
 	if (rxrpc_abort_connection(conn, ret, abort_code) < 0)
 		goto requeue_and_leave;
-	rxrpc_free_skb(skb, rxrpc_skb_rx_freed);
-	goto out;
+	rxrpc_free_skb(skb, rxrpc_skb_freed);
+	return;
+}
+
+void rxrpc_process_connection(struct work_struct *work)
+{
+	struct rxrpc_connection *conn =
+		container_of(work, struct rxrpc_connection, processor);
+
+	rxrpc_see_connection(conn);
+
+	if (__rxrpc_use_local(conn->params.local)) {
+		rxrpc_do_process_connection(conn);
+		rxrpc_unuse_local(conn->params.local);
+	}
+
+	rxrpc_put_connection(conn);
+	_leave("");
+	return;
 }

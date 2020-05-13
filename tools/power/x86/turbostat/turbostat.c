@@ -30,7 +30,7 @@
 #include <sched.h>
 #include <time.h>
 #include <cpuid.h>
-#include <linux/capability.h>
+#include <sys/capability.h>
 #include <errno.h>
 #include <math.h>
 
@@ -39,7 +39,6 @@ FILE *outf;
 int *fd_percpu;
 struct timeval interval_tv = {5, 0};
 struct timespec interval_ts = {5, 0};
-struct timespec one_msec = {0, 1000000};
 unsigned int num_iterations;
 unsigned int debug;
 unsigned int quiet;
@@ -60,6 +59,7 @@ unsigned int do_irtl_hsw;
 unsigned int units = 1000000;	/* MHz etc */
 unsigned int genuine_intel;
 unsigned int authentic_amd;
+unsigned int hygon_genuine;
 unsigned int max_level, max_extended_level;
 unsigned int has_invariant_tsc;
 unsigned int do_nhm_platform_info;
@@ -100,6 +100,7 @@ unsigned int has_hwp_epp;		/* IA32_HWP_REQUEST[bits 31:24] */
 unsigned int has_hwp_pkg;		/* IA32_HWP_REQUEST_PKG */
 unsigned int has_misc_feature_control;
 unsigned int first_counter_read = 1;
+int ignore_stdin;
 
 #define RAPL_PKG		(1 << 0)
 					/* 0x610 MSR_PKG_POWER_LIMIT */
@@ -166,6 +167,7 @@ size_t cpu_present_setsize, cpu_affinity_setsize, cpu_subset_size;
 struct thread_data {
 	struct timeval tv_begin;
 	struct timeval tv_end;
+	struct timeval tv_delta;
 	unsigned long long tsc;
 	unsigned long long aperf;
 	unsigned long long mperf;
@@ -301,6 +303,10 @@ int *irq_column_2_cpu;	/* /proc/interrupts column numbers */
 int *irqs_per_cpu;		/* indexed by cpu_num */
 
 void setup_all_buffers(void);
+
+char *sys_lpi_file;
+char *sys_lpi_file_sysfs = "/sys/devices/system/cpu/cpuidle/low_power_idle_system_residency_us";
+char *sys_lpi_file_debugfs = "/sys/kernel/debug/pmc_core/slp_s0_residency_usec";
 
 int cpu_is_not_present(int cpu)
 {
@@ -506,6 +512,7 @@ unsigned long long bic_enabled = (0xFFFFFFFFFFFFFFFFULL & ~BIC_DISABLED_BY_DEFAU
 unsigned long long bic_present = BIC_USEC | BIC_TOD | BIC_sysfs | BIC_APIC | BIC_X2APIC;
 
 #define DO_BIC(COUNTER_NAME) (bic_enabled & bic_present & COUNTER_NAME)
+#define DO_BIC_READ(COUNTER_NAME) (bic_present & COUNTER_NAME)
 #define ENABLE_BIC(COUNTER_NAME) (bic_enabled |= COUNTER_NAME)
 #define BIC_PRESENT(COUNTER_BIT) (bic_present |= COUNTER_BIT)
 #define BIC_NOT_PRESENT(COUNTER_BIT) (bic_present &= ~COUNTER_BIT)
@@ -849,7 +856,6 @@ int dump_counters(struct thread_data *t, struct core_data *c,
 		outp += sprintf(outp, "pc8: %016llX\n", p->pc8);
 		outp += sprintf(outp, "pc9: %016llX\n", p->pc9);
 		outp += sprintf(outp, "pc10: %016llX\n", p->pc10);
-		outp += sprintf(outp, "pc10: %016llX\n", p->pc10);
 		outp += sprintf(outp, "cpu_lpi: %016llX\n", p->cpu_lpi);
 		outp += sprintf(outp, "sys_lpi: %016llX\n", p->sys_lpi);
 		outp += sprintf(outp, "Joules PKG: %0X\n", p->energy_pkg);
@@ -911,7 +917,7 @@ int format_counters(struct thread_data *t, struct core_data *c,
 	if (DO_BIC(BIC_TOD))
 		outp += sprintf(outp, "%10ld.%06ld\t", t->tv_end.tv_sec, t->tv_end.tv_usec);
 
-	interval_float = tv_delta.tv_sec + tv_delta.tv_usec/1000000.0;
+	interval_float = t->tv_delta.tv_sec + t->tv_delta.tv_usec/1000000.0;
 
 	tsc = t->tsc * tsc_tweak;
 
@@ -1287,6 +1293,14 @@ delta_core(struct core_data *new, struct core_data *old)
 	}
 }
 
+int soft_c1_residency_display(int bic)
+{
+	if (!DO_BIC(BIC_CPU_c1) || use_c1_residency_msr)
+		return 0;
+
+	return DO_BIC_READ(bic);
+}
+
 /*
  * old = new - old
  */
@@ -1309,6 +1323,7 @@ delta_thread(struct thread_data *new, struct thread_data *old,
 	 * over-write old w/ new so we can print end of interval values
 	 */
 
+	timersub(&new->tv_begin, &old->tv_begin, &old->tv_delta);
 	old->tv_begin = new->tv_begin;
 	old->tv_end = new->tv_end;
 
@@ -1322,7 +1337,8 @@ delta_thread(struct thread_data *new, struct thread_data *old,
 
 	old->c1 = new->c1 - old->c1;
 
-	if (DO_BIC(BIC_Avg_MHz) || DO_BIC(BIC_Busy) || DO_BIC(BIC_Bzy_MHz)) {
+	if (DO_BIC(BIC_Avg_MHz) || DO_BIC(BIC_Busy) || DO_BIC(BIC_Bzy_MHz) ||
+	    soft_c1_residency_display(BIC_Avg_MHz)) {
 		if ((new->aperf > old->aperf) && (new->mperf > old->mperf)) {
 			old->aperf = new->aperf - old->aperf;
 			old->mperf = new->mperf - old->mperf;
@@ -1404,6 +1420,8 @@ void clear_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 	t->tv_begin.tv_usec = 0;
 	t->tv_end.tv_sec = 0;
 	t->tv_end.tv_usec = 0;
+	t->tv_delta.tv_sec = 0;
+	t->tv_delta.tv_usec = 0;
 
 	t->tsc = 0;
 	t->aperf = 0;
@@ -1573,6 +1591,9 @@ void compute_average(struct thread_data *t, struct core_data *c,
 
 	for_all_cpus(sum_counters, t, c, p);
 
+	/* Use the global time delta for the average. */
+	average.threads.tv_delta = tv_delta;
+
 	average.threads.tsc /= topo.num_cpus;
 	average.threads.aperf /= topo.num_cpus;
 	average.threads.mperf /= topo.num_cpus;
@@ -1714,7 +1735,7 @@ void get_apic_id(struct thread_data *t)
 	if (!DO_BIC(BIC_X2APIC))
 		return;
 
-	if (authentic_amd) {
+	if (authentic_amd || hygon_genuine) {
 		unsigned int topology_extensions;
 
 		if (max_extended_level < 0x8000001e)
@@ -1762,19 +1783,20 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 	struct msr_counter *mp;
 	int i;
 
-	gettimeofday(&t->tv_begin, (struct timezone *)NULL);
-
 	if (cpu_migrate(cpu)) {
 		fprintf(outf, "Could not migrate to CPU %d\n", cpu);
 		return -1;
 	}
+
+	gettimeofday(&t->tv_begin, (struct timezone *)NULL);
 
 	if (first_counter_read)
 		get_apic_id(t);
 retry:
 	t->tsc = rdtsc();	/* we are running on local CPU of interest */
 
-	if (DO_BIC(BIC_Avg_MHz) || DO_BIC(BIC_Busy) || DO_BIC(BIC_Bzy_MHz)) {
+	if (DO_BIC(BIC_Avg_MHz) || DO_BIC(BIC_Busy) || DO_BIC(BIC_Bzy_MHz) ||
+	    soft_c1_residency_display(BIC_Avg_MHz)) {
 		unsigned long long tsc_before, tsc_between, tsc_after, aperf_time, mperf_time;
 
 		/*
@@ -1851,20 +1873,20 @@ retry:
 	if (!(t->flags & CPU_IS_FIRST_THREAD_IN_CORE))
 		goto done;
 
-	if (DO_BIC(BIC_CPU_c3)) {
+	if (DO_BIC(BIC_CPU_c3) || soft_c1_residency_display(BIC_CPU_c3)) {
 		if (get_msr(cpu, MSR_CORE_C3_RESIDENCY, &c->c3))
 			return -6;
 	}
 
-	if (DO_BIC(BIC_CPU_c6) && !do_knl_cstates) {
+	if ((DO_BIC(BIC_CPU_c6) || soft_c1_residency_display(BIC_CPU_c6)) && !do_knl_cstates) {
 		if (get_msr(cpu, MSR_CORE_C6_RESIDENCY, &c->c6))
 			return -7;
-	} else if (do_knl_cstates) {
+	} else if (do_knl_cstates || soft_c1_residency_display(BIC_CPU_c6)) {
 		if (get_msr(cpu, MSR_KNL_CORE_C6_RESIDENCY, &c->c6))
 			return -7;
 	}
 
-	if (DO_BIC(BIC_CPU_c7))
+	if (DO_BIC(BIC_CPU_c7) || soft_c1_residency_display(BIC_CPU_c7))
 		if (get_msr(cpu, MSR_CORE_C7_RESIDENCY, &c->c7))
 			return -8;
 
@@ -2150,7 +2172,7 @@ int has_turbo_ratio_group_limits(int family, int model)
 	switch (model) {
 	case INTEL_FAM6_ATOM_GOLDMONT:
 	case INTEL_FAM6_SKYLAKE_X:
-	case INTEL_FAM6_ATOM_GOLDMONT_X:
+	case INTEL_FAM6_ATOM_GOLDMONT_D:
 		return 1;
 	}
 	return 0;
@@ -2898,8 +2920,6 @@ int snapshot_gfx_mhz(void)
  *
  * record snapshot of
  * /sys/devices/system/cpu/cpuidle/low_power_idle_cpu_residency_us
- *
- * return 1 if config change requires a restart, else return 0
  */
 int snapshot_cpu_lpi_us(void)
 {
@@ -2912,6 +2932,7 @@ int snapshot_cpu_lpi_us(void)
 	if (retval != 1) {
 		fprintf(stderr, "Disabling Low Power Idle CPU output\n");
 		BIC_NOT_PRESENT(BIC_CPU_LPI);
+		fclose(fp);
 		return -1;
 	}
 
@@ -2922,22 +2943,20 @@ int snapshot_cpu_lpi_us(void)
 /*
  * snapshot_sys_lpi()
  *
- * record snapshot of
- * /sys/devices/system/cpu/cpuidle/low_power_idle_system_residency_us
- *
- * return 1 if config change requires a restart, else return 0
+ * record snapshot of sys_lpi_file
  */
 int snapshot_sys_lpi_us(void)
 {
 	FILE *fp;
 	int retval;
 
-	fp = fopen_or_die("/sys/devices/system/cpu/cpuidle/low_power_idle_system_residency_us", "r");
+	fp = fopen_or_die(sys_lpi_file, "r");
 
 	retval = fscanf(fp, "%lld", &cpuidle_cur_sys_lpi_us);
 	if (retval != 1) {
 		fprintf(stderr, "Disabling Low Power Idle System output\n");
 		BIC_NOT_PRESENT(BIC_SYS_LPI);
+		fclose(fp);
 		return -1;
 	}
 	fclose(fp);
@@ -2985,8 +3004,6 @@ static void signal_handler (int signal)
 			fprintf(stderr, "SIGUSR1\n");
 		break;
 	}
-	/* make sure this manually-invoked interval is at least 1ms long */
-	nanosleep(&one_msec, NULL);
 }
 
 void setup_signal_handler(void)
@@ -3005,29 +3022,38 @@ void setup_signal_handler(void)
 
 void do_sleep(void)
 {
-	struct timeval select_timeout;
+	struct timeval tout;
+	struct timespec rest;
 	fd_set readfds;
 	int retval;
 
 	FD_ZERO(&readfds);
 	FD_SET(0, &readfds);
 
-	if (!isatty(fileno(stdin))) {
+	if (ignore_stdin) {
 		nanosleep(&interval_ts, NULL);
 		return;
 	}
 
-	select_timeout = interval_tv;
-	retval = select(1, &readfds, NULL, NULL, &select_timeout);
+	tout = interval_tv;
+	retval = select(1, &readfds, NULL, NULL, &tout);
 
 	if (retval == 1) {
 		switch (getc(stdin)) {
 		case 'q':
 			exit_requested = 1;
 			break;
+		case EOF:
+			/*
+			 * 'stdin' is a pipe closed on the other end. There
+			 * won't be any further input.
+			 */
+			ignore_stdin = 1;
+			/* Sleep the rest of the time */
+			rest.tv_sec = (tout.tv_sec + tout.tv_usec / 1000000);
+			rest.tv_nsec = (tout.tv_usec % 1000000) * 1000;
+			nanosleep(&rest, NULL);
 		}
-		/* make sure this manually-invoked interval is at least 1ms long */
-		nanosleep(&one_msec, NULL);
 	}
 }
 
@@ -3124,27 +3150,41 @@ void check_dev_msr()
 			err(-5, "no /dev/cpu/0/msr, Try \"# modprobe msr\" ");
 }
 
-void check_permissions()
+/*
+ * check for CAP_SYS_RAWIO
+ * return 0 on success
+ * return 1 on fail
+ */
+int check_for_cap_sys_rawio(void)
 {
-	struct __user_cap_header_struct cap_header_data;
-	cap_user_header_t cap_header = &cap_header_data;
-	struct __user_cap_data_struct cap_data_data;
-	cap_user_data_t cap_data = &cap_data_data;
-	extern int capget(cap_user_header_t hdrp, cap_user_data_t datap);
+	cap_t caps;
+	cap_flag_value_t cap_flag_value;
+
+	caps = cap_get_proc();
+	if (caps == NULL)
+		err(-6, "cap_get_proc\n");
+
+	if (cap_get_flag(caps, CAP_SYS_RAWIO, CAP_EFFECTIVE, &cap_flag_value))
+		err(-6, "cap_get\n");
+
+	if (cap_flag_value != CAP_SET) {
+		warnx("capget(CAP_SYS_RAWIO) failed,"
+			" try \"# setcap cap_sys_rawio=ep %s\"", progname);
+		return 1;
+	}
+
+	if (cap_free(caps) == -1)
+		err(-6, "cap_free\n");
+
+	return 0;
+}
+void check_permissions(void)
+{
 	int do_exit = 0;
 	char pathname[32];
 
 	/* check for CAP_SYS_RAWIO */
-	cap_header->pid = getpid();
-	cap_header->version = _LINUX_CAPABILITY_VERSION;
-	if (capget(cap_header, cap_data) < 0)
-		err(-6, "capget(2) failed");
-
-	if ((cap_data->effective & (1 << CAP_SYS_RAWIO)) == 0) {
-		do_exit++;
-		warnx("capget(CAP_SYS_RAWIO) failed,"
-			" try \"# setcap cap_sys_rawio=ep %s\"", progname);
-	}
+	do_exit += check_for_cap_sys_rawio();
 
 	/* test file permissions */
 	sprintf(pathname, "/dev/cpu/%d/msr", base_cpu);
@@ -3207,14 +3247,15 @@ int probe_nhm_msrs(unsigned int family, unsigned int model)
 		pkg_cstate_limits = snb_pkg_cstate_limits;
 		has_misc_feature_control = 1;
 		break;
-	case INTEL_FAM6_HASWELL_CORE:	/* HSW */
+	case INTEL_FAM6_HASWELL:	/* HSW */
+	case INTEL_FAM6_HASWELL_G:	/* HSW */
 	case INTEL_FAM6_HASWELL_X:	/* HSX */
-	case INTEL_FAM6_HASWELL_GT3E:	/* HSW */
-	case INTEL_FAM6_BROADWELL_CORE:	/* BDW */
-	case INTEL_FAM6_BROADWELL_GT3E:	/* BDW */
+	case INTEL_FAM6_HASWELL_L:	/* HSW */
+	case INTEL_FAM6_BROADWELL:	/* BDW */
+	case INTEL_FAM6_BROADWELL_G:	/* BDW */
 	case INTEL_FAM6_BROADWELL_X:	/* BDX */
-	case INTEL_FAM6_SKYLAKE_MOBILE:	/* SKL */
-	case INTEL_FAM6_CANNONLAKE_MOBILE:	/* CNL */
+	case INTEL_FAM6_SKYLAKE_L:	/* SKL */
+	case INTEL_FAM6_CANNONLAKE_L:	/* CNL */
 		pkg_cstate_limits = hsw_pkg_cstate_limits;
 		has_misc_feature_control = 1;
 		break;
@@ -3224,7 +3265,7 @@ int probe_nhm_msrs(unsigned int family, unsigned int model)
 		break;
 	case INTEL_FAM6_ATOM_SILVERMONT:	/* BYT */
 		no_MSR_MISC_PWR_MGMT = 1;
-	case INTEL_FAM6_ATOM_SILVERMONT_X:	/* AVN */
+	case INTEL_FAM6_ATOM_SILVERMONT_D:	/* AVN */
 		pkg_cstate_limits = slv_pkg_cstate_limits;
 		break;
 	case INTEL_FAM6_ATOM_AIRMONT:	/* AMT */
@@ -3236,7 +3277,8 @@ int probe_nhm_msrs(unsigned int family, unsigned int model)
 		break;
 	case INTEL_FAM6_ATOM_GOLDMONT:	/* BXT */
 	case INTEL_FAM6_ATOM_GOLDMONT_PLUS:
-	case INTEL_FAM6_ATOM_GOLDMONT_X:	/* DNV */
+	case INTEL_FAM6_ATOM_GOLDMONT_D:	/* DNV */
+	case INTEL_FAM6_ATOM_TREMONT:	/* EHL */
 		pkg_cstate_limits = glm_pkg_cstate_limits;
 		break;
 	default:
@@ -3279,7 +3321,7 @@ int is_dnv(unsigned int family, unsigned int model)
 		return 0;
 
 	switch (model) {
-	case INTEL_FAM6_ATOM_GOLDMONT_X:
+	case INTEL_FAM6_ATOM_GOLDMONT_D:
 		return 1;
 	}
 	return 0;
@@ -3304,6 +3346,17 @@ int is_skx(unsigned int family, unsigned int model)
 
 	switch (model) {
 	case INTEL_FAM6_SKYLAKE_X:
+		return 1;
+	}
+	return 0;
+}
+int is_ehl(unsigned int family, unsigned int model)
+{
+	if (!genuine_intel)
+		return 0;
+
+	switch (model) {
+	case INTEL_FAM6_ATOM_TREMONT:
 		return 1;
 	}
 	return 0;
@@ -3403,14 +3456,15 @@ int has_config_tdp(unsigned int family, unsigned int model)
 
 	switch (model) {
 	case INTEL_FAM6_IVYBRIDGE:	/* IVB */
-	case INTEL_FAM6_HASWELL_CORE:	/* HSW */
+	case INTEL_FAM6_HASWELL:	/* HSW */
 	case INTEL_FAM6_HASWELL_X:	/* HSX */
-	case INTEL_FAM6_HASWELL_GT3E:	/* HSW */
-	case INTEL_FAM6_BROADWELL_CORE:	/* BDW */
-	case INTEL_FAM6_BROADWELL_GT3E:	/* BDW */
+	case INTEL_FAM6_HASWELL_L:	/* HSW */
+	case INTEL_FAM6_HASWELL_G:	/* HSW */
+	case INTEL_FAM6_BROADWELL:	/* BDW */
+	case INTEL_FAM6_BROADWELL_G:	/* BDW */
 	case INTEL_FAM6_BROADWELL_X:	/* BDX */
-	case INTEL_FAM6_SKYLAKE_MOBILE:	/* SKL */
-	case INTEL_FAM6_CANNONLAKE_MOBILE:	/* CNL */
+	case INTEL_FAM6_SKYLAKE_L:	/* SKL */
+	case INTEL_FAM6_CANNONLAKE_L:	/* CNL */
 	case INTEL_FAM6_SKYLAKE_X:	/* SKX */
 
 	case INTEL_FAM6_XEON_PHI_KNL:	/* Knights Landing */
@@ -3449,6 +3503,23 @@ dump_cstate_pstate_config_info(unsigned int family, unsigned int model)
 	dump_nhm_cst_cfg();
 }
 
+static void dump_sysfs_file(char *path)
+{
+	FILE *input;
+	char cpuidle_buf[64];
+
+	input = fopen(path, "r");
+	if (input == NULL) {
+		if (debug)
+			fprintf(outf, "NSFOD %s\n", path);
+		return;
+	}
+	if (!fgets(cpuidle_buf, sizeof(cpuidle_buf), input))
+		err(1, "%s: failed to read file", path);
+	fclose(input);
+
+	fprintf(outf, "%s: %s", strrchr(path, '/') + 1, cpuidle_buf);
+}
 static void
 dump_sysfs_cstate_config(void)
 {
@@ -3461,6 +3532,15 @@ dump_sysfs_cstate_config(void)
 
 	if (!DO_BIC(BIC_sysfs))
 		return;
+
+	if (access("/sys/devices/system/cpu/cpuidle", R_OK)) {
+		fprintf(outf, "cpuidle not loaded\n");
+		return;
+	}
+
+	dump_sysfs_file("/sys/devices/system/cpu/cpuidle/current_driver");
+	dump_sysfs_file("/sys/devices/system/cpu/cpuidle/current_governor");
+	dump_sysfs_file("/sys/devices/system/cpu/cpuidle/current_governor_ro");
 
 	for (state = 0; state < 10; ++state) {
 
@@ -3792,7 +3872,7 @@ double get_tdp_intel(unsigned int model)
 
 	switch (model) {
 	case INTEL_FAM6_ATOM_SILVERMONT:
-	case INTEL_FAM6_ATOM_SILVERMONT_X:
+	case INTEL_FAM6_ATOM_SILVERMONT_D:
 		return 30.0;
 	default:
 		return 135.0;
@@ -3803,6 +3883,7 @@ double get_tdp_amd(unsigned int family)
 {
 	switch (family) {
 	case 0x17:
+	case 0x18:
 	default:
 		/* This is the max stock TDP of HEDT/Server Fam17h chips */
 		return 250.0;
@@ -3840,10 +3921,11 @@ void rapl_probe_intel(unsigned int family, unsigned int model)
 	switch (model) {
 	case INTEL_FAM6_SANDYBRIDGE:
 	case INTEL_FAM6_IVYBRIDGE:
-	case INTEL_FAM6_HASWELL_CORE:	/* HSW */
-	case INTEL_FAM6_HASWELL_GT3E:	/* HSW */
-	case INTEL_FAM6_BROADWELL_CORE:	/* BDW */
-	case INTEL_FAM6_BROADWELL_GT3E:	/* BDW */
+	case INTEL_FAM6_HASWELL:	/* HSW */
+	case INTEL_FAM6_HASWELL_L:	/* HSW */
+	case INTEL_FAM6_HASWELL_G:	/* HSW */
+	case INTEL_FAM6_BROADWELL:	/* BDW */
+	case INTEL_FAM6_BROADWELL_G:	/* BDW */
 		do_rapl = RAPL_PKG | RAPL_CORES | RAPL_CORE_POLICY | RAPL_GFX | RAPL_PKG_POWER_INFO;
 		if (rapl_joules) {
 			BIC_PRESENT(BIC_Pkg_J);
@@ -3863,8 +3945,22 @@ void rapl_probe_intel(unsigned int family, unsigned int model)
 		else
 			BIC_PRESENT(BIC_PkgWatt);
 		break;
-	case INTEL_FAM6_SKYLAKE_MOBILE:	/* SKL */
-	case INTEL_FAM6_CANNONLAKE_MOBILE:	/* CNL */
+	case INTEL_FAM6_ATOM_TREMONT:	/* EHL */
+		do_rapl = RAPL_PKG | RAPL_CORES | RAPL_CORE_POLICY | RAPL_DRAM | RAPL_DRAM_PERF_STATUS | RAPL_PKG_PERF_STATUS | RAPL_GFX | RAPL_PKG_POWER_INFO;
+		if (rapl_joules) {
+			BIC_PRESENT(BIC_Pkg_J);
+			BIC_PRESENT(BIC_Cor_J);
+			BIC_PRESENT(BIC_RAM_J);
+			BIC_PRESENT(BIC_GFX_J);
+		} else {
+			BIC_PRESENT(BIC_PkgWatt);
+			BIC_PRESENT(BIC_CorWatt);
+			BIC_PRESENT(BIC_RAMWatt);
+			BIC_PRESENT(BIC_GFXWatt);
+		}
+		break;
+	case INTEL_FAM6_SKYLAKE_L:	/* SKL */
+	case INTEL_FAM6_CANNONLAKE_L:	/* CNL */
 		do_rapl = RAPL_PKG | RAPL_CORES | RAPL_CORE_POLICY | RAPL_DRAM | RAPL_DRAM_PERF_STATUS | RAPL_PKG_PERF_STATUS | RAPL_GFX | RAPL_PKG_POWER_INFO;
 		BIC_PRESENT(BIC_PKG__);
 		BIC_PRESENT(BIC_RAM__);
@@ -3911,7 +4007,7 @@ void rapl_probe_intel(unsigned int family, unsigned int model)
 		}
 		break;
 	case INTEL_FAM6_ATOM_SILVERMONT:	/* BYT */
-	case INTEL_FAM6_ATOM_SILVERMONT_X:	/* AVN */
+	case INTEL_FAM6_ATOM_SILVERMONT_D:	/* AVN */
 		do_rapl = RAPL_PKG | RAPL_CORES;
 		if (rapl_joules) {
 			BIC_PRESENT(BIC_Pkg_J);
@@ -3921,7 +4017,7 @@ void rapl_probe_intel(unsigned int family, unsigned int model)
 			BIC_PRESENT(BIC_CorWatt);
 		}
 		break;
-	case INTEL_FAM6_ATOM_GOLDMONT_X:	/* DNV */
+	case INTEL_FAM6_ATOM_GOLDMONT_D:	/* DNV */
 		do_rapl = RAPL_PKG | RAPL_DRAM | RAPL_DRAM_POWER_INFO | RAPL_DRAM_PERF_STATUS | RAPL_PKG_PERF_STATUS | RAPL_PKG_POWER_INFO | RAPL_CORES_ENERGY_STATUS;
 		BIC_PRESENT(BIC_PKG__);
 		BIC_PRESENT(BIC_RAM__);
@@ -3982,6 +4078,7 @@ void rapl_probe_amd(unsigned int family, unsigned int model)
 
 	switch (family) {
 	case 0x17: /* Zen, Zen+ */
+	case 0x18: /* Hygon Dhyana */
 		do_rapl = RAPL_AMD_F17H | RAPL_PER_CORE_ENERGY;
 		if (rapl_joules) {
 			BIC_PRESENT(BIC_Pkg_J);
@@ -4002,7 +4099,7 @@ void rapl_probe_amd(unsigned int family, unsigned int model)
 	rapl_energy_units = ldexp(1.0, -(msr >> 8 & 0x1f));
 	rapl_power_units = ldexp(1.0, -(msr & 0xf));
 
-	tdp = get_tdp_amd(model);
+	tdp = get_tdp_amd(family);
 
 	rapl_joule_counter_range = 0xFFFFFFFF * rapl_energy_units / tdp;
 	if (!quiet)
@@ -4018,7 +4115,7 @@ void rapl_probe(unsigned int family, unsigned int model)
 {
 	if (genuine_intel)
 		rapl_probe_intel(family, model);
-	if (authentic_amd)
+	if (authentic_amd || hygon_genuine)
 		rapl_probe_amd(family, model);
 }
 
@@ -4031,8 +4128,9 @@ void perf_limit_reasons_probe(unsigned int family, unsigned int model)
 		return;
 
 	switch (model) {
-	case INTEL_FAM6_HASWELL_CORE:	/* HSW */
-	case INTEL_FAM6_HASWELL_GT3E:	/* HSW */
+	case INTEL_FAM6_HASWELL:	/* HSW */
+	case INTEL_FAM6_HASWELL_L:	/* HSW */
+	case INTEL_FAM6_HASWELL_G:	/* HSW */
 		do_gfx_perf_limit_reasons = 1;
 	case INTEL_FAM6_HASWELL_X:	/* HSX */
 		do_core_perf_limit_reasons = 1;
@@ -4247,27 +4345,29 @@ int has_snb_msrs(unsigned int family, unsigned int model)
 	switch (model) {
 	case INTEL_FAM6_SANDYBRIDGE:
 	case INTEL_FAM6_SANDYBRIDGE_X:
-	case INTEL_FAM6_IVYBRIDGE:	/* IVB */
-	case INTEL_FAM6_IVYBRIDGE_X:	/* IVB Xeon */
-	case INTEL_FAM6_HASWELL_CORE:	/* HSW */
-	case INTEL_FAM6_HASWELL_X:	/* HSW */
-	case INTEL_FAM6_HASWELL_GT3E:	/* HSW */
-	case INTEL_FAM6_BROADWELL_CORE:	/* BDW */
-	case INTEL_FAM6_BROADWELL_GT3E:	/* BDW */
-	case INTEL_FAM6_BROADWELL_X:	/* BDX */
-	case INTEL_FAM6_SKYLAKE_MOBILE:	/* SKL */
-	case INTEL_FAM6_CANNONLAKE_MOBILE:	/* CNL */
-	case INTEL_FAM6_SKYLAKE_X:	/* SKX */
-	case INTEL_FAM6_ATOM_GOLDMONT:	/* BXT */
+	case INTEL_FAM6_IVYBRIDGE:		/* IVB */
+	case INTEL_FAM6_IVYBRIDGE_X:		/* IVB Xeon */
+	case INTEL_FAM6_HASWELL:		/* HSW */
+	case INTEL_FAM6_HASWELL_X:		/* HSW */
+	case INTEL_FAM6_HASWELL_L:		/* HSW */
+	case INTEL_FAM6_HASWELL_G:		/* HSW */
+	case INTEL_FAM6_BROADWELL:		/* BDW */
+	case INTEL_FAM6_BROADWELL_G:		/* BDW */
+	case INTEL_FAM6_BROADWELL_X:		/* BDX */
+	case INTEL_FAM6_SKYLAKE_L:		/* SKL */
+	case INTEL_FAM6_CANNONLAKE_L:		/* CNL */
+	case INTEL_FAM6_SKYLAKE_X:		/* SKX */
+	case INTEL_FAM6_ATOM_GOLDMONT:		/* BXT */
 	case INTEL_FAM6_ATOM_GOLDMONT_PLUS:
-	case INTEL_FAM6_ATOM_GOLDMONT_X:	/* DNV */
+	case INTEL_FAM6_ATOM_GOLDMONT_D:	/* DNV */
+	case INTEL_FAM6_ATOM_TREMONT:		/* EHL */
 		return 1;
 	}
 	return 0;
 }
 
 /*
- * HSW adds support for additional MSRs:
+ * HSW ULT added support for C8/C9/C10 MSRs:
  *
  * MSR_PKG_C8_RESIDENCY		0x00000630
  * MSR_PKG_C9_RESIDENCY		0x00000631
@@ -4278,18 +4378,19 @@ int has_snb_msrs(unsigned int family, unsigned int model)
  * MSR_PKGC10_IRTL		0x00000635
  *
  */
-int has_hsw_msrs(unsigned int family, unsigned int model)
+int has_c8910_msrs(unsigned int family, unsigned int model)
 {
 	if (!genuine_intel)
 		return 0;
 
 	switch (model) {
-	case INTEL_FAM6_HASWELL_CORE:
-	case INTEL_FAM6_BROADWELL_CORE:	/* BDW */
-	case INTEL_FAM6_SKYLAKE_MOBILE:	/* SKL */
-	case INTEL_FAM6_CANNONLAKE_MOBILE:	/* CNL */
+	case INTEL_FAM6_HASWELL_L:	/* HSW */
+	case INTEL_FAM6_BROADWELL:	/* BDW */
+	case INTEL_FAM6_SKYLAKE_L:	/* SKL */
+	case INTEL_FAM6_CANNONLAKE_L:	/* CNL */
 	case INTEL_FAM6_ATOM_GOLDMONT:	/* BXT */
 	case INTEL_FAM6_ATOM_GOLDMONT_PLUS:
+	case INTEL_FAM6_ATOM_TREMONT:	/* EHL */
 		return 1;
 	}
 	return 0;
@@ -4309,8 +4410,8 @@ int has_skl_msrs(unsigned int family, unsigned int model)
 		return 0;
 
 	switch (model) {
-	case INTEL_FAM6_SKYLAKE_MOBILE:	/* SKL */
-	case INTEL_FAM6_CANNONLAKE_MOBILE:	/* CNL */
+	case INTEL_FAM6_SKYLAKE_L:	/* SKL */
+	case INTEL_FAM6_CANNONLAKE_L:	/* CNL */
 		return 1;
 	}
 	return 0;
@@ -4322,7 +4423,7 @@ int is_slm(unsigned int family, unsigned int model)
 		return 0;
 	switch (model) {
 	case INTEL_FAM6_ATOM_SILVERMONT:	/* BYT */
-	case INTEL_FAM6_ATOM_SILVERMONT_X:	/* AVN */
+	case INTEL_FAM6_ATOM_SILVERMONT_D:	/* AVN */
 		return 1;
 	}
 	return 0;
@@ -4345,7 +4446,7 @@ int is_cnl(unsigned int family, unsigned int model)
 		return 0;
 
 	switch (model) {
-	case INTEL_FAM6_CANNONLAKE_MOBILE: /* CNL */
+	case INTEL_FAM6_CANNONLAKE_L: /* CNL */
 		return 1;
 	}
 
@@ -4465,10 +4566,10 @@ void decode_feature_control_msr(void)
 {
 	unsigned long long msr;
 
-	if (!get_msr(base_cpu, MSR_IA32_FEATURE_CONTROL, &msr))
+	if (!get_msr(base_cpu, MSR_IA32_FEAT_CTL, &msr))
 		fprintf(outf, "cpu%d: MSR_IA32_FEATURE_CONTROL: 0x%08llx (%sLocked %s)\n",
 			base_cpu, msr,
-			msr & FEATURE_CONTROL_LOCKED ? "" : "UN-",
+			msr & FEAT_CTL_LOCKED ? "" : "UN-",
 			msr & (1 << 18) ? "SGX" : "");
 }
 
@@ -4568,21 +4669,32 @@ unsigned int intel_model_duplicates(unsigned int model)
 	case INTEL_FAM6_XEON_PHI_KNM:
 		return INTEL_FAM6_XEON_PHI_KNL;
 
-	case INTEL_FAM6_HASWELL_ULT:
-		return INTEL_FAM6_HASWELL_CORE;
-
 	case INTEL_FAM6_BROADWELL_X:
-	case INTEL_FAM6_BROADWELL_XEON_D:	/* BDX-DE */
+	case INTEL_FAM6_BROADWELL_D:	/* BDX-DE */
 		return INTEL_FAM6_BROADWELL_X;
 
-	case INTEL_FAM6_SKYLAKE_MOBILE:
-	case INTEL_FAM6_SKYLAKE_DESKTOP:
-	case INTEL_FAM6_KABYLAKE_MOBILE:
-	case INTEL_FAM6_KABYLAKE_DESKTOP:
-		return INTEL_FAM6_SKYLAKE_MOBILE;
+	case INTEL_FAM6_SKYLAKE_L:
+	case INTEL_FAM6_SKYLAKE:
+	case INTEL_FAM6_KABYLAKE_L:
+	case INTEL_FAM6_KABYLAKE:
+	case INTEL_FAM6_COMETLAKE_L:
+	case INTEL_FAM6_COMETLAKE:
+		return INTEL_FAM6_SKYLAKE_L;
 
-	case INTEL_FAM6_ICELAKE_MOBILE:
-		return INTEL_FAM6_CANNONLAKE_MOBILE;
+	case INTEL_FAM6_ICELAKE_L:
+	case INTEL_FAM6_ICELAKE_NNPI:
+	case INTEL_FAM6_TIGERLAKE_L:
+	case INTEL_FAM6_TIGERLAKE:
+		return INTEL_FAM6_CANNONLAKE_L;
+
+	case INTEL_FAM6_ATOM_TREMONT_D:
+		return INTEL_FAM6_ATOM_GOLDMONT_D;
+
+	case INTEL_FAM6_ATOM_TREMONT_L:
+		return INTEL_FAM6_ATOM_TREMONT;
+
+	case INTEL_FAM6_ICELAKE_X:
+		return INTEL_FAM6_SKYLAKE_X;
 	}
 	return model;
 }
@@ -4600,6 +4712,8 @@ void process_cpuid()
 		genuine_intel = 1;
 	else if (ebx == 0x68747541 && ecx == 0x444d4163 && edx == 0x69746e65)
 		authentic_amd = 1;
+	else if (ebx == 0x6f677948 && ecx == 0x656e6975 && edx == 0x6e65476e)
+		hygon_genuine = 1;
 
 	if (!quiet)
 		fprintf(outf, "CPUID(0): %.4s%.4s%.4s ",
@@ -4731,10 +4845,10 @@ void process_cpuid()
 
 			if (crystal_hz == 0)
 				switch(model) {
-				case INTEL_FAM6_SKYLAKE_MOBILE:	/* SKL */
+				case INTEL_FAM6_SKYLAKE_L:	/* SKL */
 					crystal_hz = 24000000;	/* 24.0 MHz */
 					break;
-				case INTEL_FAM6_ATOM_GOLDMONT_X:	/* DNV */
+				case INTEL_FAM6_ATOM_GOLDMONT_D:	/* DNV */
 					crystal_hz = 25000000;	/* 25.0 MHz */
 					break;
 				case INTEL_FAM6_ATOM_GOLDMONT:	/* BXT */
@@ -4820,12 +4934,12 @@ void process_cpuid()
 		BIC_NOT_PRESENT(BIC_CPU_c7);
 		BIC_NOT_PRESENT(BIC_Pkgpc7);
 	}
-	if (has_hsw_msrs(family, model)) {
+	if (has_c8910_msrs(family, model)) {
 		BIC_PRESENT(BIC_Pkgpc8);
 		BIC_PRESENT(BIC_Pkgpc9);
 		BIC_PRESENT(BIC_Pkgpc10);
 	}
-	do_irtl_hsw = has_hsw_msrs(family, model);
+	do_irtl_hsw = has_c8910_msrs(family, model);
 	if (has_skl_msrs(family, model)) {
 		BIC_PRESENT(BIC_Totl_c0);
 		BIC_PRESENT(BIC_Any_c0);
@@ -4835,7 +4949,8 @@ void process_cpuid()
 	do_slm_cstates = is_slm(family, model);
 	do_knl_cstates  = is_knl(family, model);
 
-	if (do_slm_cstates || do_knl_cstates || is_cnl(family, model))
+	if (do_slm_cstates || do_knl_cstates || is_cnl(family, model) ||
+	    is_ehl(family, model))
 		BIC_NOT_PRESENT(BIC_CPU_c3);
 
 	if (!quiet)
@@ -4870,10 +4985,16 @@ void process_cpuid()
 	else
 		BIC_NOT_PRESENT(BIC_CPU_LPI);
 
-	if (!access("/sys/devices/system/cpu/cpuidle/low_power_idle_system_residency_us", R_OK))
+	if (!access(sys_lpi_file_sysfs, R_OK)) {
+		sys_lpi_file = sys_lpi_file_sysfs;
 		BIC_PRESENT(BIC_SYS_LPI);
-	else
+	} else if (!access(sys_lpi_file_debugfs, R_OK)) {
+		sys_lpi_file = sys_lpi_file_debugfs;
+		BIC_PRESENT(BIC_SYS_LPI);
+	} else {
+		sys_lpi_file_sysfs = NULL;
 		BIC_NOT_PRESENT(BIC_SYS_LPI);
+	}
 
 	if (!quiet)
 		decode_misc_feature_control();
@@ -5123,7 +5244,7 @@ int initialize_counters(int cpu_id)
 
 void allocate_output_buffer()
 {
-	output_buffer = calloc(1, (1 + topo.num_cpus) * 1024);
+	output_buffer = calloc(1, (1 + topo.num_cpus) * 2048);
 	outp = output_buffer;
 	if (outp == NULL)
 		err(-1, "calloc output buffer");
@@ -5269,7 +5390,7 @@ int get_and_dump_counters(void)
 }
 
 void print_version() {
-	fprintf(outf, "turbostat version 19.03.20"
+	fprintf(outf, "turbostat version 20.03.20"
 		" - Len Brown <lenb@kernel.org>\n");
 }
 
@@ -5286,9 +5407,9 @@ int add_counter(unsigned int msr_num, char *path, char *name,
 	}
 
 	msrp->msr_num = msr_num;
-	strncpy(msrp->name, name, NAME_BYTES);
+	strncpy(msrp->name, name, NAME_BYTES - 1);
 	if (path)
-		strncpy(msrp->path, path, PATH_BYTES);
+		strncpy(msrp->path, path, PATH_BYTES - 1);
 	msrp->width = width;
 	msrp->type = type;
 	msrp->format = format;

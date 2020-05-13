@@ -79,9 +79,6 @@ struct pnv_ioda_pe {
 	struct pnv_ioda_pe	*master;
 	struct list_head	slaves;
 
-	/* PCI peer-to-peer*/
-	int			p2p_initiator_count;
-
 	/* Link in list of PE#s */
 	struct list_head	list;
 };
@@ -111,7 +108,6 @@ struct pnv_phb {
 	int (*msi_setup)(struct pnv_phb *phb, struct pci_dev *dev,
 			 unsigned int hwirq, unsigned int virq,
 			 unsigned int is_64, struct msi_msg *msg);
-	void (*dma_dev_setup)(struct pnv_phb *phb, struct pci_dev *pdev);
 	int (*init_m64)(struct pnv_phb *phb);
 	int (*get_pe_state)(struct pnv_phb *phb, int pe_no);
 	void (*freeze_pe)(struct pnv_phb *phb, int pe_no);
@@ -172,8 +168,6 @@ struct pnv_phb {
 	/* PHB and hub diagnostics */
 	unsigned int		diag_data_size;
 	u8			*diag_data;
-
-	int p2p_target_count;
 };
 
 extern struct pci_ops pnv_pci_ops;
@@ -194,13 +188,10 @@ extern void pnv_npu2_map_lpar(struct pnv_ioda_pe *gpe, unsigned long msr);
 extern void pnv_pci_reset_secondary_bus(struct pci_dev *dev);
 extern int pnv_eeh_phb_reset(struct pci_controller *hose, int option);
 
-extern void pnv_pci_dma_dev_setup(struct pci_dev *pdev);
-extern void pnv_pci_dma_bus_setup(struct pci_bus *bus);
 extern int pnv_setup_msi_irqs(struct pci_dev *pdev, int nvec, int type);
 extern void pnv_teardown_msi_irqs(struct pci_dev *pdev);
 extern struct pnv_ioda_pe *pnv_ioda_get_pe(struct pci_dev *dev);
 extern void pnv_set_msi_irq_chip(struct pnv_phb *phb, unsigned int virq);
-extern void pnv_pci_ioda2_set_bypass(struct pnv_ioda_pe *pe, bool enable);
 extern unsigned long pnv_pci_ioda2_get_table_size(__u32 page_shift,
 		__u64 window_size, __u32 levels);
 extern int pnv_eeh_post_init(void);
@@ -225,7 +216,7 @@ extern struct iommu_table_group *pnv_npu_compound_attach(
 		struct pnv_ioda_pe *pe);
 
 /* pci-ioda-tce.c */
-#define POWERNV_IOMMU_DEFAULT_LEVELS	1
+#define POWERNV_IOMMU_DEFAULT_LEVELS	2
 #define POWERNV_IOMMU_MAX_LEVELS	5
 
 extern int pnv_tce_build(struct iommu_table *tbl, long index, long npages,

@@ -98,7 +98,6 @@ typedef void			(*rpc_action)(struct rpc_task *);
 
 struct rpc_call_ops {
 	void (*rpc_call_prepare)(struct rpc_task *, void *);
-	void (*rpc_call_prepare_transmit)(struct rpc_task *, void *);
 	void (*rpc_call_done)(struct rpc_task *, void *);
 	void (*rpc_count_stats)(struct rpc_task *, void *);
 	void (*rpc_release)(void *);
@@ -126,12 +125,14 @@ struct rpc_task_setup {
 #define RPC_CALL_MAJORSEEN	0x0020		/* major timeout seen */
 #define RPC_TASK_ROOTCREDS	0x0040		/* force root creds */
 #define RPC_TASK_DYNAMIC	0x0080		/* task was kmalloc'ed */
+#define	RPC_TASK_NO_ROUND_ROBIN	0x0100		/* send requests on "main" xprt */
 #define RPC_TASK_SOFT		0x0200		/* Use soft timeouts */
 #define RPC_TASK_SOFTCONN	0x0400		/* Fail if can't connect */
 #define RPC_TASK_SENT		0x0800		/* message was sent */
 #define RPC_TASK_TIMEOUT	0x1000		/* fail with ETIMEDOUT on timeout */
 #define RPC_TASK_NOCONNECT	0x2000		/* return ENOTCONN if not connected */
 #define RPC_TASK_NO_RETRANS_TIMEOUT	0x4000		/* wait forever for a reply */
+#define RPC_TASK_CRED_NOREF	0x8000		/* No refcount on the credential */
 
 #define RPC_IS_ASYNC(t)		((t)->tk_flags & RPC_TASK_ASYNC)
 #define RPC_IS_SWAPPER(t)	((t)->tk_flags & RPC_TASK_SWAPPER)
@@ -183,8 +184,9 @@ struct rpc_task_setup {
 #define RPC_NR_PRIORITY		(1 + RPC_PRIORITY_PRIVILEGED - RPC_PRIORITY_LOW)
 
 struct rpc_timer {
-	struct timer_list timer;
 	struct list_head list;
+	unsigned long expires;
+	struct delayed_work dwork;
 };
 
 /*
@@ -241,9 +243,6 @@ void		rpc_sleep_on_priority_timeout(struct rpc_wait_queue *queue,
 void		rpc_sleep_on_priority(struct rpc_wait_queue *,
 					struct rpc_task *,
 					int priority);
-void rpc_wake_up_queued_task_on_wq(struct workqueue_struct *wq,
-		struct rpc_wait_queue *queue,
-		struct rpc_task *task);
 void		rpc_wake_up_queued_task(struct rpc_wait_queue *,
 					struct rpc_task *);
 void		rpc_wake_up_queued_task_set_status(struct rpc_wait_queue *,

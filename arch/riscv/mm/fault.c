@@ -16,6 +16,9 @@
 
 #include <asm/pgalloc.h>
 #include <asm/ptrace.h>
+#include <asm/tlbflush.h>
+
+#include "../kernel/head.h"
 
 /*
  * This routine handles page faults.  It determines the address and the
@@ -27,12 +30,12 @@ asmlinkage void do_page_fault(struct pt_regs *regs)
 	struct vm_area_struct *vma;
 	struct mm_struct *mm;
 	unsigned long addr, cause;
-	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
+	unsigned int flags = FAULT_FLAG_DEFAULT;
 	int code = SEGV_MAPERR;
 	vm_fault_t fault;
 
-	cause = regs->scause;
-	addr = regs->sbadaddr;
+	cause = regs->cause;
+	addr = regs->badaddr;
 
 	tsk = current;
 	mm = tsk->mm;
@@ -50,7 +53,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs)
 		goto vmalloc_fault;
 
 	/* Enable interrupts if they were enabled in the parent context. */
-	if (likely(regs->sstatus & SR_SPIE))
+	if (likely(regs->status & SR_PIE))
 		local_irq_enable();
 
 	/*
@@ -114,7 +117,7 @@ good_area:
 	 * signal first. We do not need to release the mmap_sem because it
 	 * would already be released in __lock_page_or_retry in mm/filemap.c.
 	 */
-	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(tsk))
+	if (fault_signal_pending(fault, regs))
 		return;
 
 	if (unlikely(fault & VM_FAULT_ERROR)) {
@@ -141,11 +144,6 @@ good_area:
 				      1, regs, addr);
 		}
 		if (fault & VM_FAULT_RETRY) {
-			/*
-			 * Clear FAULT_FLAG_ALLOW_RETRY to avoid any risk
-			 * of starvation.
-			 */
-			flags &= ~(FAULT_FLAG_ALLOW_RETRY);
 			flags |= FAULT_FLAG_TRIED;
 
 			/*
@@ -168,7 +166,7 @@ bad_area:
 	up_read(&mm->mmap_sem);
 	/* User mode accesses just cause a SIGSEGV */
 	if (user_mode(regs)) {
-		do_trap(regs, SIGSEGV, code, addr, tsk);
+		do_trap(regs, SIGSEGV, code, addr);
 		return;
 	}
 
@@ -204,7 +202,7 @@ do_sigbus:
 	/* Kernel mode? Handle exceptions or die */
 	if (!user_mode(regs))
 		goto no_context;
-	do_trap(regs, SIGBUS, BUS_ADRERR, addr, tsk);
+	do_trap(regs, SIGBUS, BUS_ADRERR, addr);
 	return;
 
 vmalloc_fault:
@@ -218,7 +216,7 @@ vmalloc_fault:
 
 		/* User mode accesses just cause a SIGSEGV */
 		if (user_mode(regs))
-			return do_trap(regs, SIGSEGV, code, addr, tsk);
+			return do_trap(regs, SIGSEGV, code, addr);
 
 		/*
 		 * Synchronize this task's top level page-table
@@ -265,6 +263,15 @@ vmalloc_fault:
 		pte_k = pte_offset_kernel(pmd_k, addr);
 		if (!pte_present(*pte_k))
 			goto no_context;
+
+		/*
+		 * The kernel assumes that TLBs don't cache invalid
+		 * entries, but in RISC-V, SFENCE.VMA specifies an
+		 * ordering constraint, not a cache flush; it is
+		 * necessary even after writing invalid entries.
+		 */
+		local_flush_tlb_page(addr);
+
 		return;
 	}
 }

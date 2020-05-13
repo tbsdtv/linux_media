@@ -100,6 +100,43 @@ static inline int snd_sof_dsp_post_fw_run(struct snd_sof_dev *sdev)
 	return 0;
 }
 
+/* misc */
+
+/**
+ * snd_sof_dsp_get_bar_index - Maps a section type with a BAR index
+ *
+ * @sdev: sof device
+ * @type: section type as described by snd_sof_fw_blk_type
+ *
+ * Returns the corresponding BAR index (a positive integer) or -EINVAL
+ * in case there is no mapping
+ */
+static inline int snd_sof_dsp_get_bar_index(struct snd_sof_dev *sdev, u32 type)
+{
+	if (sof_ops(sdev)->get_bar_index)
+		return sof_ops(sdev)->get_bar_index(sdev, type);
+
+	return sdev->mmio_bar;
+}
+
+static inline int snd_sof_dsp_get_mailbox_offset(struct snd_sof_dev *sdev)
+{
+	if (sof_ops(sdev)->get_mailbox_offset)
+		return sof_ops(sdev)->get_mailbox_offset(sdev);
+
+	dev_err(sdev->dev, "error: %s not defined\n", __func__);
+	return -ENOTSUPP;
+}
+
+static inline int snd_sof_dsp_get_window_offset(struct snd_sof_dev *sdev,
+						u32 id)
+{
+	if (sof_ops(sdev)->get_window_offset)
+		return sof_ops(sdev)->get_window_offset(sdev, id);
+
+	dev_err(sdev->dev, "error: %s not defined\n", __func__);
+	return -ENOTSUPP;
+}
 /* power management */
 static inline int snd_sof_dsp_resume(struct snd_sof_dev *sdev)
 {
@@ -109,10 +146,11 @@ static inline int snd_sof_dsp_resume(struct snd_sof_dev *sdev)
 	return 0;
 }
 
-static inline int snd_sof_dsp_suspend(struct snd_sof_dev *sdev, int state)
+static inline int snd_sof_dsp_suspend(struct snd_sof_dev *sdev,
+				      u32 target_state)
 {
 	if (sof_ops(sdev)->suspend)
-		return sof_ops(sdev)->suspend(sdev, state);
+		return sof_ops(sdev)->suspend(sdev, target_state);
 
 	return 0;
 }
@@ -125,19 +163,27 @@ static inline int snd_sof_dsp_runtime_resume(struct snd_sof_dev *sdev)
 	return 0;
 }
 
-static inline int snd_sof_dsp_runtime_suspend(struct snd_sof_dev *sdev,
-					      int state)
+static inline int snd_sof_dsp_runtime_suspend(struct snd_sof_dev *sdev)
 {
 	if (sof_ops(sdev)->runtime_suspend)
-		return sof_ops(sdev)->runtime_suspend(sdev, state);
+		return sof_ops(sdev)->runtime_suspend(sdev);
 
 	return 0;
 }
 
-static inline void snd_sof_dsp_hw_params_upon_resume(struct snd_sof_dev *sdev)
+static inline int snd_sof_dsp_runtime_idle(struct snd_sof_dev *sdev)
+{
+	if (sof_ops(sdev)->runtime_idle)
+		return sof_ops(sdev)->runtime_idle(sdev);
+
+	return 0;
+}
+
+static inline int snd_sof_dsp_hw_params_upon_resume(struct snd_sof_dev *sdev)
 {
 	if (sof_ops(sdev)->set_hw_params_upon_resume)
-		sof_ops(sdev)->set_hw_params_upon_resume(sdev);
+		return sof_ops(sdev)->set_hw_params_upon_resume(sdev);
+	return 0;
 }
 
 static inline int snd_sof_dsp_set_clk(struct snd_sof_dev *sdev, u32 freq)
@@ -145,6 +191,17 @@ static inline int snd_sof_dsp_set_clk(struct snd_sof_dev *sdev, u32 freq)
 	if (sof_ops(sdev)->set_clk)
 		return sof_ops(sdev)->set_clk(sdev, freq);
 
+	return 0;
+}
+
+static inline int
+snd_sof_dsp_set_power_state(struct snd_sof_dev *sdev,
+			    const struct sof_dsp_power_state *target_state)
+{
+	if (sof_ops(sdev)->set_power_state)
+		return sof_ops(sdev)->set_power_state(sdev, target_state);
+
+	/* D0 substate is not supported, do nothing here. */
 	return 0;
 }
 
@@ -286,6 +343,17 @@ snd_sof_pcm_platform_hw_params(struct snd_sof_dev *sdev,
 	return 0;
 }
 
+/* host stream hw free */
+static inline int
+snd_sof_pcm_platform_hw_free(struct snd_sof_dev *sdev,
+			     struct snd_pcm_substream *substream)
+{
+	if (sof_ops(sdev) && sof_ops(sdev)->pcm_hw_free)
+		return sof_ops(sdev)->pcm_hw_free(sdev, substream);
+
+	return 0;
+}
+
 /* host stream trigger */
 static inline int
 snd_sof_pcm_platform_trigger(struct snd_sof_dev *sdev,
@@ -325,6 +393,83 @@ snd_sof_pcm_platform_pointer(struct snd_sof_dev *sdev,
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_SND_SOC_SOF_DEBUG_PROBES)
+static inline int
+snd_sof_probe_compr_assign(struct snd_sof_dev *sdev,
+		struct snd_compr_stream *cstream, struct snd_soc_dai *dai)
+{
+	return sof_ops(sdev)->probe_assign(sdev, cstream, dai);
+}
+
+static inline int
+snd_sof_probe_compr_free(struct snd_sof_dev *sdev,
+		struct snd_compr_stream *cstream, struct snd_soc_dai *dai)
+{
+	return sof_ops(sdev)->probe_free(sdev, cstream, dai);
+}
+
+static inline int
+snd_sof_probe_compr_set_params(struct snd_sof_dev *sdev,
+		struct snd_compr_stream *cstream,
+		struct snd_compr_params *params, struct snd_soc_dai *dai)
+{
+	return sof_ops(sdev)->probe_set_params(sdev, cstream, params, dai);
+}
+
+static inline int
+snd_sof_probe_compr_trigger(struct snd_sof_dev *sdev,
+		struct snd_compr_stream *cstream, int cmd,
+		struct snd_soc_dai *dai)
+{
+	return sof_ops(sdev)->probe_trigger(sdev, cstream, cmd, dai);
+}
+
+static inline int
+snd_sof_probe_compr_pointer(struct snd_sof_dev *sdev,
+		struct snd_compr_stream *cstream,
+		struct snd_compr_tstamp *tstamp, struct snd_soc_dai *dai)
+{
+	if (sof_ops(sdev) && sof_ops(sdev)->probe_pointer)
+		return sof_ops(sdev)->probe_pointer(sdev, cstream, tstamp, dai);
+
+	return 0;
+}
+#endif
+
+/* machine driver */
+static inline int
+snd_sof_machine_register(struct snd_sof_dev *sdev, void *pdata)
+{
+	if (sof_ops(sdev) && sof_ops(sdev)->machine_register)
+		return sof_ops(sdev)->machine_register(sdev, pdata);
+
+	return 0;
+}
+
+static inline void
+snd_sof_machine_unregister(struct snd_sof_dev *sdev, void *pdata)
+{
+	if (sof_ops(sdev) && sof_ops(sdev)->machine_unregister)
+		sof_ops(sdev)->machine_unregister(sdev, pdata);
+}
+
+static inline void
+snd_sof_machine_select(struct snd_sof_dev *sdev)
+{
+	if (sof_ops(sdev) && sof_ops(sdev)->machine_select)
+		sof_ops(sdev)->machine_select(sdev);
+}
+
+static inline void
+snd_sof_set_mach_params(const struct snd_soc_acpi_mach *mach,
+			struct device *dev)
+{
+	struct snd_sof_dev *sdev = dev_get_drvdata(dev);
+
+	if (sof_ops(sdev) && sof_ops(sdev)->set_mach_params)
+		sof_ops(sdev)->set_mach_params(mach, dev);
+}
+
 static inline const struct snd_sof_dsp_ops
 *sof_get_ops(const struct sof_dev_desc *d,
 	     const struct sof_ops_table mach_ops[], int asize)
@@ -349,7 +494,7 @@ static inline const struct snd_sof_dsp_ops
  * @cond: Break condition (usually involving @val)
  * @sleep_us: Maximum time to sleep between reads in us (0
  *            tight-loops).  Should be less than ~20ms since usleep_range
- *            is used (see Documentation/timers/timers-howto.txt).
+ *            is used (see Documentation/timers/timers-howto.rst).
  * @timeout_us: Timeout in us, 0 means never timeout
  *
  * Returns 0 on success and -ETIMEDOUT upon a timeout. In either

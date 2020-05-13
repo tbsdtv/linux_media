@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause) */
+/* SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause) */
 /*
  * This file is provided under a dual BSD/GPLv2 license.  When using or
  * redistributing this file, you may do so under either license.
@@ -9,6 +9,7 @@
 #ifndef __INCLUDE_SOUND_SOF_HEADER_H__
 #define __INCLUDE_SOUND_SOF_HEADER_H__
 
+#include <linux/types.h>
 #include <uapi/sound/sof/abi.h>
 
 /** \addtogroup sof_uapi uAPI
@@ -49,6 +50,8 @@
 #define SOF_IPC_GLB_DAI_MSG			SOF_GLB_TYPE(0x8U)
 #define SOF_IPC_GLB_TRACE_MSG			SOF_GLB_TYPE(0x9U)
 #define SOF_IPC_GLB_GDB_DEBUG                   SOF_GLB_TYPE(0xAU)
+#define SOF_IPC_GLB_TEST_MSG			SOF_GLB_TYPE(0xBU)
+#define SOF_IPC_GLB_PROBE			SOF_GLB_TYPE(0xCU)
 
 /*
  * DSP Command Message Types
@@ -73,6 +76,7 @@
 #define SOF_IPC_PM_CLK_GET			SOF_CMD_TYPE(0x005)
 #define SOF_IPC_PM_CLK_REQ			SOF_CMD_TYPE(0x006)
 #define SOF_IPC_PM_CORE_ENABLE			SOF_CMD_TYPE(0x007)
+#define SOF_IPC_PM_GATE				SOF_CMD_TYPE(0x008)
 
 /* component runtime config - multiple different types */
 #define SOF_IPC_COMP_SET_VALUE			SOF_CMD_TYPE(0x001)
@@ -99,9 +103,23 @@
 #define SOF_IPC_STREAM_VORBIS_PARAMS		SOF_CMD_TYPE(0x010)
 #define SOF_IPC_STREAM_VORBIS_FREE		SOF_CMD_TYPE(0x011)
 
-/* trace and debug */
+/* probe */
+#define SOF_IPC_PROBE_INIT			SOF_CMD_TYPE(0x001)
+#define SOF_IPC_PROBE_DEINIT			SOF_CMD_TYPE(0x002)
+#define SOF_IPC_PROBE_DMA_ADD			SOF_CMD_TYPE(0x003)
+#define SOF_IPC_PROBE_DMA_INFO			SOF_CMD_TYPE(0x004)
+#define SOF_IPC_PROBE_DMA_REMOVE		SOF_CMD_TYPE(0x005)
+#define SOF_IPC_PROBE_POINT_ADD		SOF_CMD_TYPE(0x006)
+#define SOF_IPC_PROBE_POINT_INFO		SOF_CMD_TYPE(0x007)
+#define SOF_IPC_PROBE_POINT_REMOVE		SOF_CMD_TYPE(0x008)
+
+/* trace */
 #define SOF_IPC_TRACE_DMA_PARAMS		SOF_CMD_TYPE(0x001)
 #define SOF_IPC_TRACE_DMA_POSITION		SOF_CMD_TYPE(0x002)
+#define SOF_IPC_TRACE_DMA_PARAMS_EXT		SOF_CMD_TYPE(0x003)
+
+/* debug */
+#define SOF_IPC_TEST_IPC_FLOOD                  SOF_CMD_TYPE(0x001)
 
 /* Get message component id */
 #define SOF_IPC_MESSAGE_ID(x)			((x) & 0xffff)

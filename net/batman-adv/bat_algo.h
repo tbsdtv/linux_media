@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2011-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2011-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner, Linus Lüssing
  */
@@ -9,11 +9,10 @@
 
 #include "main.h"
 
+#include <linux/netlink.h>
+#include <linux/seq_file.h>
+#include <linux/skbuff.h>
 #include <linux/types.h>
-
-struct netlink_callback;
-struct seq_file;
-struct sk_buff;
 
 extern char batadv_routing_algo[];
 extern struct list_head batadv_hardif_list;

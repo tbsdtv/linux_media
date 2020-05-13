@@ -244,7 +244,12 @@ int eth_header_cache(const struct neighbour *neigh, struct hh_cache *hh, __be16 
 	eth->h_proto = type;
 	memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
 	memcpy(eth->h_dest, neigh->ha, ETH_ALEN);
-	hh->hh_len = ETH_HLEN;
+
+	/* Pairs with READ_ONCE() in neigh_resolve_output(),
+	 * neigh_hh_output() and neigh_update_hhs().
+	 */
+	smp_store_release(&hh->hh_len, ETH_HLEN);
+
 	return 0;
 }
 EXPORT_SYMBOL(eth_header_cache);
@@ -329,22 +334,6 @@ int eth_mac_addr(struct net_device *dev, void *p)
 	return 0;
 }
 EXPORT_SYMBOL(eth_mac_addr);
-
-/**
- * eth_change_mtu - set new MTU size
- * @dev: network device
- * @new_mtu: new Maximum Transfer Unit
- *
- * Allow changing MTU size. Needs to be overridden for devices
- * supporting jumbo frames.
- */
-int eth_change_mtu(struct net_device *dev, int new_mtu)
-{
-	netdev_warn(dev, "%s is deprecated\n", __func__);
-	dev->mtu = new_mtu;
-	return 0;
-}
-EXPORT_SYMBOL(eth_change_mtu);
 
 int eth_validate_addr(struct net_device *dev)
 {
@@ -545,17 +534,10 @@ unsigned char * __weak arch_get_platform_mac_address(void)
 
 int eth_platform_get_mac_address(struct device *dev, u8 *mac_addr)
 {
-	const unsigned char *addr;
-	struct device_node *dp;
+	const unsigned char *addr = NULL;
 
-	if (dev_is_pci(dev))
-		dp = pci_device_to_OF_node(to_pci_dev(dev));
-	else
-		dp = dev->of_node;
-
-	addr = NULL;
-	if (dp)
-		addr = of_get_mac_address(dp);
+	if (dev->of_node)
+		addr = of_get_mac_address(dev->of_node);
 	if (IS_ERR_OR_NULL(addr))
 		addr = arch_get_platform_mac_address();
 
@@ -563,6 +545,7 @@ int eth_platform_get_mac_address(struct device *dev, u8 *mac_addr)
 		return -ENODEV;
 
 	ether_addr_copy(mac_addr, addr);
+
 	return 0;
 }
 EXPORT_SYMBOL(eth_platform_get_mac_address);

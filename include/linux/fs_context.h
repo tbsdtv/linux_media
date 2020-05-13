@@ -54,7 +54,6 @@ enum fs_value_type {
 	fs_value_is_string,		/* Value is a string */
 	fs_value_is_blob,		/* Value is a binary blob */
 	fs_value_is_filename,		/* Value is a filename* + dirfd */
-	fs_value_is_filename_empty,	/* Value is a filename* + dirfd + AT_EMPTY_PATH */
 	fs_value_is_file,		/* Value is a file* */
 };
 
@@ -74,6 +73,11 @@ struct fs_parameter {
 	int	dirfd;
 };
 
+struct p_log {
+	const char *prefix;
+	struct fc_log *log;
+};
+
 /*
  * Filesystem context for holding the parameters used in the creation or
  * reconfiguration of a superblock.
@@ -81,24 +85,25 @@ struct fs_parameter {
  * Superblock creation fills in ->root whereas reconfiguration begins with this
  * already set.
  *
- * See Documentation/filesystems/mounting.txt
+ * See Documentation/filesystems/mount_api.txt
  */
 struct fs_context {
 	const struct fs_context_operations *ops;
 	struct mutex		uapi_mutex;	/* Userspace access mutex */
 	struct file_system_type	*fs_type;
 	void			*fs_private;	/* The filesystem's context */
+	void			*sget_key;
 	struct dentry		*root;		/* The root and superblock */
 	struct user_namespace	*user_ns;	/* The user namespace for this mount */
 	struct net		*net_ns;	/* The network namespace for this mount */
 	const struct cred	*cred;		/* The mounter's credentials */
-	struct fc_log		*log;		/* Logging buffer */
+	struct p_log		log;		/* Logging buffer */
 	const char		*source;	/* The source name (eg. dev path) */
-	const char		*subtype;	/* The subtype to set on the superblock */
 	void			*security;	/* Linux S&M options */
 	void			*s_fs_info;	/* Proposed s_fs_info */
 	unsigned int		sb_flags;	/* Proposed superblock flags (SB_*) */
 	unsigned int		sb_flags_mask;	/* Superblock flags that were changed */
+	unsigned int		s_iflags;	/* OR'd with sb->s_iflags */
 	unsigned int		lsm_flags;	/* Information flags from the fs to the LSM */
 	enum fs_context_purpose	purpose:8;
 	enum fs_context_phase	phase:8;	/* The phase the context is in */
@@ -135,10 +140,11 @@ extern int vfs_get_tree(struct fs_context *fc);
 extern void put_fs_context(struct fs_context *fc);
 
 /*
- * sget() wrapper to be called from the ->get_tree() op.
+ * sget() wrappers to be called from the ->get_tree() op.
  */
 enum vfs_get_super_keying {
 	vfs_get_single_super,	/* Only one such superblock may exist */
+	vfs_get_single_reconf_super, /* As above, but reconfigure if it exists */
 	vfs_get_keyed_super,	/* Superblocks with different s_fs_info keys may exist */
 	vfs_get_independent_super, /* Multiple independent superblocks may exist */
 };
@@ -146,6 +152,24 @@ extern int vfs_get_super(struct fs_context *fc,
 			 enum vfs_get_super_keying keying,
 			 int (*fill_super)(struct super_block *sb,
 					   struct fs_context *fc));
+
+extern int get_tree_nodev(struct fs_context *fc,
+			 int (*fill_super)(struct super_block *sb,
+					   struct fs_context *fc));
+extern int get_tree_single(struct fs_context *fc,
+			 int (*fill_super)(struct super_block *sb,
+					   struct fs_context *fc));
+extern int get_tree_single_reconf(struct fs_context *fc,
+			 int (*fill_super)(struct super_block *sb,
+					   struct fs_context *fc));
+extern int get_tree_keyed(struct fs_context *fc,
+			 int (*fill_super)(struct super_block *sb,
+					   struct fs_context *fc),
+			 void *key);
+
+extern int get_tree_bdev(struct fs_context *fc,
+			       int (*fill_super)(struct super_block *sb,
+						 struct fs_context *fc));
 
 extern const struct file_operations fscontext_fops;
 
@@ -162,9 +186,13 @@ struct fc_log {
 	char		*buffer[8];
 };
 
-extern __attribute__((format(printf, 2, 3)))
-void logfc(struct fs_context *fc, const char *fmt, ...);
+extern __attribute__((format(printf, 4, 5)))
+void logfc(struct fc_log *log, const char *prefix, char level, const char *fmt, ...);
 
+#define __logfc(fc, l, fmt, ...) logfc((fc)->log.log, NULL, \
+					l, fmt, ## __VA_ARGS__)
+#define __plog(p, l, fmt, ...) logfc((p)->log, (p)->prefix, \
+					l, fmt, ## __VA_ARGS__)
 /**
  * infof - Store supplementary informational message
  * @fc: The context in which to log the informational message
@@ -173,7 +201,9 @@ void logfc(struct fs_context *fc, const char *fmt, ...);
  * Store the supplementary informational message for the process if the process
  * has enabled the facility.
  */
-#define infof(fc, fmt, ...) ({ logfc(fc, "i "fmt, ## __VA_ARGS__); })
+#define infof(fc, fmt, ...) __logfc(fc, 'i', fmt, ## __VA_ARGS__)
+#define info_plog(p, fmt, ...) __plog(p, 'i', fmt, ## __VA_ARGS__)
+#define infofc(p, fmt, ...) __plog((&(fc)->log), 'i', fmt, ## __VA_ARGS__)
 
 /**
  * warnf - Store supplementary warning message
@@ -183,7 +213,9 @@ void logfc(struct fs_context *fc, const char *fmt, ...);
  * Store the supplementary warning message for the process if the process has
  * enabled the facility.
  */
-#define warnf(fc, fmt, ...) ({ logfc(fc, "w "fmt, ## __VA_ARGS__); })
+#define warnf(fc, fmt, ...) __logfc(fc, 'w', fmt, ## __VA_ARGS__)
+#define warn_plog(p, fmt, ...) __plog(p, 'w', fmt, ## __VA_ARGS__)
+#define warnfc(fc, fmt, ...) __plog((&(fc)->log), 'w', fmt, ## __VA_ARGS__)
 
 /**
  * errorf - Store supplementary error message
@@ -193,7 +225,9 @@ void logfc(struct fs_context *fc, const char *fmt, ...);
  * Store the supplementary error message for the process if the process has
  * enabled the facility.
  */
-#define errorf(fc, fmt, ...) ({ logfc(fc, "e "fmt, ## __VA_ARGS__); })
+#define errorf(fc, fmt, ...) __logfc(fc, 'e', fmt, ## __VA_ARGS__)
+#define error_plog(p, fmt, ...) __plog(p, 'e', fmt, ## __VA_ARGS__)
+#define errorfc(fc, fmt, ...) __plog((&(fc)->log), 'e', fmt, ## __VA_ARGS__)
 
 /**
  * invalf - Store supplementary invalid argument error message
@@ -203,6 +237,8 @@ void logfc(struct fs_context *fc, const char *fmt, ...);
  * Store the supplementary error message for the process if the process has
  * enabled the facility and return -EINVAL.
  */
-#define invalf(fc, fmt, ...) ({	errorf(fc, fmt, ## __VA_ARGS__); -EINVAL; })
+#define invalf(fc, fmt, ...) (errorf(fc, fmt, ## __VA_ARGS__), -EINVAL)
+#define inval_plog(p, fmt, ...) (error_plog(p, fmt, ## __VA_ARGS__), -EINVAL)
+#define invalfc(fc, fmt, ...) (errorfc(fc, fmt, ## __VA_ARGS__), -EINVAL)
 
 #endif /* _LINUX_FS_CONTEXT_H */

@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2011 Novell Inc.
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 #include <linux/fs.h>
@@ -41,18 +38,6 @@ const struct cred *ovl_override_creds(struct super_block *sb)
 	struct ovl_fs *ofs = sb->s_fs_info;
 
 	return override_creds(ofs->creator_cred);
-}
-
-struct super_block *ovl_same_sb(struct super_block *sb)
-{
-	struct ovl_fs *ofs = sb->s_fs_info;
-
-	if (!ofs->numlowerfs)
-		return ofs->upper_mnt->mnt_sb;
-	else if (ofs->numlowerfs == 1 && !ofs->upper_mnt)
-		return ofs->lower_fs[0].sb;
-	else
-		return NULL;
 }
 
 /*
@@ -108,8 +93,24 @@ struct ovl_entry *ovl_alloc_entry(unsigned int numlower)
 bool ovl_dentry_remote(struct dentry *dentry)
 {
 	return dentry->d_flags &
-		(DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE |
-		 DCACHE_OP_REAL);
+		(DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE);
+}
+
+void ovl_dentry_update_reval(struct dentry *dentry, struct dentry *upperdentry,
+			     unsigned int mask)
+{
+	struct ovl_entry *oe = OVL_E(dentry);
+	unsigned int i, flags = 0;
+
+	if (upperdentry)
+		flags |= upperdentry->d_flags;
+	for (i = 0; i < oe->numlower; i++)
+		flags |= oe->lowerstack[i].dentry->d_flags;
+
+	spin_lock(&dentry->d_lock);
+	dentry->d_flags &= ~mask;
+	dentry->d_flags |= flags & mask;
+	spin_unlock(&dentry->d_lock);
 }
 
 bool ovl_dentry_weird(struct dentry *dentry)
@@ -201,7 +202,7 @@ struct dentry *ovl_dentry_lower(struct dentry *dentry)
 	return oe->numlower ? oe->lowerstack[0].dentry : NULL;
 }
 
-struct ovl_layer *ovl_layer_lower(struct dentry *dentry)
+const struct ovl_layer *ovl_layer_lower(struct dentry *dentry)
 {
 	struct ovl_entry *oe = dentry->d_fsdata;
 
@@ -401,24 +402,6 @@ void ovl_dentry_set_redirect(struct dentry *dentry, const char *redirect)
 	oi->redirect = redirect;
 }
 
-void ovl_inode_init(struct inode *inode, struct dentry *upperdentry,
-		    struct dentry *lowerdentry, struct dentry *lowerdata)
-{
-	struct inode *realinode = d_inode(upperdentry ?: lowerdentry);
-
-	if (upperdentry)
-		OVL_I(inode)->__upperdentry = upperdentry;
-	if (lowerdentry)
-		OVL_I(inode)->lower = igrab(d_inode(lowerdentry));
-	if (lowerdata)
-		OVL_I(inode)->lowerdata = igrab(d_inode(lowerdata));
-
-	ovl_copyattr(realinode, inode);
-	ovl_copyflags(realinode, inode);
-	if (!inode->i_ino)
-		inode->i_ino = realinode->i_ino;
-}
-
 void ovl_inode_update(struct inode *inode, struct dentry *upperdentry)
 {
 	struct inode *upperinode = d_inode(upperdentry);
@@ -431,8 +414,6 @@ void ovl_inode_update(struct inode *inode, struct dentry *upperdentry)
 	smp_wmb();
 	OVL_I(inode)->__upperdentry = upperdentry;
 	if (inode_unhashed(inode)) {
-		if (!inode->i_ino)
-			inode->i_ino = upperinode->i_ino;
 		inode->i_private = upperinode;
 		__insert_inode_hash(inode, (unsigned long) upperinode);
 	}
@@ -524,7 +505,7 @@ int ovl_copy_up_start(struct dentry *dentry, int flags)
 	struct inode *inode = d_inode(dentry);
 	int err;
 
-	err = ovl_inode_lock(inode);
+	err = ovl_inode_lock_interruptible(inode);
 	if (!err && ovl_already_copied_up_locked(dentry, flags)) {
 		err = 1; /* Already copied up */
 		ovl_inode_unlock(inode);
@@ -579,7 +560,7 @@ int ovl_check_setxattr(struct dentry *dentry, struct dentry *upperdentry,
 	err = ovl_do_setxattr(upperdentry, name, value, size, 0);
 
 	if (err == -EOPNOTSUPP) {
-		pr_warn("overlayfs: cannot set %s xattr on upper\n", name);
+		pr_warn("cannot set %s xattr on upper\n", name);
 		ofs->noxattr = true;
 		return xerr;
 	}
@@ -703,7 +684,7 @@ static void ovl_cleanup_index(struct dentry *dentry)
 
 	inode = d_inode(upperdentry);
 	if (!S_ISDIR(inode->i_mode) && inode->i_nlink != 1) {
-		pr_warn_ratelimited("overlayfs: cleanup linked index (%pd2, ino=%lu, nlink=%u)\n",
+		pr_warn_ratelimited("cleanup linked index (%pd2, ino=%lu, nlink=%u)\n",
 				    upperdentry, inode->i_ino, inode->i_nlink);
 		/*
 		 * We either have a bug with persistent union nlink or a lower
@@ -742,7 +723,7 @@ out:
 	return;
 
 fail:
-	pr_err("overlayfs: cleanup index of '%pd2' failed (%i)\n", dentry, err);
+	pr_err("cleanup index of '%pd2' failed (%i)\n", dentry, err);
 	goto out;
 }
 
@@ -779,7 +760,7 @@ int ovl_nlink_start(struct dentry *dentry)
 			return err;
 	}
 
-	err = ovl_inode_lock(inode);
+	err = ovl_inode_lock_interruptible(inode);
 	if (err)
 		return err;
 
@@ -833,7 +814,7 @@ int ovl_lock_rename_workdir(struct dentry *workdir, struct dentry *upperdir)
 err_unlock:
 	unlock_rename(workdir, upperdir);
 err:
-	pr_err("overlayfs: failed to lock workdir+upperdir\n");
+	pr_err("failed to lock workdir+upperdir\n");
 	return -EIO;
 }
 
@@ -855,7 +836,7 @@ int ovl_check_metacopy_xattr(struct dentry *dentry)
 
 	return 1;
 out:
-	pr_warn_ratelimited("overlayfs: failed to get metacopy (%i)\n", res);
+	pr_warn_ratelimited("failed to get metacopy (%i)\n", res);
 	return res;
 }
 
@@ -902,7 +883,7 @@ ssize_t ovl_getxattr(struct dentry *dentry, char *name, char **value,
 	return res;
 
 fail:
-	pr_warn_ratelimited("overlayfs: failed to get xattr %s: err=%zi)\n",
+	pr_warn_ratelimited("failed to get xattr %s: err=%zi)\n",
 			    name, res);
 	kfree(buf);
 	return res;
@@ -934,7 +915,7 @@ char *ovl_get_redirect_xattr(struct dentry *dentry, int padding)
 
 	return buf;
 invalid:
-	pr_warn_ratelimited("overlayfs: invalid redirect (%s)\n", buf);
+	pr_warn_ratelimited("invalid redirect (%s)\n", buf);
 	res = -EINVAL;
 	kfree(buf);
 	return ERR_PTR(res);

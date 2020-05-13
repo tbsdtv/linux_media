@@ -4,14 +4,7 @@
 #include <linux/module.h>
 #include "enetc.h"
 
-#define ENETC_DRV_VER_MAJ 1
-#define ENETC_DRV_VER_MIN 0
-
-#define ENETC_DRV_VER_STR __stringify(ENETC_DRV_VER_MAJ) "." \
-			  __stringify(ENETC_DRV_VER_MIN)
-static const char enetc_drv_ver[] = ENETC_DRV_VER_STR;
 #define ENETC_DRV_NAME_STR "ENETC VF driver"
-static const char enetc_drv_name[] = ENETC_DRV_NAME_STR;
 
 /* Messaging */
 static void enetc_msg_vsi_write_msg(struct enetc_hw *hw,
@@ -111,6 +104,8 @@ static const struct net_device_ops enetc_ndev_ops = {
 	.ndo_get_stats		= enetc_get_stats,
 	.ndo_set_mac_address	= enetc_vf_set_mac_addr,
 	.ndo_set_features	= enetc_vf_set_features,
+	.ndo_do_ioctl		= enetc_ioctl,
+	.ndo_setup_tc		= enetc_setup_tc,
 };
 
 static void enetc_vf_netdev_setup(struct enetc_si *si, struct net_device *ndev,
@@ -199,9 +194,6 @@ static int enetc_vf_probe(struct pci_dev *pdev,
 
 	netif_carrier_off(ndev);
 
-	netif_info(priv, probe, ndev, "%s v%s\n",
-		   enetc_drv_name, enetc_drv_ver);
-
 	return 0;
 
 err_reg_netdev:
@@ -223,8 +215,6 @@ static void enetc_vf_remove(struct pci_dev *pdev)
 	struct enetc_ndev_priv *priv;
 
 	priv = netdev_priv(si->ndev);
-	netif_info(priv, drv, si->ndev, "%s v%s remove\n",
-		   enetc_drv_name, enetc_drv_ver);
 	unregister_netdev(si->ndev);
 
 	enetc_free_msix(priv);
@@ -252,4 +242,3 @@ module_pci_driver(enetc_vf_driver);
 
 MODULE_DESCRIPTION(ENETC_DRV_NAME_STR);
 MODULE_LICENSE("Dual BSD/GPL");
-MODULE_VERSION(ENETC_DRV_VER_STR);

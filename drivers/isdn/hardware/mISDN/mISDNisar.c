@@ -27,7 +27,6 @@ MODULE_VERSION(ISAR_REV);
 
 #define DEBUG_HW_FIRMWARE_FIFO	0x10000
 
-static const u8 faxmodulation_s[] = "3,24,48,72,73,74,96,97,98,121,122,145,146";
 static const u8 faxmodulation[] = {3, 24, 48, 72, 73, 74, 96, 97, 98, 121,
 				   122, 145, 146};
 #define FAXMODCNT 13
@@ -222,7 +221,7 @@ load_firmware(struct isar_hw *isar, const u8 *buf, int size)
 			goto reterror;
 		}
 		if (!poll_mbox(isar, 1000)) {
-			pr_warning("ISAR poll_mbox dkey failed\n");
+			pr_warn("ISAR poll_mbox dkey failed\n");
 			ret = -ETIME;
 			goto reterror;
 		}
@@ -432,8 +431,8 @@ isar_rcv_frame(struct isar_ch *ch)
 	case ISDN_P_B_MODEM_ASYNC:
 		maxlen = bchannel_get_rxbuf(&ch->bch, ch->is->clsb);
 		if (maxlen < 0) {
-			pr_warning("%s.B%d: No bufferspace for %d bytes\n",
-				   ch->is->name, ch->bch.nr, ch->is->clsb);
+			pr_warn("%s.B%d: No bufferspace for %d bytes\n",
+				ch->is->name, ch->bch.nr, ch->is->clsb);
 			ch->is->write_reg(ch->is->hw, ISAR_IIA, 0);
 			break;
 		}
@@ -443,8 +442,8 @@ isar_rcv_frame(struct isar_ch *ch)
 	case ISDN_P_B_HDLC:
 		maxlen = bchannel_get_rxbuf(&ch->bch, ch->is->clsb);
 		if (maxlen < 0) {
-			pr_warning("%s.B%d: No bufferspace for %d bytes\n",
-				   ch->is->name, ch->bch.nr, ch->is->clsb);
+			pr_warn("%s.B%d: No bufferspace for %d bytes\n",
+				ch->is->name, ch->bch.nr, ch->is->clsb);
 			ch->is->write_reg(ch->is->hw, ISAR_IIA, 0);
 			break;
 		}
@@ -690,8 +689,7 @@ send_next(struct isar_ch *ch)
 			}
 		}
 	}
-	if (ch->bch.tx_skb)
-		dev_kfree_skb(ch->bch.tx_skb);
+	dev_kfree_skb(ch->bch.tx_skb);
 	if (get_next_bframe(&ch->bch)) {
 		isar_fill_fifo(ch);
 		test_and_clear_bit(FLG_TX_EMPTY, &ch->bch.Flags);
@@ -745,10 +743,10 @@ check_send(struct isar_hw *isar, u8 rdm)
 	}
 }
 
-const char *dmril[] = {"NO SPEED", "1200/75", "NODEF2", "75/1200", "NODEF4",
+static const char *dmril[] = {"NO SPEED", "1200/75", "NODEF2", "75/1200", "NODEF4",
 		       "300", "600", "1200", "2400", "4800", "7200",
 		       "9600nt", "9600t", "12000", "14400", "WRONG"};
-const char *dmrim[] = {"NO MOD", "NO DEF", "V32/V32b", "V22", "V21",
+static const char *dmrim[] = {"NO MOD", "NO DEF", "V32/V32b", "V22", "V21",
 		       "Bell103", "V23", "Bell202", "V17", "V29", "V27ter"};
 
 static void

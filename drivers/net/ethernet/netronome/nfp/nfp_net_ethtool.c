@@ -148,10 +148,33 @@ static const struct nfp_et_stat nfp_mac_et_stats[] = {
 	{ "tx_pause_frames_class7",	NFP_MAC_STATS_TX_PAUSE_FRAMES_CLASS7, },
 };
 
+static const char nfp_tlv_stat_names[][ETH_GSTRING_LEN] = {
+	[1]	= "dev_rx_discards",
+	[2]	= "dev_rx_errors",
+	[3]	= "dev_rx_bytes",
+	[4]	= "dev_rx_uc_bytes",
+	[5]	= "dev_rx_mc_bytes",
+	[6]	= "dev_rx_bc_bytes",
+	[7]	= "dev_rx_pkts",
+	[8]	= "dev_rx_mc_pkts",
+	[9]	= "dev_rx_bc_pkts",
+
+	[10]	= "dev_tx_discards",
+	[11]	= "dev_tx_errors",
+	[12]	= "dev_tx_bytes",
+	[13]	= "dev_tx_uc_bytes",
+	[14]	= "dev_tx_mc_bytes",
+	[15]	= "dev_tx_bc_bytes",
+	[16]	= "dev_tx_pkts",
+	[17]	= "dev_tx_mc_pkts",
+	[18]	= "dev_tx_bc_pkts",
+};
+
 #define NN_ET_GLOBAL_STATS_LEN ARRAY_SIZE(nfp_net_et_stats)
 #define NN_ET_SWITCH_STATS_LEN 9
-#define NN_RVEC_GATHER_STATS	9
+#define NN_RVEC_GATHER_STATS	13
 #define NN_RVEC_PER_Q_STATS	3
+#define NN_CTRL_PATH_STATS	4
 
 #define SFP_SFF_REV_COMPLIANCE	1
 
@@ -423,7 +446,8 @@ static unsigned int nfp_vnic_get_sw_stats_count(struct net_device *netdev)
 {
 	struct nfp_net *nn = netdev_priv(netdev);
 
-	return NN_RVEC_GATHER_STATS + nn->max_r_vecs * NN_RVEC_PER_Q_STATS;
+	return NN_RVEC_GATHER_STATS + nn->max_r_vecs * NN_RVEC_PER_Q_STATS +
+		NN_CTRL_PATH_STATS;
 }
 
 static u8 *nfp_vnic_get_sw_stats_strings(struct net_device *netdev, u8 *data)
@@ -442,10 +466,19 @@ static u8 *nfp_vnic_get_sw_stats_strings(struct net_device *netdev, u8 *data)
 	data = nfp_pr_et(data, "hw_rx_csum_complete");
 	data = nfp_pr_et(data, "hw_rx_csum_err");
 	data = nfp_pr_et(data, "rx_replace_buf_alloc_fail");
+	data = nfp_pr_et(data, "rx_tls_decrypted_packets");
 	data = nfp_pr_et(data, "hw_tx_csum");
 	data = nfp_pr_et(data, "hw_tx_inner_csum");
 	data = nfp_pr_et(data, "tx_gather");
 	data = nfp_pr_et(data, "tx_lso");
+	data = nfp_pr_et(data, "tx_tls_encrypted_packets");
+	data = nfp_pr_et(data, "tx_tls_ooo");
+	data = nfp_pr_et(data, "tx_tls_drop_no_sync_data");
+
+	data = nfp_pr_et(data, "hw_tls_no_space");
+	data = nfp_pr_et(data, "rx_tls_resync_req_ok");
+	data = nfp_pr_et(data, "rx_tls_resync_req_ign");
+	data = nfp_pr_et(data, "rx_tls_resync_sent");
 
 	return data;
 }
@@ -468,16 +501,20 @@ static u64 *nfp_vnic_get_sw_stats(struct net_device *netdev, u64 *data)
 			tmp[2] = nn->r_vecs[i].hw_csum_rx_complete;
 			tmp[3] = nn->r_vecs[i].hw_csum_rx_error;
 			tmp[4] = nn->r_vecs[i].rx_replace_buf_alloc_fail;
+			tmp[5] = nn->r_vecs[i].hw_tls_rx;
 		} while (u64_stats_fetch_retry(&nn->r_vecs[i].rx_sync, start));
 
 		do {
 			start = u64_stats_fetch_begin(&nn->r_vecs[i].tx_sync);
 			data[1] = nn->r_vecs[i].tx_pkts;
 			data[2] = nn->r_vecs[i].tx_busy;
-			tmp[5] = nn->r_vecs[i].hw_csum_tx;
-			tmp[6] = nn->r_vecs[i].hw_csum_tx_inner;
-			tmp[7] = nn->r_vecs[i].tx_gather;
-			tmp[8] = nn->r_vecs[i].tx_lso;
+			tmp[6] = nn->r_vecs[i].hw_csum_tx;
+			tmp[7] = nn->r_vecs[i].hw_csum_tx_inner;
+			tmp[8] = nn->r_vecs[i].tx_gather;
+			tmp[9] = nn->r_vecs[i].tx_lso;
+			tmp[10] = nn->r_vecs[i].hw_tls_tx;
+			tmp[11] = nn->r_vecs[i].tls_tx_fallback;
+			tmp[12] = nn->r_vecs[i].tls_tx_no_fallback;
 		} while (u64_stats_fetch_retry(&nn->r_vecs[i].tx_sync, start));
 
 		data += NN_RVEC_PER_Q_STATS;
@@ -488,6 +525,11 @@ static u64 *nfp_vnic_get_sw_stats(struct net_device *netdev, u64 *data)
 
 	for (j = 0; j < NN_RVEC_GATHER_STATS; j++)
 		*data++ = gathered_stats[j];
+
+	*data++ = atomic_read(&nn->ktls_no_space);
+	*data++ = atomic_read(&nn->ktls_rx_resync_req);
+	*data++ = atomic_read(&nn->ktls_rx_resync_ign);
+	*data++ = atomic_read(&nn->ktls_rx_resync_sent);
 
 	return data;
 }
@@ -546,6 +588,65 @@ nfp_vnic_get_hw_stats(u64 *data, u8 __iomem *mem, unsigned int num_vecs)
 	return data;
 }
 
+static unsigned int nfp_vnic_get_tlv_stats_count(struct nfp_net *nn)
+{
+	return nn->tlv_caps.vnic_stats_cnt + nn->max_r_vecs * 4;
+}
+
+static u8 *nfp_vnic_get_tlv_stats_strings(struct nfp_net *nn, u8 *data)
+{
+	unsigned int i, id;
+	u8 __iomem *mem;
+	u64 id_word = 0;
+
+	mem = nn->dp.ctrl_bar + nn->tlv_caps.vnic_stats_off;
+	for (i = 0; i < nn->tlv_caps.vnic_stats_cnt; i++) {
+		if (!(i % 4))
+			id_word = readq(mem + i * 2);
+
+		id = (u16)id_word;
+		id_word >>= 16;
+
+		if (id < ARRAY_SIZE(nfp_tlv_stat_names) &&
+		    nfp_tlv_stat_names[id][0]) {
+			memcpy(data, nfp_tlv_stat_names[id], ETH_GSTRING_LEN);
+			data += ETH_GSTRING_LEN;
+		} else {
+			data = nfp_pr_et(data, "dev_unknown_stat%u", id);
+		}
+	}
+
+	for (i = 0; i < nn->max_r_vecs; i++) {
+		data = nfp_pr_et(data, "rxq_%u_pkts", i);
+		data = nfp_pr_et(data, "rxq_%u_bytes", i);
+		data = nfp_pr_et(data, "txq_%u_pkts", i);
+		data = nfp_pr_et(data, "txq_%u_bytes", i);
+	}
+
+	return data;
+}
+
+static u64 *nfp_vnic_get_tlv_stats(struct nfp_net *nn, u64 *data)
+{
+	u8 __iomem *mem;
+	unsigned int i;
+
+	mem = nn->dp.ctrl_bar + nn->tlv_caps.vnic_stats_off;
+	mem += roundup(2 * nn->tlv_caps.vnic_stats_cnt, 8);
+	for (i = 0; i < nn->tlv_caps.vnic_stats_cnt; i++)
+		*data++ = readq(mem + i * 8);
+
+	mem = nn->dp.ctrl_bar;
+	for (i = 0; i < nn->max_r_vecs; i++) {
+		*data++ = readq(mem + NFP_NET_CFG_RXR_STATS(i));
+		*data++ = readq(mem + NFP_NET_CFG_RXR_STATS(i) + 8);
+		*data++ = readq(mem + NFP_NET_CFG_TXR_STATS(i));
+		*data++ = readq(mem + NFP_NET_CFG_TXR_STATS(i) + 8);
+	}
+
+	return data;
+}
+
 static unsigned int nfp_mac_get_stats_count(struct net_device *netdev)
 {
 	struct nfp_port *port;
@@ -595,8 +696,12 @@ static void nfp_net_get_strings(struct net_device *netdev,
 	switch (stringset) {
 	case ETH_SS_STATS:
 		data = nfp_vnic_get_sw_stats_strings(netdev, data);
-		data = nfp_vnic_get_hw_stats_strings(data, nn->max_r_vecs,
-						     false);
+		if (!nn->tlv_caps.vnic_stats_off)
+			data = nfp_vnic_get_hw_stats_strings(data,
+							     nn->max_r_vecs,
+							     false);
+		else
+			data = nfp_vnic_get_tlv_stats_strings(nn, data);
 		data = nfp_mac_get_stats_strings(netdev, data);
 		data = nfp_app_port_get_stats_strings(nn->port, data);
 		break;
@@ -610,7 +715,11 @@ nfp_net_get_stats(struct net_device *netdev, struct ethtool_stats *stats,
 	struct nfp_net *nn = netdev_priv(netdev);
 
 	data = nfp_vnic_get_sw_stats(netdev, data);
-	data = nfp_vnic_get_hw_stats(data, nn->dp.ctrl_bar, nn->max_r_vecs);
+	if (!nn->tlv_caps.vnic_stats_off)
+		data = nfp_vnic_get_hw_stats(data, nn->dp.ctrl_bar,
+					     nn->max_r_vecs);
+	else
+		data = nfp_vnic_get_tlv_stats(nn, data);
 	data = nfp_mac_get_stats(netdev, data);
 	data = nfp_app_port_get_stats(nn->port, data);
 }
@@ -618,13 +727,18 @@ nfp_net_get_stats(struct net_device *netdev, struct ethtool_stats *stats,
 static int nfp_net_get_sset_count(struct net_device *netdev, int sset)
 {
 	struct nfp_net *nn = netdev_priv(netdev);
+	unsigned int cnt;
 
 	switch (sset) {
 	case ETH_SS_STATS:
-		return nfp_vnic_get_sw_stats_count(netdev) +
-		       nfp_vnic_get_hw_stats_count(nn->max_r_vecs) +
-		       nfp_mac_get_stats_count(netdev) +
-		       nfp_app_port_get_stats_count(nn->port);
+		cnt = nfp_vnic_get_sw_stats_count(netdev);
+		if (!nn->tlv_caps.vnic_stats_off)
+			cnt += nfp_vnic_get_hw_stats_count(nn->max_r_vecs);
+		else
+			cnt += nfp_vnic_get_tlv_stats_count(nn);
+		cnt += nfp_mac_get_stats_count(netdev);
+		cnt += nfp_app_port_get_stats_count(nn->port);
+		return cnt;
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -1229,26 +1343,6 @@ static int nfp_net_set_coalesce(struct net_device *netdev,
 	struct nfp_net *nn = netdev_priv(netdev);
 	unsigned int factor;
 
-	if (ec->rx_coalesce_usecs_irq ||
-	    ec->rx_max_coalesced_frames_irq ||
-	    ec->tx_coalesce_usecs_irq ||
-	    ec->tx_max_coalesced_frames_irq ||
-	    ec->stats_block_coalesce_usecs ||
-	    ec->use_adaptive_rx_coalesce ||
-	    ec->use_adaptive_tx_coalesce ||
-	    ec->pkt_rate_low ||
-	    ec->rx_coalesce_usecs_low ||
-	    ec->rx_max_coalesced_frames_low ||
-	    ec->tx_coalesce_usecs_low ||
-	    ec->tx_max_coalesced_frames_low ||
-	    ec->pkt_rate_high ||
-	    ec->rx_coalesce_usecs_high ||
-	    ec->rx_max_coalesced_frames_high ||
-	    ec->tx_coalesce_usecs_high ||
-	    ec->tx_max_coalesced_frames_high ||
-	    ec->rate_sample_interval)
-		return -EOPNOTSUPP;
-
 	/* Compute factor used to convert coalesce '_usecs' parameters to
 	 * ME timestamp ticks.  There are 16 ME clock cycles for each timestamp
 	 * count.
@@ -1362,6 +1456,8 @@ static int nfp_net_set_channels(struct net_device *netdev,
 }
 
 static const struct ethtool_ops nfp_net_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
+				     ETHTOOL_COALESCE_MAX_FRAMES,
 	.get_drvinfo		= nfp_net_get_drvinfo,
 	.get_link		= ethtool_op_get_link,
 	.get_ringparam		= nfp_net_get_ringparam,

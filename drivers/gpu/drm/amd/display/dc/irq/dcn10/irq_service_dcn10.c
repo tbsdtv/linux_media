@@ -23,6 +23,8 @@
  *
  */
 
+#include <linux/slab.h>
+
 #include "dm_services.h"
 
 #include "include/logger_interface.h"
@@ -36,7 +38,7 @@
 
 #include "irq_service_dcn10.h"
 
-#include "ivsrcid/irqsrcs_dcn_1_0.h"
+#include "ivsrcid/dcn/irqsrcs_dcn_1_0.h"
 
 enum dc_irq_source to_dal_irq_source_dcn10(
 		struct irq_service *irq_service,
@@ -353,7 +355,7 @@ static const struct irq_service_funcs irq_service_funcs_dcn10 = {
 		.to_dal_irq_source = to_dal_irq_source_dcn10
 };
 
-static void construct(
+static void dcn10_irq_construct(
 	struct irq_service *irq_service,
 	struct irq_service_init_data *init_data)
 {
@@ -372,6 +374,6 @@ struct irq_service *dal_irq_service_dcn10_create(
 	if (!irq_service)
 		return NULL;
 
-	construct(irq_service, init_data);
+	dcn10_irq_construct(irq_service, init_data);
 	return irq_service;
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  *	watchdog_core.c
  *
@@ -15,11 +16,6 @@
  *	  Rusty Lynch <rusty@linux.co.intel.com>
  *	  Satyam Sharma <satyam@infradead.org>
  *	  Randy Dunlap <randy.dunlap@oracle.com>
- *
- *	This program is free software; you can redistribute it and/or
- *	modify it under the terms of the GNU General Public License
- *	as published by the Free Software Foundation; either version
- *	2 of the License, or (at your option) any later version.
  *
  *	Neither Alan Cox, CymruNet Ltd., Wim Van Sebroeck nor Iguana vzw.
  *	admit liability nor provide warranty for any of this software.
@@ -43,6 +39,10 @@
 
 static DEFINE_IDA(watchdog_ida);
 
+static int stop_on_reboot = -1;
+module_param(stop_on_reboot, int, 0444);
+MODULE_PARM_DESC(stop_on_reboot, "Stop watchdogs on reboot (0=keep watching, 1=stop)");
+
 /*
  * Deferred Registration infrastructure.
  *
@@ -60,11 +60,10 @@ static DEFINE_MUTEX(wtd_deferred_reg_mutex);
 static LIST_HEAD(wtd_deferred_reg_list);
 static bool wtd_deferred_reg_done;
 
-static int watchdog_deferred_registration_add(struct watchdog_device *wdd)
+static void watchdog_deferred_registration_add(struct watchdog_device *wdd)
 {
 	list_add_tail(&wdd->deferred,
 		      &wtd_deferred_reg_list);
-	return 0;
 }
 
 static void watchdog_deferred_registration_del(struct watchdog_device *wdd)
@@ -151,6 +150,25 @@ int watchdog_init_timeout(struct watchdog_device *wdd,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(watchdog_init_timeout);
+
+static int watchdog_reboot_notifier(struct notifier_block *nb,
+				    unsigned long code, void *data)
+{
+	struct watchdog_device *wdd;
+
+	wdd = container_of(nb, struct watchdog_device, reboot_nb);
+	if (code == SYS_DOWN || code == SYS_HALT) {
+		if (watchdog_active(wdd)) {
+			int ret;
+
+			ret = wdd->ops->stop(wdd);
+			if (ret)
+				return NOTIFY_BAD;
+		}
+	}
+
+	return NOTIFY_DONE;
+}
 
 static int watchdog_restart_notifier(struct notifier_block *nb,
 				     unsigned long action, void *data)
@@ -240,6 +258,27 @@ static int __watchdog_register_device(struct watchdog_device *wdd)
 		}
 	}
 
+	/* Module parameter to force watchdog policy on reboot. */
+	if (stop_on_reboot != -1) {
+		if (stop_on_reboot)
+			set_bit(WDOG_STOP_ON_REBOOT, &wdd->status);
+		else
+			clear_bit(WDOG_STOP_ON_REBOOT, &wdd->status);
+	}
+
+	if (test_bit(WDOG_STOP_ON_REBOOT, &wdd->status)) {
+		wdd->reboot_nb.notifier_call = watchdog_reboot_notifier;
+
+		ret = register_reboot_notifier(&wdd->reboot_nb);
+		if (ret) {
+			pr_err("watchdog%d: Cannot register reboot notifier (%d)\n",
+			       wdd->id, ret);
+			watchdog_dev_unregister(wdd);
+			ida_simple_remove(&watchdog_ida, id);
+			return ret;
+		}
+	}
+
 	if (wdd->ops->restart) {
 		wdd->restart_nb.notifier_call = watchdog_restart_notifier;
 
@@ -265,14 +304,23 @@ static int __watchdog_register_device(struct watchdog_device *wdd)
 
 int watchdog_register_device(struct watchdog_device *wdd)
 {
-	int ret;
+	const char *dev_str;
+	int ret = 0;
 
 	mutex_lock(&wtd_deferred_reg_mutex);
 	if (wtd_deferred_reg_done)
 		ret = __watchdog_register_device(wdd);
 	else
-		ret = watchdog_deferred_registration_add(wdd);
+		watchdog_deferred_registration_add(wdd);
 	mutex_unlock(&wtd_deferred_reg_mutex);
+
+	if (ret) {
+		dev_str = wdd->parent ? dev_name(wdd->parent) :
+			  (const char *)wdd->info->identity;
+		pr_err("%s: failed to register watchdog device (err = %d)\n",
+			dev_str, ret);
+	}
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(watchdog_register_device);
@@ -284,6 +332,9 @@ static void __watchdog_unregister_device(struct watchdog_device *wdd)
 
 	if (wdd->ops->restart)
 		unregister_restart_handler(&wdd->restart_nb);
+
+	if (test_bit(WDOG_STOP_ON_REBOOT, &wdd->status))
+		unregister_reboot_notifier(&wdd->reboot_nb);
 
 	watchdog_dev_unregister(wdd);
 	ida_simple_remove(&watchdog_ida, wdd->id);

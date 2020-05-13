@@ -69,11 +69,10 @@ cifs_build_path_to_root(struct smb_vol *vol, struct cifs_sb_info *cifs_sb,
 		return full_path;
 
 	if (dfsplen)
-		strncpy(full_path, tcon->treeName, dfsplen);
+		memcpy(full_path, tcon->treeName, dfsplen);
 	full_path[dfsplen] = CIFS_DIR_SEP(cifs_sb);
-	strncpy(full_path + dfsplen + 1, vol->prepath, pplen);
+	memcpy(full_path + dfsplen + 1, vol->prepath, pplen);
 	convert_delimiter(full_path, CIFS_DIR_SEP(cifs_sb));
-	full_path[dfsplen + pplen] = 0; /* add trailing null */
 	return full_path;
 }
 
@@ -126,7 +125,7 @@ cifs_bp_rename_retry:
 	}
 	rcu_read_unlock();
 
-	full_path = kmalloc(namelen+1, GFP_KERNEL);
+	full_path = kmalloc(namelen+1, GFP_ATOMIC);
 	if (full_path == NULL)
 		return full_path;
 	full_path[namelen] = 0;	/* trailing null */
@@ -245,10 +244,8 @@ cifs_do_create(struct inode *inode, struct dentry *direntry, unsigned int xid,
 		*oplock = REQ_OPLOCK;
 
 	full_path = build_path_from_dentry(direntry);
-	if (full_path == NULL) {
-		rc = -ENOMEM;
-		goto out;
-	}
+	if (!full_path)
+		return -ENOMEM;
 
 	if (tcon->unix_ext && cap_unix(tcon->ses) && !tcon->broken_posix_open &&
 	    (CIFS_UNIX_POSIX_PATH_OPS_CAP &
@@ -358,13 +355,10 @@ cifs_do_create(struct inode *inode, struct dentry *direntry, unsigned int xid,
 	if (!tcon->unix_ext && (mode & S_IWUGO) == 0)
 		create_options |= CREATE_OPTION_READONLY;
 
-	if (backup_cred(cifs_sb))
-		create_options |= CREATE_OPEN_BACKUP_INTENT;
-
 	oparms.tcon = tcon;
 	oparms.cifs_sb = cifs_sb;
 	oparms.desired_access = desired_access;
-	oparms.create_options = create_options;
+	oparms.create_options = cifs_create_options(cifs_sb, create_options);
 	oparms.disposition = disposition;
 	oparms.path = full_path;
 	oparms.fid = fid;
@@ -561,7 +555,6 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 		if (server->ops->close)
 			server->ops->close(xid, tcon, &fid);
 		cifs_del_pending_open(&open);
-		fput(file);
 		rc = -ENOMEM;
 	}
 
@@ -739,10 +732,16 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 static int
 cifs_d_revalidate(struct dentry *direntry, unsigned int flags)
 {
+	struct inode *inode;
+
 	if (flags & LOOKUP_RCU)
 		return -ECHILD;
 
 	if (d_really_is_positive(direntry)) {
+		inode = d_inode(direntry);
+		if ((flags & LOOKUP_REVAL) && !CIFS_CACHE_READ(CIFS_I(inode)))
+			CIFS_I(inode)->time = 0; /* force reval */
+
 		if (cifs_revalidate_dentry(direntry))
 			return 0;
 		else {
@@ -753,7 +752,7 @@ cifs_d_revalidate(struct dentry *direntry, unsigned int flags)
 			 * attributes will have been updated by
 			 * cifs_revalidate_dentry().
 			 */
-			if (IS_AUTOMOUNT(d_inode(direntry)) &&
+			if (IS_AUTOMOUNT(inode) &&
 			   !(direntry->d_flags & DCACHE_NEED_AUTOMOUNT)) {
 				spin_lock(&direntry->d_lock);
 				direntry->d_flags |= DCACHE_NEED_AUTOMOUNT;

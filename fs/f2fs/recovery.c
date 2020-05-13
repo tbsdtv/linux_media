@@ -188,10 +188,9 @@ out:
 		name = "<encrypted>";
 	else
 		name = raw_inode->i_name;
-	f2fs_msg(inode->i_sb, KERN_NOTICE,
-			"%s: ino = %x, name = %s, dir = %lx, err = %d",
-			__func__, ino_of_node(ipage), name,
-			IS_ERR(dir) ? 0 : dir->i_ino, err);
+	f2fs_notice(F2FS_I_SB(inode), "%s: ino = %x, name = %s, dir = %lx, err = %d",
+		    __func__, ino_of_node(ipage), name,
+		    IS_ERR(dir) ? 0 : dir->i_ino, err);
 	return err;
 }
 
@@ -292,9 +291,8 @@ static int recover_inode(struct inode *inode, struct page *page)
 	else
 		name = F2FS_INODE(page)->i_name;
 
-	f2fs_msg(inode->i_sb, KERN_NOTICE,
-		"recover_inode: ino = %x, name = %s, inline = %x",
-			ino_of_node(page), name, raw->i_inline);
+	f2fs_notice(F2FS_I_SB(inode), "recover_inode: ino = %x, name = %s, inline = %x",
+		    ino_of_node(page), name, raw->i_inline);
 	return 0;
 }
 
@@ -371,10 +369,9 @@ next:
 		/* sanity check in order to detect looped node chain */
 		if (++loop_cnt >= free_blocks ||
 			blkaddr == next_blkaddr_of_node(page)) {
-			f2fs_msg(sbi->sb, KERN_NOTICE,
-				"%s: detect looped node chain, "
-				"blkaddr:%u, next:%u",
-				__func__, blkaddr, next_blkaddr_of_node(page));
+			f2fs_notice(sbi, "%s: detect looped node chain, blkaddr:%u, next:%u",
+				    __func__, blkaddr,
+				    next_blkaddr_of_node(page));
 			f2fs_put_page(page, 1);
 			err = -EINVAL;
 			break;
@@ -499,8 +496,7 @@ out:
 	return 0;
 
 truncate_out:
-	if (datablock_addr(tdn.inode, tdn.node_page,
-					tdn.ofs_in_node) == blkaddr)
+	if (f2fs_data_blkaddr(&tdn) == blkaddr)
 		f2fs_truncate_data_blocks_range(&tdn, 1);
 	if (dn->inode->i_ino == nid && !dn->inode_page_locked)
 		unlock_page(dn->inode_page);
@@ -538,7 +534,7 @@ retry_dn:
 	err = f2fs_get_dnode_of_data(&dn, start, ALLOC_NODE);
 	if (err) {
 		if (err == -ENOMEM) {
-			congestion_wait(BLK_RW_ASYNC, HZ/50);
+			congestion_wait(BLK_RW_ASYNC, DEFAULT_IO_TIMEOUT);
 			goto retry_dn;
 		}
 		goto out;
@@ -553,29 +549,28 @@ retry_dn:
 	f2fs_bug_on(sbi, ni.ino != ino_of_node(page));
 
 	if (ofs_of_node(dn.node_page) != ofs_of_node(page)) {
-		f2fs_msg(sbi->sb, KERN_WARNING,
-			"Inconsistent ofs_of_node, ino:%lu, ofs:%u, %u",
-			inode->i_ino, ofs_of_node(dn.node_page),
-			ofs_of_node(page));
-		err = -EFAULT;
+		f2fs_warn(sbi, "Inconsistent ofs_of_node, ino:%lu, ofs:%u, %u",
+			  inode->i_ino, ofs_of_node(dn.node_page),
+			  ofs_of_node(page));
+		err = -EFSCORRUPTED;
 		goto err;
 	}
 
 	for (; start < end; start++, dn.ofs_in_node++) {
 		block_t src, dest;
 
-		src = datablock_addr(dn.inode, dn.node_page, dn.ofs_in_node);
-		dest = datablock_addr(dn.inode, page, dn.ofs_in_node);
+		src = f2fs_data_blkaddr(&dn);
+		dest = data_blkaddr(dn.inode, page, dn.ofs_in_node);
 
 		if (__is_valid_data_blkaddr(src) &&
 			!f2fs_is_valid_blkaddr(sbi, src, META_POR)) {
-			err = -EFAULT;
+			err = -EFSCORRUPTED;
 			goto err;
 		}
 
 		if (__is_valid_data_blkaddr(dest) &&
 			!f2fs_is_valid_blkaddr(sbi, dest, META_POR)) {
-			err = -EFAULT;
+			err = -EFSCORRUPTED;
 			goto err;
 		}
 
@@ -622,7 +617,8 @@ retry_prev:
 			err = check_index_in_prev_nodes(sbi, dest, &dn);
 			if (err) {
 				if (err == -ENOMEM) {
-					congestion_wait(BLK_RW_ASYNC, HZ/50);
+					congestion_wait(BLK_RW_ASYNC,
+							DEFAULT_IO_TIMEOUT);
 					goto retry_prev;
 				}
 				goto err;
@@ -642,11 +638,9 @@ retry_prev:
 err:
 	f2fs_put_dnode(&dn);
 out:
-	f2fs_msg(sbi->sb, KERN_NOTICE,
-		"recover_data: ino = %lx (i_size: %s) recovered = %d, err = %d",
-		inode->i_ino,
-		file_keep_isize(inode) ? "keep" : "recover",
-		recovered, err);
+	f2fs_notice(sbi, "recover_data: ino = %lx (i_size: %s) recovered = %d, err = %d",
+		    inode->i_ino, file_keep_isize(inode) ? "keep" : "recover",
+		    recovered, err);
 	return err;
 }
 
@@ -717,7 +711,7 @@ next:
 		f2fs_put_page(page, 1);
 	}
 	if (!err)
-		f2fs_allocate_new_segments(sbi);
+		f2fs_allocate_new_segments(sbi, NO_CHECK_TYPE);
 	return err;
 }
 
@@ -729,13 +723,13 @@ int f2fs_recover_fsync_data(struct f2fs_sb_info *sbi, bool check_only)
 	int ret = 0;
 	unsigned long s_flags = sbi->sb->s_flags;
 	bool need_writecp = false;
+	bool fix_curseg_write_pointer = false;
 #ifdef CONFIG_QUOTA
 	int quota_enabled;
 #endif
 
 	if (s_flags & SB_RDONLY) {
-		f2fs_msg(sbi->sb, KERN_INFO,
-				"recover fsync data on readonly fs");
+		f2fs_info(sbi, "recover fsync data on readonly fs");
 		sbi->sb->s_flags &= ~SB_RDONLY;
 	}
 
@@ -781,6 +775,8 @@ int f2fs_recover_fsync_data(struct f2fs_sb_info *sbi, bool check_only)
 		sbi->sb->s_flags = s_flags;
 	}
 skip:
+	fix_curseg_write_pointer = !check_only || list_empty(&inode_list);
+
 	destroy_fsync_dnodes(&inode_list, err);
 	destroy_fsync_dnodes(&tmp_inode_list, err);
 
@@ -791,9 +787,22 @@ skip:
 	if (err) {
 		truncate_inode_pages_final(NODE_MAPPING(sbi));
 		truncate_inode_pages_final(META_MAPPING(sbi));
-	} else {
-		clear_sbi_flag(sbi, SBI_POR_DOING);
 	}
+
+	/*
+	 * If fsync data succeeds or there is no fsync data to recover,
+	 * and the f2fs is not read only, check and fix zoned block devices'
+	 * write pointer consistency.
+	 */
+	if (!err && fix_curseg_write_pointer && !f2fs_readonly(sbi->sb) &&
+			f2fs_sb_has_blkzoned(sbi)) {
+		err = f2fs_fix_curseg_write_pointer(sbi);
+		ret = err;
+	}
+
+	if (!err)
+		clear_sbi_flag(sbi, SBI_POR_DOING);
+
 	mutex_unlock(&sbi->cp_mutex);
 
 	/* let's drop all the directory inodes for clean checkpoint */

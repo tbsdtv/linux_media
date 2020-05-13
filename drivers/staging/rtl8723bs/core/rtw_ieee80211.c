@@ -217,7 +217,7 @@ u8 *rtw_get_ie_ex(u8 *in_ie, uint in_len, u8 eid, u8 *oui, u8 oui_len, u8 *ie, u
  * rtw_ies_remove_ie - Find matching IEs and remove
  * @ies: Address of IEs to search
  * @ies_len: Pointer of length of ies, will update to new length
- * @offset: The offset to start scarch
+ * @offset: The offset to start search
  * @eid: Element ID to match
  * @oui: OUI to match
  * @oui_len: OUI length
@@ -654,7 +654,7 @@ int rtw_get_wapi_ie(u8 *in_ie, uint in_len, u8 *wapi_ie, u16 *wapi_len)
 }
 /* endif */
 
-int rtw_get_sec_ie(u8 *in_ie, uint in_len, u8 *rsn_ie, u16 *rsn_len, u8 *wpa_ie, u16 *wpa_len)
+void rtw_get_sec_ie(u8 *in_ie, uint in_len, u8 *rsn_ie, u16 *rsn_len, u8 *wpa_ie, u16 *wpa_len)
 {
 	u8 authmode, sec_idx, i;
 	u8 wpa_oui[4] = {0x0, 0x50, 0xf2, 0x01};
@@ -705,8 +705,6 @@ int rtw_get_sec_ie(u8 *in_ie, uint in_len, u8 *rsn_ie, u16 *rsn_len, u8 *wpa_ie,
 			}
 		}
 	}
-
-	return *rsn_len + *wpa_len;
 }
 
 u8 rtw_is_wps_ie(u8 *ie_ptr, uint *wps_ielen)

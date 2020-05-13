@@ -15,6 +15,7 @@
 
 #define MT7603_RATE_RETRY	2
 
+#define MT7603_MCU_RX_RING_SIZE	64
 #define MT7603_RX_RING_SIZE     128
 
 #define MT7603_FIRMWARE_E1	"mt7603_e1.bin"
@@ -51,14 +52,26 @@ enum mt7603_bw {
 	MT_BW_80,
 };
 
+struct mt7603_rate_set {
+	struct ieee80211_tx_rate probe_rate;
+	struct ieee80211_tx_rate rates[4];
+};
+
 struct mt7603_sta {
 	struct mt76_wcid wcid; /* must be first */
 
 	struct mt7603_vif *vif;
 
+	struct list_head poll_list;
+	u32 tx_airtime_ac[4];
+
 	struct sk_buff_head psq;
 
-	struct ieee80211_tx_rate rates[8];
+	struct ieee80211_tx_rate rates[4];
+
+	struct mt7603_rate_set rateset[2];
+	u32 rate_set_tsf;
+
 	u8 rate_count;
 	u8 n_rates;
 
@@ -86,7 +99,10 @@ enum mt7603_reset_cause {
 };
 
 struct mt7603_dev {
-	struct mt76_dev mt76; /* must be first */
+	union { /* must be first */
+		struct mt76_dev mt76;
+		struct mt76_phy mphy;
+	};
 
 	const struct mt76_bus_ops *bus_ops;
 
@@ -94,12 +110,17 @@ struct mt7603_dev {
 
 	u8 vif_mask;
 
+	struct list_head sta_poll_list;
+	spinlock_t sta_poll_lock;
+
 	struct mt7603_sta global_sta;
 
 	u32 agc0, agc3;
 	u32 false_cca_ofdm, false_cca_cck;
 	unsigned long last_cca_adj;
 
+	u32 ampdu_ref;
+	__le32 rx_ampdu_ts;
 	u8 rssi_offset[3];
 
 	u8 slottime;
@@ -107,23 +128,23 @@ struct mt7603_dev {
 
 	s8 tx_power_limit;
 
-	ktime_t survey_time;
 	ktime_t ed_time;
-
-	struct mt76_queue q_rx;
 
 	spinlock_t ps_lock;
 
 	u8 mac_work_count;
 
 	u8 mcu_running;
-	u8 ed_monitor;
 
+	u8 ed_monitor_enabled;
+	u8 ed_monitor;
 	s8 ed_trigger;
 	u8 ed_strict_mode;
 	u8 ed_strong_signal;
 
+	bool dynamic_sensitivity;
 	s8 sensitivity;
+	u8 sensitivity_limit;
 
 	u8 beacon_check;
 	u8 tx_hang_check;
@@ -182,6 +203,7 @@ static inline void mt7603_irq_disable(struct mt7603_dev *dev, u32 mask)
 	mt76_set_irq_mask(&dev->mt76, MT_INT_MASK_CSR, mask, 0);
 }
 
+void mt7603_mac_reset_counters(struct mt7603_dev *dev);
 void mt7603_mac_dma_start(struct mt7603_dev *dev);
 void mt7603_mac_start(struct mt7603_dev *dev);
 void mt7603_mac_stop(struct mt7603_dev *dev);
@@ -193,6 +215,7 @@ void mt7603_mac_add_txs(struct mt7603_dev *dev, void *data);
 void mt7603_mac_rx_ba_reset(struct mt7603_dev *dev, void *addr, u8 tid);
 void mt7603_mac_tx_ba_reset(struct mt7603_dev *dev, int wcid, int tid,
 			    int ba_size);
+void mt7603_mac_sta_poll(struct mt7603_dev *dev);
 
 void mt7603_pse_client_reset(struct mt7603_dev *dev);
 
@@ -241,4 +264,5 @@ void mt7603_update_channel(struct mt76_dev *mdev);
 void mt7603_edcca_set_strict(struct mt7603_dev *dev, bool val);
 void mt7603_cca_stats_reset(struct mt7603_dev *dev);
 
+void mt7603_init_edcca(struct mt7603_dev *dev);
 #endif

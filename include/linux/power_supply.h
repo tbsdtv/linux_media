@@ -128,6 +128,8 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD, /* in percents! */
 	POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD, /* in percents! */
 	POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT,
+	POWER_SUPPLY_PROP_INPUT_VOLTAGE_LIMIT,
+	POWER_SUPPLY_PROP_INPUT_POWER_LIMIT,
 	POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN,
 	POWER_SUPPLY_PROP_ENERGY_EMPTY_DESIGN,
 	POWER_SUPPLY_PROP_ENERGY_FULL,
@@ -323,6 +325,11 @@ struct power_supply_battery_ocv_table {
 	int capacity;	/* percent */
 };
 
+struct power_supply_resistance_temp_table {
+	int temp;	/* celsius */
+	int resistance;	/* internal resistance percent */
+};
+
 #define POWER_SUPPLY_OCV_TEMP_MAX 20
 
 /*
@@ -347,6 +354,8 @@ struct power_supply_battery_info {
 	int ocv_temp[POWER_SUPPLY_OCV_TEMP_MAX];/* celsius */
 	struct power_supply_battery_ocv_table *ocv_table[POWER_SUPPLY_OCV_TEMP_MAX];
 	int ocv_table_size[POWER_SUPPLY_OCV_TEMP_MAX];
+	struct power_supply_resistance_temp_table *resist_table;
+	int resist_table_size;
 };
 
 extern struct atomic_notifier_head power_supply_notifier;
@@ -379,6 +388,9 @@ power_supply_find_ocv2cap_table(struct power_supply_battery_info *info,
 				int temp, int *table_len);
 extern int power_supply_batinfo_ocv2cap(struct power_supply_battery_info *info,
 					int ocv, int temp);
+extern int
+power_supply_temp2resist_simple(struct power_supply_resistance_temp_table *table,
+				int table_len, int temp);
 extern void power_supply_changed(struct power_supply *psy);
 extern int power_supply_am_i_supplied(struct power_supply *psy);
 extern int power_supply_set_input_current_limit_from_supplier(
@@ -479,5 +491,18 @@ static inline bool power_supply_is_watt_property(enum power_supply_property psp)
 
 	return 0;
 }
+
+#ifdef CONFIG_POWER_SUPPLY_HWMON
+int power_supply_add_hwmon_sysfs(struct power_supply *psy);
+void power_supply_remove_hwmon_sysfs(struct power_supply *psy);
+#else
+static inline int power_supply_add_hwmon_sysfs(struct power_supply *psy)
+{
+	return 0;
+}
+
+static inline
+void power_supply_remove_hwmon_sysfs(struct power_supply *psy) {}
+#endif
 
 #endif /* __LINUX_POWER_SUPPLY_H__ */

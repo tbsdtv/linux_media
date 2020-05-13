@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __DPU_ENCODER_H__
@@ -79,9 +68,8 @@ void dpu_encoder_register_frame_event_callback(struct drm_encoder *encoder,
  *	Immediately: if no previous commit is outstanding.
  *	Delayed: Block until next trigger can be issued.
  * @encoder:	encoder pointer
- * @async:	true if this is an asynchronous commit
  */
-void dpu_encoder_prepare_for_kickoff(struct drm_encoder *encoder,  bool async);
+void dpu_encoder_prepare_for_kickoff(struct drm_encoder *encoder);
 
 /**
  * dpu_encoder_trigger_kickoff_pending - Clear the flush bits from previous
@@ -94,9 +82,13 @@ void dpu_encoder_trigger_kickoff_pending(struct drm_encoder *encoder);
  * dpu_encoder_kickoff - trigger a double buffer flip of the ctl path
  *	(i.e. ctl flush and start) immediately.
  * @encoder:	encoder pointer
- * @async:	true if this is an asynchronous commit
  */
-void dpu_encoder_kickoff(struct drm_encoder *encoder, bool async);
+void dpu_encoder_kickoff(struct drm_encoder *encoder);
+
+/**
+ * dpu_encoder_wakeup_time - get the time of the next vsync
+ */
+int dpu_encoder_vsync_time(struct drm_encoder *drm_enc, ktime_t *wakeup_time);
 
 /**
  * dpu_encoder_wait_for_event - Waits for encoder events

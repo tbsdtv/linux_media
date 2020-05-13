@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2008, 2009 Provigent Ltd.
  *
  * Author: Baruch Siach <baruch@tkos.co.il>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Driver for the ARM PrimeCell(tm) General Purpose Input/Output (PL061)
  *
@@ -66,7 +63,10 @@ static int pl061_get_direction(struct gpio_chip *gc, unsigned offset)
 {
 	struct pl061 *pl061 = gpiochip_get_data(gc);
 
-	return !(readb(pl061->base + GPIODIR) & BIT(offset));
+	if (readb(pl061->base + GPIODIR) & BIT(offset))
+		return GPIO_LINE_DIRECTION_OUT;
+
+	return GPIO_LINE_DIRECTION_IN;
 }
 
 static int pl061_direction_input(struct gpio_chip *gc, unsigned offset)
@@ -286,6 +286,7 @@ static int pl061_probe(struct amba_device *adev, const struct amba_id *id)
 {
 	struct device *dev = &adev->dev;
 	struct pl061 *pl061;
+	struct gpio_irq_chip *girq;
 	int ret, irq;
 
 	pl061 = devm_kzalloc(dev, sizeof(*pl061), GFP_KERNEL);
@@ -297,11 +298,8 @@ static int pl061_probe(struct amba_device *adev, const struct amba_id *id)
 		return PTR_ERR(pl061->base);
 
 	raw_spin_lock_init(&pl061->lock);
-	if (of_property_read_bool(dev->of_node, "gpio-ranges")) {
-		pl061->gc.request = gpiochip_generic_request;
-		pl061->gc.free = gpiochip_generic_free;
-	}
-
+	pl061->gc.request = gpiochip_generic_request;
+	pl061->gc.free = gpiochip_generic_free;
 	pl061->gc.base = -1;
 	pl061->gc.get_direction = pl061_get_direction;
 	pl061->gc.direction_input = pl061_direction_input;
@@ -312,10 +310,6 @@ static int pl061_probe(struct amba_device *adev, const struct amba_id *id)
 	pl061->gc.label = dev_name(dev);
 	pl061->gc.parent = dev;
 	pl061->gc.owner = THIS_MODULE;
-
-	ret = gpiochip_add_data(&pl061->gc, pl061);
-	if (ret)
-		return ret;
 
 	/*
 	 * irq_chip support
@@ -329,25 +323,28 @@ static int pl061_probe(struct amba_device *adev, const struct amba_id *id)
 
 	writeb(0, pl061->base + GPIOIE); /* disable irqs */
 	irq = adev->irq[0];
-	if (irq < 0) {
-		dev_err(&adev->dev, "invalid IRQ\n");
-		return -ENODEV;
-	}
+	if (!irq)
+		dev_warn(&adev->dev, "IRQ support disabled\n");
 	pl061->parent_irq = irq;
 
-	ret = gpiochip_irqchip_add(&pl061->gc, &pl061->irq_chip,
-				   0, handle_bad_irq,
-				   IRQ_TYPE_NONE);
-	if (ret) {
-		dev_info(&adev->dev, "could not add irqchip\n");
+	girq = &pl061->gc.irq;
+	girq->chip = &pl061->irq_chip;
+	girq->parent_handler = pl061_irq_handler;
+	girq->num_parents = 1;
+	girq->parents = devm_kcalloc(dev, 1, sizeof(*girq->parents),
+				     GFP_KERNEL);
+	if (!girq->parents)
+		return -ENOMEM;
+	girq->parents[0] = irq;
+	girq->default_type = IRQ_TYPE_NONE;
+	girq->handler = handle_bad_irq;
+
+	ret = devm_gpiochip_add_data(dev, &pl061->gc, pl061);
+	if (ret)
 		return ret;
-	}
-	gpiochip_set_chained_irqchip(&pl061->gc, &pl061->irq_chip,
-				     irq, pl061_irq_handler);
 
 	amba_set_drvdata(adev, pl061);
-	dev_info(&adev->dev, "PL061 GPIO chip @%pa registered\n",
-		 &adev->res.start);
+	dev_info(dev, "PL061 GPIO chip registered\n");
 
 	return 0;
 }

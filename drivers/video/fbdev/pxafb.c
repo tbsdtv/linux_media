@@ -597,7 +597,7 @@ static int pxafb_blank(int blank, struct fb_info *info)
 	return 0;
 }
 
-static struct fb_ops pxafb_ops = {
+static const struct fb_ops pxafb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= pxafb_check_var,
 	.fb_set_par	= pxafb_set_par,
@@ -865,7 +865,7 @@ static int overlayfb_set_par(struct fb_info *info)
 	return 0;
 }
 
-static struct fb_ops overlay_fb_ops = {
+static const struct fb_ops overlay_fb_ops = {
 	.owner			= THIS_MODULE,
 	.fb_open		= overlayfb_open,
 	.fb_release		= overlayfb_release,
@@ -1678,24 +1678,6 @@ pxafb_freq_transition(struct notifier_block *nb, unsigned long val, void *data)
 	}
 	return 0;
 }
-
-static int
-pxafb_freq_policy(struct notifier_block *nb, unsigned long val, void *data)
-{
-	struct pxafb_info *fbi = TO_INF(nb, freq_policy);
-	struct fb_var_screeninfo *var = &fbi->fb.var;
-	struct cpufreq_policy *policy = data;
-
-	switch (val) {
-	case CPUFREQ_ADJUST:
-		pr_debug("min dma period: %d ps, "
-			"new clock %d kHz\n", pxafb_display_dma_period(var),
-			policy->max);
-		/* TODO: fill in min/max values */
-		break;
-	}
-	return 0;
-}
 #endif
 
 #ifdef CONFIG_PM
@@ -2068,7 +2050,7 @@ static int __init pxafb_setup_options(void)
 #define pxafb_setup_options()		(0)
 
 module_param_string(options, g_options, sizeof(g_options), 0);
-MODULE_PARM_DESC(options, "LCD parameters (see Documentation/fb/pxafb.txt)");
+MODULE_PARM_DESC(options, "LCD parameters (see Documentation/fb/pxafb.rst)");
 #endif
 
 #else
@@ -2255,7 +2237,6 @@ static int pxafb_probe(struct platform_device *dev)
 {
 	struct pxafb_info *fbi;
 	struct pxafb_mach_info *inf, *pdata;
-	struct resource *r;
 	int i, irq, ret;
 
 	dev_dbg(&dev->dev, "pxafb_probe\n");
@@ -2321,14 +2302,7 @@ static int pxafb_probe(struct platform_device *dev)
 		fbi->lcd_supply = NULL;
 	}
 
-	r = platform_get_resource(dev, IORESOURCE_MEM, 0);
-	if (r == NULL) {
-		dev_err(&dev->dev, "no I/O memory resource defined\n");
-		ret = -ENODEV;
-		goto failed;
-	}
-
-	fbi->mmio_base = devm_ioremap_resource(&dev->dev, r);
+	fbi->mmio_base = devm_platform_ioremap_resource(dev, 0);
 	if (IS_ERR(fbi->mmio_base)) {
 		dev_err(&dev->dev, "failed to get I/O memory\n");
 		ret = -EBUSY;
@@ -2400,11 +2374,8 @@ static int pxafb_probe(struct platform_device *dev)
 
 #ifdef CONFIG_CPU_FREQ
 	fbi->freq_transition.notifier_call = pxafb_freq_transition;
-	fbi->freq_policy.notifier_call = pxafb_freq_policy;
 	cpufreq_register_notifier(&fbi->freq_transition,
 				CPUFREQ_TRANSITION_NOTIFIER);
-	cpufreq_register_notifier(&fbi->freq_policy,
-				CPUFREQ_POLICY_NOTIFIER);
 #endif
 
 	/*

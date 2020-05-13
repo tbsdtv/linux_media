@@ -65,6 +65,7 @@
 #define SDMA_DESCQ_CNT 2048
 #define SDMA_DESC_INTR 64
 #define INVALID_TAIL 0xffff
+#define SDMA_PAD max_t(size_t, MAX_16B_PADDING, sizeof(u32))
 
 static uint sdma_descq_cnt = SDMA_DESCQ_CNT;
 module_param(sdma_descq_cnt, uint, S_IRUGO);
@@ -405,19 +406,33 @@ static void sdma_flush(struct sdma_engine *sde)
 	struct sdma_txreq *txp, *txp_next;
 	LIST_HEAD(flushlist);
 	unsigned long flags;
+	uint seq;
 
 	/* flush from head to tail */
 	sdma_flush_descq(sde);
 	spin_lock_irqsave(&sde->flushlist_lock, flags);
 	/* copy flush list */
-	list_for_each_entry_safe(txp, txp_next, &sde->flushlist, list) {
-		list_del_init(&txp->list);
-		list_add_tail(&txp->list, &flushlist);
-	}
+	list_splice_init(&sde->flushlist, &flushlist);
 	spin_unlock_irqrestore(&sde->flushlist_lock, flags);
 	/* flush from flush list */
 	list_for_each_entry_safe(txp, txp_next, &flushlist, list)
 		complete_tx(sde, txp, SDMA_TXREQ_S_ABORTED);
+	/* wakeup QPs orphaned on the dmawait list */
+	do {
+		struct iowait *w, *nw;
+
+		seq = read_seqbegin(&sde->waitlock);
+		if (!list_empty(&sde->dmawait)) {
+			write_seqlock(&sde->waitlock);
+			list_for_each_entry_safe(w, nw, &sde->dmawait, list) {
+				if (w->wakeup) {
+					w->wakeup(w, SDMA_AVAIL_REASON);
+					list_del_init(&w->list);
+				}
+			}
+			write_sequnlock(&sde->waitlock);
+		}
+	} while (read_seqretry(&sde->waitlock, seq));
 }
 
 /*
@@ -818,7 +833,7 @@ struct sdma_engine *sdma_select_engine_sc(
 struct sdma_rht_map_elem {
 	u32 mask;
 	u8 ctr;
-	struct sdma_engine *sde[0];
+	struct sdma_engine *sde[];
 };
 
 struct sdma_rht_node {
@@ -833,7 +848,7 @@ static const struct rhashtable_params sdma_rht_params = {
 	.nelem_hint = NR_CPUS_HINT,
 	.head_offset = offsetof(struct sdma_rht_node, node),
 	.key_offset = offsetof(struct sdma_rht_node, cpu_id),
-	.key_len = FIELD_SIZEOF(struct sdma_rht_node, cpu_id),
+	.key_len = sizeof_field(struct sdma_rht_node, cpu_id),
 	.max_size = NR_CPUS,
 	.min_size = 8,
 	.automatic_shrinking = true,
@@ -855,20 +870,19 @@ struct sdma_engine *sdma_select_user_engine(struct hfi1_devdata *dd,
 {
 	struct sdma_rht_node *rht_node;
 	struct sdma_engine *sde = NULL;
-	const struct cpumask *current_mask = &current->cpus_allowed;
 	unsigned long cpu_id;
 
 	/*
 	 * To ensure that always the same sdma engine(s) will be
 	 * selected make sure the process is pinned to this CPU only.
 	 */
-	if (cpumask_weight(current_mask) != 1)
+	if (current->nr_cpus_allowed != 1)
 		goto out;
 
 	cpu_id = smp_processor_id();
 	rcu_read_lock();
-	rht_node = rhashtable_lookup_fast(dd->sdma_rht, &cpu_id,
-					  sdma_rht_params);
+	rht_node = rhashtable_lookup(dd->sdma_rht, &cpu_id,
+				     sdma_rht_params);
 
 	if (rht_node && rht_node->map[vl]) {
 		struct sdma_rht_map_elem *map = rht_node->map[vl];
@@ -1283,7 +1297,7 @@ void sdma_clean(struct hfi1_devdata *dd, size_t num_engines)
 	struct sdma_engine *sde;
 
 	if (dd->sdma_pad_dma) {
-		dma_free_coherent(&dd->pcidev->dev, 4,
+		dma_free_coherent(&dd->pcidev->dev, SDMA_PAD,
 				  (void *)dd->sdma_pad_dma,
 				  dd->sdma_pad_phys);
 		dd->sdma_pad_dma = NULL;
@@ -1478,7 +1492,7 @@ int sdma_init(struct hfi1_devdata *dd, u8 port)
 	}
 
 	/* Allocate memory for pad */
-	dd->sdma_pad_dma = dma_alloc_coherent(&dd->pcidev->dev, sizeof(u32),
+	dd->sdma_pad_dma = dma_alloc_coherent(&dd->pcidev->dev, SDMA_PAD,
 					      &dd->sdma_pad_phys, GFP_KERNEL);
 	if (!dd->sdma_pad_dma) {
 		dd_dev_err(dd, "failed to allocate SendDMA pad memory\n");
@@ -1513,8 +1527,11 @@ int sdma_init(struct hfi1_devdata *dd, u8 port)
 	}
 
 	ret = rhashtable_init(tmp_sdma_rht, &sdma_rht_params);
-	if (ret < 0)
+	if (ret < 0) {
+		kfree(tmp_sdma_rht);
 		goto bail;
+	}
+
 	dd->sdma_rht = tmp_sdma_rht;
 
 	dd_dev_info(dd, "SDMA num_sdma: %u\n", dd->num_sdma);
@@ -2413,7 +2430,7 @@ unlock_noconn:
 	list_add_tail(&tx->list, &sde->flushlist);
 	spin_unlock(&sde->flushlist_lock);
 	iowait_inc_wait_count(wait, tx->num_desc);
-	schedule_work(&sde->flush_worker);
+	queue_work_on(sde->cpu, system_highpri_wq, &sde->flush_worker);
 	ret = -ECOMM;
 	goto unlock;
 nodesc:
@@ -2511,7 +2528,7 @@ unlock_noconn:
 		iowait_inc_wait_count(wait, tx->num_desc);
 	}
 	spin_unlock(&sde->flushlist_lock);
-	schedule_work(&sde->flush_worker);
+	queue_work_on(sde->cpu, system_highpri_wq, &sde->flush_worker);
 	ret = -ECOMM;
 	goto update_tail;
 nodesc:

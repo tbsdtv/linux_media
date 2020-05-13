@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* drivers/rtc/rtc-s3c.c
  *
  * Copyright (c) 2010 Samsung Electronics Co., Ltd.
@@ -6,10 +7,6 @@
  * Copyright (c) 2004,2006 Simtec Electronics
  *	Ben Dooks, <ben@simtec.co.uk>
  *	http://armlinux.simtec.co.uk/
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * S3C2410/S3C2440/S3C24XX Internal RTC Driver
 */
@@ -447,7 +444,6 @@ static int s3c_rtc_probe(struct platform_device *pdev)
 {
 	struct s3c_rtc *info = NULL;
 	struct rtc_time rtc_tm;
-	struct resource *res;
 	int ret;
 
 	info = devm_kzalloc(&pdev->dev, sizeof(*info), GFP_KERNEL);
@@ -456,10 +452,8 @@ static int s3c_rtc_probe(struct platform_device *pdev)
 
 	/* find the IRQs */
 	info->irq_tick = platform_get_irq(pdev, 1);
-	if (info->irq_tick < 0) {
-		dev_err(&pdev->dev, "no irq for rtc tick\n");
+	if (info->irq_tick < 0)
 		return info->irq_tick;
-	}
 
 	info->dev = &pdev->dev;
 	info->data = of_device_get_match_data(&pdev->dev);
@@ -473,17 +467,14 @@ static int s3c_rtc_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, info);
 
 	info->irq_alarm = platform_get_irq(pdev, 0);
-	if (info->irq_alarm < 0) {
-		dev_err(&pdev->dev, "no irq for alarm\n");
+	if (info->irq_alarm < 0)
 		return info->irq_alarm;
-	}
 
 	dev_dbg(&pdev->dev, "s3c2410_rtc: tick irq %d, alarm irq %d\n",
 		info->irq_tick, info->irq_alarm);
 
 	/* get the memory region */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	info->base = devm_ioremap_resource(&pdev->dev, res);
+	info->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(info->base))
 		return PTR_ERR(info->base);
 

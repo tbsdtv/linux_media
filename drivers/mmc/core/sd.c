@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/drivers/mmc/core/sd.c
  *
  *  Copyright (C) 2003-2004 Russell King, All Rights Reserved.
  *  SD support Copyright (C) 2004 Ian Molton, All Rights Reserved.
  *  Copyright (C) 2005-2007 Pierre Ossman, All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
@@ -1085,6 +1082,16 @@ retry:
 		}
 	}
 
+	if (host->cqe_ops && !host->cqe_enabled) {
+		err = host->cqe_ops->cqe_enable(host, card);
+		if (!err) {
+			host->cqe_enabled = true;
+			host->hsq_enabled = true;
+			pr_info("%s: Host Software Queue enabled\n",
+				mmc_hostname(host));
+		}
+	}
+
 	if (host->caps2 & MMC_CAP2_AVOID_3_3V &&
 	    host->ios.signal_voltage == MMC_SIGNAL_VOLTAGE_330) {
 		pr_err("%s: Host failed to negotiate down from 3.3V\n",
@@ -1294,6 +1301,12 @@ int mmc_attach_sd(struct mmc_host *host)
 		if (err)
 			goto err;
 	}
+
+	/*
+	 * Some SD cards claims an out of spec VDD voltage range. Let's treat
+	 * these bits as being in-valid and especially also bit7.
+	 */
+	ocr &= ~0x7FFF;
 
 	rocr = mmc_select_voltage(host, ocr);
 

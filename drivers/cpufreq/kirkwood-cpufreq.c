@@ -85,7 +85,8 @@ static int kirkwood_cpufreq_target(struct cpufreq_policy *policy,
 /* Module init and exit code */
 static int kirkwood_cpufreq_cpu_init(struct cpufreq_policy *policy)
 {
-	return cpufreq_generic_init(policy, kirkwood_freq_table, 5000);
+	cpufreq_generic_init(policy, kirkwood_freq_table, 5000);
+	return 0;
 }
 
 static struct cpufreq_driver kirkwood_cpufreq_driver = {
@@ -101,13 +102,11 @@ static struct cpufreq_driver kirkwood_cpufreq_driver = {
 static int kirkwood_cpufreq_probe(struct platform_device *pdev)
 {
 	struct device_node *np;
-	struct resource *res;
 	int err;
 
 	priv.dev = &pdev->dev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	priv.base = devm_ioremap_resource(&pdev->dev, res);
+	priv.base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(priv.base))
 		return PTR_ERR(priv.base);
 

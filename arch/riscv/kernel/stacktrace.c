@@ -19,8 +19,10 @@ struct stackframe {
 	unsigned long ra;
 };
 
-static void notrace walk_stackframe(struct task_struct *task,
-	struct pt_regs *regs, bool (*fn)(unsigned long, void *), void *arg)
+register unsigned long sp_in_global __asm__("sp");
+
+void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
+			     bool (*fn)(unsigned long, void *), void *arg)
 {
 	unsigned long fp, sp, pc;
 
@@ -29,7 +31,7 @@ static void notrace walk_stackframe(struct task_struct *task,
 		sp = user_stack_pointer(regs);
 		pc = instruction_pointer(regs);
 	} else if (task == NULL || task == current) {
-		const register unsigned long current_sp __asm__ ("sp");
+		const register unsigned long current_sp = sp_in_global;
 		fp = (unsigned long)__builtin_frame_address(0);
 		sp = current_sp;
 		pc = (unsigned long)walk_stackframe;
@@ -73,8 +75,7 @@ static void notrace walk_stackframe(struct task_struct *task,
 		sp = user_stack_pointer(regs);
 		pc = instruction_pointer(regs);
 	} else if (task == NULL || task == current) {
-		const register unsigned long current_sp __asm__ ("sp");
-		sp = current_sp;
+		sp = sp_in_global;
 		pc = (unsigned long)walk_stackframe;
 	} else {
 		/* task blocked in __switch_to */

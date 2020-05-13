@@ -21,8 +21,14 @@ Contents:
    intel/i40e
    intel/iavf
    intel/ice
+   google/gve
+   marvell/octeontx2
+   mellanox/mlx5
+   netronome/nfp
+   pensando/ionic
+   stmicro/stmmac
 
-.. only::  subproject
+.. only::  subproject and html
 
    Indices
    =======

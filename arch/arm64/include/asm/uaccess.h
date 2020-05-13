@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Based on arch/arm/include/asm/uaccess.h
  *
  * Copyright (C) 2012 ARM Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef __ASM_UACCESS_H
 #define __ASM_UACCESS_H
@@ -72,6 +61,15 @@ static inline void set_fs(mm_segment_t fs)
 static inline unsigned long __range_ok(const void __user *addr, unsigned long size)
 {
 	unsigned long ret, limit = current_thread_info()->addr_limit;
+
+	/*
+	 * Asynchronous I/O running in a kernel thread does not have the
+	 * TIF_TAGGED_ADDR flag of the process owning the mm, so always untag
+	 * the user address before checking.
+	 */
+	if (IS_ENABLED(CONFIG_ARM64_TAGGED_ADDR_ABI) &&
+	    (current->flags & PF_KTHREAD || test_thread_flag(TIF_TAGGED_ADDR)))
+		addr = untagged_addr(addr);
 
 	__chk_user_ptr(addr);
 	asm volatile(
@@ -226,7 +224,8 @@ static inline void uaccess_enable_not_uao(void)
 
 /*
  * Sanitise a uaccess pointer such that it becomes NULL if above the
- * current addr_limit.
+ * current addr_limit. In case the pointer is tagged (has the top byte set),
+ * untag the pointer before checking.
  */
 #define uaccess_mask_ptr(ptr) (__typeof__(ptr))__uaccess_mask_ptr(ptr)
 static inline void __user *__uaccess_mask_ptr(const void __user *ptr)
@@ -234,10 +233,11 @@ static inline void __user *__uaccess_mask_ptr(const void __user *ptr)
 	void __user *safe_ptr;
 
 	asm volatile(
-	"	bics	xzr, %1, %2\n"
+	"	bics	xzr, %3, %2\n"
 	"	csel	%0, %1, xzr, eq\n"
 	: "=&r" (safe_ptr)
-	: "r" (ptr), "r" (current_thread_info()->addr_limit)
+	: "r" (ptr), "r" (current_thread_info()->addr_limit),
+	  "r" (untagged_addr(ptr))
 	: "cc");
 
 	csdb();
@@ -383,20 +383,34 @@ do {									\
 extern unsigned long __must_check __arch_copy_from_user(void *to, const void __user *from, unsigned long n);
 #define raw_copy_from_user(to, from, n)					\
 ({									\
-	__arch_copy_from_user((to), __uaccess_mask_ptr(from), (n));	\
+	unsigned long __acfu_ret;					\
+	uaccess_enable_not_uao();					\
+	__acfu_ret = __arch_copy_from_user((to),			\
+				      __uaccess_mask_ptr(from), (n));	\
+	uaccess_disable_not_uao();					\
+	__acfu_ret;							\
 })
 
 extern unsigned long __must_check __arch_copy_to_user(void __user *to, const void *from, unsigned long n);
 #define raw_copy_to_user(to, from, n)					\
 ({									\
-	__arch_copy_to_user(__uaccess_mask_ptr(to), (from), (n));	\
+	unsigned long __actu_ret;					\
+	uaccess_enable_not_uao();					\
+	__actu_ret = __arch_copy_to_user(__uaccess_mask_ptr(to),	\
+				    (from), (n));			\
+	uaccess_disable_not_uao();					\
+	__actu_ret;							\
 })
 
 extern unsigned long __must_check __arch_copy_in_user(void __user *to, const void __user *from, unsigned long n);
 #define raw_copy_in_user(to, from, n)					\
 ({									\
-	__arch_copy_in_user(__uaccess_mask_ptr(to),			\
-			    __uaccess_mask_ptr(from), (n));		\
+	unsigned long __aciu_ret;					\
+	uaccess_enable_not_uao();					\
+	__aciu_ret = __arch_copy_in_user(__uaccess_mask_ptr(to),	\
+				    __uaccess_mask_ptr(from), (n));	\
+	uaccess_disable_not_uao();					\
+	__aciu_ret;							\
 })
 
 #define INLINE_COPY_TO_USER
@@ -405,8 +419,11 @@ extern unsigned long __must_check __arch_copy_in_user(void __user *to, const voi
 extern unsigned long __must_check __arch_clear_user(void __user *to, unsigned long n);
 static inline unsigned long __must_check __clear_user(void __user *to, unsigned long n)
 {
-	if (access_ok(to, n))
+	if (access_ok(to, n)) {
+		uaccess_enable_not_uao();
 		n = __arch_clear_user(__uaccess_mask_ptr(to), n);
+		uaccess_disable_not_uao();
+	}
 	return n;
 }
 #define clear_user	__clear_user

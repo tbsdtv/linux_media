@@ -13,8 +13,9 @@
 #include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <linux/perf_event.h>
 
-#include "libbpf.h"
+#include <bpf/libbpf.h>
 #include "bpf_load.h"
 #include "bpf_util.h"
 #include "perf-sys.h"
@@ -216,7 +217,7 @@ static int test_debug_fs_uprobe(char *binary_path, long offset, bool is_return)
 {
 	const char *event_type = "uprobe";
 	struct perf_event_attr attr = {};
-	char buf[256], event_alias[256];
+	char buf[256], event_alias[sizeof("test_1234567890")];
 	__u64 probe_offset, probe_addr;
 	__u32 len, prog_id, fd_type;
 	int err, res, kfd, efd;

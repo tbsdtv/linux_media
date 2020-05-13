@@ -316,7 +316,7 @@ typedef struct asc_sg_head {
 	ushort queue_cnt;
 	ushort entry_to_copy;
 	ushort res;
-	ASC_SG_LIST sg_list[0];
+	ASC_SG_LIST sg_list[];
 } ASC_SG_HEAD;
 
 typedef struct asc_scsi_q {
@@ -7710,7 +7710,7 @@ adv_get_sglist(struct asc_board *boardp, adv_req_t *reqp,
 				sg_block->sg_ptr = 0L; /* Last ADV_SG_BLOCK in list. */
 				return ADV_SUCCESS;
 			}
-			slp++;
+			slp = sg_next(slp);
 		}
 		sg_block->sg_cnt = NO_OF_SG_PER_BLOCK;
 		prev_sg_block = sg_block;

@@ -55,7 +55,6 @@
 /*
  * Generic information about the driver.
  */
-#define DRV_VERSION "2.0.0-ko"
 #define DRV_DESC "Chelsio T4/T5/T6 Virtual Function (VF) Network Driver"
 
 /*
@@ -1556,7 +1555,6 @@ static void cxgb4vf_get_drvinfo(struct net_device *dev,
 	struct adapter *adapter = netdev2adap(dev);
 
 	strlcpy(drvinfo->driver, KBUILD_MODNAME, sizeof(drvinfo->driver));
-	strlcpy(drvinfo->version, DRV_VERSION, sizeof(drvinfo->version));
 	strlcpy(drvinfo->bus_info, pci_name(to_pci_dev(dev->dev.parent)),
 		sizeof(drvinfo->bus_info));
 	snprintf(drvinfo->fw_version, sizeof(drvinfo->fw_version),
@@ -1690,8 +1688,8 @@ static void cxgb4vf_get_pauseparam(struct net_device *dev,
 	struct port_info *pi = netdev_priv(dev);
 
 	pauseparam->autoneg = (pi->link_cfg.requested_fc & PAUSE_AUTONEG) != 0;
-	pauseparam->rx_pause = (pi->link_cfg.fc & PAUSE_RX) != 0;
-	pauseparam->tx_pause = (pi->link_cfg.fc & PAUSE_TX) != 0;
+	pauseparam->rx_pause = (pi->link_cfg.advertised_fc & PAUSE_RX) != 0;
+	pauseparam->tx_pause = (pi->link_cfg.advertised_fc & PAUSE_TX) != 0;
 }
 
 /*
@@ -1921,6 +1919,8 @@ static void cxgb4vf_get_wol(struct net_device *dev,
 		   NETIF_F_GRO | NETIF_F_IPV6_CSUM | NETIF_F_HIGHDMA)
 
 static const struct ethtool_ops cxgb4vf_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_USECS |
+				     ETHTOOL_COALESCE_RX_MAX_FRAMES,
 	.get_link_ksettings	= cxgb4vf_get_link_ksettings,
 	.get_fecparam		= cxgb4vf_get_fecparam,
 	.get_drvinfo		= cxgb4vf_get_drvinfo,
@@ -2478,11 +2478,10 @@ static int setup_debugfs(struct adapter *adapter)
 	 * Debugfs support is best effort.
 	 */
 	for (i = 0; i < ARRAY_SIZE(debugfs_files); i++)
-		(void)debugfs_create_file(debugfs_files[i].name,
-				  debugfs_files[i].mode,
-				  adapter->debugfs_root,
-				  (void *)adapter,
-				  debugfs_files[i].fops);
+		debugfs_create_file(debugfs_files[i].name,
+				    debugfs_files[i].mode,
+				    adapter->debugfs_root, (void *)adapter,
+				    debugfs_files[i].fops);
 
 	return 0;
 }
@@ -2935,12 +2934,6 @@ static int cxgb4vf_pci_probe(struct pci_dev *pdev,
 	unsigned int pf;
 
 	/*
-	 * Print our driver banner the first time we're called to initialize a
-	 * device.
-	 */
-	pr_info_once("%s - version %s\n", DRV_DESC, DRV_VERSION);
-
-	/*
 	 * Initialize generic PCI device state.
 	 */
 	err = pci_enable_device(pdev);
@@ -3257,11 +3250,7 @@ static int cxgb4vf_pci_probe(struct pci_dev *pdev,
 		adapter->debugfs_root =
 			debugfs_create_dir(pci_name(pdev),
 					   cxgb4vf_debugfs_root);
-		if (IS_ERR_OR_NULL(adapter->debugfs_root))
-			dev_warn(&pdev->dev, "could not create debugfs"
-				 " directory");
-		else
-			setup_debugfs(adapter);
+		setup_debugfs(adapter);
 	}
 
 	/*
@@ -3459,7 +3448,6 @@ static void cxgb4vf_pci_shutdown(struct pci_dev *pdev)
 MODULE_DESCRIPTION(DRV_DESC);
 MODULE_AUTHOR("Chelsio Communications");
 MODULE_LICENSE("Dual BSD/GPL");
-MODULE_VERSION(DRV_VERSION);
 MODULE_DEVICE_TABLE(pci, cxgb4vf_pci_tbl);
 
 static struct pci_driver cxgb4vf_driver = {
@@ -3486,13 +3474,11 @@ static int __init cxgb4vf_module_init(void)
 		return -EINVAL;
 	}
 
-	/* Debugfs support is optional, just warn if this fails */
+	/* Debugfs support is optional, debugfs will warn if this fails */
 	cxgb4vf_debugfs_root = debugfs_create_dir(KBUILD_MODNAME, NULL);
-	if (IS_ERR_OR_NULL(cxgb4vf_debugfs_root))
-		pr_warn("could not create debugfs entry, continuing\n");
 
 	ret = pci_register_driver(&cxgb4vf_driver);
-	if (ret < 0 && !IS_ERR_OR_NULL(cxgb4vf_debugfs_root))
+	if (ret < 0)
 		debugfs_remove(cxgb4vf_debugfs_root);
 	return ret;
 }

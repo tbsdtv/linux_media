@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * cs47l24.h  --  ALSA SoC Audio driver for Cirrus Logic CS47L24
  *
  * Copyright 2015 Cirrus Logic Inc.
  *
  * Author: Richard Fitzgerald <rf@opensource.wolfsonmicro.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -1079,14 +1076,14 @@ static int cs47l24_open(struct snd_compr_stream *stream)
 	struct arizona *arizona = priv->core.arizona;
 	int n_adsp;
 
-	if (strcmp(rtd->codec_dai->name, "cs47l24-dsp-voicectrl") == 0) {
+	if (strcmp(asoc_rtd_to_codec(rtd, 0)->name, "cs47l24-dsp-voicectrl") == 0) {
 		n_adsp = 2;
-	} else if (strcmp(rtd->codec_dai->name, "cs47l24-dsp-trace") == 0) {
+	} else if (strcmp(asoc_rtd_to_codec(rtd, 0)->name, "cs47l24-dsp-trace") == 0) {
 		n_adsp = 1;
 	} else {
 		dev_err(arizona->dev,
 			"No suitable compressed stream for DAI '%s'\n",
-			rtd->codec_dai->name);
+			asoc_rtd_to_codec(rtd, 0)->name);
 		return -EINVAL;
 	}
 

@@ -1,17 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2016 Broadcom Limited
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /**
@@ -260,9 +249,10 @@ static int vc4_dpi_init_bridge(struct vc4_dpi *dpi)
 	}
 
 	if (panel)
-		bridge = drm_panel_bridge_add(panel, DRM_MODE_CONNECTOR_DPI);
+		bridge = drm_panel_bridge_add_typed(panel,
+						    DRM_MODE_CONNECTOR_DPI);
 
-	return drm_bridge_attach(dpi->encoder, bridge, NULL);
+	return drm_bridge_attach(dpi->encoder, bridge, NULL, 0);
 }
 
 static int vc4_dpi_bind(struct device *dev, struct device *master, void *data)

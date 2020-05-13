@@ -23,21 +23,40 @@ spinmax=${4-1000}
 
 n=1
 
-starttime=`awk 'BEGIN { print systime(); }' < /dev/null`
+starttime=`gawk 'BEGIN { print systime(); }' < /dev/null`
+
+nohotplugcpus=
+for i in /sys/devices/system/cpu/cpu[0-9]*
+do
+	if test -f $i/online
+	then
+		:
+	else
+		curcpu=`echo $i | sed -e 's/^[^0-9]*//'`
+		nohotplugcpus="$nohotplugcpus $curcpu"
+	fi
+done
 
 while :
 do
 	# Check for done.
-	t=`awk -v s=$starttime 'BEGIN { print systime() - s; }' < /dev/null`
+	t=`gawk -v s=$starttime 'BEGIN { print systime() - s; }' < /dev/null`
 	if test "$t" -gt "$duration"
 	then
 		exit 0;
 	fi
 
-	# Set affinity to randomly selected CPU
-	cpus=`ls /sys/devices/system/cpu/*/online |
-		sed -e 's,/[^/]*$,,' -e 's/^[^0-9]*//' |
-		grep -v '^0*$'`
+	# Set affinity to randomly selected online CPU
+	if cpus=`grep 1 /sys/devices/system/cpu/*/online 2>&1 |
+		 sed -e 's,/[^/]*$,,' -e 's/^[^0-9]*//'`
+	then
+		:
+	else
+		cpus=
+	fi
+	# Do not leave out non-hot-pluggable CPUs
+	cpus="$cpus $nohotplugcpus"
+
 	cpumask=`awk -v cpus="$cpus" -v me=$me -v n=$n 'BEGIN {
 		srand(n + me + systime());
 		ncpus = split(cpus, ca);

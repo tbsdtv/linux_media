@@ -411,6 +411,7 @@ static int mxc_gpio_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct mxc_gpio_port *port;
+	int irq_count;
 	int irq_base;
 	int err;
 
@@ -426,21 +427,24 @@ static int mxc_gpio_probe(struct platform_device *pdev)
 	if (IS_ERR(port->base))
 		return PTR_ERR(port->base);
 
-	port->irq_high = platform_get_irq(pdev, 1);
-	if (port->irq_high < 0)
-		port->irq_high = 0;
+	irq_count = platform_irq_count(pdev);
+	if (irq_count < 0)
+		return irq_count;
+
+	if (irq_count > 1) {
+		port->irq_high = platform_get_irq(pdev, 1);
+		if (port->irq_high < 0)
+			port->irq_high = 0;
+	}
 
 	port->irq = platform_get_irq(pdev, 0);
 	if (port->irq < 0)
 		return port->irq;
 
 	/* the controller clock is optional */
-	port->clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(port->clk)) {
-		if (PTR_ERR(port->clk) == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
-		port->clk = NULL;
-	}
+	port->clk = devm_clk_get_optional(&pdev->dev, NULL);
+	if (IS_ERR(port->clk))
+		return PTR_ERR(port->clk);
 
 	err = clk_prepare_enable(port->clk);
 	if (err) {
@@ -481,11 +485,8 @@ static int mxc_gpio_probe(struct platform_device *pdev)
 	if (err)
 		goto out_bgio;
 
-	if (of_property_read_bool(np, "gpio-ranges")) {
-		port->gc.request = gpiochip_generic_request;
-		port->gc.free = gpiochip_generic_free;
-	}
-
+	port->gc.request = gpiochip_generic_request;
+	port->gc.free = gpiochip_generic_free;
 	port->gc.to_irq = mxc_gpio_to_irq;
 	port->gc.base = (pdev->id < 0) ? of_alias_get_id(np, "gpio") * 32 :
 					     pdev->id * 32;

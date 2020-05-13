@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  Copyright © 2000-2010 David Woodhouse <dwmw2@infradead.org>
  *                        Steven J. Hill <sjhill@realitydiluted.com>
  *		          Thomas Gleixner <tglx@linutronix.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Info:
  *	Contains standard defines and IDs for NAND flash devices
@@ -877,6 +874,42 @@ int nand_op_parser_exec_op(struct nand_chip *chip,
 			   const struct nand_op_parser *parser,
 			   const struct nand_operation *op, bool check_only);
 
+static inline void nand_op_trace(const char *prefix,
+				 const struct nand_op_instr *instr)
+{
+#if IS_ENABLED(CONFIG_DYNAMIC_DEBUG) || defined(DEBUG)
+	switch (instr->type) {
+	case NAND_OP_CMD_INSTR:
+		pr_debug("%sCMD      [0x%02x]\n", prefix,
+			 instr->ctx.cmd.opcode);
+		break;
+	case NAND_OP_ADDR_INSTR:
+		pr_debug("%sADDR     [%d cyc: %*ph]\n", prefix,
+			 instr->ctx.addr.naddrs,
+			 instr->ctx.addr.naddrs < 64 ?
+			 instr->ctx.addr.naddrs : 64,
+			 instr->ctx.addr.addrs);
+		break;
+	case NAND_OP_DATA_IN_INSTR:
+		pr_debug("%sDATA_IN  [%d B%s]\n", prefix,
+			 instr->ctx.data.len,
+			 instr->ctx.data.force_8bit ?
+			 ", force 8-bit" : "");
+		break;
+	case NAND_OP_DATA_OUT_INSTR:
+		pr_debug("%sDATA_OUT [%d B%s]\n", prefix,
+			 instr->ctx.data.len,
+			 instr->ctx.data.force_8bit ?
+			 ", force 8-bit" : "");
+		break;
+	case NAND_OP_WAITRDY_INSTR:
+		pr_debug("%sWAITRDY  [max %d ms]\n", prefix,
+			 instr->ctx.waitrdy.timeout_ms);
+		break;
+	}
+#endif
+}
+
 /**
  * struct nand_controller_ops - Controller operations
  *
@@ -1031,6 +1064,8 @@ struct nand_legacy {
  * @lock:		lock protecting the suspended field. Also used to
  *			serialize accesses to the NAND device.
  * @suspended:		set to 1 when the device is suspended, 0 when it's not.
+ * @suspend:		[REPLACEABLE] specific NAND device suspend operation
+ * @resume:		[REPLACEABLE] specific NAND device resume operation
  * @bbt:		[INTERN] bad block table pointer
  * @bbt_td:		[REPLACEABLE] bad block table descriptor for flash
  *			lookup.
@@ -1044,6 +1079,8 @@ struct nand_legacy {
  * @manufacturer:	[INTERN] Contains manufacturer information
  * @manufacturer.desc:	[INTERN] Contains manufacturer's description
  * @manufacturer.priv:	[INTERN] Contains manufacturer private information
+ * @lock_area:		[REPLACEABLE] specific NAND chip lock operation
+ * @unlock_area:	[REPLACEABLE] specific NAND chip unlock operation
  */
 
 struct nand_chip {
@@ -1084,6 +1121,8 @@ struct nand_chip {
 
 	struct mutex lock;
 	unsigned int suspended : 1;
+	int (*suspend)(struct nand_chip *chip);
+	void (*resume)(struct nand_chip *chip);
 
 	uint8_t *oob_poi;
 	struct nand_controller *controller;
@@ -1103,6 +1142,9 @@ struct nand_chip {
 		const struct nand_manufacturer *desc;
 		void *priv;
 	} manufacturer;
+
+	int (*lock_area)(struct nand_chip *chip, loff_t ofs, uint64_t len);
+	int (*unlock_area)(struct nand_chip *chip, loff_t ofs, uint64_t len);
 };
 
 extern const struct mtd_ooblayout_ops nand_ooblayout_sp_ops;
@@ -1182,7 +1224,7 @@ static inline struct device_node *nand_get_flash_node(struct nand_chip *chip)
  * struct nand_flash_dev - NAND Flash Device ID Structure
  * @name: a human-readable name of the NAND chip
  * @dev_id: the device ID (the second byte of the full chip ID array)
- * @mfr_id: manufecturer ID part of the full chip ID array (refers the same
+ * @mfr_id: manufacturer ID part of the full chip ID array (refers the same
  *          memory address as ``id[0]``)
  * @dev_id: device ID part of the full chip ID array (refers the same memory
  *          address as ``id[1]``)

@@ -24,7 +24,6 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include <drm/drmP.h>
 #include <drm/drm_crtc_helper.h>
 
 #include "nouveau_drv.h"
@@ -36,7 +35,8 @@
 
 #include <subdev/bios/gpio.h>
 #include <subdev/gpio.h>
-#include <subdev/timer.h>
+
+#include <nvif/timer.h>
 
 int nv04_dac_output_offset(struct drm_encoder *encoder)
 {

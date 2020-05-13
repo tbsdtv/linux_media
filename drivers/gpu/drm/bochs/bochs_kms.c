@@ -2,12 +2,13 @@
 /*
  */
 
-#include "bochs.h"
+#include <linux/moduleparam.h>
+
 #include <drm/drm_atomic_helper.h>
-#include <drm/drm_plane_helper.h>
-#include <drm/drm_atomic_uapi.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_probe_helper.h>
+
+#include "bochs.h"
 
 static int defx = 1024;
 static int defy = 768;
@@ -27,16 +28,17 @@ static const uint32_t bochs_formats[] = {
 static void bochs_plane_update(struct bochs_device *bochs,
 			       struct drm_plane_state *state)
 {
-	struct bochs_bo *bo;
+	struct drm_gem_vram_object *gbo;
 
 	if (!state->fb || !bochs->stride)
 		return;
 
-	bo = gem_to_bochs_bo(state->fb->obj[0]);
+	gbo = drm_gem_vram_of_gem(state->fb->obj[0]);
 	bochs_hw_setbase(bochs,
 			 state->crtc_x,
 			 state->crtc_y,
-			 bo->bo.offset);
+			 state->fb->pitches[0],
+			 state->fb->offsets[0] + gbo->bo.offset);
 	bochs_hw_setformat(bochs, state->fb->format);
 }
 
@@ -54,45 +56,15 @@ static void bochs_pipe_update(struct drm_simple_display_pipe *pipe,
 			      struct drm_plane_state *old_state)
 {
 	struct bochs_device *bochs = pipe->crtc.dev->dev_private;
-	struct drm_crtc *crtc = &pipe->crtc;
 
 	bochs_plane_update(bochs, pipe->plane.state);
-
-	if (crtc->state->event) {
-		spin_lock_irq(&crtc->dev->event_lock);
-		drm_crtc_send_vblank_event(crtc, crtc->state->event);
-		crtc->state->event = NULL;
-		spin_unlock_irq(&crtc->dev->event_lock);
-	}
-}
-
-static int bochs_pipe_prepare_fb(struct drm_simple_display_pipe *pipe,
-				 struct drm_plane_state *new_state)
-{
-	struct bochs_bo *bo;
-
-	if (!new_state->fb)
-		return 0;
-	bo = gem_to_bochs_bo(new_state->fb->obj[0]);
-	return bochs_bo_pin(bo, TTM_PL_FLAG_VRAM);
-}
-
-static void bochs_pipe_cleanup_fb(struct drm_simple_display_pipe *pipe,
-				  struct drm_plane_state *old_state)
-{
-	struct bochs_bo *bo;
-
-	if (!old_state->fb)
-		return;
-	bo = gem_to_bochs_bo(old_state->fb->obj[0]);
-	bochs_bo_unpin(bo);
 }
 
 static const struct drm_simple_display_pipe_funcs bochs_pipe_funcs = {
 	.enable	    = bochs_pipe_enable,
 	.update	    = bochs_pipe_update,
-	.prepare_fb = bochs_pipe_prepare_fb,
-	.cleanup_fb = bochs_pipe_cleanup_fb,
+	.prepare_fb = drm_gem_vram_simple_display_pipe_prepare_fb,
+	.cleanup_fb = drm_gem_vram_simple_display_pipe_cleanup_fb,
 };
 
 static int bochs_connector_get_modes(struct drm_connector *connector)
@@ -111,32 +83,11 @@ static int bochs_connector_get_modes(struct drm_connector *connector)
 	return count;
 }
 
-static enum drm_mode_status bochs_connector_mode_valid(struct drm_connector *connector,
-				      struct drm_display_mode *mode)
-{
-	struct bochs_device *bochs =
-		container_of(connector, struct bochs_device, connector);
-	unsigned long size = mode->hdisplay * mode->vdisplay * 4;
-
-	/*
-	 * Make sure we can fit two framebuffers into video memory.
-	 * This allows up to 1600x1200 with 16 MB (default size).
-	 * If you want more try this:
-	 *     'qemu -vga std -global VGA.vgamem_mb=32 $otherargs'
-	 */
-	if (size * 2 > bochs->fb_size)
-		return MODE_BAD;
-
-	return MODE_OK;
-}
-
 static const struct drm_connector_helper_funcs bochs_connector_connector_helper_funcs = {
 	.get_modes = bochs_connector_get_modes,
-	.mode_valid = bochs_connector_mode_valid,
 };
 
 static const struct drm_connector_funcs bochs_connector_connector_funcs = {
-	.dpms = drm_helper_connector_dpms,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
 	.reset = drm_atomic_helper_connector_reset,
@@ -176,6 +127,7 @@ bochs_gem_fb_create(struct drm_device *dev, struct drm_file *file,
 
 const struct drm_mode_config_funcs bochs_mode_funcs = {
 	.fb_create = bochs_gem_fb_create,
+	.mode_valid = drm_vram_helper_mode_valid,
 	.atomic_check = drm_atomic_helper_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
@@ -190,6 +142,7 @@ int bochs_kms_init(struct bochs_device *bochs)
 	bochs->dev->mode_config.fb_base = bochs->fb_base;
 	bochs->dev->mode_config.preferred_depth = 24;
 	bochs->dev->mode_config.prefer_shadow = 0;
+	bochs->dev->mode_config.prefer_shadow_fbdev = 1;
 	bochs->dev->mode_config.quirk_addfb_prefer_host_byte_order = true;
 
 	bochs->dev->mode_config.funcs = &bochs_mode_funcs;
@@ -210,6 +163,9 @@ int bochs_kms_init(struct bochs_device *bochs)
 
 void bochs_kms_fini(struct bochs_device *bochs)
 {
+	if (!bochs->dev->mode_config.num_connector)
+		return;
+
 	drm_atomic_helper_shutdown(bochs->dev);
 	drm_mode_config_cleanup(bochs->dev);
 }

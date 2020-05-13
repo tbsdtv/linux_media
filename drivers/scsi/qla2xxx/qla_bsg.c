@@ -11,11 +11,17 @@
 #include <linux/delay.h>
 #include <linux/bsg-lib.h>
 
-/* BSG support for ELS/CT pass through */
-void
-qla2x00_bsg_job_done(void *ptr, int res)
+static void qla2xxx_free_fcport_work(struct work_struct *work)
 {
-	srb_t *sp = ptr;
+	struct fc_port *fcport = container_of(work, typeof(*fcport),
+	    free_work);
+
+	qla2x00_free_fcport(fcport);
+}
+
+/* BSG support for ELS/CT pass through */
+void qla2x00_bsg_job_done(srb_t *sp, int res)
+{
 	struct bsg_job *bsg_job = sp->u.bsg_job;
 	struct fc_bsg_reply *bsg_reply = bsg_job->reply;
 
@@ -25,10 +31,8 @@ qla2x00_bsg_job_done(void *ptr, int res)
 	sp->free(sp);
 }
 
-void
-qla2x00_bsg_sp_free(void *ptr)
+void qla2x00_bsg_sp_free(srb_t *sp)
 {
-	srb_t *sp = ptr;
 	struct qla_hw_data *ha = sp->vha->hw;
 	struct bsg_job *bsg_job = sp->u.bsg_job;
 	struct fc_bsg_request *bsg_request = bsg_job->request;
@@ -57,8 +61,11 @@ qla2x00_bsg_sp_free(void *ptr)
 
 	if (sp->type == SRB_CT_CMD ||
 	    sp->type == SRB_FXIOCB_BCMD ||
-	    sp->type == SRB_ELS_CMD_HST)
-		kfree(sp->fcport);
+	    sp->type == SRB_ELS_CMD_HST) {
+		INIT_WORK(&sp->fcport->free_work, qla2xxx_free_fcport_work);
+		queue_work(ha->wq, &sp->fcport->free_work);
+	}
+
 	qla2x00_rel_sp(sp);
 }
 
@@ -257,7 +264,7 @@ qla2x00_process_els(struct bsg_job *bsg_job)
 	srb_t *sp;
 	const char *type;
 	int req_sg_cnt, rsp_sg_cnt;
-	int rval =  (DRIVER_ERROR << 16);
+	int rval =  (DID_ERROR << 16);
 	uint16_t nextlid = 0;
 
 	if (bsg_request->msgcode == FC_BSG_RPT_ELS) {
@@ -341,6 +348,8 @@ qla2x00_process_els(struct bsg_job *bsg_job)
 		dma_map_sg(&ha->pdev->dev, bsg_job->request_payload.sg_list,
 		bsg_job->request_payload.sg_cnt, DMA_TO_DEVICE);
 	if (!req_sg_cnt) {
+		dma_unmap_sg(&ha->pdev->dev, bsg_job->request_payload.sg_list,
+		    bsg_job->request_payload.sg_cnt, DMA_TO_DEVICE);
 		rval = -ENOMEM;
 		goto done_free_fcport;
 	}
@@ -348,6 +357,8 @@ qla2x00_process_els(struct bsg_job *bsg_job)
 	rsp_sg_cnt = dma_map_sg(&ha->pdev->dev, bsg_job->reply_payload.sg_list,
 		bsg_job->reply_payload.sg_cnt, DMA_FROM_DEVICE);
         if (!rsp_sg_cnt) {
+		dma_unmap_sg(&ha->pdev->dev, bsg_job->reply_payload.sg_list,
+		    bsg_job->reply_payload.sg_cnt, DMA_FROM_DEVICE);
 		rval = -ENOMEM;
 		goto done_free_fcport;
 	}
@@ -405,7 +416,7 @@ done_unmap_sg:
 
 done_free_fcport:
 	if (bsg_request->msgcode == FC_BSG_RPT_ELS)
-		kfree(fcport);
+		qla2x00_free_fcport(fcport);
 done:
 	return rval;
 }
@@ -432,7 +443,7 @@ qla2x00_process_ct(struct bsg_job *bsg_job)
 	struct Scsi_Host *host = fc_bsg_to_shost(bsg_job);
 	scsi_qla_host_t *vha = shost_priv(host);
 	struct qla_hw_data *ha = vha->hw;
-	int rval = (DRIVER_ERROR << 16);
+	int rval = (DID_ERROR << 16);
 	int req_sg_cnt, rsp_sg_cnt;
 	uint16_t loop_id;
 	struct fc_port *fcport;
@@ -545,7 +556,7 @@ qla2x00_process_ct(struct bsg_job *bsg_job)
 	return rval;
 
 done_free_fcport:
-	kfree(fcport);
+	qla2x00_free_fcport(fcport);
 done_unmap_sg:
 	dma_unmap_sg(&ha->pdev->dev, bsg_job->request_payload.sg_list,
 		bsg_job->request_payload.sg_cnt, DMA_TO_DEVICE);
@@ -717,7 +728,7 @@ qla2x00_process_loopback(struct bsg_job *bsg_job)
 	uint16_t response[MAILBOX_REGISTER_COUNT];
 	uint16_t config[4], new_config[4];
 	uint8_t *fw_sts_ptr;
-	uint8_t *req_data = NULL;
+	void *req_data = NULL;
 	dma_addr_t req_data_dma;
 	uint32_t req_data_len;
 	uint8_t *rsp_data = NULL;
@@ -795,10 +806,11 @@ qla2x00_process_loopback(struct bsg_job *bsg_job)
 	    bsg_request->rqst_data.h_vendor.vendor_cmd[2];
 
 	if (atomic_read(&vha->loop_state) == LOOP_READY &&
-	    (ha->current_topology == ISP_CFG_F ||
-	    (le32_to_cpu(*(uint32_t *)req_data) == ELS_OPCODE_BYTE &&
-	     req_data_len == MAX_ELS_FRAME_PAYLOAD)) &&
-	    elreq.options == EXTERNAL_LOOPBACK) {
+	    ((ha->current_topology == ISP_CFG_F && (elreq.options & 7) >= 2) ||
+	    ((IS_QLA81XX(ha) || IS_QLA8031(ha) || IS_QLA8044(ha)) &&
+	    get_unaligned_le32(req_data) == ELS_OPCODE_BYTE &&
+	    req_data_len == MAX_ELS_FRAME_PAYLOAD &&
+	    elreq.options == EXTERNAL_LOOPBACK))) {
 		type = "FC_BSG_HST_VENDOR_ECHO_DIAG";
 		ql_dbg(ql_dbg_user, vha, 0x701e,
 		    "BSG request type: %s.\n", type);
@@ -1505,10 +1517,15 @@ qla2x00_update_optrom(struct bsg_job *bsg_job)
 	    bsg_job->request_payload.sg_cnt, ha->optrom_buffer,
 	    ha->optrom_region_size);
 
-	ha->isp_ops->write_optrom(vha, ha->optrom_buffer,
+	rval = ha->isp_ops->write_optrom(vha, ha->optrom_buffer,
 	    ha->optrom_region_start, ha->optrom_region_size);
 
-	bsg_reply->result = DID_OK;
+	if (rval) {
+		bsg_reply->result = -EINVAL;
+		rval = -EINVAL;
+	} else {
+		bsg_reply->result = DID_OK;
+	}
 	vfree(ha->optrom_buffer);
 	ha->optrom_buffer = NULL;
 	ha->optrom_state = QLA_SWAITING;
@@ -1778,8 +1795,8 @@ qla24xx_process_bidir_cmd(struct bsg_job *bsg_job)
 	uint16_t nextlid = 0;
 	uint32_t tot_dsds;
 	srb_t *sp = NULL;
-	uint32_t req_data_len = 0;
-	uint32_t rsp_data_len = 0;
+	uint32_t req_data_len;
+	uint32_t rsp_data_len;
 
 	/* Check the type of the adapter */
 	if (!IS_BIDI_CAPABLE(ha)) {
@@ -1884,16 +1901,15 @@ qla24xx_process_bidir_cmd(struct bsg_job *bsg_job)
 		goto done_unmap_sg;
 	}
 
+	req_data_len = bsg_job->request_payload.payload_len;
+	rsp_data_len = bsg_job->reply_payload.payload_len;
+
 	if (req_data_len != rsp_data_len) {
 		rval = EXT_STATUS_BUSY;
 		ql_log(ql_log_warn, vha, 0x70aa,
 		    "req_data_len != rsp_data_len\n");
 		goto done_unmap_sg;
 	}
-
-	req_data_len = bsg_job->request_payload.payload_len;
-	rsp_data_len = bsg_job->reply_payload.payload_len;
-
 
 	/* Alloc SRB structure */
 	sp = qla2x00_get_sp(vha, &(vha->bidir_fcport), GFP_KERNEL);
@@ -1951,7 +1967,7 @@ qlafx00_mgmt_cmd(struct bsg_job *bsg_job)
 	struct Scsi_Host *host = fc_bsg_to_shost(bsg_job);
 	scsi_qla_host_t *vha = shost_priv(host);
 	struct qla_hw_data *ha = vha->hw;
-	int rval = (DRIVER_ERROR << 16);
+	int rval = (DID_ERROR << 16);
 	struct qla_mt_iocb_rqst_fx00 *piocb_rqst;
 	srb_t *sp;
 	int req_sg_cnt = 0, rsp_sg_cnt = 0;
@@ -2050,7 +2066,7 @@ qlafx00_mgmt_cmd(struct bsg_job *bsg_job)
 	return rval;
 
 done_free_fcport:
-	kfree(fcport);
+	qla2x00_free_fcport(fcport);
 
 done_unmap_rsp_sg:
 	if (piocb_rqst->flags & SRB_FXDISC_RESP_DMA_VALID)
@@ -2400,11 +2416,11 @@ qla2x00_get_flash_image_status(struct bsg_job *bsg_job)
 	struct qla_active_regions regions = { };
 	struct active_regions active_regions = { };
 
-	qla28xx_get_aux_images(vha, &active_regions);
+	qla27xx_get_active_image(vha, &active_regions);
 	regions.global_image = active_regions.global;
 
 	if (IS_QLA28XX(ha)) {
-		qla27xx_get_active_image(vha, &active_regions);
+		qla28xx_get_aux_images(vha, &active_regions);
 		regions.board_config = active_regions.aux.board_config;
 		regions.vpd_nvram = active_regions.aux.vpd_nvram;
 		regions.npiv_config_0_1 = active_regions.aux.npiv_config_0_1;

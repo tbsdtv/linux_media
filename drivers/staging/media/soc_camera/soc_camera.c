@@ -869,8 +869,6 @@ static int soc_camera_enum_fmt_vid_cap(struct file *file, void  *priv,
 
 	format = icd->user_formats[f->index].host_fmt;
 
-	if (format->name)
-		strscpy(f->description, format->name, sizeof(f->description));
 	f->pixelformat = format->fourcc;
 	return 0;
 }
@@ -2070,7 +2068,7 @@ static int soc_camera_video_start(struct soc_camera_device *icd)
 		v4l2_disable_ioctl(icd->vdev, VIDIOC_S_STD);
 		v4l2_disable_ioctl(icd->vdev, VIDIOC_ENUMSTD);
 	}
-	ret = video_register_device(icd->vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(icd->vdev, VFL_TYPE_VIDEO, -1);
 	if (ret < 0) {
 		dev_err(icd->pdev, "video_register_device failed: %d\n", ret);
 		return ret;

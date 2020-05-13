@@ -177,8 +177,6 @@ static void conf_message(const char *fmt, ...)
 static const char *conf_filename;
 static int conf_lineno, conf_warnings;
 
-const char conf_defname[] = "arch/$(ARCH)/defconfig";
-
 static void conf_warning(const char *fmt, ...)
 {
 	va_list ap;
@@ -231,21 +229,6 @@ static const char *conf_get_autoconfig_name(void)
 	char *name = getenv("KCONFIG_AUTOCONFIG");
 
 	return name ? name : "include/config/auto.conf";
-}
-
-char *conf_get_default_confname(void)
-{
-	static char fullname[PATH_MAX+1];
-	char *env, *name;
-
-	name = expand_string(conf_defname);
-	env = getenv(SRCTREE);
-	if (env) {
-		snprintf(fullname, sizeof(fullname), "%s/%s", env, name);
-		if (is_present(fullname))
-			return fullname;
-	}
-	return name;
 }
 
 static int conf_set_sym_val(struct symbol *sym, int def, int def_flags, char *p)
@@ -551,11 +534,9 @@ int conf_read(const char *name)
 			switch (sym->type) {
 			case S_BOOLEAN:
 			case S_TRISTATE:
-				if (sym->def[S_DEF_USER].tri != sym_get_tristate_value(sym))
-					break;
-				if (!sym_is_choice(sym))
+				if (sym->def[S_DEF_USER].tri == sym_get_tristate_value(sym))
 					continue;
-				/* fall through */
+				break;
 			default:
 				if (!strcmp(sym->curr.val, sym->def[S_DEF_USER].val))
 					continue;
@@ -729,25 +710,6 @@ static struct conf_printer header_printer_cb =
 	.print_comment = header_print_comment,
 };
 
-/*
- * Tristate printer
- *
- * This printer is used when generating the `include/config/tristate.conf' file.
- */
-static void
-tristate_print_symbol(FILE *fp, struct symbol *sym, const char *value, void *arg)
-{
-
-	if (sym->type == S_TRISTATE && *value != 'n')
-		fprintf(fp, "%s%s=%c\n", CONFIG_, sym->name, (char)toupper(*value));
-}
-
-static struct conf_printer tristate_printer_cb =
-{
-	.print_symbol = tristate_print_symbol,
-	.print_comment = kconfig_print_comment,
-};
-
 static void conf_write_symbol(FILE *fp, struct symbol *sym,
 			      struct conf_printer *printer, void *printer_arg)
 {
@@ -813,7 +775,7 @@ int conf_write_defconfig(const char *filename)
 				goto next_menu;
 			sym->flags &= ~SYMBOL_WRITE;
 			/* If we cannot change the symbol - skip */
-			if (!sym_is_changable(sym))
+			if (!sym_is_changeable(sym))
 				goto next_menu;
 			/* If symbol equals to default value - skip */
 			if (strcmp(sym_get_string_value(sym), sym_get_string_default(sym)) == 0)
@@ -867,6 +829,7 @@ int conf_write(const char *name)
 	const char *str;
 	char tmpname[PATH_MAX + 1], oldname[PATH_MAX + 1];
 	char *env;
+	int i;
 	bool need_newline = false;
 
 	if (!name)
@@ -914,7 +877,8 @@ int conf_write(const char *name)
 				     "# %s\n"
 				     "#\n", str);
 			need_newline = false;
-		} else if (!(sym->flags & SYMBOL_CHOICE)) {
+		} else if (!(sym->flags & SYMBOL_CHOICE) &&
+			   !(sym->flags & SYMBOL_WRITTEN)) {
 			sym_calc_value(sym);
 			if (!(sym->flags & SYMBOL_WRITE))
 				goto next;
@@ -922,7 +886,7 @@ int conf_write(const char *name)
 				fprintf(out, "\n");
 				need_newline = false;
 			}
-			sym->flags &= ~SYMBOL_WRITE;
+			sym->flags |= SYMBOL_WRITTEN;
 			conf_write_symbol(out, sym, &kconfig_printer_cb, NULL);
 		}
 
@@ -947,6 +911,9 @@ next:
 		}
 	}
 	fclose(out);
+
+	for_all_symbols(i, sym)
+		sym->flags &= ~SYMBOL_WRITTEN;
 
 	if (*tmpname) {
 		if (is_same(name, tmpname)) {
@@ -1076,13 +1043,11 @@ int conf_write_autoconf(int overwrite)
 	struct symbol *sym;
 	const char *name;
 	const char *autoconf_name = conf_get_autoconfig_name();
-	FILE *out, *tristate, *out_h;
+	FILE *out, *out_h;
 	int i;
 
 	if (!overwrite && is_present(autoconf_name))
 		return 0;
-
-	sym_clear_all_valid();
 
 	conf_write_dep("include/config/auto.conf.cmd");
 
@@ -1093,23 +1058,13 @@ int conf_write_autoconf(int overwrite)
 	if (!out)
 		return 1;
 
-	tristate = fopen(".tmpconfig_tristate", "w");
-	if (!tristate) {
-		fclose(out);
-		return 1;
-	}
-
 	out_h = fopen(".tmpconfig.h", "w");
 	if (!out_h) {
 		fclose(out);
-		fclose(tristate);
 		return 1;
 	}
 
 	conf_write_heading(out, &kconfig_printer_cb, NULL);
-
-	conf_write_heading(tristate, &tristate_printer_cb, NULL);
-
 	conf_write_heading(out_h, &header_printer_cb, NULL);
 
 	for_all_symbols(i, sym) {
@@ -1117,15 +1072,11 @@ int conf_write_autoconf(int overwrite)
 		if (!(sym->flags & SYMBOL_WRITE) || !sym->name)
 			continue;
 
-		/* write symbol to auto.conf, tristate and header files */
+		/* write symbols to auto.conf and autoconf.h */
 		conf_write_symbol(out, sym, &kconfig_printer_cb, (void *)1);
-
-		conf_write_symbol(tristate, sym, &tristate_printer_cb, (void *)1);
-
 		conf_write_symbol(out_h, sym, &header_printer_cb, NULL);
 	}
 	fclose(out);
-	fclose(tristate);
 	fclose(out_h);
 
 	name = getenv("KCONFIG_AUTOHEADER");
@@ -1134,14 +1085,6 @@ int conf_write_autoconf(int overwrite)
 	if (make_parent_dir(name))
 		return 1;
 	if (rename(".tmpconfig.h", name))
-		return 1;
-
-	name = getenv("KCONFIG_TRISTATE");
-	if (!name)
-		name = "include/config/tristate.conf";
-	if (make_parent_dir(name))
-		return 1;
-	if (rename(".tmpconfig_tristate", name))
 		return 1;
 
 	if (make_parent_dir(autoconf_name))
@@ -1369,7 +1312,7 @@ bool conf_set_all_new_symbols(enum conf_def_mode mode)
 
 		sym_calc_value(csym);
 		if (mode == def_random)
-			has_changed = randomize_choice_values(csym);
+			has_changed |= randomize_choice_values(csym);
 		else {
 			set_all_choice_values(csym);
 			has_changed = true;
@@ -1377,4 +1320,19 @@ bool conf_set_all_new_symbols(enum conf_def_mode mode)
 	}
 
 	return has_changed;
+}
+
+void conf_rewrite_mod_or_yes(enum conf_def_mode mode)
+{
+	struct symbol *sym;
+	int i;
+	tristate old_val = (mode == def_y2m) ? yes : mod;
+	tristate new_val = (mode == def_y2m) ? mod : yes;
+
+	for_all_symbols(i, sym) {
+		if (sym_get_type(sym) == S_TRISTATE &&
+		    sym->def[S_DEF_USER].tri == old_val)
+			sym->def[S_DEF_USER].tri = new_val;
+	}
+	sym_clear_all_valid();
 }

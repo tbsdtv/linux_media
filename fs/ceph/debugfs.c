@@ -33,7 +33,7 @@ static int mdsmap_show(struct seq_file *s, void *p)
 	seq_printf(s, "max_mds %d\n", mdsmap->m_max_mds);
 	seq_printf(s, "session_timeout %d\n", mdsmap->m_session_timeout);
 	seq_printf(s, "session_autoclose %d\n", mdsmap->m_session_autoclose);
-	for (i = 0; i < mdsmap->m_num_mds; i++) {
+	for (i = 0; i < mdsmap->possible_max_rank; i++) {
 		struct ceph_entity_addr *addr = &mdsmap->m_info[i].addr;
 		int state = mdsmap->m_info[i].state;
 		seq_printf(s, "\tmds%d\t%s\t(%s)\n", i,
@@ -52,7 +52,7 @@ static int mdsc_show(struct seq_file *s, void *p)
 	struct ceph_mds_client *mdsc = fsc->mdsc;
 	struct ceph_mds_request *req;
 	struct rb_node *rp;
-	int pathlen;
+	int pathlen = 0;
 	u64 pathbase;
 	char *path;
 
@@ -139,6 +139,7 @@ static int caps_show(struct seq_file *s, void *p)
 	struct ceph_fs_client *fsc = s->private;
 	struct ceph_mds_client *mdsc = fsc->mdsc;
 	int total, avail, used, reserved, min, i;
+	struct cap_wait	*cw;
 
 	ceph_reservation_status(fsc, &total, &avail, &used, &reserved, &min);
 	seq_printf(s, "total\t\t%d\n"
@@ -165,6 +166,18 @@ static int caps_show(struct seq_file *s, void *p)
 		mutex_lock(&mdsc->mutex);
 	}
 	mutex_unlock(&mdsc->mutex);
+
+	seq_printf(s, "\n\nWaiters:\n--------\n");
+	seq_printf(s, "tgid         ino                need             want\n");
+	seq_printf(s, "-----------------------------------------------------\n");
+
+	spin_lock(&mdsc->caps_list_lock);
+	list_for_each_entry(cw, &mdsc->cap_wait_list, list) {
+		seq_printf(s, "%-13d0x%-17lx%-17s%-17s\n", cw->tgid, cw->ino,
+				ceph_cap_string(cw->need),
+				ceph_cap_string(cw->want));
+	}
+	spin_unlock(&mdsc->caps_list_lock);
 
 	return 0;
 }
@@ -205,10 +218,10 @@ static int mds_sessions_show(struct seq_file *s, void *ptr)
 	return 0;
 }
 
-CEPH_DEFINE_SHOW_FUNC(mdsmap_show)
-CEPH_DEFINE_SHOW_FUNC(mdsc_show)
-CEPH_DEFINE_SHOW_FUNC(caps_show)
-CEPH_DEFINE_SHOW_FUNC(mds_sessions_show)
+DEFINE_SHOW_ATTRIBUTE(mdsmap);
+DEFINE_SHOW_ATTRIBUTE(mdsc);
+DEFINE_SHOW_ATTRIBUTE(caps);
+DEFINE_SHOW_ATTRIBUTE(mds_sessions);
 
 
 /*
@@ -245,21 +258,17 @@ void ceph_fs_debugfs_cleanup(struct ceph_fs_client *fsc)
 	debugfs_remove(fsc->debugfs_mdsc);
 }
 
-int ceph_fs_debugfs_init(struct ceph_fs_client *fsc)
+void ceph_fs_debugfs_init(struct ceph_fs_client *fsc)
 {
 	char name[100];
-	int err = -ENOMEM;
 
 	dout("ceph_fs_debugfs_init\n");
-	BUG_ON(!fsc->client->debugfs_dir);
 	fsc->debugfs_congestion_kb =
 		debugfs_create_file("writeback_congestion_kb",
 				    0600,
 				    fsc->client->debugfs_dir,
 				    fsc,
 				    &congestion_kb_fops);
-	if (!fsc->debugfs_congestion_kb)
-		goto out;
 
 	snprintf(name, sizeof(name), "../../bdi/%s",
 		 dev_name(fsc->sb->s_bdi->dev));
@@ -267,54 +276,37 @@ int ceph_fs_debugfs_init(struct ceph_fs_client *fsc)
 		debugfs_create_symlink("bdi",
 				       fsc->client->debugfs_dir,
 				       name);
-	if (!fsc->debugfs_bdi)
-		goto out;
 
 	fsc->debugfs_mdsmap = debugfs_create_file("mdsmap",
 					0400,
 					fsc->client->debugfs_dir,
 					fsc,
-					&mdsmap_show_fops);
-	if (!fsc->debugfs_mdsmap)
-		goto out;
+					&mdsmap_fops);
 
 	fsc->debugfs_mds_sessions = debugfs_create_file("mds_sessions",
 					0400,
 					fsc->client->debugfs_dir,
 					fsc,
-					&mds_sessions_show_fops);
-	if (!fsc->debugfs_mds_sessions)
-		goto out;
+					&mds_sessions_fops);
 
 	fsc->debugfs_mdsc = debugfs_create_file("mdsc",
 						0400,
 						fsc->client->debugfs_dir,
 						fsc,
-						&mdsc_show_fops);
-	if (!fsc->debugfs_mdsc)
-		goto out;
+						&mdsc_fops);
 
 	fsc->debugfs_caps = debugfs_create_file("caps",
 						   0400,
 						   fsc->client->debugfs_dir,
 						   fsc,
-						   &caps_show_fops);
-	if (!fsc->debugfs_caps)
-		goto out;
-
-	return 0;
-
-out:
-	ceph_fs_debugfs_cleanup(fsc);
-	return err;
+						   &caps_fops);
 }
 
 
 #else  /* CONFIG_DEBUG_FS */
 
-int ceph_fs_debugfs_init(struct ceph_fs_client *fsc)
+void ceph_fs_debugfs_init(struct ceph_fs_client *fsc)
 {
-	return 0;
 }
 
 void ceph_fs_debugfs_cleanup(struct ceph_fs_client *fsc)

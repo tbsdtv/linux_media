@@ -9,7 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <bpf.h>
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
 
 #include "main.h"
 
@@ -25,7 +26,8 @@ bool pretty_output;
 bool json_output;
 bool show_pinned;
 bool block_mount;
-int bpf_flags;
+bool verifier_logs;
+bool relaxed_maps;
 struct pinned_obj_table prog_table;
 struct pinned_obj_table map_table;
 
@@ -56,7 +58,7 @@ static int do_help(int argc, char **argv)
 		"       %s batch file FILE\n"
 		"       %s version\n"
 		"\n"
-		"       OBJECT := { prog | map | cgroup | perf | net | feature | btf }\n"
+		"       OBJECT := { prog | map | cgroup | perf | net | feature | btf | gen | struct_ops }\n"
 		"       " HELP_SPEC_OPTIONS "\n"
 		"",
 		bin_name, bin_name, bin_name);
@@ -106,6 +108,35 @@ bool is_prefix(const char *pfx, const char *str)
 		return false;
 
 	return !memcmp(str, pfx, strlen(pfx));
+}
+
+/* Last argument MUST be NULL pointer */
+int detect_common_prefix(const char *arg, ...)
+{
+	unsigned int count = 0;
+	const char *ref;
+	char msg[256];
+	va_list ap;
+
+	snprintf(msg, sizeof(msg), "ambiguous prefix: '%s' could be '", arg);
+	va_start(ap, arg);
+	while ((ref = va_arg(ap, const char *))) {
+		if (!is_prefix(arg, ref))
+			continue;
+		count++;
+		if (count > 1)
+			strncat(msg, "' or '", sizeof(msg) - strlen(msg) - 1);
+		strncat(msg, ref, sizeof(msg) - strlen(msg) - 1);
+	}
+	va_end(ap);
+	strncat(msg, "'", sizeof(msg) - strlen(msg) - 1);
+
+	if (count >= 2) {
+		p_err("%s", msg);
+		return -1;
+	}
+
+	return 0;
 }
 
 void fprint_hex(FILE *f, void *arg, unsigned int n, const char *sep)
@@ -189,6 +220,8 @@ static const struct cmd cmds[] = {
 	{ "net",	do_net },
 	{ "feature",	do_feature },
 	{ "btf",	do_btf },
+	{ "gen",	do_gen },
+	{ "struct_ops",	do_struct_ops },
 	{ "version",	do_version },
 	{ 0 }
 };
@@ -317,6 +350,7 @@ int main(int argc, char **argv)
 		{ "bpffs",	no_argument,	NULL,	'f' },
 		{ "mapcompat",	no_argument,	NULL,	'm' },
 		{ "nomount",	no_argument,	NULL,	'n' },
+		{ "debug",	no_argument,	NULL,	'd' },
 		{ 0 }
 	};
 	int opt, ret;
@@ -332,7 +366,7 @@ int main(int argc, char **argv)
 	hash_init(map_table.table);
 
 	opterr = 0;
-	while ((opt = getopt_long(argc, argv, "Vhpjfmn",
+	while ((opt = getopt_long(argc, argv, "Vhpjfmnd",
 				  options, NULL)) >= 0) {
 		switch (opt) {
 		case 'V':
@@ -357,10 +391,14 @@ int main(int argc, char **argv)
 			show_pinned = true;
 			break;
 		case 'm':
-			bpf_flags = MAPS_RELAX_COMPAT;
+			relaxed_maps = true;
 			break;
 		case 'n':
 			block_mount = true;
+			break;
+		case 'd':
+			libbpf_set_print(print_all_levels);
+			verifier_logs = true;
 			break;
 		default:
 			p_err("unrecognized option '%s'", argv[optind - 1]);

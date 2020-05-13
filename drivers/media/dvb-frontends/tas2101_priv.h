@@ -260,21 +260,21 @@ static struct tas2101_snrtable_pair tas2101_snrtable[] =  {
 };
 
 struct tas2101_dbmtable_pair {
-	u16 dbm;
+	s32 dbm;
 	u16 raw;
 };
 
 static struct tas2101_dbmtable_pair tas2101_dbmtable[] =  {
-	{ 0x3333, 0xfff}, /* 20% */
-	{ 0x4CCC, 0x778},
-	{ 0x6666, 0x621},
-	{ 0x7FFF, 0x55c},
-	{ 0x9999, 0x40e},
-	{ 0xB332, 0x343},
-	{ 0xCCCC, 0x2b7},
-	{ 0xE665, 0x231},
-	{ 0xFFFF, 0x1a1}, /* 100% */
-	{0, 0}
+	{ -1000, 0xfff},
+	{ -900, 0x778},
+	{ -800, 0x621},
+	{ -700, 0x55c},  
+	{ -600, 0x40e},
+	{ -500, 0x343},
+	{ -400, 0x2b7},
+	{ -300, 0x231},
+	{ -200, 0x1a1},
+	{ 0, 0},
 };
 
 /* modfec (modulation and FEC) lookup table */

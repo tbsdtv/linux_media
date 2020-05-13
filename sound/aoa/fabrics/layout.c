@@ -1,10 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Apple Onboard Audio driver -- layout/machine id fabric
  *
  * Copyright 2006-2008 Johannes Berg <johannes@sipsolutions.net>
- *
- * GPL v2, can be found in COPYING.
- *
  *
  * This fabric module looks for sound codecs based on the
  * layout-id or device-id property in the device tree.
@@ -657,7 +655,7 @@ static int n##_control_put(struct snd_kcontrol *kcontrol,		\
 			!!ucontrol->value.integer.value[0]);		\
 	return 1;							\
 }									\
-static struct snd_kcontrol_new n##_ctl = {				\
+static const struct snd_kcontrol_new n##_ctl = {			\
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,				\
 	.name = description,						\
 	.access = SNDRV_CTL_ELEM_ACCESS_READWRITE,                      \

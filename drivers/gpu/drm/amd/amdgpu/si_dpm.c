@@ -21,7 +21,9 @@
  *
  */
 
-#include <drm/drmP.h>
+#include <linux/module.h>
+#include <linux/pci.h>
+
 #include "amdgpu.h"
 #include "amdgpu_pm.h"
 #include "amdgpu_dpm.h"
@@ -3437,7 +3439,6 @@ static void si_apply_state_adjust_rules(struct amdgpu_device *adev,
 
 	if (adev->asic_type == CHIP_HAINAN) {
 		if ((adev->pdev->revision == 0x81) ||
-		    (adev->pdev->revision == 0x83) ||
 		    (adev->pdev->revision == 0xC3) ||
 		    (adev->pdev->device == 0x6664) ||
 		    (adev->pdev->device == 0x6665) ||

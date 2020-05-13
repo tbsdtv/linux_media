@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014 Samsung Electronics Co., Ltd.
  * Author: Chanwoo Choi <cw00.choi@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Common Clock Framework support for Exynos5433 SoC.
  */
@@ -16,6 +13,7 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/slab.h>
 
 #include <dt-bindings/clock/exynos5433.h>
 
@@ -5587,20 +5585,29 @@ static int __init exynos5433_cmu_probe(struct platform_device *pdev)
 
 	data->clk_save = samsung_clk_alloc_reg_dump(info->clk_regs,
 						    info->nr_clk_regs);
+	if (!data->clk_save)
+		return -ENOMEM;
 	data->nr_clk_save = info->nr_clk_regs;
 	data->clk_suspend = info->suspend_regs;
 	data->nr_clk_suspend = info->nr_suspend_regs;
-	data->nr_pclks = of_count_phandle_with_args(dev->of_node, "clocks",
-						    "#clock-cells");
+	data->nr_pclks = of_clk_get_parent_count(dev->of_node);
+
 	if (data->nr_pclks > 0) {
 		data->pclks = devm_kcalloc(dev, sizeof(struct clk *),
 					   data->nr_pclks, GFP_KERNEL);
-
+		if (!data->pclks) {
+			kfree(data->clk_save);
+			return -ENOMEM;
+		}
 		for (i = 0; i < data->nr_pclks; i++) {
 			struct clk *clk = of_clk_get(dev->of_node, i);
 
-			if (IS_ERR(clk))
+			if (IS_ERR(clk)) {
+				kfree(data->clk_save);
+				while (--i >= 0)
+					clk_put(data->pclks[i]);
 				return PTR_ERR(clk);
+			}
 			data->pclks[i] = clk;
 		}
 	}

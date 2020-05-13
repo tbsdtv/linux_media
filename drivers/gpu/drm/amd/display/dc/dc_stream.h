@@ -42,6 +42,7 @@ struct dc_stream_status {
 	int primary_otg_inst;
 	int stream_enc_inst;
 	int plane_count;
+	int audio_inst;
 	struct timing_sync_info timing_sync_info;
 	struct dc_plane_state *plane_states[MAX_SURFACE_NUM];
 };
@@ -49,6 +50,48 @@ struct dc_stream_status {
 // TODO: References to this needs to be removed..
 struct freesync_context {
 	bool dummy;
+};
+
+enum hubp_dmdata_mode {
+	DMDATA_SW_MODE,
+	DMDATA_HW_MODE
+};
+
+struct dc_dmdata_attributes {
+	/* Specifies whether dynamic meta data will be updated by software
+	 * or has to be fetched by hardware (DMA mode)
+	 */
+	enum hubp_dmdata_mode dmdata_mode;
+	/* Specifies if current dynamic meta data is to be used only for the current frame */
+	bool dmdata_repeat;
+	/* Specifies the size of Dynamic Metadata surface in byte.  Size of 0 means no Dynamic metadata is fetched */
+	uint32_t dmdata_size;
+	/* Specifies if a new dynamic meta data should be fetched for an upcoming frame */
+	bool dmdata_updated;
+	/* If hardware mode is used, the base address where DMDATA surface is located */
+	PHYSICAL_ADDRESS_LOC address;
+	/* Specifies whether QOS level will be provided by TTU or it will come from DMDATA_QOS_LEVEL */
+	bool dmdata_qos_mode;
+	/* If qos_mode = 1, this is the QOS value to be used: */
+	uint32_t dmdata_qos_level;
+	/* Specifies the value in unit of REFCLK cycles to be added to the
+	 * current time to produce the Amortized deadline for Dynamic Metadata chunk request
+	 */
+	uint32_t dmdata_dl_delta;
+	/* An unbounded array of uint32s, represents software dmdata to be loaded */
+	uint32_t *dmdata_sw_data;
+};
+
+struct dc_writeback_info {
+	bool wb_enabled;
+	int dwb_pipe_inst;
+	struct dc_dwb_params dwb_params;
+	struct mcif_buf_params mcif_buf_params;
+};
+
+struct dc_writeback_update {
+	unsigned int num_wb_info;
+	struct dc_writeback_info writeback_info[MAX_DWB_PIPES];
 };
 
 enum vertical_interrupt_ref_point {
@@ -66,6 +109,20 @@ struct periodic_interrupt_config {
 	int lines_offset;
 };
 
+union stream_update_flags {
+	struct {
+		uint32_t scaling:1;
+		uint32_t out_tf:1;
+		uint32_t out_csc:1;
+		uint32_t abm_level:1;
+		uint32_t dpms_off:1;
+		uint32_t gamut_remap:1;
+		uint32_t wb_update:1;
+		uint32_t dsc_changed : 1;
+	} bits;
+
+	uint32_t raw;
+};
 
 struct dc_stream_state {
 	// sink is deprecated, new code should not reference
@@ -80,7 +137,6 @@ struct dc_stream_state {
 	struct dc_info_packet vrr_infopacket;
 	struct dc_info_packet vsc_infopacket;
 	struct dc_info_packet vsp_infopacket;
-	struct dc_info_packet dpsdp_infopacket;
 
 	struct rect src; /* composition area */
 	struct rect dst; /* stream addressable area */
@@ -103,6 +159,7 @@ struct dc_stream_state {
 
 	enum view_3d_format view_format;
 
+	bool use_vsc_sdp_for_colorimetry;
 	bool ignore_msa_timing_param;
 	bool converter_disable_audio;
 	uint8_t qs_bit;
@@ -142,6 +199,9 @@ struct dc_stream_state {
 
 	struct crtc_trigger_info triggered_crtc_reset;
 
+	/* writeback */
+	unsigned int num_wb_info;
+	struct dc_writeback_info writeback_info[MAX_DWB_PIPES];
 	/* Computed state bits */
 	bool mode_changed : 1;
 
@@ -160,9 +220,15 @@ struct dc_stream_state {
 	bool apply_seamless_boot_optimization;
 
 	uint32_t stream_id;
+	bool is_dsc_enabled;
+	union stream_update_flags update_flags;
 };
 
+#define ABM_LEVEL_IMMEDIATE_DISABLE 0xFFFFFFFF
+
 struct dc_stream_update {
+	struct dc_stream_state *stream;
+
 	struct rect src;
 	struct rect dst;
 	struct dc_transfer_func *out_transfer_func;
@@ -172,12 +238,12 @@ struct dc_stream_update {
 	struct periodic_interrupt_config *periodic_interrupt0;
 	struct periodic_interrupt_config *periodic_interrupt1;
 
-	struct dc_crtc_timing_adjust *adjust;
 	struct dc_info_packet *vrr_infopacket;
 	struct dc_info_packet *vsc_infopacket;
 	struct dc_info_packet *vsp_infopacket;
 
 	bool *dpms_off;
+	bool integer_scaling_update;
 
 	struct colorspace_transform *gamut_remap;
 	enum dc_color_space *output_color_space;
@@ -185,6 +251,8 @@ struct dc_stream_update {
 
 	struct dc_csc_transform *output_csc_transform;
 
+	struct dc_writeback_update *wb_update;
+	struct dc_dsc_config *dsc_config;
 };
 
 bool dc_is_stream_unchanged(
@@ -274,6 +342,24 @@ bool dc_add_all_planes_for_stream(
 		int plane_count,
 		struct dc_state *context);
 
+bool dc_stream_add_writeback(struct dc *dc,
+		struct dc_stream_state *stream,
+		struct dc_writeback_info *wb_info);
+
+bool dc_stream_remove_writeback(struct dc *dc,
+		struct dc_stream_state *stream,
+		uint32_t dwb_pipe_inst);
+
+bool dc_stream_warmup_writeback(struct dc *dc,
+		int num_dwb,
+		struct dc_writeback_info *wb_info);
+
+bool dc_stream_dmdata_status_done(struct dc *dc, struct dc_stream_state *stream);
+
+bool dc_stream_set_dynamic_metadata(struct dc *dc,
+		struct dc_stream_state *stream,
+		struct dc_dmdata_attributes *dmdata_attr);
+
 enum dc_status dc_validate_stream(struct dc *dc, struct dc_stream_state *stream);
 
 /*
@@ -354,10 +440,13 @@ bool dc_stream_get_crc(struct dc *dc,
 		       uint32_t *g_y,
 		       uint32_t *b_cb);
 
-void dc_stream_set_static_screen_events(struct dc *dc,
+void dc_stream_set_static_screen_params(struct dc *dc,
 					struct dc_stream_state **stream,
 					int num_streams,
-					const struct dc_static_screen_events *events);
+					const struct dc_static_screen_params *params);
+
+void dc_stream_set_dyn_expansion(struct dc *dc, struct dc_stream_state *stream,
+		enum dc_dynamic_expansion option);
 
 void dc_stream_set_dither_option(struct dc_stream_state *stream,
 				 enum dc_dither_option option);

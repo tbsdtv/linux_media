@@ -5,19 +5,17 @@
  */
 #include "xfs.h"
 #include "xfs_fs.h"
+#include "xfs_shared.h"
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_bit.h"
-#include "xfs_sb.h"
 #include "xfs_mount.h"
 #include "xfs_trans.h"
 #include "xfs_buf_item.h"
 #include "xfs_trans_priv.h"
-#include "xfs_error.h"
 #include "xfs_trace.h"
 #include "xfs_log.h"
-#include "xfs_inode.h"
 
 
 kmem_zone_t	*xfs_buf_item_zone;
@@ -28,6 +26,23 @@ static inline struct xfs_buf_log_item *BUF_ITEM(struct xfs_log_item *lip)
 }
 
 STATIC void	xfs_buf_do_callbacks(struct xfs_buf *bp);
+
+/* Is this log iovec plausibly large enough to contain the buffer log format? */
+bool
+xfs_buf_log_check_iovec(
+	struct xfs_log_iovec		*iovec)
+{
+	struct xfs_buf_log_format	*blfp = iovec->i_addr;
+	char				*bmp_end;
+	char				*item_end;
+
+	if (offsetof(struct xfs_buf_log_format, blf_data_map) > iovec->i_len)
+		return false;
+
+	item_end = (char *)iovec->i_addr + iovec->i_len;
+	bmp_end = (char *)&blfp->blf_data_map[blfp->blf_map_size];
+	return bmp_end <= item_end;
+}
 
 static inline int
 xfs_buf_log_format_size(
@@ -330,7 +345,7 @@ xfs_buf_item_format(
 	 * occurs during recovery.
 	 */
 	if (bip->bli_flags & XFS_BLI_INODE_BUF) {
-		if (xfs_sb_version_hascrc(&lip->li_mountp->m_sb) ||
+		if (xfs_sb_version_has_v3inode(&lip->li_mountp->m_sb) ||
 		    !((bip->bli_flags & XFS_BLI_INODE_ALLOC_BUF) &&
 		      xfs_log_item_in_current_chkpt(lip)))
 			bip->__bli_format.blf_flags |= XFS_BLF_INODE_BUF;
@@ -520,7 +535,7 @@ xfs_buf_item_push(
 	/* has a previous flush failed due to IO errors? */
 	if ((bp->b_flags & XBF_WRITE_FAIL) &&
 	    ___ratelimit(&xfs_buf_write_fail_rl_state, "XFS: Failing async write")) {
-		xfs_warn(bp->b_target->bt_mount,
+		xfs_warn(bp->b_mount,
 "Failing async write on buffer block 0x%llx. Retrying async write.",
 			 (long long)bp->b_bn);
 	}
@@ -594,7 +609,7 @@ xfs_buf_item_put(
  * free the item.
  */
 STATIC void
-xfs_buf_item_unlock(
+xfs_buf_item_release(
 	struct xfs_log_item	*lip)
 {
 	struct xfs_buf_log_item	*bip = BUF_ITEM(lip);
@@ -609,7 +624,7 @@ xfs_buf_item_unlock(
 						   &lip->li_flags);
 #endif
 
-	trace_xfs_buf_item_unlock(bip);
+	trace_xfs_buf_item_release(bip);
 
 	/*
 	 * The bli dirty state should match whether the blf has logged segments
@@ -637,6 +652,14 @@ xfs_buf_item_unlock(
 		return;
 	ASSERT(!stale || aborted);
 	xfs_buf_relse(bp);
+}
+
+STATIC void
+xfs_buf_item_committing(
+	struct xfs_log_item	*lip,
+	xfs_lsn_t		commit_lsn)
+{
+	return xfs_buf_item_release(lip);
 }
 
 /*
@@ -671,28 +694,18 @@ xfs_buf_item_committed(
 	return lsn;
 }
 
-STATIC void
-xfs_buf_item_committing(
-	struct xfs_log_item	*lip,
-	xfs_lsn_t		commit_lsn)
-{
-}
-
-/*
- * This is the ops vector shared by all buf log items.
- */
 static const struct xfs_item_ops xfs_buf_item_ops = {
 	.iop_size	= xfs_buf_item_size,
 	.iop_format	= xfs_buf_item_format,
 	.iop_pin	= xfs_buf_item_pin,
 	.iop_unpin	= xfs_buf_item_unpin,
-	.iop_unlock	= xfs_buf_item_unlock,
+	.iop_release	= xfs_buf_item_release,
+	.iop_committing	= xfs_buf_item_committing,
 	.iop_committed	= xfs_buf_item_committed,
 	.iop_push	= xfs_buf_item_push,
-	.iop_committing = xfs_buf_item_committing
 };
 
-STATIC int
+STATIC void
 xfs_buf_item_get_format(
 	struct xfs_buf_log_item	*bip,
 	int			count)
@@ -702,14 +715,11 @@ xfs_buf_item_get_format(
 
 	if (count == 1) {
 		bip->bli_formats = &bip->__bli_format;
-		return 0;
+		return;
 	}
 
 	bip->bli_formats = kmem_zalloc(count * sizeof(struct xfs_buf_log_format),
-				KM_SLEEP);
-	if (!bip->bli_formats)
-		return -ENOMEM;
-	return 0;
+				0);
 }
 
 STATIC void
@@ -735,7 +745,6 @@ xfs_buf_item_init(
 	struct xfs_buf_log_item	*bip = bp->b_log_item;
 	int			chunks;
 	int			map_size;
-	int			error;
 	int			i;
 
 	/*
@@ -743,7 +752,7 @@ xfs_buf_item_init(
 	 * this buffer. If we do already have one, there is
 	 * nothing to do here so return.
 	 */
-	ASSERT(bp->b_target->bt_mount == mp);
+	ASSERT(bp->b_mount == mp);
 	if (bip) {
 		ASSERT(bip->bli_item.li_type == XFS_LI_BUF);
 		ASSERT(!bp->b_transp);
@@ -751,7 +760,7 @@ xfs_buf_item_init(
 		return 0;
 	}
 
-	bip = kmem_zone_zalloc(xfs_buf_item_zone, KM_SLEEP);
+	bip = kmem_zone_zalloc(xfs_buf_item_zone, 0);
 	xfs_log_item_init(mp, &bip->bli_item, XFS_LI_BUF, &xfs_buf_item_ops);
 	bip->bli_buf = bp;
 
@@ -764,18 +773,21 @@ xfs_buf_item_init(
 	 * Discontiguous buffer support follows the layout of the underlying
 	 * buffer. This makes the implementation as simple as possible.
 	 */
-	error = xfs_buf_item_get_format(bip, bp->b_map_count);
-	ASSERT(error == 0);
-	if (error) {	/* to stop gcc throwing set-but-unused warnings */
-		kmem_zone_free(xfs_buf_item_zone, bip);
-		return error;
-	}
-
+	xfs_buf_item_get_format(bip, bp->b_map_count);
 
 	for (i = 0; i < bip->bli_format_count; i++) {
 		chunks = DIV_ROUND_UP(BBTOB(bp->b_maps[i].bm_len),
 				      XFS_BLF_CHUNK);
 		map_size = DIV_ROUND_UP(chunks, NBWORD);
+
+		if (map_size > XFS_BLF_DATAMAP_SIZE) {
+			kmem_cache_free(xfs_buf_item_zone, bip);
+			xfs_err(mp,
+	"buffer item dirty bitmap (%u uints) too small to reflect %u bytes!",
+					map_size,
+					BBTOB(bp->b_maps[i].bm_len));
+			return -EFSCORRUPTED;
+		}
 
 		bip->bli_formats[i].blf_type = XFS_LI_BUF;
 		bip->bli_formats[i].blf_blkno = bp->b_maps[i].bm_bn;
@@ -808,6 +820,9 @@ xfs_buf_item_log_segment(
 	uint		bit;
 	uint		end_bit;
 	uint		mask;
+
+	ASSERT(first < XFS_BLF_DATAMAP_SIZE * XFS_BLF_CHUNK * NBWORD);
+	ASSERT(last < XFS_BLF_DATAMAP_SIZE * XFS_BLF_CHUNK * NBWORD);
 
 	/*
 	 * Convert byte offsets to bit numbers.
@@ -855,7 +870,7 @@ xfs_buf_item_log_segment(
 	 * first_bit and last_bit.
 	 */
 	while ((bits_to_set - bits_set) >= NBWORD) {
-		*wordp |= 0xffffffff;
+		*wordp = 0xffffffff;
 		bits_set += NBWORD;
 		wordp++;
 	}
@@ -943,7 +958,7 @@ xfs_buf_item_free(
 {
 	xfs_buf_item_free_format(bip);
 	kmem_free(bip->bli_item.li_lv_shadow);
-	kmem_zone_free(xfs_buf_item_zone, bip);
+	kmem_cache_free(xfs_buf_item_zone, bip);
 }
 
 /*
@@ -960,7 +975,7 @@ xfs_buf_item_relse(
 	struct xfs_buf_log_item	*bip = bp->b_log_item;
 
 	trace_xfs_buf_item_relse(bp, _RET_IP_);
-	ASSERT(!(bip->bli_item.li_flags & XFS_LI_IN_AIL));
+	ASSERT(!test_bit(XFS_LI_IN_AIL, &bip->bli_item.li_flags));
 
 	bp->b_log_item = NULL;
 	if (list_empty(&bp->b_li_list))
@@ -980,9 +995,9 @@ xfs_buf_item_relse(
  */
 void
 xfs_buf_attach_iodone(
-	xfs_buf_t	*bp,
-	void		(*cb)(xfs_buf_t *, xfs_log_item_t *),
-	xfs_log_item_t	*lip)
+	struct xfs_buf		*bp,
+	void			(*cb)(struct xfs_buf *, struct xfs_log_item *),
+	struct xfs_log_item	*lip)
 {
 	ASSERT(xfs_buf_islocked(bp));
 
@@ -1098,7 +1113,7 @@ xfs_buf_iodone_callback_error(
 	if (bp->b_target != lasttarg ||
 	    time_after(jiffies, (lasttime + 5*HZ))) {
 		lasttime = jiffies;
-		xfs_buf_ioerror_alert(bp, __func__);
+		xfs_buf_ioerror_alert(bp, __this_address);
 	}
 	lasttarg = bp->b_target;
 

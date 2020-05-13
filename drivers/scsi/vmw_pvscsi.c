@@ -335,7 +335,7 @@ static void pvscsi_create_sg(struct pvscsi_ctx *ctx,
 	BUG_ON(count > PVSCSI_MAX_NUM_SG_ENTRIES_PER_SEGMENT);
 
 	sge = &ctx->sgl->sge[0];
-	for (i = 0; i < count; i++, sg++) {
+	for (i = 0; i < count; i++, sg = sg_next(sg)) {
 		sge[i].addr   = sg_dma_address(sg);
 		sge[i].length = sg_dma_len(sg);
 		sge[i].flags  = 0;
@@ -365,7 +365,7 @@ static int pvscsi_map_buffers(struct pvscsi_adapter *adapter,
 		int segs = scsi_dma_map(cmd);
 
 		if (segs == -ENOMEM) {
-			scmd_printk(KERN_ERR, cmd,
+			scmd_printk(KERN_DEBUG, cmd,
 				    "vmw_pvscsi: Failed to map cmd sglist for DMA.\n");
 			return -ENOMEM;
 		} else if (segs > 1) {
@@ -392,7 +392,7 @@ static int pvscsi_map_buffers(struct pvscsi_adapter *adapter,
 		ctx->dataPA = dma_map_single(&adapter->dev->dev, sg, bufflen,
 					     cmd->sc_data_direction);
 		if (dma_mapping_error(&adapter->dev->dev, ctx->dataPA)) {
-			scmd_printk(KERN_ERR, cmd,
+			scmd_printk(KERN_DEBUG, cmd,
 				    "vmw_pvscsi: Failed to map direct data buffer for DMA.\n");
 			return -ENOMEM;
 		}
@@ -400,6 +400,17 @@ static int pvscsi_map_buffers(struct pvscsi_adapter *adapter,
 	}
 
 	return 0;
+}
+
+/*
+ * The device incorrectly doesn't clear the first byte of the sense
+ * buffer in some cases. We have to do it ourselves.
+ * Otherwise we run into trouble when SWIOTLB is forced.
+ */
+static void pvscsi_patch_sense(struct scsi_cmnd *cmd)
+{
+	if (cmd->sense_buffer)
+		cmd->sense_buffer[0] = 0;
 }
 
 static void pvscsi_unmap_buffers(const struct pvscsi_adapter *adapter,
@@ -544,6 +555,8 @@ static void pvscsi_complete_request(struct pvscsi_adapter *adapter,
 	cmd = ctx->cmd;
 	abort_cmp = ctx->abort_cmp;
 	pvscsi_unmap_buffers(adapter, ctx);
+	if (sdstat != SAM_STAT_CHECK_CONDITION)
+		pvscsi_patch_sense(cmd);
 	pvscsi_release_context(adapter, ctx);
 	if (abort_cmp) {
 		/*
@@ -712,7 +725,7 @@ static int pvscsi_queue_ring(struct pvscsi_adapter *adapter,
 				cmd->sense_buffer, SCSI_SENSE_BUFFERSIZE,
 				DMA_FROM_DEVICE);
 		if (dma_mapping_error(&adapter->dev->dev, ctx->sensePA)) {
-			scmd_printk(KERN_ERR, cmd,
+			scmd_printk(KERN_DEBUG, cmd,
 				    "vmw_pvscsi: Failed to map sense buffer for DMA.\n");
 			ctx->sensePA = 0;
 			return -ENOMEM;
@@ -763,6 +776,7 @@ static int pvscsi_queue_lck(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd
 	struct pvscsi_adapter *adapter = shost_priv(host);
 	struct pvscsi_ctx *ctx;
 	unsigned long flags;
+	unsigned char op;
 
 	spin_lock_irqsave(&adapter->hw_lock, flags);
 
@@ -775,13 +789,14 @@ static int pvscsi_queue_lck(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd
 	}
 
 	cmd->scsi_done = done;
+	op = cmd->cmnd[0];
 
 	dev_dbg(&cmd->device->sdev_gendev,
-		"queued cmd %p, ctx %p, op=%x\n", cmd, ctx, cmd->cmnd[0]);
+		"queued cmd %p, ctx %p, op=%x\n", cmd, ctx, op);
 
 	spin_unlock_irqrestore(&adapter->hw_lock, flags);
 
-	pvscsi_kick_io(adapter, cmd->cmnd[0]);
+	pvscsi_kick_io(adapter, op);
 
 	return 0;
 }
@@ -871,6 +886,7 @@ static void pvscsi_reset_all(struct pvscsi_adapter *adapter)
 			scmd_printk(KERN_ERR, cmd,
 				    "Forced reset on cmd %p\n", cmd);
 			pvscsi_unmap_buffers(adapter, ctx);
+			pvscsi_patch_sense(cmd);
 			pvscsi_release_context(adapter, ctx);
 			cmd->result = (DID_RESET << 16);
 			cmd->scsi_done(cmd);

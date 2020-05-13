@@ -44,6 +44,16 @@ static DEFINE_PER_CPU(u64 *, trace_imc_mem);
 static struct imc_pmu_ref *trace_imc_refc;
 static int trace_imc_mem_size;
 
+/*
+ * Global data structure used to avoid races between thread,
+ * core and trace-imc
+ */
+static struct imc_pmu_ref imc_global_refc = {
+	.lock = __MUTEX_INITIALIZER(imc_global_refc.lock),
+	.id = 0,
+	.refc = 0,
+};
+
 static struct imc_pmu *imc_event_to_pmu(struct perf_event *event)
 {
 	return container_of(event->pmu, struct imc_pmu, pmu);
@@ -362,7 +372,14 @@ static int ppc_nest_imc_cpu_offline(unsigned int cpu)
 	 */
 	nid = cpu_to_node(cpu);
 	l_cpumask = cpumask_of_node(nid);
-	target = cpumask_any_but(l_cpumask, cpu);
+	target = cpumask_last(l_cpumask);
+
+	/*
+	 * If this(target) is the last cpu in the cpumask for this chip,
+	 * check for any possible online cpu in the chip.
+	 */
+	if (unlikely(target == cpu))
+		target = cpumask_any_but(l_cpumask, cpu);
 
 	/*
 	 * Update the cpumask with the target cpu and
@@ -570,6 +587,7 @@ static int core_imc_mem_init(int cpu, int size)
 {
 	int nid, rc = 0, core_id = (cpu / threads_per_core);
 	struct imc_mem_info *mem_info;
+	struct page *page;
 
 	/*
 	 * alloc_pages_node() will allocate memory for core in the
@@ -580,11 +598,12 @@ static int core_imc_mem_init(int cpu, int size)
 	mem_info->id = core_id;
 
 	/* We need only vbase for core counters */
-	mem_info->vbase = page_address(alloc_pages_node(nid,
-					  GFP_KERNEL | __GFP_ZERO | __GFP_THISNODE |
-					  __GFP_NOWARN, get_order(size)));
-	if (!mem_info->vbase)
+	page = alloc_pages_node(nid,
+				GFP_KERNEL | __GFP_ZERO | __GFP_THISNODE |
+				__GFP_NOWARN, get_order(size));
+	if (!page)
 		return -ENOMEM;
+	mem_info->vbase = page_address(page);
 
 	/* Init the mutex */
 	core_imc_refc[core_id].id = core_id;
@@ -667,7 +686,10 @@ static int ppc_core_imc_cpu_offline(unsigned int cpu)
 		return 0;
 
 	/* Find any online cpu in that core except the current "cpu" */
-	ncpu = cpumask_any_but(cpu_sibling_mask(cpu), cpu);
+	ncpu = cpumask_last(cpu_sibling_mask(cpu));
+
+	if (unlikely(ncpu == cpu))
+		ncpu = cpumask_any_but(cpu_sibling_mask(cpu), cpu);
 
 	if (ncpu >= 0 && ncpu < nr_cpu_ids) {
 		cpumask_set_cpu(ncpu, &core_imc_cpumask);
@@ -686,6 +708,16 @@ static int ppc_core_imc_cpu_offline(unsigned int cpu)
 			return -EINVAL;
 
 		ref->refc = 0;
+		/*
+		 * Reduce the global reference count, if this is the
+		 * last cpu in this core and core-imc event running
+		 * in this cpu.
+		 */
+		mutex_lock(&imc_global_refc.lock);
+		if (imc_global_refc.id == IMC_DOMAIN_CORE)
+			imc_global_refc.refc--;
+
+		mutex_unlock(&imc_global_refc.lock);
 	}
 	return 0;
 }
@@ -696,6 +728,23 @@ static int core_imc_pmu_cpumask_init(void)
 				 "perf/powerpc/imc_core:online",
 				 ppc_core_imc_cpu_online,
 				 ppc_core_imc_cpu_offline);
+}
+
+static void reset_global_refc(struct perf_event *event)
+{
+		mutex_lock(&imc_global_refc.lock);
+		imc_global_refc.refc--;
+
+		/*
+		 * If no other thread is running any
+		 * event for this domain(thread/core/trace),
+		 * set the global id to zero.
+		 */
+		if (imc_global_refc.refc <= 0) {
+			imc_global_refc.refc = 0;
+			imc_global_refc.id = 0;
+		}
+		mutex_unlock(&imc_global_refc.lock);
 }
 
 static void core_imc_counters_release(struct perf_event *event)
@@ -747,6 +796,8 @@ static void core_imc_counters_release(struct perf_event *event)
 		ref->refc = 0;
 	}
 	mutex_unlock(&ref->lock);
+
+	reset_global_refc(event);
 }
 
 static int core_imc_event_init(struct perf_event *event)
@@ -807,6 +858,29 @@ static int core_imc_event_init(struct perf_event *event)
 	++ref->refc;
 	mutex_unlock(&ref->lock);
 
+	/*
+	 * Since the system can run either in accumulation or trace-mode
+	 * of IMC at a time, core-imc events are allowed only if no other
+	 * trace/thread imc events are enabled/monitored.
+	 *
+	 * Take the global lock, and check the refc.id
+	 * to know whether any other trace/thread imc
+	 * events are running.
+	 */
+	mutex_lock(&imc_global_refc.lock);
+	if (imc_global_refc.id == 0 || imc_global_refc.id == IMC_DOMAIN_CORE) {
+		/*
+		 * No other trace/thread imc events are running in
+		 * the system, so set the refc.id to core-imc.
+		 */
+		imc_global_refc.id = IMC_DOMAIN_CORE;
+		imc_global_refc.refc++;
+	} else {
+		mutex_unlock(&imc_global_refc.lock);
+		return -EBUSY;
+	}
+	mutex_unlock(&imc_global_refc.lock);
+
 	event->hw.event_base = (u64)pcmi->vbase + (config & IMC_EVENT_OFFSET_MASK);
 	event->destroy = core_imc_counters_release;
 	return 0;
@@ -839,15 +913,17 @@ static int thread_imc_mem_alloc(int cpu_id, int size)
 	int nid = cpu_to_node(cpu_id);
 
 	if (!local_mem) {
+		struct page *page;
 		/*
 		 * This case could happen only once at start, since we dont
 		 * free the memory in cpu offline path.
 		 */
-		local_mem = page_address(alloc_pages_node(nid,
+		page = alloc_pages_node(nid,
 				  GFP_KERNEL | __GFP_ZERO | __GFP_THISNODE |
-				  __GFP_NOWARN, get_order(size)));
-		if (!local_mem)
+				  __GFP_NOWARN, get_order(size));
+		if (!page)
 			return -ENOMEM;
+		local_mem = page_address(page);
 
 		per_cpu(thread_imc_mem, cpu_id) = local_mem;
 	}
@@ -863,7 +939,23 @@ static int ppc_thread_imc_cpu_online(unsigned int cpu)
 
 static int ppc_thread_imc_cpu_offline(unsigned int cpu)
 {
-	mtspr(SPRN_LDBAR, 0);
+	/*
+	 * Set the bit 0 of LDBAR to zero.
+	 *
+	 * If bit 0 of LDBAR is unset, it will stop posting
+	 * the counter data to memory.
+	 * For thread-imc, bit 0 of LDBAR will be set to 1 in the
+	 * event_add function. So reset this bit here, to stop the updates
+	 * to memory in the cpu_offline path.
+	 */
+	mtspr(SPRN_LDBAR, (mfspr(SPRN_LDBAR) & (~(1UL << 63))));
+
+	/* Reduce the refc if thread-imc event running on this cpu */
+	mutex_lock(&imc_global_refc.lock);
+	if (imc_global_refc.id == IMC_DOMAIN_THREAD)
+		imc_global_refc.refc--;
+	mutex_unlock(&imc_global_refc.lock);
+
 	return 0;
 }
 
@@ -902,7 +994,22 @@ static int thread_imc_event_init(struct perf_event *event)
 	if (!target)
 		return -EINVAL;
 
+	mutex_lock(&imc_global_refc.lock);
+	/*
+	 * Check if any other trace/core imc events are running in the
+	 * system, if not set the global id to thread-imc.
+	 */
+	if (imc_global_refc.id == 0 || imc_global_refc.id == IMC_DOMAIN_THREAD) {
+		imc_global_refc.id = IMC_DOMAIN_THREAD;
+		imc_global_refc.refc++;
+	} else {
+		mutex_unlock(&imc_global_refc.lock);
+		return -EBUSY;
+	}
+	mutex_unlock(&imc_global_refc.lock);
+
 	event->pmu->task_ctx_nr = perf_sw_context;
+	event->destroy = reset_global_refc;
 	return 0;
 }
 
@@ -1049,10 +1156,12 @@ static void thread_imc_event_del(struct perf_event *event, int flags)
 	int core_id;
 	struct imc_pmu_ref *ref;
 
-	mtspr(SPRN_LDBAR, 0);
-
 	core_id = smp_processor_id() / threads_per_core;
 	ref = &core_imc_refc[core_id];
+	if (!ref) {
+		pr_debug("imc: Failed to get event reference count\n");
+		return;
+	}
 
 	mutex_lock(&ref->lock);
 	ref->refc--;
@@ -1068,6 +1177,10 @@ static void thread_imc_event_del(struct perf_event *event, int flags)
 		ref->refc = 0;
 	}
 	mutex_unlock(&ref->lock);
+
+	/* Set bit 0 of LDBAR to zero, to stop posting updates to memory */
+	mtspr(SPRN_LDBAR, (mfspr(SPRN_LDBAR) & (~(1UL << 63))));
+
 	/*
 	 * Take a snapshot and calculate the delta and update
 	 * the event counter values.
@@ -1085,11 +1198,14 @@ static int trace_imc_mem_alloc(int cpu_id, int size)
 	int core_id = (cpu_id / threads_per_core);
 
 	if (!local_mem) {
-		local_mem = page_address(alloc_pages_node(phys_id,
-					GFP_KERNEL | __GFP_ZERO | __GFP_THISNODE |
-					__GFP_NOWARN, get_order(size)));
-		if (!local_mem)
+		struct page *page;
+
+		page = alloc_pages_node(phys_id,
+				GFP_KERNEL | __GFP_ZERO | __GFP_THISNODE |
+				__GFP_NOWARN, get_order(size));
+		if (!page)
 			return -ENOMEM;
+		local_mem = page_address(page);
 		per_cpu(trace_imc_mem, cpu_id) = local_mem;
 
 		/* Initialise the counters for trace mode */
@@ -1116,7 +1232,18 @@ static int ppc_trace_imc_cpu_online(unsigned int cpu)
 
 static int ppc_trace_imc_cpu_offline(unsigned int cpu)
 {
-	mtspr(SPRN_LDBAR, 0);
+	/*
+	 * No need to set bit 0 of LDBAR to zero, as
+	 * it is set to zero for imc trace-mode
+	 *
+	 * Reduce the refc if any trace-imc event running
+	 * on this cpu.
+	 */
+	mutex_lock(&imc_global_refc.lock);
+	if (imc_global_refc.id == IMC_DOMAIN_TRACE)
+		imc_global_refc.refc--;
+	mutex_unlock(&imc_global_refc.lock);
+
 	return 0;
 }
 
@@ -1209,15 +1336,14 @@ static int trace_imc_event_add(struct perf_event *event, int flags)
 	local_mem = get_trace_imc_event_base_addr();
 	ldbar_value = ((u64)local_mem & THREAD_IMC_LDBAR_MASK) | TRACE_IMC_ENABLE;
 
-	if (core_imc_refc)
-		ref = &core_imc_refc[core_id];
+	/* trace-imc reference count */
+	if (trace_imc_refc)
+		ref = &trace_imc_refc[core_id];
 	if (!ref) {
-		/* If core-imc is not enabled, use trace-imc reference count */
-		if (trace_imc_refc)
-			ref = &trace_imc_refc[core_id];
-		if (!ref)
-			return -EINVAL;
+		pr_debug("imc: Failed to get the event reference count\n");
+		return -EINVAL;
 	}
+
 	mtspr(SPRN_LDBAR, ldbar_value);
 	mutex_lock(&ref->lock);
 	if (ref->refc == 0) {
@@ -1225,13 +1351,11 @@ static int trace_imc_event_add(struct perf_event *event, int flags)
 				get_hard_smp_processor_id(smp_processor_id()))) {
 			mutex_unlock(&ref->lock);
 			pr_err("trace-imc: Unable to start the counters for core %d\n", core_id);
-			mtspr(SPRN_LDBAR, 0);
 			return -EINVAL;
 		}
 	}
 	++ref->refc;
 	mutex_unlock(&ref->lock);
-
 	return 0;
 }
 
@@ -1257,16 +1381,13 @@ static void trace_imc_event_del(struct perf_event *event, int flags)
 	int core_id = smp_processor_id() / threads_per_core;
 	struct imc_pmu_ref *ref = NULL;
 
-	if (core_imc_refc)
-		ref = &core_imc_refc[core_id];
+	if (trace_imc_refc)
+		ref = &trace_imc_refc[core_id];
 	if (!ref) {
-		/* If core-imc is not enabled, use trace-imc reference count */
-		if (trace_imc_refc)
-			ref = &trace_imc_refc[core_id];
-		if (!ref)
-			return;
+		pr_debug("imc: Failed to get event reference count\n");
+		return;
 	}
-	mtspr(SPRN_LDBAR, 0);
+
 	mutex_lock(&ref->lock);
 	ref->refc--;
 	if (ref->refc == 0) {
@@ -1280,6 +1401,7 @@ static void trace_imc_event_del(struct perf_event *event, int flags)
 		ref->refc = 0;
 	}
 	mutex_unlock(&ref->lock);
+
 	trace_imc_event_stop(event, flags);
 }
 
@@ -1297,10 +1419,30 @@ static int trace_imc_event_init(struct perf_event *event)
 	if (event->attr.sample_period == 0)
 		return -ENOENT;
 
+	/*
+	 * Take the global lock, and make sure
+	 * no other thread is running any core/thread imc
+	 * events
+	 */
+	mutex_lock(&imc_global_refc.lock);
+	if (imc_global_refc.id == 0 || imc_global_refc.id == IMC_DOMAIN_TRACE) {
+		/*
+		 * No core/thread imc events are running in the
+		 * system, so set the refc.id to trace-imc.
+		 */
+		imc_global_refc.id = IMC_DOMAIN_TRACE;
+		imc_global_refc.refc++;
+	} else {
+		mutex_unlock(&imc_global_refc.lock);
+		return -EBUSY;
+	}
+	mutex_unlock(&imc_global_refc.lock);
+
 	event->hw.idx = -1;
 	target = event->hw.target;
 
 	event->pmu->task_ctx_nr = perf_hw_context;
+	event->destroy = reset_global_refc;
 	return 0;
 }
 
@@ -1412,10 +1554,10 @@ static void cleanup_all_core_imc_memory(void)
 static void thread_imc_ldbar_disable(void *dummy)
 {
 	/*
-	 * By Zeroing LDBAR, we disable thread-imc
-	 * updates.
+	 * By setting 0th bit of LDBAR to zero, we disable thread-imc
+	 * updates to memory.
 	 */
-	mtspr(SPRN_LDBAR, 0);
+	mtspr(SPRN_LDBAR, (mfspr(SPRN_LDBAR) & (~(1UL << 63))));
 }
 
 void thread_imc_disable(void)

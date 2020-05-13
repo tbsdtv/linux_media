@@ -1026,12 +1026,15 @@ static int smu10_get_clock_by_type_with_latency(struct pp_hwmgr *hwmgr,
 
 	clocks->num_levels = 0;
 	for (i = 0; i < pclk_vol_table->count; i++) {
-		clocks->data[i].clocks_in_khz = pclk_vol_table->entries[i].clk * 10;
-		clocks->data[i].latency_in_us = latency_required ?
-						smu10_get_mem_latency(hwmgr,
-						pclk_vol_table->entries[i].clk) :
-						0;
-		clocks->num_levels++;
+		if (pclk_vol_table->entries[i].clk) {
+			clocks->data[clocks->num_levels].clocks_in_khz =
+				pclk_vol_table->entries[i].clk * 10;
+			clocks->data[clocks->num_levels].latency_in_us = latency_required ?
+				smu10_get_mem_latency(hwmgr,
+						      pclk_vol_table->entries[i].clk) :
+				0;
+			clocks->num_levels++;
+		}
 	}
 
 	return 0;
@@ -1077,9 +1080,11 @@ static int smu10_get_clock_by_type_with_voltage(struct pp_hwmgr *hwmgr,
 
 	clocks->num_levels = 0;
 	for (i = 0; i < pclk_vol_table->count; i++) {
-		clocks->data[i].clocks_in_khz = pclk_vol_table->entries[i].clk  * 10;
-		clocks->data[i].voltage_in_mv = pclk_vol_table->entries[i].vol;
-		clocks->num_levels++;
+		if (pclk_vol_table->entries[i].clk) {
+			clocks->data[clocks->num_levels].clocks_in_khz = pclk_vol_table->entries[i].clk  * 10;
+			clocks->data[clocks->num_levels].voltage_in_mv = pclk_vol_table->entries[i].vol;
+			clocks->num_levels++;
+		}
 	}
 
 	return 0;
@@ -1111,6 +1116,7 @@ static int smu10_thermal_get_temperature(struct pp_hwmgr *hwmgr)
 static int smu10_read_sensor(struct pp_hwmgr *hwmgr, int idx,
 			  void *value, int *size)
 {
+	struct smu10_hwmgr *smu10_data = (struct smu10_hwmgr *)(hwmgr->backend);
 	uint32_t sclk, mclk;
 	int ret = 0;
 
@@ -1132,6 +1138,10 @@ static int smu10_read_sensor(struct pp_hwmgr *hwmgr, int idx,
 	case AMDGPU_PP_SENSOR_GPU_TEMP:
 		*((uint32_t *)value) = smu10_thermal_get_temperature(hwmgr);
 		break;
+	case AMDGPU_PP_SENSOR_VCN_POWER_STATE:
+		*(uint32_t *)value =  smu10_data->vcn_power_gated ? 0 : 1;
+		*size = 4;
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -1146,12 +1156,11 @@ static int smu10_set_watermarks_for_clocks_ranges(struct pp_hwmgr *hwmgr,
 	struct smu10_hwmgr *data = hwmgr->backend;
 	struct dm_pp_wm_sets_with_clock_ranges_soc15 *wm_with_clock_ranges = clock_ranges;
 	Watermarks_t *table = &(data->water_marks_table);
-	int result = 0;
 
 	smu_set_watermarks_for_clocks_ranges(table,wm_with_clock_ranges);
 	smum_smc_table_manager(hwmgr, (uint8_t *)table, (uint16_t)SMU10_WMTABLE, false);
 	data->water_marks_exist = true;
-	return result;
+	return 0;
 }
 
 static int smu10_smus_notify_pwe(struct pp_hwmgr *hwmgr)
@@ -1175,18 +1184,22 @@ static int smu10_powergate_sdma(struct pp_hwmgr *hwmgr, bool gate)
 
 static void smu10_powergate_vcn(struct pp_hwmgr *hwmgr, bool bgate)
 {
+	struct smu10_hwmgr *smu10_data = (struct smu10_hwmgr *)(hwmgr->backend);
+
 	if (bgate) {
 		amdgpu_device_ip_set_powergating_state(hwmgr->adev,
 						AMD_IP_BLOCK_TYPE_VCN,
 						AMD_PG_STATE_GATE);
 		smum_send_msg_to_smc_with_parameter(hwmgr,
 					PPSMC_MSG_PowerDownVcn, 0);
+		smu10_data->vcn_power_gated = true;
 	} else {
 		smum_send_msg_to_smc_with_parameter(hwmgr,
 						PPSMC_MSG_PowerUpVcn, 0);
 		amdgpu_device_ip_set_powergating_state(hwmgr->adev,
 						AMD_IP_BLOCK_TYPE_VCN,
 						AMD_PG_STATE_UNGATE);
+		smu10_data->vcn_power_gated = false;
 	}
 }
 
@@ -1302,6 +1315,12 @@ static int smu10_set_power_profile_mode(struct pp_hwmgr *hwmgr, long *input, uin
 	return 0;
 }
 
+static int smu10_asic_reset(struct pp_hwmgr *hwmgr, enum SMU_ASIC_RESET_MODE mode)
+{
+	return smum_send_msg_to_smc_with_parameter(hwmgr,
+						   PPSMC_MSG_DeviceDriverReset,
+						   mode);
+}
 
 static const struct pp_hwmgr_func smu10_hwmgr_funcs = {
 	.backend_init = smu10_hwmgr_backend_init,
@@ -1346,6 +1365,7 @@ static const struct pp_hwmgr_func smu10_hwmgr_funcs = {
 	.set_hard_min_fclk_by_freq = smu10_set_hard_min_fclk_by_freq,
 	.get_power_profile_mode = smu10_get_power_profile_mode,
 	.set_power_profile_mode = smu10_set_power_profile_mode,
+	.asic_reset = smu10_asic_reset,
 };
 
 int smu10_init_function_pointers(struct pp_hwmgr *hwmgr)

@@ -1637,7 +1637,7 @@ static int savagefb_release(struct fb_info *info, int user)
 	return 0;
 }
 
-static struct fb_ops savagefb_ops = {
+static const struct fb_ops savagefb_ops = {
 	.owner          = THIS_MODULE,
 	.fb_open        = savagefb_open,
 	.fb_release     = savagefb_release,
@@ -2333,14 +2333,7 @@ static void savagefb_remove(struct pci_dev *dev)
 	DBG("savagefb_remove");
 
 	if (info) {
-		/*
-		 * If unregister_framebuffer fails, then
-		 * we will be leaving hooks that could cause
-		 * oopsen laying around.
-		 */
-		if (unregister_framebuffer(info))
-			printk(KERN_WARNING "savagefb: danger danger! "
-			       "Oopsen imminent!\n");
+		unregister_framebuffer(info);
 
 #ifdef CONFIG_FB_SAVAGE_I2C
 		savagefb_delete_i2c_busses(info);

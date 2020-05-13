@@ -84,6 +84,7 @@ enum {
 #define I2C_HW_ENGINE_COMMON_REG_LIST(id)\
 	SRI(SETUP, DC_I2C_DDC, id),\
 	SRI(SPEED, DC_I2C_DDC, id),\
+	SRI(HW_STATUS, DC_I2C_DDC, id),\
 	SR(DC_I2C_ARBITRATION),\
 	SR(DC_I2C_CONTROL),\
 	SR(DC_I2C_SW_STATUS),\
@@ -105,6 +106,8 @@ enum {
 	I2C_SF(DC_I2C_DDC1_SETUP, DC_I2C_DDC1_DATA_DRIVE_SEL, mask_sh),\
 	I2C_SF(DC_I2C_DDC1_SETUP, DC_I2C_DDC1_INTRA_TRANSACTION_DELAY, mask_sh),\
 	I2C_SF(DC_I2C_DDC1_SETUP, DC_I2C_DDC1_INTRA_BYTE_DELAY, mask_sh),\
+	I2C_SF(DC_I2C_DDC1_HW_STATUS, DC_I2C_DDC1_HW_STATUS, mask_sh),\
+	I2C_SF(DC_I2C_ARBITRATION, DC_I2C_SW_USE_I2C_REG_REQ, mask_sh),\
 	I2C_SF(DC_I2C_ARBITRATION, DC_I2C_SW_DONE_USING_I2C_REG, mask_sh),\
 	I2C_SF(DC_I2C_ARBITRATION, DC_I2C_NO_QUEUED_SW_GO, mask_sh),\
 	I2C_SF(DC_I2C_ARBITRATION, DC_I2C_SW_PRIORITY, mask_sh),\
@@ -145,7 +148,9 @@ struct dce_i2c_shift {
 	uint8_t DC_I2C_DDC1_DATA_DRIVE_SEL;
 	uint8_t DC_I2C_DDC1_INTRA_TRANSACTION_DELAY;
 	uint8_t DC_I2C_DDC1_INTRA_BYTE_DELAY;
+	uint8_t DC_I2C_DDC1_HW_STATUS;
 	uint8_t DC_I2C_SW_DONE_USING_I2C_REG;
+	uint8_t DC_I2C_SW_USE_I2C_REG_REQ;
 	uint8_t DC_I2C_NO_QUEUED_SW_GO;
 	uint8_t DC_I2C_SW_PRIORITY;
 	uint8_t DC_I2C_SOFT_RESET;
@@ -172,6 +177,7 @@ struct dce_i2c_shift {
 	uint8_t DC_I2C_INDEX;
 	uint8_t DC_I2C_INDEX_WRITE;
 	uint8_t XTAL_REF_DIV;
+	uint8_t DC_I2C_DDC1_SEND_RESET_LENGTH;
 	uint8_t DC_I2C_REG_RW_CNTL_STATUS;
 };
 
@@ -183,7 +189,9 @@ struct dce_i2c_mask {
 	uint32_t DC_I2C_DDC1_DATA_DRIVE_SEL;
 	uint32_t DC_I2C_DDC1_INTRA_TRANSACTION_DELAY;
 	uint32_t DC_I2C_DDC1_INTRA_BYTE_DELAY;
+	uint32_t DC_I2C_DDC1_HW_STATUS;
 	uint32_t DC_I2C_SW_DONE_USING_I2C_REG;
+	uint32_t DC_I2C_SW_USE_I2C_REG_REQ;
 	uint32_t DC_I2C_NO_QUEUED_SW_GO;
 	uint32_t DC_I2C_SW_PRIORITY;
 	uint32_t DC_I2C_SOFT_RESET;
@@ -210,12 +218,18 @@ struct dce_i2c_mask {
 	uint32_t DC_I2C_INDEX;
 	uint32_t DC_I2C_INDEX_WRITE;
 	uint32_t XTAL_REF_DIV;
+	uint32_t DC_I2C_DDC1_SEND_RESET_LENGTH;
 	uint32_t DC_I2C_REG_RW_CNTL_STATUS;
 };
+
+#define I2C_COMMON_MASK_SH_LIST_DCN2(mask_sh)\
+	I2C_COMMON_MASK_SH_LIST_DCE110(mask_sh),\
+	I2C_SF(DC_I2C_DDC1_SETUP, DC_I2C_DDC1_SEND_RESET_LENGTH, mask_sh)
 
 struct dce_i2c_registers {
 	uint32_t SETUP;
 	uint32_t SPEED;
+	uint32_t HW_STATUS;
 	uint32_t DC_I2C_ARBITRATION;
 	uint32_t DC_I2C_CONTROL;
 	uint32_t DC_I2C_SW_STATUS;
@@ -242,7 +256,6 @@ struct i2c_request_transaction_data {
 
 struct dce_i2c_hw {
 	struct ddc *ddc;
-	uint32_t original_speed;
 	uint32_t engine_keep_power_up_count;
 	uint32_t transaction_count;
 	uint32_t buffer_used_bytes;
@@ -285,6 +298,14 @@ void dce112_i2c_hw_construct(
 	const struct dce_i2c_mask *masks);
 
 void dcn1_i2c_hw_construct(
+	struct dce_i2c_hw *dce_i2c_hw,
+	struct dc_context *ctx,
+	uint32_t engine_id,
+	const struct dce_i2c_registers *regs,
+	const struct dce_i2c_shift *shifts,
+	const struct dce_i2c_mask *masks);
+
+void dcn2_i2c_hw_construct(
 	struct dce_i2c_hw *dce_i2c_hw,
 	struct dc_context *ctx,
 	uint32_t engine_id,

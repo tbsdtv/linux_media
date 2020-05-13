@@ -55,9 +55,7 @@
 #include <linux/io.h>
 #include <linux/uaccess.h>
 
-#include <misc/charlcd.h>
-
-#define KEYPAD_MINOR		185
+#include "charlcd.h"
 
 #define LCD_MAXBYTES		256	/* max burst write */
 
@@ -1617,6 +1615,8 @@ static void panel_attach(struct parport *port)
 	return;
 
 err_lcd_unreg:
+	if (scan_timer.function)
+		del_timer_sync(&scan_timer);
 	if (lcd.enabled)
 		charlcd_unregister(lcd.charlcd);
 err_unreg_device:

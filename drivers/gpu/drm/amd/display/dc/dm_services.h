@@ -40,6 +40,9 @@
 
 #undef DEPRECATED
 
+struct dmub_srv;
+struct dc_dmub_srv;
+
 irq_handler_idx dm_register_interrupt(
 	struct dc_context *ctx,
 	struct dc_interrupt_params *int_params,
@@ -139,6 +142,13 @@ uint32_t generic_reg_update_ex(const struct dc_context *ctx,
 		uint32_t addr, int n,
 		uint8_t shift1, uint32_t mask1, uint32_t field_value1, ...);
 
+struct dc_dmub_srv *dc_dmub_srv_create(struct dc *dc, struct dmub_srv *dmub);
+void dc_dmub_srv_destroy(struct dc_dmub_srv **dmub_srv);
+
+void reg_sequence_start_gather(const struct dc_context *ctx);
+void reg_sequence_start_execute(const struct dc_context *ctx);
+void reg_sequence_wait_done(const struct dc_context *ctx);
+
 #define FD(reg_field)	reg_field ## __SHIFT, \
 						reg_field ## _MASK
 
@@ -151,6 +161,7 @@ void generic_reg_wait(const struct dc_context *ctx,
 	unsigned int delay_between_poll_us, unsigned int time_out_num_tries,
 	const char *func_name, int line);
 
+unsigned int snprintf_count(char *pBuf, unsigned int bufSize, char *fmt, ...);
 
 /* These macros need to be used with soc15 registers in order to retrieve
  * the actual offset.

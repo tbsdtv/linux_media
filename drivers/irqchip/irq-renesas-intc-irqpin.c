@@ -460,8 +460,8 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 			goto err0;
 		}
 
-		i->iomem = devm_ioremap_nocache(dev, io[k]->start,
-						resource_size(io[k]));
+		i->iomem = devm_ioremap(dev, io[k]->start,
+					resource_size(io[k]));
 		if (!i->iomem) {
 			dev_err(dev, "failed to remap IOMEM\n");
 			ret = -ENXIO;
@@ -508,7 +508,8 @@ static int intc_irqpin_probe(struct platform_device *pdev)
 	}
 
 	irq_chip = &p->irq_chip;
-	irq_chip->name = name;
+	irq_chip->name = "intc-irqpin";
+	irq_chip->parent_device = dev;
 	irq_chip->irq_mask = disable_fn;
 	irq_chip->irq_unmask = enable_fn;
 	irq_chip->irq_set_type = intc_irqpin_irq_set_type;

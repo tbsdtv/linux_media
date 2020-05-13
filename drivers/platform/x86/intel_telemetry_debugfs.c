@@ -308,11 +308,10 @@ static struct telemetry_debugfs_conf telem_apl_debugfs_conf = {
 };
 
 static const struct x86_cpu_id telemetry_debugfs_cpu_ids[] = {
-	INTEL_CPU_FAM6(ATOM_GOLDMONT, telem_apl_debugfs_conf),
-	INTEL_CPU_FAM6(ATOM_GOLDMONT_PLUS, telem_apl_debugfs_conf),
+	X86_MATCH_INTEL_FAM6_MODEL(ATOM_GOLDMONT,	&telem_apl_debugfs_conf),
+	X86_MATCH_INTEL_FAM6_MODEL(ATOM_GOLDMONT_PLUS,	&telem_apl_debugfs_conf),
 	{}
 };
-
 MODULE_DEVICE_TABLE(x86cpu, telemetry_debugfs_cpu_ids);
 
 static int telemetry_debugfs_check_evts(void)
@@ -686,13 +685,14 @@ static ssize_t telem_pss_trc_verb_write(struct file *file,
 	u32 verbosity;
 	int err;
 
-	if (kstrtou32_from_user(userbuf, count, 0, &verbosity))
-		return -EFAULT;
+	err = kstrtou32_from_user(userbuf, count, 0, &verbosity);
+	if (err)
+		return err;
 
 	err = telemetry_set_trace_verbosity(TELEM_PSS, verbosity);
 	if (err) {
 		pr_err("Changing PSS Trace Verbosity Failed. Error %d\n", err);
-		count = err;
+		return err;
 	}
 
 	return count;
@@ -733,13 +733,14 @@ static ssize_t telem_ioss_trc_verb_write(struct file *file,
 	u32 verbosity;
 	int err;
 
-	if (kstrtou32_from_user(userbuf, count, 0, &verbosity))
-		return -EFAULT;
+	err = kstrtou32_from_user(userbuf, count, 0, &verbosity);
+	if (err)
+		return err;
 
 	err = telemetry_set_trace_verbosity(TELEM_IOSS, verbosity);
 	if (err) {
 		pr_err("Changing IOSS Trace Verbosity Failed. Error %d\n", err);
-		count = err;
+		return err;
 	}
 
 	return count;
@@ -900,7 +901,7 @@ static int __init telemetry_debugfs_init(void)
 {
 	const struct x86_cpu_id *id;
 	int err;
-	struct dentry *f;
+	struct dentry *dir;
 
 	/* Only APL supported for now */
 	id = x86_match_cpu(telemetry_debugfs_cpu_ids);
@@ -923,68 +924,22 @@ static int __init telemetry_debugfs_init(void)
 
 	register_pm_notifier(&pm_notifier);
 
-	err = -ENOMEM;
-	debugfs_conf->telemetry_dbg_dir = debugfs_create_dir("telemetry", NULL);
-	if (!debugfs_conf->telemetry_dbg_dir)
-		goto out_pm;
+	dir = debugfs_create_dir("telemetry", NULL);
+	debugfs_conf->telemetry_dbg_dir = dir;
 
-	f = debugfs_create_file("pss_info", S_IFREG | S_IRUGO,
-				debugfs_conf->telemetry_dbg_dir, NULL,
-				&telem_pss_states_fops);
-	if (!f) {
-		pr_err("pss_sample_info debugfs register failed\n");
-		goto out;
-	}
-
-	f = debugfs_create_file("ioss_info", S_IFREG | S_IRUGO,
-				debugfs_conf->telemetry_dbg_dir, NULL,
-				&telem_ioss_states_fops);
-	if (!f) {
-		pr_err("ioss_sample_info debugfs register failed\n");
-		goto out;
-	}
-
-	f = debugfs_create_file("soc_states", S_IFREG | S_IRUGO,
-				debugfs_conf->telemetry_dbg_dir,
-				NULL, &telem_soc_states_fops);
-	if (!f) {
-		pr_err("ioss_sample_info debugfs register failed\n");
-		goto out;
-	}
-
-	f = debugfs_create_file("s0ix_residency_usec", S_IFREG | S_IRUGO,
-				debugfs_conf->telemetry_dbg_dir,
-				NULL, &telem_s0ix_fops);
-	if (!f) {
-		pr_err("s0ix_residency_usec debugfs register failed\n");
-		goto out;
-	}
-
-	f = debugfs_create_file("pss_trace_verbosity", S_IFREG | S_IRUGO,
-				debugfs_conf->telemetry_dbg_dir, NULL,
-				&telem_pss_trc_verb_ops);
-	if (!f) {
-		pr_err("pss_trace_verbosity debugfs register failed\n");
-		goto out;
-	}
-
-	f = debugfs_create_file("ioss_trace_verbosity", S_IFREG | S_IRUGO,
-				debugfs_conf->telemetry_dbg_dir, NULL,
-				&telem_ioss_trc_verb_ops);
-	if (!f) {
-		pr_err("ioss_trace_verbosity debugfs register failed\n");
-		goto out;
-	}
-
+	debugfs_create_file("pss_info", S_IFREG | S_IRUGO, dir, NULL,
+			    &telem_pss_states_fops);
+	debugfs_create_file("ioss_info", S_IFREG | S_IRUGO, dir, NULL,
+			    &telem_ioss_states_fops);
+	debugfs_create_file("soc_states", S_IFREG | S_IRUGO, dir, NULL,
+			    &telem_soc_states_fops);
+	debugfs_create_file("s0ix_residency_usec", S_IFREG | S_IRUGO, dir, NULL,
+			    &telem_s0ix_fops);
+	debugfs_create_file("pss_trace_verbosity", S_IFREG | S_IRUGO, dir, NULL,
+			    &telem_pss_trc_verb_ops);
+	debugfs_create_file("ioss_trace_verbosity", S_IFREG | S_IRUGO, dir,
+			    NULL, &telem_ioss_trc_verb_ops);
 	return 0;
-
-out:
-	debugfs_remove_recursive(debugfs_conf->telemetry_dbg_dir);
-	debugfs_conf->telemetry_dbg_dir = NULL;
-out_pm:
-	unregister_pm_notifier(&pm_notifier);
-
-	return err;
 }
 
 static void __exit telemetry_debugfs_exit(void)

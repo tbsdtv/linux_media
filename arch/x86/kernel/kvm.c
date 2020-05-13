@@ -33,6 +33,7 @@
 #include <asm/apicdef.h>
 #include <asm/hypervisor.h>
 #include <asm/tlb.h>
+#include <asm/cpuidle_haltpoll.h>
 
 static int kvmapf = 1;
 
@@ -242,23 +243,19 @@ EXPORT_SYMBOL_GPL(kvm_read_and_reset_pf_reason);
 NOKPROBE_SYMBOL(kvm_read_and_reset_pf_reason);
 
 dotraplinkage void
-do_async_page_fault(struct pt_regs *regs, unsigned long error_code)
+do_async_page_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address)
 {
-	enum ctx_state prev_state;
-
 	switch (kvm_read_and_reset_pf_reason()) {
 	default:
-		do_page_fault(regs, error_code);
+		do_page_fault(regs, error_code, address);
 		break;
 	case KVM_PV_REASON_PAGE_NOT_PRESENT:
 		/* page is swapped out by the host. */
-		prev_state = exception_enter();
-		kvm_async_pf_task_wait((u32)read_cr2(), !user_mode(regs));
-		exception_exit(prev_state);
+		kvm_async_pf_task_wait((u32)address, !user_mode(regs));
 		break;
 	case KVM_PV_REASON_PAGE_READY:
 		rcu_irq_enter();
-		kvm_async_pf_task_wake((u32)read_cr2());
+		kvm_async_pf_task_wake((u32)address);
 		rcu_irq_exit();
 		break;
 	}
@@ -308,13 +305,10 @@ static notrace void kvm_guest_apic_eoi_write(u32 reg, u32 val)
 
 static void kvm_guest_cpu_init(void)
 {
-	if (!kvm_para_available())
-		return;
-
 	if (kvm_para_has_feature(KVM_FEATURE_ASYNC_PF) && kvmapf) {
 		u64 pa = slow_virt_to_phys(this_cpu_ptr(&apf_reason));
 
-#ifdef CONFIG_PREEMPT
+#ifdef CONFIG_PREEMPTION
 		pa |= KVM_ASYNC_PF_SEND_ALWAYS;
 #endif
 		pa |= KVM_ASYNC_PF_ENABLED;
@@ -431,7 +425,29 @@ static void __init sev_map_percpu_data(void)
 	}
 }
 
+static bool pv_tlb_flush_supported(void)
+{
+	return (kvm_para_has_feature(KVM_FEATURE_PV_TLB_FLUSH) &&
+		!kvm_para_has_hint(KVM_HINTS_REALTIME) &&
+		kvm_para_has_feature(KVM_FEATURE_STEAL_TIME));
+}
+
+static DEFINE_PER_CPU(cpumask_var_t, __pv_cpu_mask);
+
 #ifdef CONFIG_SMP
+
+static bool pv_ipi_supported(void)
+{
+	return kvm_para_has_feature(KVM_FEATURE_PV_SEND_IPI);
+}
+
+static bool pv_sched_yield_supported(void)
+{
+	return (kvm_para_has_feature(KVM_FEATURE_PV_SCHED_YIELD) &&
+		!kvm_para_has_hint(KVM_HINTS_REALTIME) &&
+	    kvm_para_has_feature(KVM_FEATURE_STEAL_TIME));
+}
+
 #define KVM_IPI_CLUSTER_SIZE	(2 * BITS_PER_LONG)
 
 static void __send_ipi_mask(const struct cpumask *mask, int vector)
@@ -496,23 +512,13 @@ static void kvm_send_ipi_mask(const struct cpumask *mask, int vector)
 static void kvm_send_ipi_mask_allbutself(const struct cpumask *mask, int vector)
 {
 	unsigned int this_cpu = smp_processor_id();
-	struct cpumask new_mask;
+	struct cpumask *new_mask = this_cpu_cpumask_var_ptr(__pv_cpu_mask);
 	const struct cpumask *local_mask;
 
-	cpumask_copy(&new_mask, mask);
-	cpumask_clear_cpu(this_cpu, &new_mask);
-	local_mask = &new_mask;
+	cpumask_copy(new_mask, mask);
+	cpumask_clear_cpu(this_cpu, new_mask);
+	local_mask = new_mask;
 	__send_ipi_mask(local_mask, vector);
-}
-
-static void kvm_send_ipi_allbutself(int vector)
-{
-	kvm_send_ipi_mask_allbutself(cpu_online_mask, vector);
-}
-
-static void kvm_send_ipi_all(int vector)
-{
-	__send_ipi_mask(cpu_online_mask, vector);
 }
 
 /*
@@ -522,9 +528,22 @@ static void kvm_setup_pv_ipi(void)
 {
 	apic->send_IPI_mask = kvm_send_ipi_mask;
 	apic->send_IPI_mask_allbutself = kvm_send_ipi_mask_allbutself;
-	apic->send_IPI_allbutself = kvm_send_ipi_allbutself;
-	apic->send_IPI_all = kvm_send_ipi_all;
 	pr_info("KVM setup pv IPIs\n");
+}
+
+static void kvm_smp_send_call_func_ipi(const struct cpumask *mask)
+{
+	int cpu;
+
+	native_send_call_func_ipi(mask);
+
+	/* Make sure other vCPUs get a chance to run if they need to. */
+	for_each_cpu(cpu, mask) {
+		if (vcpu_is_preempted(cpu)) {
+			kvm_hypercall1(KVM_HC_SCHED_YIELD, per_cpu(x86_cpu_to_apicid, cpu));
+			break;
+		}
+	}
 }
 
 static void __init kvm_smp_prepare_cpus(unsigned int max_cpus)
@@ -578,7 +597,6 @@ static void __init kvm_apf_trap_init(void)
 	update_intr_gate(X86_TRAP_PF, async_page_fault);
 }
 
-static DEFINE_PER_CPU(cpumask_var_t, __pv_tlb_mask);
 
 static void kvm_flush_tlb_others(const struct cpumask *cpumask,
 			const struct flush_tlb_info *info)
@@ -586,7 +604,7 @@ static void kvm_flush_tlb_others(const struct cpumask *cpumask,
 	u8 state;
 	int cpu;
 	struct kvm_steal_time *src;
-	struct cpumask *flushmask = this_cpu_cpumask_var_ptr(__pv_tlb_mask);
+	struct cpumask *flushmask = this_cpu_cpumask_var_ptr(__pv_cpu_mask);
 
 	cpumask_copy(flushmask, cpumask);
 	/*
@@ -610,9 +628,6 @@ static void __init kvm_guest_init(void)
 {
 	int i;
 
-	if (!kvm_para_available())
-		return;
-
 	paravirt_ops_setup();
 	register_reboot_notifier(&kvm_pv_reboot_nb);
 	for (i = 0; i < KVM_TASK_SLEEP_HASHSIZE; i++)
@@ -625,11 +640,10 @@ static void __init kvm_guest_init(void)
 		pv_ops.time.steal_clock = kvm_steal_clock;
 	}
 
-	if (kvm_para_has_feature(KVM_FEATURE_PV_TLB_FLUSH) &&
-	    !kvm_para_has_hint(KVM_HINTS_REALTIME) &&
-	    kvm_para_has_feature(KVM_FEATURE_STEAL_TIME)) {
+	if (pv_tlb_flush_supported()) {
 		pv_ops.mmu.flush_tlb_others = kvm_flush_tlb_others;
 		pv_ops.mmu.tlb_remove_table = tlb_remove_table;
+		pr_info("KVM setup pv remote TLB flush\n");
 	}
 
 	if (kvm_para_has_feature(KVM_FEATURE_PV_EOI))
@@ -638,6 +652,10 @@ static void __init kvm_guest_init(void)
 #ifdef CONFIG_SMP
 	smp_ops.smp_prepare_cpus = kvm_smp_prepare_cpus;
 	smp_ops.smp_prepare_boot_cpu = kvm_smp_prepare_boot_cpu;
+	if (pv_sched_yield_supported()) {
+		smp_ops.send_call_func_ipi = kvm_smp_send_call_func_ipi;
+		pr_info("KVM setup pv sched yield\n");
+	}
 	if (cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "x86/kvm:online",
 				      kvm_cpu_online, kvm_cpu_down_prepare) < 0)
 		pr_err("kvm_guest: Failed to install cpu hotplug callbacks\n");
@@ -690,6 +708,7 @@ unsigned int kvm_arch_para_hints(void)
 {
 	return cpuid_edx(kvm_cpuid_base() | KVM_CPUID_FEATURES);
 }
+EXPORT_SYMBOL_GPL(kvm_arch_para_hints);
 
 static uint32_t __init kvm_detect(void)
 {
@@ -699,7 +718,7 @@ static uint32_t __init kvm_detect(void)
 static void __init kvm_apic_init(void)
 {
 #if defined(CONFIG_SMP)
-	if (kvm_para_has_feature(KVM_FEATURE_PV_SEND_IPI))
+	if (pv_ipi_supported())
 		kvm_setup_pv_ipi();
 #endif
 }
@@ -731,23 +750,31 @@ static __init int activate_jump_labels(void)
 }
 arch_initcall(activate_jump_labels);
 
-static __init int kvm_setup_pv_tlb_flush(void)
+static __init int kvm_alloc_cpumask(void)
 {
 	int cpu;
+	bool alloc = false;
 
-	if (kvm_para_has_feature(KVM_FEATURE_PV_TLB_FLUSH) &&
-	    !kvm_para_has_hint(KVM_HINTS_REALTIME) &&
-	    kvm_para_has_feature(KVM_FEATURE_STEAL_TIME)) {
+	if (!kvm_para_available() || nopv)
+		return 0;
+
+	if (pv_tlb_flush_supported())
+		alloc = true;
+
+#if defined(CONFIG_SMP)
+	if (pv_ipi_supported())
+		alloc = true;
+#endif
+
+	if (alloc)
 		for_each_possible_cpu(cpu) {
-			zalloc_cpumask_var_node(per_cpu_ptr(&__pv_tlb_mask, cpu),
+			zalloc_cpumask_var_node(per_cpu_ptr(&__pv_cpu_mask, cpu),
 				GFP_KERNEL, cpu_to_node(cpu));
 		}
-		pr_info("KVM setup pv remote TLB flush\n");
-	}
 
 	return 0;
 }
-arch_initcall(kvm_setup_pv_tlb_flush);
+arch_initcall(kvm_alloc_cpumask);
 
 #ifdef CONFIG_PARAVIRT_SPINLOCKS
 
@@ -817,6 +844,7 @@ asm(
 "cmpb	$0, " __stringify(KVM_STEAL_TIME_preempted) "+steal_time(%rax);"
 "setne	%al;"
 "ret;"
+".size __raw_callee_save___kvm_vcpu_is_preempted, .-__raw_callee_save___kvm_vcpu_is_preempted;"
 ".popsection");
 
 #endif
@@ -826,8 +854,6 @@ asm(
  */
 void __init kvm_spinlock_init(void)
 {
-	if (!kvm_para_available())
-		return;
 	/* Does host kernel support KVM_FEATURE_PV_UNHALT? */
 	if (!kvm_para_has_feature(KVM_FEATURE_PV_UNHALT))
 		return;
@@ -853,3 +879,39 @@ void __init kvm_spinlock_init(void)
 }
 
 #endif	/* CONFIG_PARAVIRT_SPINLOCKS */
+
+#ifdef CONFIG_ARCH_CPUIDLE_HALTPOLL
+
+static void kvm_disable_host_haltpoll(void *i)
+{
+	wrmsrl(MSR_KVM_POLL_CONTROL, 0);
+}
+
+static void kvm_enable_host_haltpoll(void *i)
+{
+	wrmsrl(MSR_KVM_POLL_CONTROL, 1);
+}
+
+void arch_haltpoll_enable(unsigned int cpu)
+{
+	if (!kvm_para_has_feature(KVM_FEATURE_POLL_CONTROL)) {
+		pr_err_once("kvm: host does not support poll control\n");
+		pr_err_once("kvm: host upgrade recommended\n");
+		return;
+	}
+
+	/* Enable guest halt poll disables host halt poll */
+	smp_call_function_single(cpu, kvm_disable_host_haltpoll, NULL, 1);
+}
+EXPORT_SYMBOL_GPL(arch_haltpoll_enable);
+
+void arch_haltpoll_disable(unsigned int cpu)
+{
+	if (!kvm_para_has_feature(KVM_FEATURE_POLL_CONTROL))
+		return;
+
+	/* Enable guest halt poll disables host halt poll */
+	smp_call_function_single(cpu, kvm_enable_host_haltpoll, NULL, 1);
+}
+EXPORT_SYMBOL_GPL(arch_haltpoll_disable);
+#endif

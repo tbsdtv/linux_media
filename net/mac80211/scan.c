@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Scanning implementation
  *
@@ -9,10 +10,6 @@
  * Copyright 2013-2015  Intel Mobile Communications GmbH
  * Copyright 2016-2017  Intel Deutschland GmbH
  * Copyright (C) 2018-2019 Intel Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/if_arp.h>
@@ -204,8 +201,7 @@ ieee80211_bss_info_update(struct ieee80211_local *local,
 			       mgmt->bssid, cbss->bssid);
 
 	/* In case the signal is invalid update the status */
-	signal_valid = abs(channel->center_freq - cbss->channel->center_freq)
-		<= local->hw.wiphy->max_adj_channel_rssi_comp;
+	signal_valid = channel == cbss->channel;
 	if (!signal_valid)
 		rx_status->flag |= RX_FLAG_NO_SIGNAL_VAL;
 
@@ -523,10 +519,33 @@ static int ieee80211_start_sw_scan(struct ieee80211_local *local,
 	return 0;
 }
 
+static bool __ieee80211_can_leave_ch(struct ieee80211_sub_if_data *sdata)
+{
+	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_sub_if_data *sdata_iter;
+
+	if (!ieee80211_is_radar_required(local))
+		return true;
+
+	if (!regulatory_pre_cac_allowed(local->hw.wiphy))
+		return false;
+
+	mutex_lock(&local->iflist_mtx);
+	list_for_each_entry(sdata_iter, &local->interfaces, list) {
+		if (sdata_iter->wdev.cac_started) {
+			mutex_unlock(&local->iflist_mtx);
+			return false;
+		}
+	}
+	mutex_unlock(&local->iflist_mtx);
+
+	return true;
+}
+
 static bool ieee80211_can_scan(struct ieee80211_local *local,
 			       struct ieee80211_sub_if_data *sdata)
 {
-	if (ieee80211_is_radar_required(local))
+	if (!__ieee80211_can_leave_ch(sdata))
 		return false;
 
 	if (!list_empty(&local->roc_list))
@@ -633,7 +652,10 @@ static int __ieee80211_start_scan(struct ieee80211_sub_if_data *sdata,
 
 	lockdep_assert_held(&local->mtx);
 
-	if (local->scan_req || ieee80211_is_radar_required(local))
+	if (local->scan_req)
+		return -EBUSY;
+
+	if (!__ieee80211_can_leave_ch(sdata))
 		return -EBUSY;
 
 	if (!ieee80211_can_scan(local, sdata)) {

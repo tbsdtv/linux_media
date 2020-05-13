@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2008, 2009 open80211s Ltd.
  * Authors:    Luis Carlos Cobo <luisca@cozybit.com>
  *             Javier Cardona <javier@cozybit.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef IEEE80211S_H
@@ -221,6 +218,10 @@ int mesh_add_vht_cap_ie(struct ieee80211_sub_if_data *sdata,
 			struct sk_buff *skb);
 int mesh_add_vht_oper_ie(struct ieee80211_sub_if_data *sdata,
 			 struct sk_buff *skb);
+int mesh_add_he_cap_ie(struct ieee80211_sub_if_data *sdata,
+		       struct sk_buff *skb, u8 ie_len);
+int mesh_add_he_oper_ie(struct ieee80211_sub_if_data *sdata,
+			struct sk_buff *skb);
 void mesh_rmc_free(struct ieee80211_sub_if_data *sdata);
 int mesh_rmc_init(struct ieee80211_sub_if_data *sdata);
 void ieee80211s_init(void);

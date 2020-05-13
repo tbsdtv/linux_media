@@ -11,6 +11,7 @@
 #include <linux/mmc/host.h>
 #include <linux/mmc/mmc.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 
 #include "sdhci-pltfm.h"
 
@@ -67,7 +68,7 @@ struct sdhci_cdns_priv {
 	void __iomem *hrs_addr;
 	bool enhanced_strobe;
 	unsigned int nr_phy_params;
-	struct sdhci_cdns_phy_param phy_params[0];
+	struct sdhci_cdns_phy_param phy_params[];
 };
 
 struct sdhci_cdns_phy_cfg {
@@ -158,7 +159,7 @@ static int sdhci_cdns_phy_init(struct sdhci_cdns_priv *priv)
 	return 0;
 }
 
-static inline void *sdhci_cdns_priv(struct sdhci_host *host)
+static void *sdhci_cdns_priv(struct sdhci_host *host)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 
@@ -233,6 +234,11 @@ static const struct sdhci_ops sdhci_cdns_ops = {
 	.set_bus_width = sdhci_set_bus_width,
 	.reset = sdhci_reset,
 	.set_uhs_signaling = sdhci_cdns_set_uhs_signaling,
+};
+
+static const struct sdhci_pltfm_data sdhci_cdns_uniphier_pltfm_data = {
+	.ops = &sdhci_cdns_ops,
+	.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN,
 };
 
 static const struct sdhci_pltfm_data sdhci_cdns_pltfm_data = {
@@ -334,13 +340,14 @@ static void sdhci_cdns_hs400_enhanced_strobe(struct mmc_host *mmc,
 static int sdhci_cdns_probe(struct platform_device *pdev)
 {
 	struct sdhci_host *host;
+	const struct sdhci_pltfm_data *data;
 	struct sdhci_pltfm_host *pltfm_host;
 	struct sdhci_cdns_priv *priv;
 	struct clk *clk;
-	size_t priv_size;
 	unsigned int nr_phy_params;
 	int ret;
 	struct device *dev = &pdev->dev;
+	static const u16 version = SDHCI_SPEC_400 << SDHCI_SPEC_VER_SHIFT;
 
 	clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(clk))
@@ -350,9 +357,13 @@ static int sdhci_cdns_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	data = of_device_get_match_data(dev);
+	if (!data)
+		data = &sdhci_cdns_pltfm_data;
+
 	nr_phy_params = sdhci_cdns_phy_param_count(dev->of_node);
-	priv_size = sizeof(*priv) + sizeof(priv->phy_params[0]) * nr_phy_params;
-	host = sdhci_pltfm_init(pdev, &sdhci_cdns_pltfm_data, priv_size);
+	host = sdhci_pltfm_init(pdev, data,
+				struct_size(priv, phy_params, nr_phy_params));
 	if (IS_ERR(host)) {
 		ret = PTR_ERR(host);
 		goto disable_clk;
@@ -369,6 +380,8 @@ static int sdhci_cdns_probe(struct platform_device *pdev)
 	host->mmc_host_ops.execute_tuning = sdhci_cdns_execute_tuning;
 	host->mmc_host_ops.hs400_enhanced_strobe =
 				sdhci_cdns_hs400_enhanced_strobe;
+	sdhci_enable_v4_mode(host);
+	__sdhci_read_caps(host, &version, NULL, NULL);
 
 	sdhci_get_of_property(pdev);
 
@@ -429,7 +442,10 @@ static const struct dev_pm_ops sdhci_cdns_pm_ops = {
 };
 
 static const struct of_device_id sdhci_cdns_match[] = {
-	{ .compatible = "socionext,uniphier-sd4hc" },
+	{
+		.compatible = "socionext,uniphier-sd4hc",
+		.data = &sdhci_cdns_uniphier_pltfm_data,
+	},
 	{ .compatible = "cdns,sd4hc" },
 	{ /* sentinel */ }
 };

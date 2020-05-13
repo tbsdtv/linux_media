@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /* XTS: as defined in IEEE1619/D16
  *	http://grouper.ieee.org/groups/1619/email/pdf00086.pdf
- *	(sector sizes which are not a multiple of 16 bytes are,
- *	however currently unsupported)
  *
  * Copyright (c) 2007 Rik Snel <rsnel@cube.dyndns.org>
  *
@@ -34,6 +32,8 @@ struct xts_instance_ctx {
 
 struct rctx {
 	le128 t;
+	struct scatterlist *tail;
+	struct scatterlist sg[2];
 	struct skcipher_request subreq;
 };
 
@@ -61,8 +61,6 @@ static int setkey(struct crypto_skcipher *parent, const u8 *key,
 	crypto_cipher_set_flags(tweak, crypto_skcipher_get_flags(parent) &
 				       CRYPTO_TFM_REQ_MASK);
 	err = crypto_cipher_setkey(tweak, key + keylen, keylen);
-	crypto_skcipher_set_flags(parent, crypto_cipher_get_flags(tweak) &
-					  CRYPTO_TFM_RES_MASK);
 	if (err)
 		return err;
 
@@ -71,11 +69,7 @@ static int setkey(struct crypto_skcipher *parent, const u8 *key,
 	crypto_skcipher_clear_flags(child, CRYPTO_TFM_REQ_MASK);
 	crypto_skcipher_set_flags(child, crypto_skcipher_get_flags(parent) &
 					 CRYPTO_TFM_REQ_MASK);
-	err = crypto_skcipher_setkey(child, key, keylen);
-	crypto_skcipher_set_flags(parent, crypto_skcipher_get_flags(child) &
-					  CRYPTO_TFM_RES_MASK);
-
-	return err;
+	return crypto_skcipher_setkey(child, key, keylen);
 }
 
 /*
@@ -84,10 +78,11 @@ static int setkey(struct crypto_skcipher *parent, const u8 *key,
  * mutliple calls to the 'ecb(..)' instance, which usually would be slower than
  * just doing the gf128mul_x_ble() calls again.
  */
-static int xor_tweak(struct skcipher_request *req, bool second_pass)
+static int xor_tweak(struct skcipher_request *req, bool second_pass, bool enc)
 {
 	struct rctx *rctx = skcipher_request_ctx(req);
 	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
+	const bool cts = (req->cryptlen % XTS_BLOCK_SIZE);
 	const int bs = XTS_BLOCK_SIZE;
 	struct skcipher_walk w;
 	le128 t = rctx->t;
@@ -109,6 +104,20 @@ static int xor_tweak(struct skcipher_request *req, bool second_pass)
 		wdst = w.dst.virt.addr;
 
 		do {
+			if (unlikely(cts) &&
+			    w.total - w.nbytes + avail < 2 * XTS_BLOCK_SIZE) {
+				if (!enc) {
+					if (second_pass)
+						rctx->t = t;
+					gf128mul_x_ble(&t, &t);
+				}
+				le128_xor(wdst, &t, wsrc);
+				if (enc && second_pass)
+					gf128mul_x_ble(&rctx->t, &t);
+				skcipher_walk_done(&w, avail - bs);
+				return 0;
+			}
+
 			le128_xor(wdst++, &t, wsrc++);
 			gf128mul_x_ble(&t, &t);
 		} while ((avail -= bs) >= bs);
@@ -119,17 +128,71 @@ static int xor_tweak(struct skcipher_request *req, bool second_pass)
 	return err;
 }
 
-static int xor_tweak_pre(struct skcipher_request *req)
+static int xor_tweak_pre(struct skcipher_request *req, bool enc)
 {
-	return xor_tweak(req, false);
+	return xor_tweak(req, false, enc);
 }
 
-static int xor_tweak_post(struct skcipher_request *req)
+static int xor_tweak_post(struct skcipher_request *req, bool enc)
 {
-	return xor_tweak(req, true);
+	return xor_tweak(req, true, enc);
 }
 
-static void crypt_done(struct crypto_async_request *areq, int err)
+static void cts_done(struct crypto_async_request *areq, int err)
+{
+	struct skcipher_request *req = areq->data;
+	le128 b;
+
+	if (!err) {
+		struct rctx *rctx = skcipher_request_ctx(req);
+
+		scatterwalk_map_and_copy(&b, rctx->tail, 0, XTS_BLOCK_SIZE, 0);
+		le128_xor(&b, &rctx->t, &b);
+		scatterwalk_map_and_copy(&b, rctx->tail, 0, XTS_BLOCK_SIZE, 1);
+	}
+
+	skcipher_request_complete(req, err);
+}
+
+static int cts_final(struct skcipher_request *req,
+		     int (*crypt)(struct skcipher_request *req))
+{
+	struct priv *ctx = crypto_skcipher_ctx(crypto_skcipher_reqtfm(req));
+	int offset = req->cryptlen & ~(XTS_BLOCK_SIZE - 1);
+	struct rctx *rctx = skcipher_request_ctx(req);
+	struct skcipher_request *subreq = &rctx->subreq;
+	int tail = req->cryptlen % XTS_BLOCK_SIZE;
+	le128 b[2];
+	int err;
+
+	rctx->tail = scatterwalk_ffwd(rctx->sg, req->dst,
+				      offset - XTS_BLOCK_SIZE);
+
+	scatterwalk_map_and_copy(b, rctx->tail, 0, XTS_BLOCK_SIZE, 0);
+	memcpy(b + 1, b, tail);
+	scatterwalk_map_and_copy(b, req->src, offset, tail, 0);
+
+	le128_xor(b, &rctx->t, b);
+
+	scatterwalk_map_and_copy(b, rctx->tail, 0, XTS_BLOCK_SIZE + tail, 1);
+
+	skcipher_request_set_tfm(subreq, ctx->child);
+	skcipher_request_set_callback(subreq, req->base.flags, cts_done, req);
+	skcipher_request_set_crypt(subreq, rctx->tail, rctx->tail,
+				   XTS_BLOCK_SIZE, NULL);
+
+	err = crypt(subreq);
+	if (err)
+		return err;
+
+	scatterwalk_map_and_copy(b, rctx->tail, 0, XTS_BLOCK_SIZE, 0);
+	le128_xor(b, &rctx->t, b);
+	scatterwalk_map_and_copy(b, rctx->tail, 0, XTS_BLOCK_SIZE, 1);
+
+	return 0;
+}
+
+static void encrypt_done(struct crypto_async_request *areq, int err)
 {
 	struct skcipher_request *req = areq->data;
 
@@ -137,47 +200,90 @@ static void crypt_done(struct crypto_async_request *areq, int err)
 		struct rctx *rctx = skcipher_request_ctx(req);
 
 		rctx->subreq.base.flags &= ~CRYPTO_TFM_REQ_MAY_SLEEP;
-		err = xor_tweak_post(req);
+		err = xor_tweak_post(req, true);
+
+		if (!err && unlikely(req->cryptlen % XTS_BLOCK_SIZE)) {
+			err = cts_final(req, crypto_skcipher_encrypt);
+			if (err == -EINPROGRESS)
+				return;
+		}
 	}
 
 	skcipher_request_complete(req, err);
 }
 
-static void init_crypt(struct skcipher_request *req)
+static void decrypt_done(struct crypto_async_request *areq, int err)
+{
+	struct skcipher_request *req = areq->data;
+
+	if (!err) {
+		struct rctx *rctx = skcipher_request_ctx(req);
+
+		rctx->subreq.base.flags &= ~CRYPTO_TFM_REQ_MAY_SLEEP;
+		err = xor_tweak_post(req, false);
+
+		if (!err && unlikely(req->cryptlen % XTS_BLOCK_SIZE)) {
+			err = cts_final(req, crypto_skcipher_decrypt);
+			if (err == -EINPROGRESS)
+				return;
+		}
+	}
+
+	skcipher_request_complete(req, err);
+}
+
+static int init_crypt(struct skcipher_request *req, crypto_completion_t compl)
 {
 	struct priv *ctx = crypto_skcipher_ctx(crypto_skcipher_reqtfm(req));
 	struct rctx *rctx = skcipher_request_ctx(req);
 	struct skcipher_request *subreq = &rctx->subreq;
 
+	if (req->cryptlen < XTS_BLOCK_SIZE)
+		return -EINVAL;
+
 	skcipher_request_set_tfm(subreq, ctx->child);
-	skcipher_request_set_callback(subreq, req->base.flags, crypt_done, req);
+	skcipher_request_set_callback(subreq, req->base.flags, compl, req);
 	skcipher_request_set_crypt(subreq, req->dst, req->dst,
-				   req->cryptlen, NULL);
+				   req->cryptlen & ~(XTS_BLOCK_SIZE - 1), NULL);
 
 	/* calculate first value of T */
 	crypto_cipher_encrypt_one(ctx->tweak, (u8 *)&rctx->t, req->iv);
+
+	return 0;
 }
 
 static int encrypt(struct skcipher_request *req)
 {
 	struct rctx *rctx = skcipher_request_ctx(req);
 	struct skcipher_request *subreq = &rctx->subreq;
+	int err;
 
-	init_crypt(req);
-	return xor_tweak_pre(req) ?:
-		crypto_skcipher_encrypt(subreq) ?:
-		xor_tweak_post(req);
+	err = init_crypt(req, encrypt_done) ?:
+	      xor_tweak_pre(req, true) ?:
+	      crypto_skcipher_encrypt(subreq) ?:
+	      xor_tweak_post(req, true);
+
+	if (err || likely((req->cryptlen % XTS_BLOCK_SIZE) == 0))
+		return err;
+
+	return cts_final(req, crypto_skcipher_encrypt);
 }
 
 static int decrypt(struct skcipher_request *req)
 {
 	struct rctx *rctx = skcipher_request_ctx(req);
 	struct skcipher_request *subreq = &rctx->subreq;
+	int err;
 
-	init_crypt(req);
-	return xor_tweak_pre(req) ?:
-		crypto_skcipher_decrypt(subreq) ?:
-		xor_tweak_post(req);
+	err = init_crypt(req, decrypt_done) ?:
+	      xor_tweak_pre(req, false) ?:
+	      crypto_skcipher_decrypt(subreq) ?:
+	      xor_tweak_post(req, false);
+
+	if (err || likely((req->cryptlen % XTS_BLOCK_SIZE) == 0))
+		return err;
+
+	return cts_final(req, crypto_skcipher_decrypt);
 }
 
 static int init_tfm(struct crypto_skcipher *tfm)
@@ -249,20 +355,21 @@ static int create(struct crypto_template *tmpl, struct rtattr **tb)
 
 	ctx = skcipher_instance_ctx(inst);
 
-	crypto_set_skcipher_spawn(&ctx->spawn, skcipher_crypto_instance(inst));
-
 	mask = crypto_requires_off(algt->type, algt->mask,
 				   CRYPTO_ALG_NEED_FALLBACK |
 				   CRYPTO_ALG_ASYNC);
 
-	err = crypto_grab_skcipher(&ctx->spawn, cipher_name, 0, mask);
+	err = crypto_grab_skcipher(&ctx->spawn, skcipher_crypto_instance(inst),
+				   cipher_name, 0, mask);
 	if (err == -ENOENT) {
 		err = -ENAMETOOLONG;
 		if (snprintf(ctx->name, CRYPTO_MAX_ALG_NAME, "ecb(%s)",
 			     cipher_name) >= CRYPTO_MAX_ALG_NAME)
 			goto err_free_inst;
 
-		err = crypto_grab_skcipher(&ctx->spawn, ctx->name, 0, mask);
+		err = crypto_grab_skcipher(&ctx->spawn,
+					   skcipher_crypto_instance(inst),
+					   ctx->name, 0, mask);
 	}
 
 	if (err)
@@ -272,15 +379,15 @@ static int create(struct crypto_template *tmpl, struct rtattr **tb)
 
 	err = -EINVAL;
 	if (alg->base.cra_blocksize != XTS_BLOCK_SIZE)
-		goto err_drop_spawn;
+		goto err_free_inst;
 
 	if (crypto_skcipher_alg_ivsize(alg))
-		goto err_drop_spawn;
+		goto err_free_inst;
 
 	err = crypto_inst_setname(skcipher_crypto_instance(inst), "xts",
 				  &alg->base);
 	if (err)
-		goto err_drop_spawn;
+		goto err_free_inst;
 
 	err = -EINVAL;
 	cipher_name = alg->base.cra_name;
@@ -293,20 +400,20 @@ static int create(struct crypto_template *tmpl, struct rtattr **tb)
 
 		len = strlcpy(ctx->name, cipher_name + 4, sizeof(ctx->name));
 		if (len < 2 || len >= sizeof(ctx->name))
-			goto err_drop_spawn;
+			goto err_free_inst;
 
 		if (ctx->name[len - 1] != ')')
-			goto err_drop_spawn;
+			goto err_free_inst;
 
 		ctx->name[len - 1] = 0;
 
 		if (snprintf(inst->alg.base.cra_name, CRYPTO_MAX_ALG_NAME,
 			     "xts(%s)", ctx->name) >= CRYPTO_MAX_ALG_NAME) {
 			err = -ENAMETOOLONG;
-			goto err_drop_spawn;
+			goto err_free_inst;
 		}
 	} else
-		goto err_drop_spawn;
+		goto err_free_inst;
 
 	inst->alg.base.cra_flags = alg->base.cra_flags & CRYPTO_ALG_ASYNC;
 	inst->alg.base.cra_priority = alg->base.cra_priority;
@@ -330,17 +437,11 @@ static int create(struct crypto_template *tmpl, struct rtattr **tb)
 	inst->free = free;
 
 	err = skcipher_register_instance(tmpl, inst);
-	if (err)
-		goto err_drop_spawn;
-
-out:
-	return err;
-
-err_drop_spawn:
-	crypto_drop_skcipher(&ctx->spawn);
+	if (err) {
 err_free_inst:
-	kfree(inst);
-	goto out;
+		free(inst);
+	}
+	return err;
 }
 
 static struct crypto_template crypto_tmpl = {

@@ -411,6 +411,7 @@ static int rv8803_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct rv8803_data *rv8803 = dev_get_drvdata(dev);
+	unsigned int vl = 0;
 	int flags, ret = 0;
 
 	switch (cmd) {
@@ -419,18 +420,15 @@ static int rv8803_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 		if (flags < 0)
 			return flags;
 
-		if (flags & RV8803_FLAG_V1F)
+		if (flags & RV8803_FLAG_V1F) {
 			dev_warn(&client->dev, "Voltage low, temperature compensation stopped.\n");
+			vl = RTC_VL_ACCURACY_LOW;
+		}
 
 		if (flags & RV8803_FLAG_V2F)
-			dev_warn(&client->dev, "Voltage low, data loss detected.\n");
+			vl |= RTC_VL_DATA_INVALID;
 
-		flags &= RV8803_FLAG_V1F | RV8803_FLAG_V2F;
-
-		if (copy_to_user((void __user *)arg, &flags, sizeof(int)))
-			return -EFAULT;
-
-		return 0;
+		return put_user(vl, (unsigned int __user *)arg);
 
 	case RTC_VL_CLR:
 		mutex_lock(&rv8803->flags_lock);
@@ -440,7 +438,7 @@ static int rv8803_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 			return flags;
 		}
 
-		flags &= ~(RV8803_FLAG_V1F | RV8803_FLAG_V2F);
+		flags &= ~RV8803_FLAG_V1F;
 		ret = rv8803_write_reg(client, RV8803_FLAG, flags);
 		mutex_unlock(&rv8803->flags_lock);
 		if (ret)
@@ -517,7 +515,7 @@ static int rx8900_trickle_charger_init(struct rv8803_data *rv8803)
 static int rv8803_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
 {
-	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
+	struct i2c_adapter *adapter = client->adapter;
 	struct rv8803_data *rv8803;
 	int err, flags;
 	struct nvmem_config nvmem_cfg = {
@@ -564,9 +562,8 @@ static int rv8803_probe(struct i2c_client *client,
 		dev_warn(&client->dev, "An alarm maybe have been missed.\n");
 
 	rv8803->rtc = devm_rtc_allocate_device(&client->dev);
-	if (IS_ERR(rv8803->rtc)) {
+	if (IS_ERR(rv8803->rtc))
 		return PTR_ERR(rv8803->rtc);
-	}
 
 	if (client->irq > 0) {
 		err = devm_request_threaded_irq(&client->dev, client->irq,

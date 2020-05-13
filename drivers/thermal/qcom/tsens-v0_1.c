@@ -145,8 +145,10 @@ static int calibrate_8916(struct tsens_priv *priv)
 		return PTR_ERR(qfprom_cdata);
 
 	qfprom_csel = (u32 *)qfprom_read(priv->dev, "calib_sel");
-	if (IS_ERR(qfprom_csel))
+	if (IS_ERR(qfprom_csel)) {
+		kfree(qfprom_cdata);
 		return PTR_ERR(qfprom_csel);
+	}
 
 	mode = (qfprom_csel[0] & MSM8916_CAL_SEL_MASK) >> MSM8916_CAL_SEL_SHIFT;
 	dev_dbg(priv->dev, "calibration mode is %d\n", mode);
@@ -181,6 +183,8 @@ static int calibrate_8916(struct tsens_priv *priv)
 	}
 
 	compute_intercept_slope(priv, p1, p2, mode);
+	kfree(qfprom_cdata);
+	kfree(qfprom_csel);
 
 	return 0;
 }
@@ -198,8 +202,10 @@ static int calibrate_8974(struct tsens_priv *priv)
 		return PTR_ERR(calib);
 
 	bkp = (u32 *)qfprom_read(priv->dev, "calib_backup");
-	if (IS_ERR(bkp))
+	if (IS_ERR(bkp)) {
+		kfree(calib);
 		return PTR_ERR(bkp);
+	}
 
 	calib_redun_sel =  bkp[1] & BKP_REDUN_SEL;
 	calib_redun_sel >>= BKP_REDUN_SHIFT;
@@ -313,13 +319,15 @@ static int calibrate_8974(struct tsens_priv *priv)
 	}
 
 	compute_intercept_slope(priv, p1, p2, mode);
+	kfree(calib);
+	kfree(bkp);
 
 	return 0;
 }
 
 /* v0.1: 8916, 8974 */
 
-static const struct tsens_features tsens_v0_1_feat = {
+static struct tsens_features tsens_v0_1_feat = {
 	.ver_major	= VER_0_1,
 	.crit_int	= 0,
 	.adc		= 1,
@@ -339,9 +347,20 @@ static const struct reg_field tsens_v0_1_regfields[MAX_REGFIELDS] = {
 	/* INTERRUPT ENABLE */
 	[INT_EN] = REG_FIELD(TM_INT_EN_OFF, 0, 0),
 
+	/* UPPER/LOWER TEMPERATURE THRESHOLDS */
+	REG_FIELD_FOR_EACH_SENSOR11(LOW_THRESH,    TM_Sn_UPPER_LOWER_STATUS_CTRL_OFF,  0,  9),
+	REG_FIELD_FOR_EACH_SENSOR11(UP_THRESH,     TM_Sn_UPPER_LOWER_STATUS_CTRL_OFF, 10, 19),
+
+	/* UPPER/LOWER INTERRUPTS [CLEAR/STATUS] */
+	REG_FIELD_FOR_EACH_SENSOR11(LOW_INT_CLEAR, TM_Sn_UPPER_LOWER_STATUS_CTRL_OFF, 20, 20),
+	REG_FIELD_FOR_EACH_SENSOR11(UP_INT_CLEAR,  TM_Sn_UPPER_LOWER_STATUS_CTRL_OFF, 21, 21),
+
+	/* NO CRITICAL INTERRUPT SUPPORT on v0.1 */
+
 	/* Sn_STATUS */
 	REG_FIELD_FOR_EACH_SENSOR11(LAST_TEMP,    TM_Sn_STATUS_OFF,  0,  9),
 	/* No VALID field on v0.1 */
+	/* xxx_STATUS bits: 1 == threshold violated */
 	REG_FIELD_FOR_EACH_SENSOR11(MIN_STATUS,   TM_Sn_STATUS_OFF, 10, 10),
 	REG_FIELD_FOR_EACH_SENSOR11(LOWER_STATUS, TM_Sn_STATUS_OFF, 11, 11),
 	REG_FIELD_FOR_EACH_SENSOR11(UPPER_STATUS, TM_Sn_STATUS_OFF, 12, 12),
@@ -358,7 +377,7 @@ static const struct tsens_ops ops_8916 = {
 	.get_temp	= get_temp_common,
 };
 
-const struct tsens_plat_data data_8916 = {
+struct tsens_plat_data data_8916 = {
 	.num_sensors	= 5,
 	.ops		= &ops_8916,
 	.hw_ids		= (unsigned int []){0, 1, 2, 4, 5 },
@@ -373,7 +392,7 @@ static const struct tsens_ops ops_8974 = {
 	.get_temp	= get_temp_common,
 };
 
-const struct tsens_plat_data data_8974 = {
+struct tsens_plat_data data_8974 = {
 	.num_sensors	= 11,
 	.ops		= &ops_8974,
 	.feat		= &tsens_v0_1_feat,

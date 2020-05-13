@@ -171,10 +171,8 @@ static int tb10x_gpio_probe(struct platform_device *pdev)
 		struct irq_chip_generic *gc;
 
 		ret = platform_get_irq(pdev, 0);
-		if (ret < 0) {
-			dev_err(dev, "No interrupt specified.\n");
+		if (ret < 0)
 			return ret;
-		}
 
 		tb10x_gpio->gc.to_irq	= tb10x_gpio_to_irq;
 		tb10x_gpio->irq		= ret;
@@ -245,4 +243,3 @@ static struct platform_driver tb10x_gpio_driver = {
 module_platform_driver(tb10x_gpio_driver);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("tb10x gpio.");
-MODULE_VERSION("0.0.1");

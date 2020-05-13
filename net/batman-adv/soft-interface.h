@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2007-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2007-2020  B.A.T.M.A.N. contributors:
  *
  * Marek Lindner
  */
@@ -9,12 +9,11 @@
 
 #include "main.h"
 
+#include <linux/netdevice.h>
+#include <linux/skbuff.h>
 #include <linux/types.h>
+#include <net/net_namespace.h>
 #include <net/rtnetlink.h>
-
-struct net_device;
-struct net;
-struct sk_buff;
 
 int batadv_skb_head_push(struct sk_buff *skb, unsigned int len);
 void batadv_interface_rx(struct net_device *soft_iface,

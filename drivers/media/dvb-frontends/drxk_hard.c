@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drxk_hard: DRX-K DVB-C/T demodulator driver
  *
  * Copyright (C) 2010-2011 Digital Devices GmbH
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 only, as published by the Free Software Foundation.
- *
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -1105,7 +1093,7 @@ static int init_hi(struct drxk_state *state)
 
 static int mpegts_configure_pins(struct drxk_state *state, bool mpeg_enable)
 {
-	int status = -1;
+	int status;
 	u16 sio_pdr_mclk_cfg = 0;
 	u16 sio_pdr_mdx_cfg = 0;
 	u16 err_cfg = 0;

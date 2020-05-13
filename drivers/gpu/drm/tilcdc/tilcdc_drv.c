@@ -1,36 +1,35 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Texas Instruments
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /* LCDC DRM driver, based on da8xx-fb */
 
 #include <linux/component.h>
+#include <linux/mod_devicetable.h>
+#include <linux/module.h>
 #include <linux/pinctrl/consumer.h>
-#include <linux/suspend.h>
-#include <drm/drm_atomic.h>
+#include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
+
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_debugfs.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_fb_helper.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_irq.h>
+#include <drm/drm_mm.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_vblank.h>
+
 
 #include "tilcdc_drv.h"
-#include "tilcdc_regs.h"
-#include "tilcdc_tfp410.h"
-#include "tilcdc_panel.h"
 #include "tilcdc_external.h"
+#include "tilcdc_panel.h"
+#include "tilcdc_regs.h"
 
 static LIST_HEAD(module_list);
 
@@ -63,12 +62,6 @@ void tilcdc_module_cleanup(struct tilcdc_module *mod)
 }
 
 static struct of_device_id tilcdc_of_match[];
-
-static struct drm_framebuffer *tilcdc_fb_create(struct drm_device *dev,
-		struct drm_file *file_priv, const struct drm_mode_fb_cmd2 *mode_cmd)
-{
-	return drm_gem_fb_create(dev, file_priv, mode_cmd);
-}
 
 static int tilcdc_atomic_check(struct drm_device *dev,
 			       struct drm_atomic_state *state)
@@ -140,7 +133,7 @@ static int tilcdc_commit(struct drm_device *dev,
 }
 
 static const struct drm_mode_config_funcs mode_config_funcs = {
-	.fb_create = tilcdc_fb_create,
+	.fb_create = drm_gem_fb_create,
 	.atomic_check = tilcdc_atomic_check,
 	.atomic_commit = tilcdc_commit,
 };
@@ -199,7 +192,6 @@ static void tilcdc_fini(struct drm_device *dev)
 	drm_kms_helper_poll_fini(dev);
 	drm_irq_uninstall(dev);
 	drm_mode_config_cleanup(dev);
-	tilcdc_remove_external_device(dev);
 
 	if (priv->clk)
 		clk_put(priv->clk);
@@ -257,7 +249,7 @@ static int tilcdc_init(struct drm_driver *ddrv, struct device *dev)
 		goto init_failed;
 	}
 
-	priv->mmio = ioremap_nocache(res->start, resource_size(res));
+	priv->mmio = ioremap(res->start, resource_size(res));
 	if (!priv->mmio) {
 		dev_err(dev, "failed to ioremap\n");
 		ret = -ENOMEM;
@@ -512,8 +504,7 @@ static int tilcdc_debugfs_init(struct drm_minor *minor)
 DEFINE_DRM_GEM_CMA_FOPS(fops);
 
 static struct drm_driver tilcdc_driver = {
-	.driver_features    = (DRIVER_GEM | DRIVER_MODESET |
-			       DRIVER_PRIME | DRIVER_ATOMIC),
+	.driver_features    = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.irq_handler        = tilcdc_irq,
 	.gem_free_object_unlocked = drm_gem_cma_free_object,
 	.gem_print_info     = drm_gem_cma_print_info,
@@ -522,8 +513,6 @@ static struct drm_driver tilcdc_driver = {
 
 	.prime_handle_to_fd	= drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle	= drm_gem_prime_fd_to_handle,
-	.gem_prime_import	= drm_gem_prime_import,
-	.gem_prime_export	= drm_gem_prime_export,
 	.gem_prime_get_sg_table	= drm_gem_cma_prime_get_sg_table,
 	.gem_prime_import_sg_table = drm_gem_cma_prime_import_sg_table,
 	.gem_prime_vmap		= drm_gem_cma_prime_vmap,
@@ -653,7 +642,6 @@ static struct platform_driver tilcdc_platform_driver = {
 static int __init tilcdc_drm_init(void)
 {
 	DBG("init");
-	tilcdc_tfp410_init();
 	tilcdc_panel_init();
 	return platform_driver_register(&tilcdc_platform_driver);
 }
@@ -663,7 +651,6 @@ static void __exit tilcdc_drm_fini(void)
 	DBG("fini");
 	platform_driver_unregister(&tilcdc_platform_driver);
 	tilcdc_panel_fini();
-	tilcdc_tfp410_fini();
 }
 
 module_init(tilcdc_drm_init);

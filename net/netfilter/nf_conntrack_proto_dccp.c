@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * DCCP connection tracking protocol helper
  *
  * Copyright (c) 2005, 2006, 2008 Patrick McHardy <kaber@trash.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -680,6 +676,9 @@ static int dccp_timeout_nlattr_to_obj(struct nlattr *tb[],
 	struct nf_dccp_net *dn = nf_dccp_pernet(net);
 	unsigned int *timeouts = data;
 	int i;
+
+	if (!timeouts)
+		 timeouts = dn->dccp_timeout;
 
 	/* set default DCCP timeouts. */
 	for (i=0; i<CT_DCCP_MAX; i++)

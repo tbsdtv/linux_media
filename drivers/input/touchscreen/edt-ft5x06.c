@@ -13,20 +13,23 @@
  *    http://www.glyn.com/Products/Displays
  */
 
-#include <linux/module.h>
-#include <linux/ratelimit.h>
-#include <linux/irq.h>
+#include <linux/debugfs.h>
+#include <linux/delay.h>
+#include <linux/gpio/consumer.h>
+#include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/input.h>
-#include <linux/i2c.h>
-#include <linux/kernel.h>
-#include <linux/uaccess.h>
-#include <linux/delay.h>
-#include <linux/debugfs.h>
-#include <linux/slab.h>
-#include <linux/gpio/consumer.h>
 #include <linux/input/mt.h>
 #include <linux/input/touchscreen.h>
+#include <linux/irq.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/ratelimit.h>
+#include <linux/regulator/consumer.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+
+#include <asm/unaligned.h>
 
 #define WORK_REGISTER_THRESHOLD		0x00
 #define WORK_REGISTER_REPORT_RATE	0x08
@@ -87,6 +90,7 @@ struct edt_ft5x06_ts_data {
 	struct touchscreen_properties prop;
 	u16 num_x;
 	u16 num_y;
+	struct regulator *vcc;
 
 	struct gpio_desc *reset_gpio;
 	struct gpio_desc *wake_gpio;
@@ -228,7 +232,6 @@ static irqreturn_t edt_ft5x06_ts_isr(int irq, void *dev_id)
 
 	for (i = 0; i < tsdata->max_support_points; i++) {
 		u8 *buf = &rdbuf[i * tplen + offset];
-		bool down;
 
 		type = buf[0] >> 6;
 		/* ignore Reserved events */
@@ -239,23 +242,19 @@ static irqreturn_t edt_ft5x06_ts_isr(int irq, void *dev_id)
 		if (tsdata->version == EDT_M06 && type == TOUCH_EVENT_DOWN)
 			continue;
 
-		x = ((buf[0] << 8) | buf[1]) & 0x0fff;
-		y = ((buf[2] << 8) | buf[3]) & 0x0fff;
+		x = get_unaligned_be16(buf) & 0x0fff;
+		y = get_unaligned_be16(buf + 2) & 0x0fff;
 		/* The FT5x26 send the y coordinate first */
 		if (tsdata->version == EV_FT)
 			swap(x, y);
 
 		id = (buf[2] >> 4) & 0x0f;
-		down = type != TOUCH_EVENT_UP;
 
 		input_mt_slot(tsdata->input, id);
-		input_mt_report_slot_state(tsdata->input, MT_TOOL_FINGER, down);
-
-		if (!down)
-			continue;
-
-		touchscreen_report_pos(tsdata->input, &tsdata->prop, x, y,
-				       true);
+		if (input_mt_report_slot_state(tsdata->input, MT_TOOL_FINGER,
+					       type != TOUCH_EVENT_UP))
+			touchscreen_report_pos(tsdata->input, &tsdata->prop,
+					       x, y, true);
 	}
 
 	input_mt_report_pointer_emulation(tsdata->input, true);
@@ -768,8 +767,6 @@ edt_ft5x06_ts_prepare_debugfs(struct edt_ft5x06_ts_data *tsdata,
 			      const char *debugfs_name)
 {
 	tsdata->debug_dir = debugfs_create_dir(debugfs_name, NULL);
-	if (!tsdata->debug_dir)
-		return;
 
 	debugfs_create_u16("num_x", S_IRUSR, tsdata->debug_dir, &tsdata->num_x);
 	debugfs_create_u16("num_y", S_IRUSR, tsdata->debug_dir, &tsdata->num_y);
@@ -1042,11 +1039,19 @@ edt_ft5x06_ts_set_regs(struct edt_ft5x06_ts_data *tsdata)
 	}
 }
 
+static void edt_ft5x06_disable_regulator(void *arg)
+{
+	struct edt_ft5x06_ts_data *data = arg;
+
+	regulator_disable(data->vcc);
+}
+
 static int edt_ft5x06_ts_probe(struct i2c_client *client,
 					 const struct i2c_device_id *id)
 {
 	const struct edt_i2c_chip_data *chip_data;
 	struct edt_ft5x06_ts_data *tsdata;
+	u8 buf[2] = { 0xfc, 0x00 };
 	struct input_dev *input;
 	unsigned long irq_flags;
 	int error;
@@ -1069,6 +1074,27 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client,
 	}
 
 	tsdata->max_support_points = chip_data->max_support_points;
+
+	tsdata->vcc = devm_regulator_get(&client->dev, "vcc");
+	if (IS_ERR(tsdata->vcc)) {
+		error = PTR_ERR(tsdata->vcc);
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev,
+				"failed to request regulator: %d\n", error);
+		return error;
+	}
+
+	error = regulator_enable(tsdata->vcc);
+	if (error < 0) {
+		dev_err(&client->dev, "failed to enable vcc: %d\n", error);
+		return error;
+	}
+
+	error = devm_add_action_or_reset(&client->dev,
+					 edt_ft5x06_disable_regulator,
+					 tsdata);
+	if (error)
+		return error;
 
 	tsdata->reset_gpio = devm_gpiod_get_optional(&client->dev,
 						     "reset", GPIOD_OUT_HIGH);
@@ -1115,6 +1141,12 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client,
 		dev_err(&client->dev, "touchscreen probe failed\n");
 		return error;
 	}
+
+	/*
+	 * Dummy read access. EP0700MLP1 returns bogus data on the first
+	 * register read access and ignores writes.
+	 */
+	edt_ft5x06_ts_readwrite(tsdata->client, 2, buf, 2, buf);
 
 	edt_ft5x06_ts_set_regs(tsdata);
 	edt_ft5x06_ts_get_defaults(&client->dev, tsdata);
@@ -1176,7 +1208,6 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client,
 		return error;
 
 	edt_ft5x06_ts_prepare_debugfs(tsdata, dev_driver_string(&client->dev));
-	device_init_wakeup(&client->dev, 1);
 
 	dev_dbg(&client->dev,
 		"EDT FT5x06 initialized: IRQ %d, WAKE pin %d, Reset pin %d.\n",
@@ -1195,29 +1226,6 @@ static int edt_ft5x06_ts_remove(struct i2c_client *client)
 
 	return 0;
 }
-
-static int __maybe_unused edt_ft5x06_ts_suspend(struct device *dev)
-{
-	struct i2c_client *client = to_i2c_client(dev);
-
-	if (device_may_wakeup(dev))
-		enable_irq_wake(client->irq);
-
-	return 0;
-}
-
-static int __maybe_unused edt_ft5x06_ts_resume(struct device *dev)
-{
-	struct i2c_client *client = to_i2c_client(dev);
-
-	if (device_may_wakeup(dev))
-		disable_irq_wake(client->irq);
-
-	return 0;
-}
-
-static SIMPLE_DEV_PM_OPS(edt_ft5x06_ts_pm_ops,
-			 edt_ft5x06_ts_suspend, edt_ft5x06_ts_resume);
 
 static const struct edt_i2c_chip_data edt_ft5x06_data = {
 	.max_support_points = 5,
@@ -1257,7 +1265,6 @@ static struct i2c_driver edt_ft5x06_ts_driver = {
 	.driver = {
 		.name = "edt_ft5x06",
 		.of_match_table = edt_ft5x06_of_match,
-		.pm = &edt_ft5x06_ts_pm_ops,
 	},
 	.id_table = edt_ft5x06_ts_id,
 	.probe    = edt_ft5x06_ts_probe,

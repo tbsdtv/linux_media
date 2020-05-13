@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Low-level CPU initialisation
  * Based on arch/arm/kernel/head.S
@@ -6,18 +7,6 @@
  * Copyright (C) 2003-2012 ARM Ltd.
  * Authors:	Catalin Marinas <catalin.marinas@arm.com>
  *		Will Deacon <will.deacon@arm.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/linkage.h>
@@ -113,8 +102,10 @@ pe_header:
 	 *  x23        stext() .. start_kernel()  physical misalignment/KASLR offset
 	 *  x28        __create_page_tables()     callee preserved temp register
 	 *  x19/x20    __primary_switch()         callee preserved temp registers
+	 *  x24        __primary_switch() .. relocate_kernel()
+	 *                                        current RELR displacement
 	 */
-ENTRY(stext)
+SYM_CODE_START(stext)
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
 	adrp	x23, __PHYS_OFFSET
@@ -127,14 +118,15 @@ ENTRY(stext)
 	 * On return, the CPU will be ready for the MMU to be turned on and
 	 * the TCR will have been set.
 	 */
+	mov	x0, #ARM64_CPU_BOOT_PRIMARY
 	bl	__cpu_setup			// initialise processor
 	b	__primary_switch
-ENDPROC(stext)
+SYM_CODE_END(stext)
 
 /*
  * Preserve the arguments passed by the bootloader in x0 .. x3
  */
-preserve_boot_args:
+SYM_CODE_START_LOCAL(preserve_boot_args)
 	mov	x21, x0				// x21=FDT
 
 	adr_l	x0, boot_args			// record the contents of
@@ -146,7 +138,7 @@ preserve_boot_args:
 
 	mov	x1, #0x20			// 4 x 8 bytes
 	b	__inval_dcache_area		// tail call
-ENDPROC(preserve_boot_args)
+SYM_CODE_END(preserve_boot_args)
 
 /*
  * Macro to create a table entry to the next page.
@@ -284,7 +276,7 @@ ENDPROC(preserve_boot_args)
  *   - first few MB of the kernel linear mapping to jump to once the MMU has
  *     been enabled
  */
-__create_page_tables:
+SYM_FUNC_START_LOCAL(__create_page_tables)
 	mov	x28, lr
 
 	/*
@@ -319,15 +311,15 @@ __create_page_tables:
 	adrp	x0, idmap_pg_dir
 	adrp	x3, __idmap_text_start		// __pa(__idmap_text_start)
 
-#ifdef CONFIG_ARM64_USER_VA_BITS_52
+#ifdef CONFIG_ARM64_VA_BITS_52
 	mrs_s	x6, SYS_ID_AA64MMFR2_EL1
 	and	x6, x6, #(0xf << ID_AA64MMFR2_LVA_SHIFT)
 	mov	x5, #52
 	cbnz	x6, 1f
 #endif
-	mov	x5, #VA_BITS
+	mov	x5, #VA_BITS_MIN
 1:
-	adr_l	x6, vabits_user
+	adr_l	x6, vabits_actual
 	str	x5, [x6]
 	dmb	sy
 	dc	ivac, x6		// Invalidate potentially stale cache line
@@ -412,15 +404,14 @@ __create_page_tables:
 	bl	__inval_dcache_area
 
 	ret	x28
-ENDPROC(__create_page_tables)
-	.ltorg
+SYM_FUNC_END(__create_page_tables)
 
 /*
  * The following fragment of code is executed with the MMU enabled.
  *
  *   x0 = __PHYS_OFFSET
  */
-__primary_switched:
+SYM_FUNC_START_LOCAL(__primary_switched)
 	adrp	x4, init_thread_union
 	add	sp, x4, #THREAD_SIZE
 	adr_l	x5, init_task
@@ -465,17 +456,20 @@ __primary_switched:
 	mov	x29, #0
 	mov	x30, #0
 	b	start_kernel
-ENDPROC(__primary_switched)
+SYM_FUNC_END(__primary_switched)
+
+	.pushsection ".rodata", "a"
+SYM_DATA_START(kimage_vaddr)
+	.quad		_text - TEXT_OFFSET
+SYM_DATA_END(kimage_vaddr)
+EXPORT_SYMBOL(kimage_vaddr)
+	.popsection
 
 /*
  * end early head section, begin head code that is also used for
  * hotplug and needs to have the same protections as the text region
  */
 	.section ".idmap.text","awx"
-
-ENTRY(kimage_vaddr)
-	.quad		_text - TEXT_OFFSET
-EXPORT_SYMBOL(kimage_vaddr)
 
 /*
  * If we're fortunate enough to boot at EL2, ensure that the world is
@@ -484,7 +478,7 @@ EXPORT_SYMBOL(kimage_vaddr)
  * Returns either BOOT_CPU_MODE_EL1 or BOOT_CPU_MODE_EL2 in w0 if
  * booted in EL1 or EL2 respectively.
  */
-ENTRY(el2_setup)
+SYM_FUNC_START(el2_setup)
 	msr	SPsel, #1			// We want to use SP_EL{1,2}
 	mrs	x0, CurrentEL
 	cmp	x0, #CurrentEL_EL2
@@ -608,7 +602,7 @@ set_hcr:
 	isb
 	ret
 
-install_el2_stub:
+SYM_INNER_LABEL(install_el2_stub, SYM_L_LOCAL)
 	/*
 	 * When VHE is not in use, early init of EL2 and EL1 needs to be
 	 * done here.
@@ -645,13 +639,13 @@ install_el2_stub:
 	msr	elr_el2, lr
 	mov	w0, #BOOT_CPU_MODE_EL2		// This CPU booted in EL2
 	eret
-ENDPROC(el2_setup)
+SYM_FUNC_END(el2_setup)
 
 /*
  * Sets the __boot_cpu_mode flag depending on the CPU boot mode passed
  * in w0. See arch/arm64/include/asm/virt.h for more info.
  */
-set_cpu_boot_mode_flag:
+SYM_FUNC_START_LOCAL(set_cpu_boot_mode_flag)
 	adr_l	x1, __boot_cpu_mode
 	cmp	w0, #BOOT_CPU_MODE_EL2
 	b.ne	1f
@@ -660,7 +654,7 @@ set_cpu_boot_mode_flag:
 	dmb	sy
 	dc	ivac, x1			// Invalidate potentially stale cache line
 	ret
-ENDPROC(set_cpu_boot_mode_flag)
+SYM_FUNC_END(set_cpu_boot_mode_flag)
 
 /*
  * These values are written with the MMU off, but read with the MMU on.
@@ -676,15 +670,17 @@ ENDPROC(set_cpu_boot_mode_flag)
  * This is not in .bss, because we set it sufficiently early that the boot-time
  * zeroing of .bss would clobber it.
  */
-ENTRY(__boot_cpu_mode)
+SYM_DATA_START(__boot_cpu_mode)
 	.long	BOOT_CPU_MODE_EL2
 	.long	BOOT_CPU_MODE_EL1
+SYM_DATA_END(__boot_cpu_mode)
 /*
  * The booting CPU updates the failed status @__early_cpu_boot_status,
  * with MMU turned off.
  */
-ENTRY(__early_cpu_boot_status)
+SYM_DATA_START(__early_cpu_boot_status)
 	.quad 	0
+SYM_DATA_END(__early_cpu_boot_status)
 
 	.popsection
 
@@ -692,7 +688,7 @@ ENTRY(__early_cpu_boot_status)
 	 * This provides a "holding pen" for platforms to hold all secondary
 	 * cores are held until we're ready for them to initialise.
 	 */
-ENTRY(secondary_holding_pen)
+SYM_FUNC_START(secondary_holding_pen)
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
 	bl	set_cpu_boot_mode_flag
 	mrs	x0, mpidr_el1
@@ -704,44 +700,53 @@ pen:	ldr	x4, [x3]
 	b.eq	secondary_startup
 	wfe
 	b	pen
-ENDPROC(secondary_holding_pen)
+SYM_FUNC_END(secondary_holding_pen)
 
 	/*
 	 * Secondary entry point that jumps straight into the kernel. Only to
 	 * be used where CPUs are brought online dynamically by the kernel.
 	 */
-ENTRY(secondary_entry)
+SYM_FUNC_START(secondary_entry)
 	bl	el2_setup			// Drop to EL1
 	bl	set_cpu_boot_mode_flag
 	b	secondary_startup
-ENDPROC(secondary_entry)
+SYM_FUNC_END(secondary_entry)
 
-secondary_startup:
+SYM_FUNC_START_LOCAL(secondary_startup)
 	/*
 	 * Common entry point for secondary CPUs.
 	 */
 	bl	__cpu_secondary_check52bitva
+	mov	x0, #ARM64_CPU_BOOT_SECONDARY
 	bl	__cpu_setup			// initialise processor
 	adrp	x1, swapper_pg_dir
 	bl	__enable_mmu
 	ldr	x8, =__secondary_switched
 	br	x8
-ENDPROC(secondary_startup)
+SYM_FUNC_END(secondary_startup)
 
-__secondary_switched:
+SYM_FUNC_START_LOCAL(__secondary_switched)
 	adr_l	x5, vectors
 	msr	vbar_el1, x5
 	isb
 
 	adr_l	x0, secondary_data
 	ldr	x1, [x0, #CPU_BOOT_STACK]	// get secondary_data.stack
+	cbz	x1, __secondary_too_slow
 	mov	sp, x1
 	ldr	x2, [x0, #CPU_BOOT_TASK]
+	cbz	x2, __secondary_too_slow
 	msr	sp_el0, x2
 	mov	x29, #0
 	mov	x30, #0
 	b	secondary_start_kernel
-ENDPROC(__secondary_switched)
+SYM_FUNC_END(__secondary_switched)
+
+SYM_FUNC_START_LOCAL(__secondary_too_slow)
+	wfe
+	wfi
+	b	__secondary_too_slow
+SYM_FUNC_END(__secondary_too_slow)
 
 /*
  * The booting CPU updates the failed status @__early_cpu_boot_status,
@@ -773,7 +778,7 @@ ENDPROC(__secondary_switched)
  * Checks if the selected granule size is supported by the CPU.
  * If it isn't, park the CPU
  */
-ENTRY(__enable_mmu)
+SYM_FUNC_START(__enable_mmu)
 	mrs	x2, ID_AA64MMFR0_EL1
 	ubfx	x2, x2, #ID_AA64MMFR0_TGRAN_SHIFT, 4
 	cmp	x2, #ID_AA64MMFR0_TGRAN_SUPPORTED
@@ -783,7 +788,7 @@ ENTRY(__enable_mmu)
 	phys_to_ttbr x1, x1
 	phys_to_ttbr x2, x2
 	msr	ttbr0_el1, x2			// load TTBR0
-	offset_ttbr1 x1
+	offset_ttbr1 x1, x3
 	msr	ttbr1_el1, x1			// load TTBR1
 	isb
 	msr	sctlr_el1, x0
@@ -797,11 +802,11 @@ ENTRY(__enable_mmu)
 	dsb	nsh
 	isb
 	ret
-ENDPROC(__enable_mmu)
+SYM_FUNC_END(__enable_mmu)
 
-ENTRY(__cpu_secondary_check52bitva)
-#ifdef CONFIG_ARM64_USER_VA_BITS_52
-	ldr_l	x0, vabits_user
+SYM_FUNC_START(__cpu_secondary_check52bitva)
+#ifdef CONFIG_ARM64_VA_BITS_52
+	ldr_l	x0, vabits_actual
 	cmp	x0, #52
 	b.ne	2f
 
@@ -817,9 +822,9 @@ ENTRY(__cpu_secondary_check52bitva)
 
 #endif
 2:	ret
-ENDPROC(__cpu_secondary_check52bitva)
+SYM_FUNC_END(__cpu_secondary_check52bitva)
 
-__no_granule_support:
+SYM_FUNC_START_LOCAL(__no_granule_support)
 	/* Indicate that this CPU can't boot and is stuck in the kernel */
 	update_early_cpu_boot_status \
 		CPU_STUCK_IN_KERNEL | CPU_STUCK_REASON_NO_GRAN, x1, x2
@@ -827,10 +832,10 @@ __no_granule_support:
 	wfe
 	wfi
 	b	1b
-ENDPROC(__no_granule_support)
+SYM_FUNC_END(__no_granule_support)
 
 #ifdef CONFIG_RELOCATABLE
-__relocate_kernel:
+SYM_FUNC_START_LOCAL(__relocate_kernel)
 	/*
 	 * Iterate over each entry in the relocation table, and apply the
 	 * relocations in place.
@@ -845,18 +850,97 @@ __relocate_kernel:
 
 0:	cmp	x9, x10
 	b.hs	1f
-	ldp	x11, x12, [x9], #24
-	ldr	x13, [x9, #-8]
-	cmp	w12, #R_AARCH64_RELATIVE
+	ldp	x12, x13, [x9], #24
+	ldr	x14, [x9, #-8]
+	cmp	w13, #R_AARCH64_RELATIVE
 	b.ne	0b
-	add	x13, x13, x23			// relocate
-	str	x13, [x11, x23]
+	add	x14, x14, x23			// relocate
+	str	x14, [x12, x23]
 	b	0b
-1:	ret
-ENDPROC(__relocate_kernel)
+
+1:
+#ifdef CONFIG_RELR
+	/*
+	 * Apply RELR relocations.
+	 *
+	 * RELR is a compressed format for storing relative relocations. The
+	 * encoded sequence of entries looks like:
+	 * [ AAAAAAAA BBBBBBB1 BBBBBBB1 ... AAAAAAAA BBBBBB1 ... ]
+	 *
+	 * i.e. start with an address, followed by any number of bitmaps. The
+	 * address entry encodes 1 relocation. The subsequent bitmap entries
+	 * encode up to 63 relocations each, at subsequent offsets following
+	 * the last address entry.
+	 *
+	 * The bitmap entries must have 1 in the least significant bit. The
+	 * assumption here is that an address cannot have 1 in lsb. Odd
+	 * addresses are not supported. Any odd addresses are stored in the RELA
+	 * section, which is handled above.
+	 *
+	 * Excluding the least significant bit in the bitmap, each non-zero
+	 * bit in the bitmap represents a relocation to be applied to
+	 * a corresponding machine word that follows the base address
+	 * word. The second least significant bit represents the machine
+	 * word immediately following the initial address, and each bit
+	 * that follows represents the next word, in linear order. As such,
+	 * a single bitmap can encode up to 63 relocations in a 64-bit object.
+	 *
+	 * In this implementation we store the address of the next RELR table
+	 * entry in x9, the address being relocated by the current address or
+	 * bitmap entry in x13 and the address being relocated by the current
+	 * bit in x14.
+	 *
+	 * Because addends are stored in place in the binary, RELR relocations
+	 * cannot be applied idempotently. We use x24 to keep track of the
+	 * currently applied displacement so that we can correctly relocate if
+	 * __relocate_kernel is called twice with non-zero displacements (i.e.
+	 * if there is both a physical misalignment and a KASLR displacement).
+	 */
+	ldr	w9, =__relr_offset		// offset to reloc table
+	ldr	w10, =__relr_size		// size of reloc table
+	add	x9, x9, x11			// __va(.relr)
+	add	x10, x9, x10			// __va(.relr) + sizeof(.relr)
+
+	sub	x15, x23, x24			// delta from previous offset
+	cbz	x15, 7f				// nothing to do if unchanged
+	mov	x24, x23			// save new offset
+
+2:	cmp	x9, x10
+	b.hs	7f
+	ldr	x11, [x9], #8
+	tbnz	x11, #0, 3f			// branch to handle bitmaps
+	add	x13, x11, x23
+	ldr	x12, [x13]			// relocate address entry
+	add	x12, x12, x15
+	str	x12, [x13], #8			// adjust to start of bitmap
+	b	2b
+
+3:	mov	x14, x13
+4:	lsr	x11, x11, #1
+	cbz	x11, 6f
+	tbz	x11, #0, 5f			// skip bit if not set
+	ldr	x12, [x14]			// relocate bit
+	add	x12, x12, x15
+	str	x12, [x14]
+
+5:	add	x14, x14, #8			// move to next bit's address
+	b	4b
+
+6:	/*
+	 * Move to the next bitmap's address. 8 is the word size, and 63 is the
+	 * number of significant bits in a bitmap entry.
+	 */
+	add	x13, x13, #(8 * 63)
+	b	2b
+
+7:
+#endif
+	ret
+
+SYM_FUNC_END(__relocate_kernel)
 #endif
 
-__primary_switch:
+SYM_FUNC_START_LOCAL(__primary_switch)
 #ifdef CONFIG_RANDOMIZE_BASE
 	mov	x19, x0				// preserve new SCTLR_EL1 value
 	mrs	x20, sctlr_el1			// preserve old SCTLR_EL1 value
@@ -865,6 +949,9 @@ __primary_switch:
 	adrp	x1, init_pg_dir
 	bl	__enable_mmu
 #ifdef CONFIG_RELOCATABLE
+#ifdef CONFIG_RELR
+	mov	x24, #0				// no RELR displacement yet
+#endif
 	bl	__relocate_kernel
 #ifdef CONFIG_RANDOMIZE_BASE
 	ldr	x8, =__primary_switched
@@ -896,4 +983,4 @@ __primary_switch:
 	ldr	x8, =__primary_switched
 	adrp	x0, __PHYS_OFFSET
 	br	x8
-ENDPROC(__primary_switch)
+SYM_FUNC_END(__primary_switch)

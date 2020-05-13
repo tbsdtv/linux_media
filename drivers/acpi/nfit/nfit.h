@@ -34,6 +34,7 @@
 		| ACPI_NFIT_MEM_NOT_ARMED | ACPI_NFIT_MEM_MAP_FAILED)
 
 #define NVDIMM_FAMILY_MAX NVDIMM_FAMILY_HYPERV
+#define NVDIMM_CMD_MAX 31
 
 #define NVDIMM_STANDARD_CMDMASK \
 (1 << ND_CMD_SMART | 1 << ND_CMD_SMART_THRESHOLD | 1 << ND_CMD_DIMM_FLAGS \
@@ -144,32 +145,32 @@ struct nfit_spa {
 	unsigned long ars_state;
 	u32 clear_err_unit;
 	u32 max_ars;
-	struct acpi_nfit_system_address spa[0];
+	struct acpi_nfit_system_address spa[];
 };
 
 struct nfit_dcr {
 	struct list_head list;
-	struct acpi_nfit_control_region dcr[0];
+	struct acpi_nfit_control_region dcr[];
 };
 
 struct nfit_bdw {
 	struct list_head list;
-	struct acpi_nfit_data_region bdw[0];
+	struct acpi_nfit_data_region bdw[];
 };
 
 struct nfit_idt {
 	struct list_head list;
-	struct acpi_nfit_interleave idt[0];
+	struct acpi_nfit_interleave idt[];
 };
 
 struct nfit_flush {
 	struct list_head list;
-	struct acpi_nfit_flush_address flush[0];
+	struct acpi_nfit_flush_address flush[];
 };
 
 struct nfit_memdev {
 	struct list_head list;
-	struct acpi_nfit_memory_map memdev[0];
+	struct acpi_nfit_memory_map memdev[];
 };
 
 enum nfit_mem_flags {
@@ -311,6 +312,30 @@ static inline struct acpi_nfit_desc *to_acpi_desc(
 {
 	return container_of(nd_desc, struct acpi_nfit_desc, nd_desc);
 }
+
+#ifdef CONFIG_PROVE_LOCKING
+static inline void nfit_device_lock(struct device *dev)
+{
+	device_lock(dev);
+	mutex_lock(&dev->lockdep_mutex);
+}
+
+static inline void nfit_device_unlock(struct device *dev)
+{
+	mutex_unlock(&dev->lockdep_mutex);
+	device_unlock(dev);
+}
+#else
+static inline void nfit_device_lock(struct device *dev)
+{
+	device_lock(dev);
+}
+
+static inline void nfit_device_unlock(struct device *dev)
+{
+	device_unlock(dev);
+}
+#endif
 
 const guid_t *to_nfit_uuid(enum nfit_uuids id);
 int acpi_nfit_init(struct acpi_nfit_desc *acpi_desc, void *nfit, acpi_size sz);

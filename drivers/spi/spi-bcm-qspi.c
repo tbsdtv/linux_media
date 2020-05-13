@@ -1,19 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Broadcom BRCMSTB, NSP,  NS2, Cygnus SPI Controllers
  *
  * Copyright 2016 Broadcom
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation (the "GPL").
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License version 2 (GPLv2) for more details.
- *
- * You should have received a copy of the GNU General Public License
- * version 2 (GPLv2) along with this source code.
  */
 
 #include <linux/clk.h>
@@ -354,7 +343,7 @@ static int bcm_qspi_bspi_set_flex_mode(struct bcm_qspi *qspi,
 {
 	int bpc = 0, bpp = 0;
 	u8 command = op->cmd.opcode;
-	int width  = op->cmd.buswidth ? op->cmd.buswidth : SPI_NBITS_SINGLE;
+	int width = op->data.buswidth ? op->data.buswidth : SPI_NBITS_SINGLE;
 	int addrlen = op->addr.nbytes;
 	int flex_mode = 1;
 
@@ -814,7 +803,8 @@ static int bcm_qspi_bspi_exec_mem_op(struct spi_device *spi,
 			return -EIO;
 
 	from = op->addr.val;
-	bcm_qspi_chip_select(qspi, spi->chip_select);
+	if (!spi->cs_gpiod)
+		bcm_qspi_chip_select(qspi, spi->chip_select);
 	bcm_qspi_write(qspi, MSPI, MSPI_WRITE_LOCK, 0);
 
 	/*
@@ -893,7 +883,8 @@ static int bcm_qspi_transfer_one(struct spi_master *master,
 	int slots;
 	unsigned long timeo = msecs_to_jiffies(100);
 
-	bcm_qspi_chip_select(qspi, spi->chip_select);
+	if (!spi->cs_gpiod)
+		bcm_qspi_chip_select(qspi, spi->chip_select);
 	qspi->trans_pos.trans = trans;
 	qspi->trans_pos.byte = 0;
 
@@ -908,6 +899,7 @@ static int bcm_qspi_transfer_one(struct spi_master *master,
 
 		read_from_hw(qspi, slots);
 	}
+	bcm_qspi_enable_bspi(qspi);
 
 	return 0;
 }
@@ -992,7 +984,7 @@ static int bcm_qspi_exec_mem_op(struct spi_mem *mem,
 	if (mspi_read)
 		return bcm_qspi_mspi_exec_mem_op(spi, op);
 
-	ret = bcm_qspi_bspi_set_mode(qspi, op, -1);
+	ret = bcm_qspi_bspi_set_mode(qspi, op, 0);
 
 	if (!ret)
 		ret = bcm_qspi_bspi_exec_mem_op(spi, op);
@@ -1244,6 +1236,7 @@ int bcm_qspi_probe(struct platform_device *pdev,
 	master->cleanup = bcm_qspi_cleanup;
 	master->dev.of_node = dev->of_node;
 	master->num_chipselect = NUM_CHIPSELECT;
+	master->use_gpio_descriptors = true;
 
 	qspi->big_endian = of_device_is_big_endian(dev->of_node);
 
@@ -1300,7 +1293,7 @@ int bcm_qspi_probe(struct platform_device *pdev,
 		name = qspi_irq_tab[val].irq_name;
 		if (qspi_irq_tab[val].irq_source == SINGLE_L2) {
 			/* get the l2 interrupts */
-			irq = platform_get_irq_byname(pdev, name);
+			irq = platform_get_irq_byname_optional(pdev, name);
 		} else if (!num_ints && soc_intc) {
 			/* all mspi, bspi intrs muxed to one L1 intr */
 			irq = platform_get_irq(pdev, 0);

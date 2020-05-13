@@ -1,5 +1,6 @@
 /*
  * Copyright 2017 Advanced Micro Devices, Inc.
+ * Copyright 2019 Raptor Engineering, LLC
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -24,14 +25,14 @@
  */
 
 #include "dm_services.h"
+#include "dc.h"
 #include "dcn_calcs.h"
 #include "dcn_calc_auto.h"
-#include "dc.h"
 #include "dal_asic_id.h"
-
 #include "resource.h"
 #include "dcn10/dcn10_resource.h"
 #include "dcn10/dcn10_hubbub.h"
+#include "dml/dml1_display_rq_dlg_calc.h"
 
 #include "dcn_calc_math.h"
 
@@ -53,7 +54,9 @@
  * remain as-is as it provides us with a guarantee from HW that it is correct.
  */
 
-/* Defaults from spreadsheet rev#247 */
+/* Defaults from spreadsheet rev#247.
+ * RV2 delta: dram_clock_change_latency, max_num_dpp
+ */
 const struct dcn_soc_bounding_box dcn10_soc_defaults = {
 		/* latencies */
 		.sr_exit_time = 17, /*us*/
@@ -323,7 +326,7 @@ static void pipe_ctx_to_e2e_pipe_params (
 			dcc_support_pixel_format(pipe->plane_state->format, &bpe) ? 1 : 0;
 	}
 	input->src.dcc_rate            = 1;
-	input->src.meta_pitch          = pipe->plane_state->dcc.grph.meta_pitch;
+	input->src.meta_pitch          = pipe->plane_state->dcc.meta_pitch;
 	input->src.source_scan         = dm_horz;
 	input->src.sw_mode             = pipe->plane_state->tiling_info.gfx9.swizzle;
 
@@ -620,7 +623,7 @@ static bool dcn_bw_apply_registry_override(struct dc *dc)
 {
 	bool updated = false;
 
-	kernel_fpu_begin();
+	DC_FP_START();
 	if ((int)(dc->dcn_soc->sr_exit_time * 1000) != dc->debug.sr_exit_time_ns
 			&& dc->debug.sr_exit_time_ns) {
 		updated = true;
@@ -656,7 +659,7 @@ static bool dcn_bw_apply_registry_override(struct dc *dc)
 		dc->dcn_soc->dram_clock_change_latency =
 				dc->debug.dram_clock_change_latency_ns / 1000.0;
 	}
-	kernel_fpu_end();
+	DC_FP_END();
 
 	return updated;
 }
@@ -699,6 +702,30 @@ static void hack_bounding_box(struct dcn_bw_internal_vars *v,
 		hack_force_pipe_split(v, context->streams[0]->timing.pix_clk_100hz);
 }
 
+
+unsigned int get_highest_allowed_voltage_level(uint32_t hw_internal_rev, uint32_t pci_revision_id)
+{
+	/* for low power RV2 variants, the highest voltage level we want is 0 */
+	if (ASICREV_IS_RAVEN2(hw_internal_rev))
+		switch (pci_revision_id) {
+		case PRID_DALI_DE:
+		case PRID_DALI_DF:
+		case PRID_DALI_E3:
+		case PRID_DALI_E4:
+		case PRID_POLLOCK_94:
+		case PRID_POLLOCK_95:
+		case PRID_POLLOCK_E9:
+		case PRID_POLLOCK_EA:
+		case PRID_POLLOCK_EB:
+			return 0;
+		default:
+			break;
+		}
+
+	/* we are ok with all levels */
+	return 4;
+}
+
 bool dcn_validate_bandwidth(
 		struct dc *dc,
 		struct dc_state *context,
@@ -712,7 +739,7 @@ bool dcn_validate_bandwidth(
 
 	const struct resource_pool *pool = dc->res_pool;
 	struct dcn_bw_internal_vars *v = &context->dcn_bw_vars;
-	int i, input_idx;
+	int i, input_idx, k;
 	int vesa_sync_start, asic_blank_end, asic_blank_start;
 	bool bw_limit_pass;
 	float bw_limit;
@@ -725,7 +752,8 @@ bool dcn_validate_bandwidth(
 		dcn_bw_sync_calcs_and_dml(dc);
 
 	memset(v, 0, sizeof(*v));
-	kernel_fpu_begin();
+	DC_FP_START();
+
 	v->sr_exit_time = dc->dcn_soc->sr_exit_time;
 	v->sr_enter_plus_exit_time = dc->dcn_soc->sr_enter_plus_exit_time;
 	v->urgent_latency = dc->dcn_soc->urgent_latency;
@@ -873,8 +901,19 @@ bool dcn_validate_bandwidth(
 			v->lb_bit_per_pixel[input_idx] = 30;
 			v->viewport_width[input_idx] = pipe->stream->timing.h_addressable;
 			v->viewport_height[input_idx] = pipe->stream->timing.v_addressable;
-			v->scaler_rec_out_width[input_idx] = pipe->stream->timing.h_addressable;
-			v->scaler_recout_height[input_idx] = pipe->stream->timing.v_addressable;
+			/*
+			 * for cases where we have no plane, we want to validate up to 1080p
+			 * source size because here we are only interested in if the output
+			 * timing is supported or not. if we cannot support native resolution
+			 * of the high res display, we still want to support lower res up scale
+			 * to native
+			 */
+			if (v->viewport_width[input_idx] > 1920)
+				v->viewport_width[input_idx] = 1920;
+			if (v->viewport_height[input_idx] > 1080)
+				v->viewport_height[input_idx] = 1080;
+			v->scaler_rec_out_width[input_idx] = v->viewport_width[input_idx];
+			v->scaler_recout_height[input_idx] = v->viewport_height[input_idx];
 			v->override_hta_ps[input_idx] = 1;
 			v->override_vta_ps[input_idx] = 1;
 			v->override_hta_pschroma[input_idx] = 1;
@@ -1023,6 +1062,43 @@ bool dcn_validate_bandwidth(
 		mode_support_and_system_configuration(v);
 	}
 
+	display_pipe_configuration(v);
+
+	for (k = 0; k <= v->number_of_active_planes - 1; k++) {
+		if (v->source_scan[k] == dcn_bw_hor)
+			v->swath_width_y[k] = v->viewport_width[k] / v->dpp_per_plane[k];
+		else
+			v->swath_width_y[k] = v->viewport_height[k] / v->dpp_per_plane[k];
+	}
+	for (k = 0; k <= v->number_of_active_planes - 1; k++) {
+		if (v->source_pixel_format[k] == dcn_bw_rgb_sub_64) {
+			v->byte_per_pixel_dety[k] = 8.0;
+			v->byte_per_pixel_detc[k] = 0.0;
+		} else if (v->source_pixel_format[k] == dcn_bw_rgb_sub_32) {
+			v->byte_per_pixel_dety[k] = 4.0;
+			v->byte_per_pixel_detc[k] = 0.0;
+		} else if (v->source_pixel_format[k] == dcn_bw_rgb_sub_16) {
+			v->byte_per_pixel_dety[k] = 2.0;
+			v->byte_per_pixel_detc[k] = 0.0;
+		} else if (v->source_pixel_format[k] == dcn_bw_yuv420_sub_8) {
+			v->byte_per_pixel_dety[k] = 1.0;
+			v->byte_per_pixel_detc[k] = 2.0;
+		} else {
+			v->byte_per_pixel_dety[k] = 4.0f / 3.0f;
+			v->byte_per_pixel_detc[k] = 8.0f / 3.0f;
+		}
+	}
+
+	v->total_data_read_bandwidth = 0.0;
+	for (k = 0; k <= v->number_of_active_planes - 1; k++) {
+		v->read_bandwidth_plane_luma[k] = v->swath_width_y[k] * v->dpp_per_plane[k] *
+				dcn_bw_ceil2(v->byte_per_pixel_dety[k], 1.0) / (v->htotal[k] / v->pixel_clock[k]) * v->v_ratio[k];
+		v->read_bandwidth_plane_chroma[k] = v->swath_width_y[k] / 2.0 * v->dpp_per_plane[k] *
+				dcn_bw_ceil2(v->byte_per_pixel_detc[k], 2.0) / (v->htotal[k] / v->pixel_clock[k]) * v->v_ratio[k] / 2.0;
+		v->total_data_read_bandwidth = v->total_data_read_bandwidth +
+				v->read_bandwidth_plane_luma[k] + v->read_bandwidth_plane_chroma[k];
+	}
+
 	BW_VAL_TRACE_END_VOLTAGE_LEVEL();
 
 	if (v->voltage_level != number_of_states_plus_one && !fast_validate) {
@@ -1062,9 +1138,8 @@ bool dcn_validate_bandwidth(
 
 		context->bw_ctx.bw.dcn.clk.fclk_khz = (int)(bw_consumed * 1000000 /
 				(ddr4_dram_factor_single_Channel * v->number_of_channels));
-		if (bw_consumed == v->fabric_and_dram_bandwidth_vmin0p65) {
+		if (bw_consumed == v->fabric_and_dram_bandwidth_vmin0p65)
 			context->bw_ctx.bw.dcn.clk.fclk_khz = (int)(bw_consumed * 1000000 / 32);
-		}
 
 		context->bw_ctx.bw.dcn.clk.dcfclk_deep_sleep_khz = (int)(v->dcf_clk_deep_sleep * 1000);
 		context->bw_ctx.bw.dcn.clk.dcfclk_khz = (int)(v->dcfclk * 1000);
@@ -1079,7 +1154,8 @@ bool dcn_validate_bandwidth(
 					dc->debug.min_disp_clk_khz;
 		}
 
-		context->bw_ctx.bw.dcn.clk.dppclk_khz = context->bw_ctx.bw.dcn.clk.dispclk_khz / v->dispclk_dppclk_ratio;
+		context->bw_ctx.bw.dcn.clk.dppclk_khz = context->bw_ctx.bw.dcn.clk.dispclk_khz /
+				v->dispclk_dppclk_ratio;
 		context->bw_ctx.bw.dcn.clk.phyclk_khz = v->phyclk_per_state[v->voltage_level];
 		switch (v->voltage_level) {
 		case 0:
@@ -1166,9 +1242,7 @@ bool dcn_validate_bandwidth(
 						/* pipe not split previously needs split */
 						hsplit_pipe = find_idle_secondary_pipe(&context->res_ctx, pool, pipe);
 						ASSERT(hsplit_pipe);
-						split_stream_across_pipes(
-							&context->res_ctx, pool,
-							pipe, hsplit_pipe);
+						split_stream_across_pipes(&context->res_ctx, pool, pipe, hsplit_pipe);
 					}
 
 					dcn_bw_calc_rq_dlg_ttu(dc, v, hsplit_pipe, input_idx);
@@ -1199,7 +1273,6 @@ bool dcn_validate_bandwidth(
 	}
 
 	if (v->voltage_level == 0) {
-
 		context->bw_ctx.dml.soc.sr_enter_plus_exit_time_us =
 				dc->dcn_soc->sr_enter_plus_exit_time;
 		context->bw_ctx.dml.soc.sr_exit_time_us = dc->dcn_soc->sr_exit_time;
@@ -1212,12 +1285,14 @@ bool dcn_validate_bandwidth(
 	bw_limit = dc->dcn_soc->percent_disp_bw_limit * v->fabric_and_dram_bandwidth_vmax0p9;
 	bw_limit_pass = (v->total_data_read_bandwidth / 1000.0) < bw_limit;
 
-	kernel_fpu_end();
+	DC_FP_END();
 
 	PERFORMANCE_TRACE_END();
 	BW_VAL_TRACE_FINISH();
 
-	if (bw_limit_pass && v->voltage_level != 5)
+	if (bw_limit_pass && v->voltage_level <= get_highest_allowed_voltage_level(
+							dc->ctx->asic_id.hw_internal_rev,
+							dc->ctx->asic_id.pci_revision_id))
 		return true;
 	else
 		return false;
@@ -1375,37 +1450,49 @@ void dcn_bw_update_from_pplib(struct dc *dc)
 	struct dc_context *ctx = dc->ctx;
 	struct dm_pp_clock_levels_with_voltage fclks = {0}, dcfclks = {0};
 	bool res;
+	unsigned vmin0p65_idx, vmid0p72_idx, vnom0p8_idx, vmax0p9_idx;
 
 	/* TODO: This is not the proper way to obtain fabric_and_dram_bandwidth, should be min(fclk, memclk) */
 	res = dm_pp_get_clock_levels_by_type_with_voltage(
 			ctx, DM_PP_CLOCK_TYPE_FCLK, &fclks);
 
-	kernel_fpu_begin();
+	DC_FP_START();
 
 	if (res)
 		res = verify_clock_values(&fclks);
 
 	if (res) {
-		ASSERT(fclks.num_levels >= 3);
-		dc->dcn_soc->fabric_and_dram_bandwidth_vmin0p65 = 32 * (fclks.data[0].clocks_in_khz / 1000.0) / 1000.0;
-		dc->dcn_soc->fabric_and_dram_bandwidth_vmid0p72 = dc->dcn_soc->number_of_channels *
-				(fclks.data[fclks.num_levels - (fclks.num_levels > 2 ? 3 : 2)].clocks_in_khz / 1000.0)
-				* ddr4_dram_factor_single_Channel / 1000.0;
-		dc->dcn_soc->fabric_and_dram_bandwidth_vnom0p8 = dc->dcn_soc->number_of_channels *
-				(fclks.data[fclks.num_levels - 2].clocks_in_khz / 1000.0)
-				* ddr4_dram_factor_single_Channel / 1000.0;
-		dc->dcn_soc->fabric_and_dram_bandwidth_vmax0p9 = dc->dcn_soc->number_of_channels *
-				(fclks.data[fclks.num_levels - 1].clocks_in_khz / 1000.0)
-				* ddr4_dram_factor_single_Channel / 1000.0;
+		ASSERT(fclks.num_levels);
+
+		vmin0p65_idx = 0;
+		vmid0p72_idx = fclks.num_levels -
+			(fclks.num_levels > 2 ? 3 : (fclks.num_levels > 1 ? 2 : 1));
+		vnom0p8_idx = fclks.num_levels - (fclks.num_levels > 1 ? 2 : 1);
+		vmax0p9_idx = fclks.num_levels - 1;
+
+		dc->dcn_soc->fabric_and_dram_bandwidth_vmin0p65 =
+			32 * (fclks.data[vmin0p65_idx].clocks_in_khz / 1000.0) / 1000.0;
+		dc->dcn_soc->fabric_and_dram_bandwidth_vmid0p72 =
+			dc->dcn_soc->number_of_channels *
+			(fclks.data[vmid0p72_idx].clocks_in_khz / 1000.0)
+			* ddr4_dram_factor_single_Channel / 1000.0;
+		dc->dcn_soc->fabric_and_dram_bandwidth_vnom0p8 =
+			dc->dcn_soc->number_of_channels *
+			(fclks.data[vnom0p8_idx].clocks_in_khz / 1000.0)
+			* ddr4_dram_factor_single_Channel / 1000.0;
+		dc->dcn_soc->fabric_and_dram_bandwidth_vmax0p9 =
+			dc->dcn_soc->number_of_channels *
+			(fclks.data[vmax0p9_idx].clocks_in_khz / 1000.0)
+			* ddr4_dram_factor_single_Channel / 1000.0;
 	} else
 		BREAK_TO_DEBUGGER();
 
-	kernel_fpu_end();
+	DC_FP_END();
 
 	res = dm_pp_get_clock_levels_by_type_with_voltage(
 			ctx, DM_PP_CLOCK_TYPE_DCFCLK, &dcfclks);
 
-	kernel_fpu_begin();
+	DC_FP_START();
 
 	if (res)
 		res = verify_clock_values(&dcfclks);
@@ -1418,7 +1505,7 @@ void dcn_bw_update_from_pplib(struct dc *dc)
 	} else
 		BREAK_TO_DEBUGGER();
 
-	kernel_fpu_end();
+	DC_FP_END();
 }
 
 void dcn_bw_notify_pplib_of_wm_ranges(struct dc *dc)
@@ -1433,11 +1520,11 @@ void dcn_bw_notify_pplib_of_wm_ranges(struct dc *dc)
 	if (!pp || !pp->set_wm_ranges)
 		return;
 
-	kernel_fpu_begin();
+	DC_FP_START();
 	min_fclk_khz = dc->dcn_soc->fabric_and_dram_bandwidth_vmin0p65 * 1000000 / 32;
 	min_dcfclk_khz = dc->dcn_soc->dcfclkv_min0p65 * 1000;
 	socclk_khz = dc->dcn_soc->socclk * 1000;
-	kernel_fpu_end();
+	DC_FP_END();
 
 	/* Now notify PPLib/SMU about which Watermarks sets they should select
 	 * depending on DPM state they are in. And update BW MGR GFX Engine and
@@ -1488,7 +1575,7 @@ void dcn_bw_notify_pplib_of_wm_ranges(struct dc *dc)
 
 void dcn_bw_sync_calcs_and_dml(struct dc *dc)
 {
-	kernel_fpu_begin();
+	DC_FP_START();
 	DC_LOG_BANDWIDTH_CALCS("sr_exit_time: %f ns\n"
 			"sr_enter_plus_exit_time: %f ns\n"
 			"urgent_latency: %f ns\n"
@@ -1677,5 +1764,5 @@ void dcn_bw_sync_calcs_and_dml(struct dc *dc)
 	dc->dml.ip.bug_forcing_LC_req_same_size_fixed =
 		dc->dcn_ip->bug_forcing_luma_and_chroma_request_to_same_size_fixed == dcn_bw_yes;
 	dc->dml.ip.dcfclk_cstate_latency = dc->dcn_ip->dcfclk_cstate_latency;
-	kernel_fpu_end();
+	DC_FP_END();
 }

@@ -45,19 +45,6 @@
 
 #define GFAR_MAX_COAL_USECS 0xffff
 #define GFAR_MAX_COAL_FRAMES 0xff
-static void gfar_fill_stats(struct net_device *dev, struct ethtool_stats *dummy,
-			    u64 *buf);
-static void gfar_gstrings(struct net_device *dev, u32 stringset, u8 * buf);
-static int gfar_gcoalesce(struct net_device *dev,
-			  struct ethtool_coalesce *cvals);
-static int gfar_scoalesce(struct net_device *dev,
-			  struct ethtool_coalesce *cvals);
-static void gfar_gringparam(struct net_device *dev,
-			    struct ethtool_ringparam *rvals);
-static int gfar_sringparam(struct net_device *dev,
-			   struct ethtool_ringparam *rvals);
-static void gfar_gdrvinfo(struct net_device *dev,
-			  struct ethtool_drvinfo *drvinfo);
 
 static const char stat_gstrings[][ETH_GSTRING_LEN] = {
 	/* extra stats */
@@ -177,10 +164,6 @@ static void gfar_gdrvinfo(struct net_device *dev,
 			  struct ethtool_drvinfo *drvinfo)
 {
 	strlcpy(drvinfo->driver, DRV_NAME, sizeof(drvinfo->driver));
-	strlcpy(drvinfo->version, gfar_driver_version,
-		sizeof(drvinfo->version));
-	strlcpy(drvinfo->fw_version, "N/A", sizeof(drvinfo->fw_version));
-	strlcpy(drvinfo->bus_info, "N/A", sizeof(drvinfo->bus_info));
 }
 
 /* Return the length of the register structure */
@@ -288,35 +271,6 @@ static int gfar_gcoalesce(struct net_device *dev,
 
 	cvals->tx_coalesce_usecs = gfar_ticks2usecs(priv, txtime);
 	cvals->tx_max_coalesced_frames = txcount;
-
-	cvals->use_adaptive_rx_coalesce = 0;
-	cvals->use_adaptive_tx_coalesce = 0;
-
-	cvals->pkt_rate_low = 0;
-	cvals->rx_coalesce_usecs_low = 0;
-	cvals->rx_max_coalesced_frames_low = 0;
-	cvals->tx_coalesce_usecs_low = 0;
-	cvals->tx_max_coalesced_frames_low = 0;
-
-	/* When the packet rate is below pkt_rate_high but above
-	 * pkt_rate_low (both measured in packets per second) the
-	 * normal {rx,tx}_* coalescing parameters are used.
-	 */
-
-	/* When the packet rate is (measured in packets per second)
-	 * is above pkt_rate_high, the {rx,tx}_*_high parameters are
-	 * used.
-	 */
-	cvals->pkt_rate_high = 0;
-	cvals->rx_coalesce_usecs_high = 0;
-	cvals->rx_max_coalesced_frames_high = 0;
-	cvals->tx_coalesce_usecs_high = 0;
-	cvals->tx_max_coalesced_frames_high = 0;
-
-	/* How often to do adaptive coalescing packet rate sampling,
-	 * measured in seconds.  Must not be zero.
-	 */
-	cvals->rate_sample_interval = 0;
 
 	return 0;
 }
@@ -1520,6 +1474,8 @@ static int gfar_get_ts_info(struct net_device *dev,
 }
 
 const struct ethtool_ops gfar_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
+				     ETHTOOL_COALESCE_MAX_FRAMES,
 	.get_drvinfo = gfar_gdrvinfo,
 	.get_regs_len = gfar_reglen,
 	.get_regs = gfar_get_regs,

@@ -57,7 +57,7 @@ struct mlx5_fpga_ipsec_cmd_context {
 	struct completion complete;
 	struct mlx5_fpga_device *dev;
 	struct list_head list; /* Item in pending_cmds */
-	u8 command[0];
+	u8 command[];
 };
 
 struct mlx5_fpga_esp_xfrm;
@@ -87,10 +87,10 @@ static const struct rhashtable_params rhash_sa = {
 	 * value is not constant during the lifetime
 	 * of the key object.
 	 */
-	.key_len = FIELD_SIZEOF(struct mlx5_fpga_ipsec_sa_ctx, hw_sa) -
-		   FIELD_SIZEOF(struct mlx5_ifc_fpga_ipsec_sa_v1, cmd),
+	.key_len = sizeof_field(struct mlx5_fpga_ipsec_sa_ctx, hw_sa) -
+		   sizeof_field(struct mlx5_ifc_fpga_ipsec_sa_v1, cmd),
 	.key_offset = offsetof(struct mlx5_fpga_ipsec_sa_ctx, hw_sa) +
-		      FIELD_SIZEOF(struct mlx5_ifc_fpga_ipsec_sa_v1, cmd),
+		      sizeof_field(struct mlx5_ifc_fpga_ipsec_sa_v1, cmd),
 	.head_offset = offsetof(struct mlx5_fpga_ipsec_sa_ctx, hash),
 	.automatic_shrinking = true,
 	.min_size = 1,
@@ -636,7 +636,8 @@ static bool mlx5_is_fpga_egress_ipsec_rule(struct mlx5_core_dev *dev,
 					   u8 match_criteria_enable,
 					   const u32 *match_c,
 					   const u32 *match_v,
-					   struct mlx5_flow_act *flow_act)
+					   struct mlx5_flow_act *flow_act,
+					   struct mlx5_flow_context *flow_context)
 {
 	const void *outer_c = MLX5_ADDR_OF(fte_match_param, match_c,
 					   outer_headers);
@@ -655,7 +656,7 @@ static bool mlx5_is_fpga_egress_ipsec_rule(struct mlx5_core_dev *dev,
 	    (match_criteria_enable &
 	     ~(MLX5_MATCH_OUTER_HEADERS | MLX5_MATCH_MISC_PARAMETERS)) ||
 	    (flow_act->action & ~(MLX5_FLOW_CONTEXT_ACTION_ENCRYPT | MLX5_FLOW_CONTEXT_ACTION_ALLOW)) ||
-	     (flow_act->flags & FLOW_ACT_HAS_TAG))
+	     (flow_context->flags & FLOW_CONTEXT_HAS_TAG))
 		return false;
 
 	return true;
@@ -767,7 +768,8 @@ mlx5_fpga_ipsec_fs_create_sa_ctx(struct mlx5_core_dev *mdev,
 					    fg->mask.match_criteria_enable,
 					    fg->mask.match_criteria,
 					    fte->val,
-					    &fte->action))
+					    &fte->action,
+					    &fte->flow_context))
 		return ERR_PTR(-EINVAL);
 	else if (!mlx5_is_fpga_ipsec_rule(mdev,
 					  fg->mask.match_criteria_enable,
@@ -848,6 +850,7 @@ void mlx5_fpga_ipsec_delete_sa_ctx(void *context)
 	mutex_lock(&fpga_xfrm->lock);
 	if (!--fpga_xfrm->num_rules) {
 		mlx5_fpga_ipsec_release_sa_ctx(fpga_xfrm->sa_ctx);
+		kfree(fpga_xfrm->sa_ctx);
 		fpga_xfrm->sa_ctx = NULL;
 	}
 	mutex_unlock(&fpga_xfrm->lock);
@@ -1476,7 +1479,7 @@ int mlx5_fpga_esp_modify_xfrm(struct mlx5_accel_esp_xfrm *xfrm,
 	if (!memcmp(&xfrm->attrs, attrs, sizeof(xfrm->attrs)))
 		return 0;
 
-	if (!mlx5_fpga_esp_validate_xfrm_attrs(mdev, attrs)) {
+	if (mlx5_fpga_esp_validate_xfrm_attrs(mdev, attrs)) {
 		mlx5_core_warn(mdev, "Tried to create an esp with unsupported attrs\n");
 		return -EOPNOTSUPP;
 	}

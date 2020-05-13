@@ -8,6 +8,7 @@
  *          Mengdong Lin <mengdong.lin@intel.com>
  */
 
+#include <linux/gpio/consumer.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -143,7 +144,7 @@ static int cht_aif1_hw_params(struct snd_pcm_substream *substream,
 					struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
 	int ret;
 
 	/* set codec PLL source to the 19.2MHz platform clock (MCLK) */
@@ -175,7 +176,7 @@ static const struct acpi_gpio_mapping cht_rt5672_gpios[] = {
 static int cht_codec_init(struct snd_soc_pcm_runtime *runtime)
 {
 	int ret;
-	struct snd_soc_dai *codec_dai = runtime->codec_dai;
+	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(runtime, 0);
 	struct snd_soc_component *component = codec_dai->component;
 	struct cht_mc_private *ctx = snd_soc_card_get_drvdata(runtime->card);
 
@@ -254,7 +255,7 @@ static int cht_codec_fixup(struct snd_soc_pcm_runtime *rtd,
 	/*
 	 * Default mode for SSP configuration is TDM 4 slot
 	 */
-	ret = snd_soc_dai_set_fmt(rtd->codec_dai,
+	ret = snd_soc_dai_set_fmt(asoc_rtd_to_codec(rtd, 0),
 				  SND_SOC_DAIFMT_DSP_B |
 				  SND_SOC_DAIFMT_IB_NF |
 				  SND_SOC_DAIFMT_CBS_CFS);
@@ -264,7 +265,7 @@ static int cht_codec_fixup(struct snd_soc_pcm_runtime *rtd,
 	}
 
 	/* TDM 4 slots 24 bit, set Rx & Tx bitmask to 4 active slots */
-	ret = snd_soc_dai_set_tdm_slot(rtd->codec_dai, 0xF, 0xF, 4, 24);
+	ret = snd_soc_dai_set_tdm_slot(asoc_rtd_to_codec(rtd, 0), 0xF, 0xF, 4, 24);
 	if (ret < 0) {
 		dev_err(rtd->dev, "can't set codec TDM slot %d\n", ret);
 		return ret;
@@ -287,32 +288,44 @@ static const struct snd_soc_ops cht_be_ssp2_ops = {
 	.hw_params = cht_aif1_hw_params,
 };
 
+SND_SOC_DAILINK_DEF(dummy,
+	DAILINK_COMP_ARRAY(COMP_DUMMY()));
+
+SND_SOC_DAILINK_DEF(media,
+	DAILINK_COMP_ARRAY(COMP_CPU("media-cpu-dai")));
+
+SND_SOC_DAILINK_DEF(deepbuffer,
+	DAILINK_COMP_ARRAY(COMP_CPU("deepbuffer-cpu-dai")));
+
+SND_SOC_DAILINK_DEF(ssp2_port,
+	DAILINK_COMP_ARRAY(COMP_CPU("ssp2-port")));
+SND_SOC_DAILINK_DEF(ssp2_codec,
+	DAILINK_COMP_ARRAY(COMP_CODEC("i2c-10EC5670:00",
+				      "rt5670-aif1")));
+
+SND_SOC_DAILINK_DEF(platform,
+	DAILINK_COMP_ARRAY(COMP_PLATFORM("sst-mfld-platform")));
+
 static struct snd_soc_dai_link cht_dailink[] = {
 	/* Front End DAI links */
 	[MERR_DPCM_AUDIO] = {
 		.name = "Audio Port",
 		.stream_name = "Audio",
-		.cpu_dai_name = "media-cpu-dai",
-		.codec_dai_name = "snd-soc-dummy-dai",
-		.codec_name = "snd-soc-dummy",
-		.platform_name = "sst-mfld-platform",
 		.nonatomic = true,
 		.dynamic = 1,
 		.dpcm_playback = 1,
 		.dpcm_capture = 1,
 		.ops = &cht_aif1_ops,
+		SND_SOC_DAILINK_REG(media, dummy, platform),
 	},
 	[MERR_DPCM_DEEP_BUFFER] = {
 		.name = "Deep-Buffer Audio Port",
 		.stream_name = "Deep-Buffer Audio",
-		.cpu_dai_name = "deepbuffer-cpu-dai",
-		.codec_dai_name = "snd-soc-dummy-dai",
-		.codec_name = "snd-soc-dummy",
-		.platform_name = "sst-mfld-platform",
 		.nonatomic = true,
 		.dynamic = 1,
 		.dpcm_playback = 1,
 		.ops = &cht_aif1_ops,
+		SND_SOC_DAILINK_REG(deepbuffer, dummy, platform),
 	},
 
 	/* Back End DAI links */
@@ -320,17 +333,14 @@ static struct snd_soc_dai_link cht_dailink[] = {
 		/* SSP2 - Codec */
 		.name = "SSP2-Codec",
 		.id = 0,
-		.cpu_dai_name = "ssp2-port",
-		.platform_name = "sst-mfld-platform",
 		.no_pcm = 1,
 		.nonatomic = true,
-		.codec_dai_name = "rt5670-aif1",
-		.codec_name = "i2c-10EC5670:00",
 		.init = cht_codec_init,
 		.be_hw_params_fixup = cht_codec_fixup,
 		.dpcm_playback = 1,
 		.dpcm_capture = 1,
 		.ops = &cht_be_ssp2_ops,
+		SND_SOC_DAILINK_REG(ssp2_port, ssp2_codec, platform),
 	},
 };
 
@@ -409,9 +419,9 @@ static int snd_cht_mc_probe(struct platform_device *pdev)
 			 "i2c-%s", acpi_dev_name(adev));
 		put_device(&adev->dev);
 		for (i = 0; i < ARRAY_SIZE(cht_dailink); i++) {
-			if (!strcmp(cht_dailink[i].codec_name,
-				RT5672_I2C_DEFAULT)) {
-				cht_dailink[i].codec_name = drv->codec_name;
+			if (!strcmp(cht_dailink[i].codecs->name,
+				    RT5672_I2C_DEFAULT)) {
+				cht_dailink[i].codecs->name = drv->codec_name;
 				break;
 			}
 		}

@@ -21,9 +21,9 @@
 
 void l2_guest_code(void)
 {
-	GUEST_SYNC(6);
-
 	GUEST_SYNC(7);
+
+	GUEST_SYNC(8);
 
 	/* Done, exit to L1 and never come back.  */
 	vmcall();
@@ -50,12 +50,17 @@ void l1_guest_code(struct vmx_pages *vmx_pages)
 
 	GUEST_SYNC(5);
 	GUEST_ASSERT(vmptrstz() == vmx_pages->enlightened_vmcs_gpa);
+	current_evmcs->revision_id = -1u;
+	GUEST_ASSERT(vmlaunch());
+	current_evmcs->revision_id = EVMCS_VERSION;
+	GUEST_SYNC(6);
+
 	GUEST_ASSERT(!vmlaunch());
 	GUEST_ASSERT(vmptrstz() == vmx_pages->enlightened_vmcs_gpa);
-	GUEST_SYNC(8);
+	GUEST_SYNC(9);
 	GUEST_ASSERT(!vmresume());
 	GUEST_ASSERT(vmreadz(VM_EXIT_REASON) == EXIT_REASON_VMCALL);
-	GUEST_SYNC(9);
+	GUEST_SYNC(10);
 }
 
 void guest_code(struct vmx_pages *vmx_pages)
@@ -67,6 +72,10 @@ void guest_code(struct vmx_pages *vmx_pages)
 		l1_guest_code(vmx_pages);
 
 	GUEST_DONE();
+
+	/* Try enlightened vmptrld with an incorrect GPA */
+	evmcs_vmptrld(0xdeadbeef, vmx_pages->enlightened_vmcs);
+	GUEST_ASSERT(vmlaunch());
 }
 
 int main(int argc, char *argv[])
@@ -79,11 +88,6 @@ int main(int argc, char *argv[])
 	struct kvm_x86_state *state;
 	struct ucall uc;
 	int stage;
-	uint16_t evmcs_ver;
-	struct kvm_enable_cap enable_evmcs_cap = {
-		.cap = KVM_CAP_HYPERV_ENLIGHTENED_VMCS,
-		 .args[0] = (unsigned long)&evmcs_ver
-	};
 
 	/* Create VM */
 	vm = vm_create_default(VCPU_ID, 0, guest_code);
@@ -92,17 +96,11 @@ int main(int argc, char *argv[])
 
 	if (!kvm_check_cap(KVM_CAP_NESTED_STATE) ||
 	    !kvm_check_cap(KVM_CAP_HYPERV_ENLIGHTENED_VMCS)) {
-		printf("capabilities not available, skipping test\n");
+		print_skip("capabilities not available");
 		exit(KSFT_SKIP);
 	}
 
-	vcpu_ioctl(vm, VCPU_ID, KVM_ENABLE_CAP, &enable_evmcs_cap);
-
-	/* KVM should return supported EVMCS version range */
-	TEST_ASSERT(((evmcs_ver >> 8) >= (evmcs_ver & 0xff)) &&
-		    (evmcs_ver & 0xff) > 0,
-		    "Incorrect EVMCS version range: %x:%x\n",
-		    evmcs_ver & 0xff, evmcs_ver >> 8);
+	vcpu_enable_evmcs(vm, VCPU_ID);
 
 	run = vcpu_state(vm, VCPU_ID);
 
@@ -120,20 +118,20 @@ int main(int argc, char *argv[])
 
 		switch (get_ucall(vm, VCPU_ID, &uc)) {
 		case UCALL_ABORT:
-			TEST_ASSERT(false, "%s at %s:%d", (const char *)uc.args[0],
-				    __FILE__, uc.args[1]);
+			TEST_FAIL("%s at %s:%ld", (const char *)uc.args[0],
+		      		  __FILE__, uc.args[1]);
 			/* NOT REACHED */
 		case UCALL_SYNC:
 			break;
 		case UCALL_DONE:
-			goto done;
+			goto part1_done;
 		default:
-			TEST_ASSERT(false, "Unknown ucall 0x%x.", uc.cmd);
+			TEST_FAIL("Unknown ucall %lu", uc.cmd);
 		}
 
 		/* UCALL_SYNC is handled here.  */
 		TEST_ASSERT(!strcmp((const char *)uc.args[0], "hello") &&
-			    uc.args[1] == stage, "Unexpected register values vmexit #%lx, got %lx",
+			    uc.args[1] == stage, "Stage %d: Unexpected register values vmexit, got %lx",
 			    stage, (ulong)uc.args[1]);
 
 		state = vcpu_save_state(vm, VCPU_ID);
@@ -144,8 +142,9 @@ int main(int argc, char *argv[])
 
 		/* Restore state in a new VM.  */
 		kvm_vm_restart(vm, O_RDWR);
-		vm_vcpu_add(vm, VCPU_ID, 0, 0);
+		vm_vcpu_add(vm, VCPU_ID);
 		vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
+		vcpu_enable_evmcs(vm, VCPU_ID);
 		vcpu_load_state(vm, VCPU_ID, state);
 		run = vcpu_state(vm, VCPU_ID);
 		free(state);
@@ -157,6 +156,10 @@ int main(int argc, char *argv[])
 			    (ulong) regs2.rdi, (ulong) regs2.rsi);
 	}
 
-done:
+part1_done:
+	_vcpu_run(vm, VCPU_ID);
+	TEST_ASSERT(run->exit_reason == KVM_EXIT_SHUTDOWN,
+		    "Unexpected successful VMEnter with invalid eVMCS pointer!");
+
 	kvm_vm_free(vm);
 }

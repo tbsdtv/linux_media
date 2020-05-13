@@ -118,6 +118,7 @@ struct b53_device {
 	u8 jumbo_size_reg;
 	int reset_gpio;
 	u8 num_arl_entries;
+	enum dsa_tag_protocol tag_protocol;
 
 	/* used ports mask */
 	u16 enabled_ports;
@@ -250,7 +251,7 @@ b53_build_op(write48, u64);
 b53_build_op(write64, u64);
 
 struct b53_arl_entry {
-	u8 port;
+	u16 port;
 	u8 mac[ETH_ALEN];
 	u16 vid;
 	u8 is_valid:1;
@@ -319,6 +320,8 @@ int b53_br_join(struct dsa_switch *ds, int port, struct net_device *bridge);
 void b53_br_leave(struct dsa_switch *ds, int port, struct net_device *bridge);
 void b53_br_set_stp_state(struct dsa_switch *ds, int port, u8 state);
 void b53_br_fast_age(struct dsa_switch *ds, int port);
+int b53_br_egress_floods(struct dsa_switch *ds, int port,
+			 bool unicast, bool multicast);
 void b53_port_event(struct dsa_switch *ds, int port);
 void b53_phylink_validate(struct dsa_switch *ds, int port,
 			  unsigned long *supported,
@@ -335,7 +338,9 @@ void b53_phylink_mac_link_down(struct dsa_switch *ds, int port,
 void b53_phylink_mac_link_up(struct dsa_switch *ds, int port,
 			     unsigned int mode,
 			     phy_interface_t interface,
-			     struct phy_device *phydev);
+			     struct phy_device *phydev,
+			     int speed, int duplex,
+			     bool tx_pause, bool rx_pause);
 int b53_vlan_filtering(struct dsa_switch *ds, int port, bool vlan_filtering);
 int b53_vlan_prepare(struct dsa_switch *ds, int port,
 		     const struct switchdev_obj_port_vlan *vlan);
@@ -349,9 +354,16 @@ int b53_fdb_del(struct dsa_switch *ds, int port,
 		const unsigned char *addr, u16 vid);
 int b53_fdb_dump(struct dsa_switch *ds, int port,
 		 dsa_fdb_dump_cb_t *cb, void *data);
+int b53_mdb_prepare(struct dsa_switch *ds, int port,
+		    const struct switchdev_obj_port_mdb *mdb);
+void b53_mdb_add(struct dsa_switch *ds, int port,
+		 const struct switchdev_obj_port_mdb *mdb);
+int b53_mdb_del(struct dsa_switch *ds, int port,
+		const struct switchdev_obj_port_mdb *mdb);
 int b53_mirror_add(struct dsa_switch *ds, int port,
 		   struct dsa_mall_mirror_tc_entry *mirror, bool ingress);
-enum dsa_tag_protocol b53_get_tag_protocol(struct dsa_switch *ds, int port);
+enum dsa_tag_protocol b53_get_tag_protocol(struct dsa_switch *ds, int port,
+					   enum dsa_tag_protocol mprot);
 void b53_mirror_del(struct dsa_switch *ds, int port,
 		    struct dsa_mall_mirror_tc_entry *mirror);
 int b53_enable_port(struct dsa_switch *ds, int port, struct phy_device *phy);

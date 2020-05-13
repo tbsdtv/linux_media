@@ -16,7 +16,7 @@
 #include <linux/kfifo.h>
 #include <linux/uaccess.h>
 #include <linux/idr.h>
-#include "most/core.h"
+#include <linux/most.h>
 
 #define CHRDEV_REGION_SIZE 50
 
@@ -25,7 +25,7 @@ static struct cdev_component {
 	struct ida minor_id;
 	unsigned int major;
 	struct class *class;
-	struct core_component cc;
+	struct most_component cc;
 } comp;
 
 struct comp_channel {
@@ -463,10 +463,8 @@ static int comp_probe(struct most_interface *iface, int channel_id,
 	spin_lock_init(&c->unlink);
 	INIT_KFIFO(c->fifo);
 	retval = kfifo_alloc(&c->fifo, cfg->num_buffers, GFP_KERNEL);
-	if (retval) {
-		pr_info("failed to alloc channel kfifo");
+	if (retval)
 		goto err_del_cdev_and_free_channel;
-	}
 	init_waitqueue_head(&c->wq);
 	mutex_init(&c->io_mutex);
 	spin_lock_irqsave(&ch_list_lock, cl_flags);
@@ -496,6 +494,7 @@ err_remove_ida:
 
 static struct cdev_component comp = {
 	.cc = {
+		.mod = THIS_MODULE,
 		.name = "cdev",
 		.probe_channel = comp_probe,
 		.disconnect_channel = comp_disconnect_channel,

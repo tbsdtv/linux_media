@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2014 NVIDIA Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef __SOC_TEGRA_MC_H__
@@ -184,7 +181,7 @@ struct tegra_mc {
 	spinlock_t lock;
 };
 
-void tegra_mc_write_emem_configuration(struct tegra_mc *mc, unsigned long rate);
+int tegra_mc_write_emem_configuration(struct tegra_mc *mc, unsigned long rate);
 unsigned int tegra_mc_get_emem_device_count(struct tegra_mc *mc);
 
 #endif /* __SOC_TEGRA_MC_H__ */

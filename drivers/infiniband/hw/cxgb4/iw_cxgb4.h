@@ -490,13 +490,13 @@ struct c4iw_qp {
 	struct t4_wq wq;
 	spinlock_t lock;
 	struct mutex mutex;
-	struct kref kref;
 	wait_queue_head_t wait;
 	int sq_sig_all;
 	struct c4iw_srq *srq;
-	struct work_struct free_work;
 	struct c4iw_ucontext *ucontext;
 	struct c4iw_wr_wait *wr_waitp;
+	struct completion qp_rel_comp;
+	refcount_t qp_refcnt;
 };
 
 static inline struct c4iw_qp *to_c4iw_qp(struct ib_qp *ibqp)
@@ -707,7 +707,7 @@ struct mpa_message {
 	u8 flags;
 	u8 revision;
 	__be16 private_data_size;
-	u8 private_data[0];
+	u8 private_data[];
 };
 
 struct mpa_v2_conn_params {
@@ -719,7 +719,7 @@ struct terminate_message {
 	u8 layer_etype;
 	u8 ecode;
 	__be16 hdrct_rsvd;
-	u8 len_hdrs[0];
+	u8 len_hdrs[];
 };
 
 #define TERM_MAX_LENGTH (sizeof(struct terminate_message) + 2 + 18 + 28)
@@ -992,10 +992,9 @@ struct ib_mr *c4iw_reg_user_mr(struct ib_pd *pd, u64 start,
 					   struct ib_udata *udata);
 struct ib_mr *c4iw_get_dma_mr(struct ib_pd *pd, int acc);
 int c4iw_dereg_mr(struct ib_mr *ib_mr, struct ib_udata *udata);
-int c4iw_destroy_cq(struct ib_cq *ib_cq, struct ib_udata *udata);
-struct ib_cq *c4iw_create_cq(struct ib_device *ibdev,
-			     const struct ib_cq_init_attr *attr,
-			     struct ib_udata *udata);
+void c4iw_destroy_cq(struct ib_cq *ib_cq, struct ib_udata *udata);
+int c4iw_create_cq(struct ib_cq *ibcq, const struct ib_cq_init_attr *attr,
+		   struct ib_udata *udata);
 int c4iw_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags);
 int c4iw_modify_srq(struct ib_srq *ib_srq, struct ib_srq_attr *attr,
 		    enum ib_srq_attr_mask srq_attr_mask,

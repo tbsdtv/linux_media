@@ -140,6 +140,7 @@ struct qed_cxt_mngr;
 struct qed_sb_sp_info;
 struct qed_ll2_info;
 struct qed_mcp_info;
+struct qed_llh_info;
 
 struct qed_rt_data {
 	u32	*init_val;
@@ -252,7 +253,8 @@ enum qed_resources {
 	QED_VLAN,
 	QED_RDMA_CNQ_RAM,
 	QED_ILT,
-	QED_LL2_QUEUE,
+	QED_LL2_RAM_QUEUE,
+	QED_LL2_CTX_QUEUE,
 	QED_CMDQS_CQS,
 	QED_RDMA_STATS_QUEUE,
 	QED_BDQ,
@@ -460,6 +462,8 @@ struct qed_fw_data {
 	const u8		*modes_tree_buf;
 	union init_op		*init_ops;
 	const u32		*arr_data;
+	const u32		*fw_overlays;
+	u32			fw_overlays_len;
 	u32			init_ops_size;
 };
 
@@ -528,6 +532,23 @@ struct qed_nvm_image_info {
 	u32 num_images;
 	struct bist_nvm_image_att *image_att;
 	bool valid;
+};
+
+enum qed_hsi_def_type {
+	QED_HSI_DEF_MAX_NUM_VFS,
+	QED_HSI_DEF_MAX_NUM_L2_QUEUES,
+	QED_HSI_DEF_MAX_NUM_PORTS,
+	QED_HSI_DEF_MAX_SB_PER_PATH,
+	QED_HSI_DEF_MAX_NUM_PFS,
+	QED_HSI_DEF_MAX_NUM_VPORTS,
+	QED_HSI_DEF_NUM_ETH_RSS_ENGINE,
+	QED_HSI_DEF_MAX_QM_TX_QUEUES,
+	QED_HSI_DEF_NUM_PXP_ILT_RECORDS,
+	QED_HSI_DEF_NUM_RDMA_STATISTIC_COUNTERS,
+	QED_HSI_DEF_MAX_QM_GLOBAL_RLS,
+	QED_HSI_DEF_MAX_PBF_CMD_LINES,
+	QED_HSI_DEF_MAX_BTB_BLOCKS,
+	QED_NUM_HSI_DEFS
 };
 
 #define DRV_MODULE_VERSION		      \
@@ -645,6 +666,7 @@ struct qed_hwfn {
 
 	struct dbg_tools_data		dbg_info;
 	void				*dbg_user_info;
+	struct virt_mem_desc		dbg_arrays[MAX_BIN_DBG_BUFFER_TYPE];
 
 	/* PWM region specific data */
 	u16				wid_count;
@@ -667,6 +689,7 @@ struct qed_hwfn {
 	/* Nvm images number and attributes */
 	struct qed_nvm_image_info nvm_info;
 
+	struct phys_mem_desc *fw_overlay_mem;
 	struct qed_ptt *p_arfs_ptt;
 
 	struct qed_simd_fp_handler	simd_proto_handler[64];
@@ -741,6 +764,7 @@ struct qed_dev {
 #define QED_DEV_ID_MASK		0xff00
 #define QED_DEV_ID_MASK_BB	0x1600
 #define QED_DEV_ID_MASK_AH	0x8000
+#define QED_IS_E4(dev)  (QED_IS_BB(dev) || QED_IS_AH(dev))
 
 	u16	chip_num;
 #define CHIP_NUM_MASK                   0xffff
@@ -794,12 +818,17 @@ struct qed_dev {
 	u8				cache_shift;
 
 	/* Init */
-	const struct iro		*iro_arr;
-#define IRO (p_hwfn->cdev->iro_arr)
+	const u32 *iro_arr;
+#define IRO ((const struct iro *)p_hwfn->cdev->iro_arr)
 
 	/* HW functions */
 	u8				num_hwfns;
 	struct qed_hwfn			hwfns[MAX_HWFNS_PER_DEVICE];
+
+	/* Engine affinity */
+	u8				l2_affin_hint;
+	u8				fir_affin;
+	u8				iwarp_affin;
 
 	/* SRIOV */
 	struct qed_hw_sriov_info *p_iov_info;
@@ -814,6 +843,10 @@ struct qed_dev {
 
 	/* Recovery */
 	bool recov_in_prog;
+
+	/* LLH info */
+	u8 ppfid_bitmap;
+	struct qed_llh_info *p_llh_info;
 
 	/* Linux specific here */
 	struct  qede_dev		*edev;
@@ -845,6 +878,8 @@ struct qed_dev {
 	struct qed_cb_ll2_info		*ll2;
 	u8				ll2_mac_address[ETH_ALEN];
 #endif
+	struct qed_dbg_feature dbg_features[DBG_FEATURE_NUM];
+	bool disable_ilt_dump;
 	DECLARE_HASHTABLE(connections, 10);
 	const struct firmware		*firmware;
 
@@ -852,18 +887,40 @@ struct qed_dev {
 	u32 rdma_max_inline;
 	u32 rdma_max_srq_sge;
 	u16 tunn_feature_mask;
+
+	struct devlink			*dl;
+	bool				iwarp_cmt;
 };
 
-#define NUM_OF_VFS(dev)         (QED_IS_BB(dev) ? MAX_NUM_VFS_BB \
-						: MAX_NUM_VFS_K2)
-#define NUM_OF_L2_QUEUES(dev)   (QED_IS_BB(dev) ? MAX_NUM_L2_QUEUES_BB \
-						: MAX_NUM_L2_QUEUES_K2)
-#define NUM_OF_PORTS(dev)       (QED_IS_BB(dev) ? MAX_NUM_PORTS_BB \
-						: MAX_NUM_PORTS_K2)
-#define NUM_OF_SBS(dev)         (QED_IS_BB(dev) ? MAX_SB_PER_PATH_BB \
-						: MAX_SB_PER_PATH_K2)
-#define NUM_OF_ENG_PFS(dev)     (QED_IS_BB(dev) ? MAX_NUM_PFS_BB \
-						: MAX_NUM_PFS_K2)
+u32 qed_get_hsi_def_val(struct qed_dev *cdev, enum qed_hsi_def_type type);
+
+#define NUM_OF_VFS(dev)	\
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_NUM_VFS)
+#define NUM_OF_L2_QUEUES(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_NUM_L2_QUEUES)
+#define NUM_OF_PORTS(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_NUM_PORTS)
+#define NUM_OF_SBS(dev)	\
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_SB_PER_PATH)
+#define NUM_OF_ENG_PFS(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_NUM_PFS)
+#define NUM_OF_VPORTS(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_NUM_VPORTS)
+#define NUM_OF_RSS_ENGINES(dev)	\
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_NUM_ETH_RSS_ENGINE)
+#define NUM_OF_QM_TX_QUEUES(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_QM_TX_QUEUES)
+#define NUM_OF_PXP_ILT_RECORDS(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_NUM_PXP_ILT_RECORDS)
+#define NUM_OF_RDMA_STATISTIC_COUNTERS(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_NUM_RDMA_STATISTIC_COUNTERS)
+#define NUM_OF_QM_GLOBAL_RLS(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_QM_GLOBAL_RLS)
+#define NUM_OF_PBF_CMD_LINES(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_PBF_CMD_LINES)
+#define NUM_OF_BTB_BLOCKS(dev) \
+	qed_get_hsi_def_val(dev, QED_HSI_DEF_MAX_BTB_BLOCKS)
+
 
 /**
  * @brief qed_concrete_to_sw_fid - get the sw function id from
@@ -904,6 +961,14 @@ void qed_set_fw_mac_addr(__le16 *fw_msb,
 			 __le16 *fw_mid, __le16 *fw_lsb, u8 *mac);
 
 #define QED_LEADING_HWFN(dev)   (&dev->hwfns[0])
+#define QED_IS_CMT(dev)		((dev)->num_hwfns > 1)
+/* Macros for getting the engine-affinitized hwfn (FIR: fcoe,iscsi,roce) */
+#define QED_FIR_AFFIN_HWFN(dev)		(&(dev)->hwfns[dev->fir_affin])
+#define QED_IWARP_AFFIN_HWFN(dev)       (&(dev)->hwfns[dev->iwarp_affin])
+#define QED_AFFIN_HWFN(dev)				   \
+	(QED_IS_IWARP_PERSONALITY(QED_LEADING_HWFN(dev)) ? \
+	 QED_IWARP_AFFIN_HWFN(dev) : QED_FIR_AFFIN_HWFN(dev))
+#define QED_AFFIN_HWFN_IDX(dev) (IS_LEAD_HWFN(QED_AFFIN_HWFN(dev)) ? 0 : 1)
 
 /* Flags for indication of required queues */
 #define PQ_FLAGS_RLS    (BIT(0))
@@ -922,8 +987,6 @@ u16 qed_get_cm_pq_idx_mcos(struct qed_hwfn *p_hwfn, u8 tc);
 u16 qed_get_cm_pq_idx_vf(struct qed_hwfn *p_hwfn, u16 vf);
 u16 qed_get_cm_pq_idx_ofld_mtc(struct qed_hwfn *p_hwfn, u8 tc);
 u16 qed_get_cm_pq_idx_llt_mtc(struct qed_hwfn *p_hwfn, u8 tc);
-
-#define QED_LEADING_HWFN(dev)   (&dev->hwfns[0])
 
 /* doorbell recovery mechanism */
 void qed_db_recovery_dp(struct qed_hwfn *p_hwfn);

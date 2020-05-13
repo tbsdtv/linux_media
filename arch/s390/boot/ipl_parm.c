@@ -7,13 +7,16 @@
 #include <asm/sections.h>
 #include <asm/boot_data.h>
 #include <asm/facility.h>
+#include <asm/pgtable.h>
 #include <asm/uv.h>
 #include "boot.h"
 
 char __bootdata(early_command_line)[COMMAND_LINE_SIZE];
 struct ipl_parameter_block __bootdata_preserved(ipl_block);
 int __bootdata_preserved(ipl_block_valid);
+unsigned int __bootdata_preserved(zlib_dfltcc_support) = ZLIB_DFLTCC_FULL;
 
+unsigned long __bootdata(vmalloc_size) = VMALLOC_DEFAULT_SIZE;
 unsigned long __bootdata(memory_end);
 int __bootdata(memory_end_set);
 int __bootdata(noexec_disabled);
@@ -48,9 +51,7 @@ void store_ipl_parmblock(void)
 {
 	int rc;
 
-	uv_set_shared(__pa(&ipl_block));
 	rc = __diag308(DIAG308_STORE, &ipl_block);
-	uv_remove_shared(__pa(&ipl_block));
 	if (rc == DIAG308_RC_OK &&
 	    ipl_block.hdr.version <= IPL_MAX_SUPPORTED_VERSION)
 		ipl_block_valid = 1;
@@ -221,9 +222,25 @@ void parse_boot_command_line(void)
 	while (*args) {
 		args = next_arg(args, &param, &val);
 
-		if (!strcmp(param, "mem")) {
-			memory_end = memparse(val, NULL);
+		if (!strcmp(param, "mem") && val) {
+			memory_end = round_down(memparse(val, NULL), PAGE_SIZE);
 			memory_end_set = 1;
+		}
+
+		if (!strcmp(param, "vmalloc") && val)
+			vmalloc_size = round_up(memparse(val, NULL), PAGE_SIZE);
+
+		if (!strcmp(param, "dfltcc")) {
+			if (!strcmp(val, "off"))
+				zlib_dfltcc_support = ZLIB_DFLTCC_DISABLED;
+			else if (!strcmp(val, "on"))
+				zlib_dfltcc_support = ZLIB_DFLTCC_FULL;
+			else if (!strcmp(val, "def_only"))
+				zlib_dfltcc_support = ZLIB_DFLTCC_DEFLATE_ONLY;
+			else if (!strcmp(val, "inf_only"))
+				zlib_dfltcc_support = ZLIB_DFLTCC_INFLATE_ONLY;
+			else if (!strcmp(val, "always"))
+				zlib_dfltcc_support = ZLIB_DFLTCC_FULL_DEBUG;
 		}
 
 		if (!strcmp(param, "noexec")) {
@@ -232,7 +249,7 @@ void parse_boot_command_line(void)
 				noexec_disabled = 1;
 		}
 
-		if (!strcmp(param, "facilities"))
+		if (!strcmp(param, "facilities") && val)
 			modify_fac_list(val);
 
 		if (!strcmp(param, "nokaslr"))

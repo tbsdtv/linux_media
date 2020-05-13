@@ -325,7 +325,7 @@ struct usb_interface_cache {
 
 	/* variable-length array of alternate settings for this interface,
 	 * stored in no particular order */
-	struct usb_host_interface altsetting[0];
+	struct usb_host_interface altsetting[];
 };
 #define	ref_to_usb_interface_cache(r) \
 		container_of(r, struct usb_interface_cache, ref)
@@ -426,7 +426,6 @@ struct usb_bus {
 	struct device *sysdev;		/* as seen from firmware or bus */
 	int busnum;			/* Bus number (in order of reg) */
 	const char *bus_name;		/* stable id (PCI slot_name etc) */
-	u8 uses_dma;			/* Does the host controller use DMA? */
 	u8 uses_pio_for_control;	/*
 					 * Does the host controller use PIO
 					 * for control transfers?
@@ -578,6 +577,7 @@ struct usb3_lpm_parameters {
  * @bus_mA: Current available from the bus
  * @portnum: parent port number (origin 1)
  * @level: number of USB hub ancestors
+ * @devaddr: device address, XHCI: assigned by HW, others: same as devnum
  * @can_submit: URBs may be submitted
  * @persist_enabled:  USB_PERSIST enabled for this device
  * @have_langid: whether string_langid is valid
@@ -661,6 +661,7 @@ struct usb_device {
 	unsigned short bus_mA;
 	u8 portnum;
 	u8 level;
+	u8 devaddr;
 
 	unsigned can_submit:1;
 	unsigned persist_enabled:1;
@@ -707,6 +708,7 @@ struct usb_device {
 	unsigned lpm_disable_count;
 
 	u16 hub_delay;
+	unsigned use_generic_driver:1;
 };
 #define	to_usb_device(d) container_of(d, struct usb_device, dev)
 
@@ -1149,6 +1151,8 @@ struct usbdrv_wrap {
  * @id_table: USB drivers use ID table to support hotplugging.
  *	Export this with MODULE_DEVICE_TABLE(usb,...).  This must be set
  *	or your driver's probe function will never get called.
+ * @dev_groups: Attributes attached to the device that will be created once it
+ *	is bound to the driver.
  * @dynids: used internally to hold the list of dynamically added device
  *	ids for this driver.
  * @drvwrap: Driver-model core structure wrapper.
@@ -1196,6 +1200,7 @@ struct usb_driver {
 	int (*post_reset)(struct usb_interface *intf);
 
 	const struct usb_device_id *id_table;
+	const struct attribute_group **dev_groups;
 
 	struct usb_dynids dynids;
 	struct usbdrv_wrap drvwrap;
@@ -1219,22 +1224,31 @@ struct usb_driver {
  *	module is being unloaded.
  * @suspend: Called when the device is going to be suspended by the system.
  * @resume: Called when the device is being resumed by the system.
+ * @dev_groups: Attributes attached to the device that will be created once it
+ *	is bound to the driver.
  * @drvwrap: Driver-model core structure wrapper.
  * @supports_autosuspend: if set to 0, the USB core will not allow autosuspend
  *	for devices bound to this driver.
+ * @generic_subclass: if set to 1, the generic USB driver's probe, disconnect,
+ *	resume and suspend functions will be called in addition to the driver's
+ *	own, so this part of the setup does not need to be replicated.
  *
  * USB drivers must provide all the fields listed above except drvwrap.
  */
 struct usb_device_driver {
 	const char *name;
 
+	bool (*match) (struct usb_device *udev);
 	int (*probe) (struct usb_device *udev);
 	void (*disconnect) (struct usb_device *udev);
 
 	int (*suspend) (struct usb_device *udev, pm_message_t message);
 	int (*resume) (struct usb_device *udev, pm_message_t message);
+	const struct attribute_group **dev_groups;
 	struct usbdrv_wrap drvwrap;
+	const struct usb_device_id *id_table;
 	unsigned int supports_autosuspend:1;
+	unsigned int generic_subclass:1;
 };
 #define	to_usb_device_driver(d) container_of(d, struct usb_device_driver, \
 		drvwrap.driver)
@@ -1455,7 +1469,7 @@ typedef void (*usb_complete_t)(struct urb *);
  * field rather than determining a dma address themselves.
  *
  * Note that transfer_buffer must still be set if the controller
- * does not support DMA (as indicated by bus.uses_dma) and when talking
+ * does not support DMA (as indicated by hcd_uses_dma()) and when talking
  * to root hub. If you have to trasfer between highmem zone and the device
  * on such controller, create a bounce buffer or bail out with an error.
  * If transfer_buffer cannot be set (is in highmem) and the controller is DMA
@@ -1575,7 +1589,7 @@ struct urb {
 	int error_count;		/* (return) number of ISO errors */
 	void *context;			/* (in) context for completion */
 	usb_complete_t complete;	/* (in) completion routine */
-	struct usb_iso_packet_descriptor iso_frame_desc[0];
+	struct usb_iso_packet_descriptor iso_frame_desc[];
 					/* (in) ISO ONLY */
 };
 

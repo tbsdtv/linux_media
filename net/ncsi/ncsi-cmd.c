@@ -54,7 +54,7 @@ static void ncsi_cmd_build_header(struct ncsi_pkt_hdr *h,
 	checksum = ncsi_calculate_checksum((unsigned char *)h,
 					   sizeof(*h) + nca->payload);
 	pchecksum = (__be32 *)((void *)h + sizeof(struct ncsi_pkt_hdr) +
-		    nca->payload);
+		    ALIGN(nca->payload, 4));
 	*pchecksum = htonl(checksum);
 }
 
@@ -309,14 +309,21 @@ static struct ncsi_request *ncsi_alloc_command(struct ncsi_cmd_arg *nca)
 
 int ncsi_xmit_cmd(struct ncsi_cmd_arg *nca)
 {
-	struct ncsi_request *nr;
-	struct ethhdr *eh;
 	struct ncsi_cmd_handler *nch = NULL;
+	struct ncsi_request *nr;
+	unsigned char type;
+	struct ethhdr *eh;
 	int i, ret;
+
+	/* Use OEM generic handler for Netlink request */
+	if (nca->req_flags == NCSI_REQ_FLAG_NETLINK_DRIVEN)
+		type = NCSI_PKT_CMD_OEM;
+	else
+		type = nca->type;
 
 	/* Search for the handler */
 	for (i = 0; i < ARRAY_SIZE(ncsi_cmd_handlers); i++) {
-		if (ncsi_cmd_handlers[i].type == nca->type) {
+		if (ncsi_cmd_handlers[i].type == type) {
 			if (ncsi_cmd_handlers[i].handler)
 				nch = &ncsi_cmd_handlers[i];
 			else
@@ -362,7 +369,15 @@ int ncsi_xmit_cmd(struct ncsi_cmd_arg *nca)
 	eh = skb_push(nr->cmd, sizeof(*eh));
 	eh->h_proto = htons(ETH_P_NCSI);
 	eth_broadcast_addr(eh->h_dest);
-	eth_broadcast_addr(eh->h_source);
+
+	/* If mac address received from device then use it for
+	 * source address as unicast address else use broadcast
+	 * address as source address
+	 */
+	if (nca->ndp->gma_flag == 1)
+		memcpy(eh->h_source, nca->ndp->ndev.dev->dev_addr, ETH_ALEN);
+	else
+		eth_broadcast_addr(eh->h_source);
 
 	/* Start the timer for the request that might not have
 	 * corresponding response. Given NCSI is an internal

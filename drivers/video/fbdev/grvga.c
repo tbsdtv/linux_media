@@ -251,7 +251,7 @@ static int grvga_pan_display(struct fb_var_screeninfo *var,
 	return 0;
 }
 
-static struct fb_ops grvga_ops = {
+static const struct fb_ops grvga_ops = {
 	.owner          = THIS_MODULE,
 	.fb_check_var   = grvga_check_var,
 	.fb_set_par	= grvga_set_par,
@@ -336,10 +336,8 @@ static int grvga_probe(struct platform_device *dev)
 	char *options = NULL, *mode_opt = NULL;
 
 	info = framebuffer_alloc(sizeof(struct grvga_par), &dev->dev);
-	if (!info) {
-		dev_err(&dev->dev, "framebuffer_alloc failed\n");
+	if (!info)
 		return -ENOMEM;
-	}
 
 	/* Expecting: "grvga: modestring, [addr:<framebuffer physical address>], [size:<framebuffer size>]
 	 *

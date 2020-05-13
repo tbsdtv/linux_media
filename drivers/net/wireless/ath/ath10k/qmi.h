@@ -104,6 +104,7 @@ struct ath10k_qmi {
 	bool fw_ready;
 	char fw_build_timestamp[MAX_TIMESTAMP_LEN + 1];
 	struct ath10k_qmi_cal_data cal_data[MAX_NUM_CAL_V01];
+	bool msa_fixed_perm;
 };
 
 int ath10k_qmi_wlan_enable(struct ath10k *ar,
@@ -114,5 +115,6 @@ int ath10k_qmi_wlan_disable(struct ath10k *ar);
 int ath10k_qmi_register_service_notifier(struct notifier_block *nb);
 int ath10k_qmi_init(struct ath10k *ar, u32 msa_size);
 int ath10k_qmi_deinit(struct ath10k *ar);
+int ath10k_qmi_set_fw_log_mode(struct ath10k *ar, u8 fw_log_mode);
 
 #endif /* ATH10K_QMI_H */

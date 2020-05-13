@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * generic helper functions for handling video4linux capture buffers
  *
@@ -19,6 +19,7 @@
 #include <linux/interrupt.h>
 
 #include <media/videobuf-core.h>
+#include <media/v4l2-common.h>
 
 #define MAGIC_BUFFER 0x20070728
 #define MAGIC_CHECK(is, should)						\
@@ -364,7 +365,7 @@ static void videobuf_status(struct videobuf_queue *q, struct v4l2_buffer *b,
 	}
 
 	b->field     = vb->field;
-	b->timestamp = ns_to_timeval(vb->ts);
+	v4l2_buffer_set_timestamp(b, vb->ts);
 	b->bytesused = vb->size;
 	b->sequence  = vb->field_count >> 1;
 }
@@ -578,7 +579,7 @@ int videobuf_qbuf(struct videobuf_queue *q, struct v4l2_buffer *b)
 		    || q->type == V4L2_BUF_TYPE_SDR_OUTPUT) {
 			buf->size = b->bytesused;
 			buf->field = b->field;
-			buf->ts = v4l2_timeval_to_ns(&b->timestamp);
+			buf->ts = v4l2_buffer_get_timestamp(b);
 		}
 		break;
 	case V4L2_MEMORY_USERPTR:
@@ -1123,7 +1124,6 @@ __poll_t videobuf_poll_stream(struct file *file,
 	struct videobuf_buffer *buf = NULL;
 	__poll_t rc = 0;
 
-	poll_wait(file, &buf->done, wait);
 	videobuf_queue_lock(q);
 	if (q->streaming) {
 		if (!list_empty(&q->stream))
@@ -1143,7 +1143,9 @@ __poll_t videobuf_poll_stream(struct file *file,
 		}
 		buf = q->read_buf;
 	}
-	if (!buf)
+	if (buf)
+		poll_wait(file, &buf->done, wait);
+	else
 		rc = EPOLLERR;
 
 	if (0 == rc) {

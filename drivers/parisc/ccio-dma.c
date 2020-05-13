@@ -1024,6 +1024,7 @@ static const struct dma_map_ops ccio_ops = {
 	.unmap_page =		ccio_unmap_page,
 	.map_sg = 		ccio_map_sg,
 	.unmap_sg = 		ccio_unmap_sg,
+	.get_sgtable =		dma_common_get_sgtable,
 };
 
 #ifdef CONFIG_PROC_FS
@@ -1533,7 +1534,7 @@ static int __init ccio_probe(struct parisc_device *dev)
 	*ioc_p = ioc;
 
 	ioc->hw_path = dev->hw_path;
-	ioc->ioc_regs = ioremap_nocache(dev->hpa.start, 4096);
+	ioc->ioc_regs = ioremap(dev->hpa.start, 4096);
 	if (!ioc->ioc_regs) {
 		kfree(ioc);
 		return -ENOMEM;

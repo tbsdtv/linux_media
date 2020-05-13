@@ -41,7 +41,7 @@
 #include <asm/div64.h>
 #include <asm/unaligned.h>
 
-#include <media/dvb_frontend.h>
+
 #include "mxl58x.h"
 #include "mxl58x_regs.h"
 #include "mxl58x_defs.h"
@@ -52,12 +52,16 @@
 #define BYTE2(v) ((v >> 16) & 0xff)
 #define BYTE3(v) ((v >> 24) & 0xff)
 
-#define MXL5XX_DEFAULT_FIRMWARE "dvb-fe-mxl5xx.fw"
+#define MXL58X_DEFAULT_FIRMWARE "dvb-fe-mxl5xx.fw"
 
-static int mode = 0;
+static int mode;
 module_param(mode, int, 0444);
 MODULE_PARM_DESC(mode,
-		"Multi-switch mode: 0=quattro/quad 1=normal direct connection 2 = Unicable mode(using the input 3 for 6909)");
+		"Multi-switch mode: 0=quattro/quad 1=normal direct connection");
+
+static unsigned int rfsource;
+module_param(rfsource, int, 0644);
+MODULE_PARM_DESC(rfsource, "RF source selection for direct connection mode (default:0 - auto)");
 
 LIST_HEAD(mxllist);
 
@@ -79,6 +83,9 @@ struct mxl_base {
 	u8                   cmd_data[MAX_CMD_DATA];
 
 	struct mxl58x_cfg   *cfg;
+
+	void (*write_properties) (struct i2c_adapter *i2c,u8 reg, u32 buf);
+	void (*read_properties) (struct i2c_adapter *i2c,u8 reg, u32 *buf);
 };
 
 struct mxl {
@@ -86,8 +93,6 @@ struct mxl {
 	struct dvb_frontend  fe;
 	u32                  demod;
 	u32                  rf_in;
-	bool			diseqcsign; //
-	MXL_HYDRA_DISEQC_TX_MSG_T diseqcMsg;
 };
 
 static void convert_endian(u8 flag, u32 size, u8 *d)
@@ -157,7 +162,7 @@ static int write_register(struct mxl *state, u32 reg, u32 val)
 	stat = i2cwrite(state, data, sizeof(data));
 	mutex_unlock(&state->base->i2c_lock);
 	if (stat)
-		pr_err("i2c write error\n");
+		dev_err(&state->base->i2c->dev,"i2c write error\n");
 	return stat;
 }
 
@@ -203,7 +208,7 @@ static int write_firmware_block(struct mxl *state,
 			MXL_HYDRA_REG_SIZE_IN_BYTES + size);
 	mutex_unlock(&state->base->i2c_lock);
 	if (stat)
-		pr_err("fw block write failed\n");
+		dev_err(&state->base->i2c->dev,"fw block write failed\n");
 	return stat;
 }
 
@@ -220,13 +225,13 @@ static int read_register(struct mxl *state, u32 reg, u32 *val)
 	stat = i2cwrite(state, data,
 			MXL_HYDRA_REG_SIZE_IN_BYTES + MXL_HYDRA_I2C_HDR_SIZE);
 	if (stat)
-		pr_err("i2c read error 1\n");
+		dev_err(&state->base->i2c->dev,"i2c read error 1\n");
 	if (!stat)
 		stat = i2cread(state, (u8 *) val, MXL_HYDRA_REG_SIZE_IN_BYTES);
 	mutex_unlock(&state->base->i2c_lock);
 	le32_to_cpus(val);
 	if (stat)
-		pr_err("i2c read error 2\n");
+		dev_err(&state->base->i2c->dev,"i2c read error 2\n");
 	return stat;
 }
 
@@ -327,7 +332,7 @@ static void release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static int get_algo(struct dvb_frontend *fe)
+static enum dvbfe_algo get_algo(struct dvb_frontend *fe)
 {
 	return DVBFE_ALGO_HW;
 }
@@ -351,7 +356,6 @@ static int send_master_cmd(struct dvb_frontend *fe,
 	u8 cmdSize = sizeof(MXL_HYDRA_DISEQC_TX_MSG_T);
 	u8 cmdBuff[MXL_HYDRA_OEM_MAX_CMD_BUFF_LEN];
 	int i = 0,ret = 0;
-	
 
 	diseqcMsgPtr.diseqcId = state->rf_in;
 	diseqcMsgPtr.nbyte	= cmd->msg_len;
@@ -360,17 +364,11 @@ static int send_master_cmd(struct dvb_frontend *fe,
 	for( i =0;i < cmd->msg_len;i++)
 		diseqcMsgPtr.bufMsg[i] = cmd->msg[i];
 
-	if(mode == 1){
-		state->diseqcsign= true;
-		memcpy(&state->diseqcMsg,&diseqcMsgPtr,sizeof(MXL_HYDRA_DISEQC_TX_MSG_T));
-	  return 0;
-
-	}
-
 	BUILD_HYDRA_CMD(MXL_HYDRA_DISEQC_MSG_CMD, MXL_CMD_WRITE, cmdSize, &diseqcMsgPtr, cmdBuff);
 	mutex_lock(&state->base->status_lock);
 	ret=send_command(state, cmdSize + MXL_HYDRA_CMD_HEADER_SIZE, &cmdBuff[0]);
 	mutex_unlock(&state->base->status_lock);
+	msleep(100);
 
 	return ret;
 }
@@ -384,17 +382,9 @@ static int send_burst(struct dvb_frontend *fe,
 	u8 cmdBuff[MXL_HYDRA_OEM_MAX_CMD_BUFF_LEN];
 	int i = 0,ret = 0;
 
-
 	diseqcMsgPtr.diseqcId = state->rf_in;
 	diseqcMsgPtr.nbyte	= 0;
 	diseqcMsgPtr.toneBurst = burst == SEC_MINI_B ? MXL_HYDRA_DISEQC_TONE_SB : MXL_HYDRA_DISEQC_TONE_SA;
-
-	if(mode == 1){
-		state->diseqcsign= true;
-		memcpy(&state->diseqcMsg,&diseqcMsgPtr,sizeof(MXL_HYDRA_DISEQC_TX_MSG_T));
-	  return 0;
-
-	}
 
 	BUILD_HYDRA_CMD(MXL_HYDRA_DISEQC_MSG_CMD, MXL_CMD_WRITE, cmdSize, &diseqcMsgPtr, cmdBuff);
 	mutex_lock(&state->base->status_lock);
@@ -402,25 +392,6 @@ static int send_burst(struct dvb_frontend *fe,
 	mutex_unlock(&state->base->status_lock);
 
 	return ret;
-}
-
-static void senddiseqcAbortTune(struct dvb_frontend *fe)
-{
-	struct mxl *state = fe->demodulator_priv;
-	u8 cmdSize = sizeof(MXL_HYDRA_DISEQC_TX_MSG_T);
-	u8 cmdBuff[MXL_HYDRA_OEM_MAX_CMD_BUFF_LEN];
-
-	if(state->diseqcsign){
-	state->diseqcMsg.diseqcId = state->rf_in;
-	state->diseqcMsg.bufMsg[0] = 0xe0;
-	BUILD_HYDRA_CMD(MXL_HYDRA_DISEQC_MSG_CMD, MXL_CMD_WRITE, cmdSize, &state->diseqcMsg, cmdBuff);
-	mutex_lock(&state->base->status_lock);
-	send_command(state, cmdSize + MXL_HYDRA_CMD_HEADER_SIZE, &cmdBuff[0]);
-	mutex_unlock(&state->base->status_lock);
-
-	state->diseqcsign = false;
-	}
-	msleep(100);
 }
 
 static int set_parameters(struct dvb_frontend *fe)
@@ -446,9 +417,6 @@ static int set_parameters(struct dvb_frontend *fe)
 	if (p->symbol_rate < 1000000 || p->symbol_rate > 45000000)
 		return -EINVAL;
 
-	if(mode == 1)
-		 senddiseqcAbortTune(fe);
-	
 	//CfgDemodAbortTune(state);
 	
 	switch (p->delivery_system) {
@@ -477,8 +445,6 @@ static int set_parameters(struct dvb_frontend *fe)
 	demodChanCfg.maxCarrierOffsetInMHz = 10;
 	demodChanCfg.spectrumInversion = MXL_HYDRA_SPECTRUM_AUTO;
 	demodChanCfg.fecCodeRate = MXL_HYDRA_FEC_AUTO;
-
-	//printk("std %u freq %u\n", demodChanCfg.standard, demodChanCfg.symbolRateInHz);
 
 #if 0
 	if (p->delivery_system == SYS_DSS)
@@ -580,7 +546,7 @@ static int read_status(struct dvb_frontend *fe, enum fe_status *status)
 		p->pre_bit_count.len = 1;
 		p->pre_bit_count.stat[0].scale = FE_SCALE_COUNTER;
 		p->pre_bit_count.stat[0].uvalue = reg[3];
-		/* pr_warn("mxl5xx: pre_bit_error=%u pre_bit_count=%u\n", p->pre_bit_error.stat[0].uvalue, p->pre_bit_count.stat[0].uvalue); */
+		dev_dbg(&state->base->i2c->dev,"pre_bit_error=%u pre_bit_count=%u\n", p->pre_bit_error.stat[0].uvalue, p->pre_bit_count.stat[0].uvalue);
 		break;
 	default:
 		break;
@@ -615,7 +581,7 @@ static int read_status(struct dvb_frontend *fe, enum fe_status *status)
 	default:
 		break;
 	}
-	/* pr_warn("mxl5xx: post_bit_error=%u post_bit_count=%u\n", p->post_bit_error.stat[0].uvalue, p->post_bit_count.stat[0].uvalue); */
+	dev_dbg(&state->base->i2c->dev,"post_bit_error=%u post_bit_count=%u\n", p->post_bit_error.stat[0].uvalue, p->post_bit_count.stat[0].uvalue);
 
 	return 0;
 }
@@ -677,7 +643,13 @@ static int tune(struct dvb_frontend *fe, bool re_tune,
 	}
 
 	r = read_status(fe, status);
-	return r;
+	if (r)
+		return r;
+
+	if (*status & FE_HAS_LOCK)
+		return 0;
+
+	return 0;
 }
 
 static int sleep(struct dvb_frontend *fe)
@@ -720,11 +692,6 @@ static int get_frontend(struct dvb_frontend *fe, struct dtv_frontend_properties 
 		(u8 *) &freq);
 	HYDRA_DEMOD_STATUS_UNLOCK(state, state->demod);
 	mutex_unlock(&state->base->status_lock);
-
-#if 0
-	pr_warn("mxl5xx: freq=%u delsys=%u srate=%u\n", freq * 1000,
-		regData[DMD_STANDARD_ADDR], regData[DMD_SYMBOL_RATE_ADDR]);
-#endif
 
 	p->symbol_rate = regData[DMD_SYMBOL_RATE_ADDR];
 	p->frequency = freq;
@@ -799,22 +766,16 @@ static int set_voltage(struct dvb_frontend *fe, enum fe_sec_voltage voltage)
 	struct i2c_adapter *i2c = state->base->i2c;
 	struct mxl58x_cfg *cfg = state->base->cfg;
 
-	switch (mode) {
-	case 2:
-			break;
-	case 1:
+	if (mode)
 		cfg->set_voltage(i2c, voltage, state->rf_in);
-		break;
-	case 0:
-	default:
+	else {
 		if (voltage == SEC_VOLTAGE_18)
 			state->rf_in &= ~2;
 		else
 			state->rf_in |= 2;
-		break;
 	}
 
-	return 0; //state->base->cfg->set_voltage(fe, voltage, 0);
+	return 0;  
 }
 
 
@@ -822,28 +783,42 @@ static int set_tone(struct dvb_frontend *fe, enum fe_sec_tone_mode tone)
 {
 	struct mxl *state = fe->demodulator_priv;
 
-	switch (mode) {
-	case 2:
-			break;
-	case 1:
+	if (mode)
 		set_input_tone(fe, tone, state->rf_in);
-		break;
-	case 0:
-	default:
+	else {
 		if (tone == SEC_TONE_ON)
 			state->rf_in &= ~1;
 		else
 			state->rf_in |= 1;
-		break;
 	}
 
 	return 0;
 }
 
+static void spi_read(struct dvb_frontend *fe, struct ecp3_info *ecp3inf)
+{
+	struct mxl *state = fe->demodulator_priv;
+	struct i2c_adapter *adapter = state->base->i2c;
+
+	if (state->base->read_properties)
+		state->base->read_properties(adapter,ecp3inf->reg, &(ecp3inf->data));
+	return ;
+}
+
+static void spi_write(struct dvb_frontend *fe,struct ecp3_info *ecp3inf)
+{
+	struct mxl *state = fe->demodulator_priv;
+	struct i2c_adapter *adapter = state->base->i2c;
+
+	if (state->base->write_properties)
+		state->base->write_properties(adapter,ecp3inf->reg, ecp3inf->data);
+	return ;
+}
+
 static struct dvb_frontend_ops mxl_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2, SYS_DSS },
 	.info = {
-		.name			= "MXL5XX",
+		.name			= "MXL58X",
 		.frequency_min_hz	=  300 * MHz,
 		.frequency_max_hz	= 2350 * MHz,
 		.symbol_rate_min	= 1000000,
@@ -869,6 +844,9 @@ static struct dvb_frontend_ops mxl_ops = {
 
 	.set_tone			= set_tone,
 	.set_voltage			= set_voltage,
+
+	.spi_read			= spi_read,
+	.spi_write			= spi_write,
 };
 
 static struct mxl_base *match_base(struct i2c_adapter *i2c, u8 adr)
@@ -935,7 +913,7 @@ static int write_fw_segment(struct mxl *state,
 	u32 blockSize = MXL_HYDRA_OEM_MAX_BLOCK_WRITE_LENGTH;
 	u8 wMsgBuffer[MXL_HYDRA_OEM_MAX_BLOCK_WRITE_LENGTH];
 
-	//pr_info("seg %u\n", totalSize);
+	//dev_warn(&state->base->i2c->dev,"seg %u\n", totalSize);
 	do {
 		size = origSize = (((u32)(dataCount + blockSize)) > totalSize) ?
 			(totalSize - dataCount) : blockSize;
@@ -972,7 +950,7 @@ static int do_firmware_download(struct mxl *state,
 	MBIN_SEGMENT_T *segmentPtr;
 
 	if (mbinPtr->header.id != MBIN_FILE_HEADER_ID) {
-		pr_err("%s: Invalid file header ID (%c)\n",
+		dev_err(&state->base->i2c->dev,"%s: Invalid file header ID (%c)\n",
 		       __func__, mbinPtr->header.id);
 		return -EINVAL;
 	}
@@ -982,7 +960,7 @@ static int do_firmware_download(struct mxl *state,
 	segmentPtr = (MBIN_SEGMENT_T *) (&mbinPtr->data[0]);
 	for (index = 0; index < mbinPtr->header.numSegments; index++) {
 		if (segmentPtr->header.id != MBIN_SEGMENT_HEADER_ID) {
-			pr_err("%s: Invalid segment header ID (%c)\n",
+			dev_err(&state->base->i2c->dev,"%s: Invalid segment header ID (%c)\n",
 			       __func__, segmentPtr->header.id);
 			return -EINVAL;
 		}
@@ -1078,7 +1056,7 @@ static int firmware_download(struct mxl *state, u32 mbinBufferSize,
 	if (!firmware_is_alive(state))
 		return -1;
 
-	pr_info("Hydra FW alive\n");
+	dev_info(&state->base->i2c->dev,"Hydra FW alive\n");
 
 	/* sometimes register values are wrong shortly after first heart beats */
 	msleep(50);
@@ -1093,17 +1071,17 @@ static int firmware_download(struct mxl *state, u32 mbinBufferSize,
 	status = GET_REG_FIELD_DATA(PAD_MUX_BOND_OPTION, &regData);
 	if (status)
 		return status;
-	pr_info("chipID=%08x\n", regData);
+	dev_info(&state->base->i2c->dev,"chipID=%08x\n", regData);
 
 	status = GET_REG_FIELD_DATA(PRCM_AFE_CHIP_MMSK_VER, &regData);
 	if (status)
 		return status;
-	pr_info("chipVer=%08x\n", regData);
+	dev_info(&state->base->i2c->dev,"chipVer=%08x\n", regData);
 
 	status = read_register(state, HYDRA_FIRMWARE_VERSION, &regData);
 	if (status)
 		return status;
-	pr_info("FWVer=%08x\n", regData);
+	dev_info(&state->base->i2c->dev,"FWVer=%08x\n", regData);
 
 	return status;
 }
@@ -1362,8 +1340,7 @@ static int config_dis(struct mxl *state, u32 id)
 	MXL_HYDRA_DISEQC_ID_E diseqcId = id;
 	MXL_HYDRA_DISEQC_OPMODE_E opMode = MXL_HYDRA_DISEQC_TONE_MODE; //lja MXL_HYDRA_DISEQC_ENVELOPE_MODE;
 	MXL_HYDRA_DISEQC_VER_E version = MXL_HYDRA_DISEQC_1_X;
-	MXL_HYDRA_DISEQC_CARRIER_FREQ_E carrierFreqInHz =
-		MXL_HYDRA_DISEQC_CARRIER_FREQ_22KHZ;
+	MXL_HYDRA_DISEQC_CARRIER_FREQ_E carrierFreqInHz = MXL_HYDRA_DISEQC_CARRIER_FREQ_22KHZ;
 	MXL58x_DSQ_OP_MODE_T diseqcMsg;
 	u8 cmdSize = sizeof(diseqcMsg);
 	u8 cmdBuff[MXL_HYDRA_OEM_MAX_CMD_BUFF_LEN];
@@ -1384,12 +1361,11 @@ static int load_fw(struct mxl *state)
 	int stat = 0;
 	u8 *buf;
 
-#if 1
 	const struct firmware *fw;
 
-	pr_info("loading firmware, please wait...\n");
+	dev_warn(&state->base->i2c->dev,"loading firmware, please wait...\n");
 
-	stat = request_firmware(&fw, MXL5XX_DEFAULT_FIRMWARE,
+	stat = request_firmware(&fw, MXL58X_DEFAULT_FIRMWARE,
 		state->base->i2c->dev.parent);
 	if (stat)
 		return stat;
@@ -1399,27 +1375,8 @@ static int load_fw(struct mxl *state)
 	release_firmware(fw);
 
 	if (stat)
-		pr_info("error loading firmware\n");
-
-#else
-	if (cfg->fw)
-		return firmware_download(state, cfg->fw_len, cfg->fw);
+		dev_err(&state->base->i2c->dev,"error loading firmware\n");
 	
-#ifdef FW_INCLUDED
-	return firmware_download(state, sizeof(hydra_fw), hydra_fw);
-#endif
-	
-	if (!cfg->fw_read)
-		return -1;
-
-	buf = vmalloc(0x40000);
-	if (!buf)
-		return -ENOMEM;
-	
-	cfg->fw_read(cfg->fw_priv, buf, 0x40000);
-	stat = firmware_download(state, 0x40000, buf);
-	vfree(buf);
-#endif
 	return stat;
 }
 
@@ -1429,22 +1386,17 @@ static int init_multisw(struct mxl *state)
 	struct i2c_adapter *i2c = state->base->i2c;
 	struct mxl58x_cfg *cfg = state->base->cfg;
 
-	switch (mode) {
-	case 0:
-	default:
-		cfg->set_voltage(i2c, SEC_VOLTAGE_13, 3);
-		cfg->set_voltage(i2c, SEC_VOLTAGE_13, 2);
-		cfg->set_voltage(i2c, SEC_VOLTAGE_18, 1);
-		cfg->set_voltage(i2c, SEC_VOLTAGE_18, 0);
-		set_input_tone(fe, SEC_TONE_OFF, 3);
-		set_input_tone(fe, SEC_TONE_ON, 2);
-		set_input_tone(fe, SEC_TONE_OFF, 1);
-		set_input_tone(fe, SEC_TONE_ON, 0);
-		break;
-	case 1:
-	case 2:
-		break;
-	}
+	if (mode)
+		return 0;
+
+	cfg->set_voltage(i2c, SEC_VOLTAGE_13, 3);
+	cfg->set_voltage(i2c, SEC_VOLTAGE_13, 2);
+	cfg->set_voltage(i2c, SEC_VOLTAGE_18, 1);
+	cfg->set_voltage(i2c, SEC_VOLTAGE_18, 0);
+	set_input_tone(fe, SEC_TONE_OFF, 3);
+	set_input_tone(fe, SEC_TONE_ON, 2);
+	set_input_tone(fe, SEC_TONE_OFF, 1);
+	set_input_tone(fe, SEC_TONE_ON, 0);
 
 	return 0;
 }
@@ -1469,7 +1421,7 @@ static int probe(struct mxl *state)
 			state->base->chipversion = 0;
 		else
 			state->base->chipversion = (chipver == 2) ? 2 : 1;
-		pr_info("Hydra chip version %u\n", state->base->chipversion);
+		dev_info(&state->base->i2c->dev, "Hydra chip version %u\n", state->base->chipversion);
 
 
 
@@ -1525,7 +1477,6 @@ static int probe(struct mxl *state)
 	write_register(state, 0x90700000, 0x000000ff);
 
 	}
-	
 
 	return 0;
 }
@@ -1543,15 +1494,21 @@ struct dvb_frontend *mxl58x_attach(struct i2c_adapter *i2c,
 
 	state->demod = demod;
 	state->rf_in = 0;
-	if(mode == 1)
+	if(mode)
 	{ 
-	   if((demod ==0)||(demod ==1))
+		if((demod==0)||(demod==1))
 			state->rf_in = 3;
-	   if((demod ==2)||(demod ==3))
+		if((demod==2)||(demod==3))
 			state->rf_in = 2;
-	   if((demod ==4)||(demod ==5))
+		if((demod ==4)||(demod ==5))
 			state->rf_in = 1;
-	   if((demod ==6)||(demod ==7))
+		if((demod ==6)||(demod ==7))
+			state->rf_in = 0;
+
+		if (rfsource > 0 && rfsource < 5)
+			state->rf_in = 4 - rfsource;
+		
+		if (mode==2)
 			state->rf_in = 0;
 	}
 	state->fe.ops = mxl_ops;
@@ -1570,6 +1527,8 @@ struct dvb_frontend *mxl58x_attach(struct i2c_adapter *i2c,
 		base->adr = cfg->adr;
 		base->type = cfg->type;
 		base->count = 1;
+		base->write_properties = cfg->write_properties;
+		base->read_properties = cfg->read_properties;
 		mutex_init(&base->i2c_lock);
 		mutex_init(&base->status_lock);
 		state->base = base;

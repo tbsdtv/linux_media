@@ -16,6 +16,7 @@
 #include <asm/unaligned.h>
 #include <linux/ctype.h>
 #include <linux/errno.h>
+#include <linux/zlib.h>
 
 #include "include/apparmor.h"
 #include "include/audit.h"
@@ -139,9 +140,11 @@ bool aa_rawdata_eq(struct aa_loaddata *l, struct aa_loaddata *r)
 {
 	if (l->size != r->size)
 		return false;
+	if (l->compressed_size != r->compressed_size)
+		return false;
 	if (aa_g_hash_policy && memcmp(l->hash, r->hash, aa_hash_size()) != 0)
 		return false;
-	return memcmp(l->data, r->data, r->size) == 0;
+	return memcmp(l->data, r->data, r->compressed_size ?: r->size) == 0;
 }
 
 /*
@@ -219,16 +222,21 @@ static void *kvmemdup(const void *src, size_t len)
 static size_t unpack_u16_chunk(struct aa_ext *e, char **chunk)
 {
 	size_t size = 0;
+	void *pos = e->pos;
 
 	if (!inbounds(e, sizeof(u16)))
-		return 0;
+		goto fail;
 	size = le16_to_cpu(get_unaligned((__le16 *) e->pos));
 	e->pos += sizeof(__le16);
 	if (!inbounds(e, size))
-		return 0;
+		goto fail;
 	*chunk = e->pos;
 	e->pos += size;
 	return size;
+
+fail:
+	e->pos = pos;
+	return 0;
 }
 
 /* unpack control byte */
@@ -272,7 +280,7 @@ static bool unpack_nameX(struct aa_ext *e, enum aa_code code, const char *name)
 		char *tag = NULL;
 		size_t size = unpack_u16_chunk(e, &tag);
 		/* if a name is specified it must match. otherwise skip tag */
-		if (name && (!size || strcmp(name, tag)))
+		if (name && (!size || tag[size-1] != '\0' || strcmp(name, tag)))
 			goto fail;
 	} else if (name) {
 		/* if a name is specified and there is no name tag fail */
@@ -290,62 +298,84 @@ fail:
 
 static bool unpack_u8(struct aa_ext *e, u8 *data, const char *name)
 {
+	void *pos = e->pos;
+
 	if (unpack_nameX(e, AA_U8, name)) {
 		if (!inbounds(e, sizeof(u8)))
-			return 0;
+			goto fail;
 		if (data)
 			*data = get_unaligned((u8 *)e->pos);
 		e->pos += sizeof(u8);
 		return 1;
 	}
+
+fail:
+	e->pos = pos;
 	return 0;
 }
 
 static bool unpack_u32(struct aa_ext *e, u32 *data, const char *name)
 {
+	void *pos = e->pos;
+
 	if (unpack_nameX(e, AA_U32, name)) {
 		if (!inbounds(e, sizeof(u32)))
-			return 0;
+			goto fail;
 		if (data)
 			*data = le32_to_cpu(get_unaligned((__le32 *) e->pos));
 		e->pos += sizeof(u32);
 		return 1;
 	}
+
+fail:
+	e->pos = pos;
 	return 0;
 }
 
 static bool unpack_u64(struct aa_ext *e, u64 *data, const char *name)
 {
+	void *pos = e->pos;
+
 	if (unpack_nameX(e, AA_U64, name)) {
 		if (!inbounds(e, sizeof(u64)))
-			return 0;
+			goto fail;
 		if (data)
 			*data = le64_to_cpu(get_unaligned((__le64 *) e->pos));
 		e->pos += sizeof(u64);
 		return 1;
 	}
+
+fail:
+	e->pos = pos;
 	return 0;
 }
 
 static size_t unpack_array(struct aa_ext *e, const char *name)
 {
+	void *pos = e->pos;
+
 	if (unpack_nameX(e, AA_ARRAY, name)) {
 		int size;
 		if (!inbounds(e, sizeof(u16)))
-			return 0;
+			goto fail;
 		size = (int)le16_to_cpu(get_unaligned((__le16 *) e->pos));
 		e->pos += sizeof(u16);
 		return size;
 	}
+
+fail:
+	e->pos = pos;
 	return 0;
 }
 
 static size_t unpack_blob(struct aa_ext *e, char **blob, const char *name)
 {
+	void *pos = e->pos;
+
 	if (unpack_nameX(e, AA_BLOB, name)) {
 		u32 size;
 		if (!inbounds(e, sizeof(u32)))
-			return 0;
+			goto fail;
 		size = le32_to_cpu(get_unaligned((__le32 *) e->pos));
 		e->pos += sizeof(u32);
 		if (inbounds(e, (size_t) size)) {
@@ -354,6 +384,9 @@ static size_t unpack_blob(struct aa_ext *e, char **blob, const char *name)
 			return size;
 		}
 	}
+
+fail:
+	e->pos = pos;
 	return 0;
 }
 
@@ -370,9 +403,10 @@ static int unpack_str(struct aa_ext *e, const char **string, const char *name)
 			if (src_str[size - 1] != 0)
 				goto fail;
 			*string = src_str;
+
+			return size;
 		}
 	}
-	return size;
 
 fail:
 	e->pos = pos;
@@ -937,11 +971,14 @@ static int verify_header(struct aa_ext *e, int required, const char **ns)
 				    e, error);
 			return error;
 		}
-		if (*ns && strcmp(*ns, name))
+		if (*ns && strcmp(*ns, name)) {
 			audit_iface(NULL, NULL, NULL, "invalid ns change", e,
 				    error);
-		else if (!*ns)
-			*ns = name;
+		} else if (!*ns) {
+			*ns = kstrdup(name, GFP_KERNEL);
+			if (!*ns)
+				return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -1006,6 +1043,105 @@ struct aa_load_ent *aa_load_ent_alloc(void)
 	if (ent)
 		INIT_LIST_HEAD(&ent->list);
 	return ent;
+}
+
+static int deflate_compress(const char *src, size_t slen, char **dst,
+			    size_t *dlen)
+{
+	int error;
+	struct z_stream_s strm;
+	void *stgbuf, *dstbuf;
+	size_t stglen = deflateBound(slen);
+
+	memset(&strm, 0, sizeof(strm));
+
+	if (stglen < slen)
+		return -EFBIG;
+
+	strm.workspace = kvzalloc(zlib_deflate_workspacesize(MAX_WBITS,
+							     MAX_MEM_LEVEL),
+				  GFP_KERNEL);
+	if (!strm.workspace)
+		return -ENOMEM;
+
+	error = zlib_deflateInit(&strm, aa_g_rawdata_compression_level);
+	if (error != Z_OK) {
+		error = -ENOMEM;
+		goto fail_deflate_init;
+	}
+
+	stgbuf = kvzalloc(stglen, GFP_KERNEL);
+	if (!stgbuf) {
+		error = -ENOMEM;
+		goto fail_stg_alloc;
+	}
+
+	strm.next_in = src;
+	strm.avail_in = slen;
+	strm.next_out = stgbuf;
+	strm.avail_out = stglen;
+
+	error = zlib_deflate(&strm, Z_FINISH);
+	if (error != Z_STREAM_END) {
+		error = -EINVAL;
+		goto fail_deflate;
+	}
+	error = 0;
+
+	if (is_vmalloc_addr(stgbuf)) {
+		dstbuf = kvzalloc(strm.total_out, GFP_KERNEL);
+		if (dstbuf) {
+			memcpy(dstbuf, stgbuf, strm.total_out);
+			kvfree(stgbuf);
+		}
+	} else
+		/*
+		 * If the staging buffer was kmalloc'd, then using krealloc is
+		 * probably going to be faster. The destination buffer will
+		 * always be smaller, so it's just shrunk, avoiding a memcpy
+		 */
+		dstbuf = krealloc(stgbuf, strm.total_out, GFP_KERNEL);
+
+	if (!dstbuf) {
+		error = -ENOMEM;
+		goto fail_deflate;
+	}
+
+	*dst = dstbuf;
+	*dlen = strm.total_out;
+
+fail_stg_alloc:
+	zlib_deflateEnd(&strm);
+fail_deflate_init:
+	kvfree(strm.workspace);
+	return error;
+
+fail_deflate:
+	kvfree(stgbuf);
+	goto fail_stg_alloc;
+}
+
+static int compress_loaddata(struct aa_loaddata *data)
+{
+
+	AA_BUG(data->compressed_size > 0);
+
+	/*
+	 * Shortcut the no compression case, else we increase the amount of
+	 * storage required by a small amount
+	 */
+	if (aa_g_rawdata_compression_level != 0) {
+		void *udata = data->data;
+		int error = deflate_compress(udata, data->size, &data->data,
+					     &data->compressed_size);
+		if (error)
+			return error;
+
+		kvfree(udata);
+	} else
+		data->compressed_size = data->size;
+
+	return 0;
 }
 
 /**
@@ -1076,6 +1212,9 @@ int aa_unpack(struct aa_loaddata *udata, struct list_head *lh,
 			goto fail;
 		}
 	}
+	error = compress_loaddata(udata);
+	if (error)
+		goto fail;
 	return 0;
 
 fail_profile:
@@ -1089,3 +1228,7 @@ fail:
 
 	return error;
 }
+
+#ifdef CONFIG_SECURITY_APPARMOR_KUNIT_TEST
+#include "policy_unpack_test.c"
+#endif /* CONFIG_SECURITY_APPARMOR_KUNIT_TEST */

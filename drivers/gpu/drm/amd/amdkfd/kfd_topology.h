@@ -27,7 +27,7 @@
 #include <linux/list.h>
 #include "kfd_crat.h"
 
-#define KFD_TOPOLOGY_PUBLIC_NAME_SIZE 128
+#define KFD_TOPOLOGY_PUBLIC_NAME_SIZE 32
 
 #define HSA_CAP_HOT_PLUGGABLE			0x00000001
 #define HSA_CAP_ATS_PRESENT			0x00000002
@@ -54,6 +54,7 @@
 
 struct kfd_node_properties {
 	uint64_t hive_id;
+	uint64_t unique_id;
 	uint32_t cpu_cores_count;
 	uint32_t simd_count;
 	uint32_t mem_banks_count;
@@ -65,6 +66,7 @@ struct kfd_node_properties {
 	uint32_t max_waves_per_simd;
 	uint32_t lds_size_in_kb;
 	uint32_t gds_size_in_kb;
+	uint32_t num_gws;
 	uint32_t wave_front_size;
 	uint32_t array_count;
 	uint32_t simd_arrays_per_engine;
@@ -78,7 +80,11 @@ struct kfd_node_properties {
 	uint32_t max_engine_clk_fcompute;
 	uint32_t max_engine_clk_ccompute;
 	int32_t  drm_render_minor;
-	uint16_t marketing_name[KFD_TOPOLOGY_PUBLIC_NAME_SIZE];
+	uint32_t num_sdma_engines;
+	uint32_t num_sdma_xgmi_engines;
+	uint32_t num_sdma_queues_per_engine;
+	uint32_t num_cp_queues;
+	char name[KFD_TOPOLOGY_PUBLIC_NAME_SIZE];
 };
 
 #define HSA_MEM_HEAP_TYPE_SYSTEM	0
@@ -99,6 +105,7 @@ struct kfd_mem_properties {
 	uint32_t		flags;
 	uint32_t		width;
 	uint32_t		mem_clk_max;
+	struct kfd_dev		*gpu;
 	struct kobject		*kobj;
 	struct attribute	attr;
 };
@@ -120,6 +127,7 @@ struct kfd_cache_properties {
 	uint32_t		cache_latency;
 	uint32_t		cache_type;
 	uint8_t			sibling_map[CRAT_SIBLINGMAP_SIZE];
+	struct kfd_dev		*gpu;
 	struct kobject		*kobj;
 	struct attribute	attr;
 };
@@ -138,6 +146,7 @@ struct kfd_iolink_properties {
 	uint32_t		max_bandwidth;
 	uint32_t		rec_transfer_size;
 	uint32_t		flags;
+	struct kfd_dev		*gpu;
 	struct kobject		*kobj;
 	struct attribute	attr;
 };

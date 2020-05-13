@@ -28,7 +28,7 @@
 # override by exporting to your environment prior running this script.
 # For instance this script assumes you do not have xfs loaded upon boot.
 # If this is false, export DEFAULT_KMOD_FS="ext4" prior to running this
-# script if the filesyste module you don't have loaded upon bootup
+# script if the filesystem module you don't have loaded upon bootup
 # is ext4 instead. Refer to allow_user_defaults() for a list of user
 # override variables possible.
 #
@@ -61,6 +61,8 @@ ALL_TESTS="$ALL_TESTS 0006:10:1"
 ALL_TESTS="$ALL_TESTS 0007:5:1"
 ALL_TESTS="$ALL_TESTS 0008:150:1"
 ALL_TESTS="$ALL_TESTS 0009:150:1"
+ALL_TESTS="$ALL_TESTS 0010:1:1"
+ALL_TESTS="$ALL_TESTS 0011:1:1"
 
 # Kselftest framework requirement - SKIP code is 4.
 ksft_skip=4
@@ -149,6 +151,7 @@ function load_req_mod()
 
 test_finish()
 {
+	echo "$MODPROBE" > /proc/sys/kernel/modprobe
 	echo "Test completed"
 }
 
@@ -263,7 +266,7 @@ config_get_test_result()
 config_reset()
 {
 	if ! echo -n "1" >"$DIR"/reset; then
-		echo "$0: reset shuld have worked" >&2
+		echo "$0: reset should have worked" >&2
 		exit 1
 	fi
 }
@@ -443,6 +446,30 @@ kmod_test_0009()
 	config_expect_result ${FUNCNAME[0]} SUCCESS
 }
 
+kmod_test_0010()
+{
+	kmod_defaults_driver
+	config_num_threads 1
+	echo "/KMOD_TEST_NONEXISTENT" > /proc/sys/kernel/modprobe
+	config_trigger ${FUNCNAME[0]}
+	config_expect_result ${FUNCNAME[0]} -ENOENT
+	echo "$MODPROBE" > /proc/sys/kernel/modprobe
+}
+
+kmod_test_0011()
+{
+	kmod_defaults_driver
+	config_num_threads 1
+	# This causes the kernel to not even try executing modprobe.  The error
+	# code is still -ENOENT like when modprobe doesn't exist, so we can't
+	# easily test for the exact difference.  But this still is a useful test
+	# since there was a bug where request_module() returned 0 in this case.
+	echo > /proc/sys/kernel/modprobe
+	config_trigger ${FUNCNAME[0]}
+	config_expect_result ${FUNCNAME[0]} -ENOENT
+	echo "$MODPROBE" > /proc/sys/kernel/modprobe
+}
+
 list_tests()
 {
 	echo "Test ID list:"
@@ -460,6 +487,8 @@ list_tests()
 	echo "0007 x $(get_test_count 0007) - multithreaded tests with default setup test request_module() and get_fs_type()"
 	echo "0008 x $(get_test_count 0008) - multithreaded - push kmod_concurrent over max_modprobes for request_module()"
 	echo "0009 x $(get_test_count 0009) - multithreaded - push kmod_concurrent over max_modprobes for get_fs_type()"
+	echo "0010 x $(get_test_count 0010) - test nonexistent modprobe path"
+	echo "0011 x $(get_test_count 0011) - test completely disabling module autoloading"
 }
 
 usage()
@@ -488,7 +517,7 @@ usage()
 	echo Example uses:
 	echo
 	echo "${TEST_NAME}.sh		-- executes all tests"
-	echo "${TEST_NAME}.sh -t 0008	-- Executes test ID 0008 number of times is recomended"
+	echo "${TEST_NAME}.sh -t 0008	-- Executes test ID 0008 number of times is recommended"
 	echo "${TEST_NAME}.sh -w 0008	-- Watch test ID 0008 run until an error occurs"
 	echo "${TEST_NAME}.sh -s 0008	-- Run test ID 0008 once"
 	echo "${TEST_NAME}.sh -c 0008 3	-- Run test ID 0008 three times"
@@ -505,18 +534,23 @@ function test_num()
 	fi
 }
 
-function get_test_count()
+function get_test_data()
 {
 	test_num $1
-	TEST_DATA=$(echo $ALL_TESTS | awk '{print $'$1'}')
+	local field_num=$(echo $1 | sed 's/^0*//')
+	echo $ALL_TESTS | awk '{print $'$field_num'}'
+}
+
+function get_test_count()
+{
+	TEST_DATA=$(get_test_data $1)
 	LAST_TWO=${TEST_DATA#*:*}
 	echo ${LAST_TWO%:*}
 }
 
 function get_test_enabled()
 {
-	test_num $1
-	TEST_DATA=$(echo $ALL_TESTS | awk '{print $'$1'}')
+	TEST_DATA=$(get_test_data $1)
 	echo ${TEST_DATA#*:*:}
 }
 
@@ -611,6 +645,7 @@ test_reqs
 allow_user_defaults
 load_req_mod
 
+MODPROBE=$(</proc/sys/kernel/modprobe)
 trap "test_finish" EXIT
 
 parse_args $@

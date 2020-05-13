@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Accelerated CRC32(C) using ARM CRC, NEON and Crypto Extensions instructions
  *
  * Copyright (C) 2016 Linaro Ltd <ard.biesheuvel@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/cpufeature.h>
@@ -57,10 +54,8 @@ static int crc32_setkey(struct crypto_shash *hash, const u8 *key,
 {
 	u32 *mctx = crypto_shash_ctx(hash);
 
-	if (keylen != sizeof(u32)) {
-		crypto_shash_set_flags(hash, CRYPTO_TFM_RES_BAD_KEY_LEN);
+	if (keylen != sizeof(u32))
 		return -EINVAL;
-	}
 	*mctx = le32_to_cpup((__le32 *)key);
 	return 0;
 }

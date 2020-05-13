@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2016-2020  B.A.T.M.A.N. contributors:
  *
  * Matthias Schiffer
  */
@@ -9,10 +9,9 @@
 
 #include "main.h"
 
+#include <linux/netlink.h>
 #include <linux/types.h>
 #include <net/genetlink.h>
-
-struct nlmsghdr;
 
 void batadv_netlink_register(void);
 void batadv_netlink_unregister(void);

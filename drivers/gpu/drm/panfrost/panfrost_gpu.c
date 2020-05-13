@@ -15,10 +15,8 @@
 #include "panfrost_features.h"
 #include "panfrost_issues.h"
 #include "panfrost_gpu.h"
+#include "panfrost_perfcnt.h"
 #include "panfrost_regs.h"
-
-#define gpu_write(dev, reg, data) writel(data, dev->iomem + reg)
-#define gpu_read(dev, reg) readl(dev->iomem + reg)
 
 static irqreturn_t panfrost_gpu_irq_handler(int irq, void *data)
 {
@@ -42,6 +40,12 @@ static irqreturn_t panfrost_gpu_irq_handler(int irq, void *data)
 
 		gpu_write(pfdev, GPU_INT_MASK, 0);
 	}
+
+	if (state & GPU_IRQ_PERFCNT_SAMPLE_COMPLETED)
+		panfrost_perfcnt_sample_done(pfdev);
+
+	if (state & GPU_IRQ_CLEAN_CACHES_COMPLETED)
+		panfrost_perfcnt_clean_cache_done(pfdev);
 
 	gpu_write(pfdev, GPU_INT_CLEAR, state);
 
@@ -204,6 +208,9 @@ static void panfrost_gpu_init_features(struct panfrost_device *pfdev)
 	pfdev->features.mem_features = gpu_read(pfdev, GPU_MEM_FEATURES);
 	pfdev->features.mmu_features = gpu_read(pfdev, GPU_MMU_FEATURES);
 	pfdev->features.thread_features = gpu_read(pfdev, GPU_THREAD_FEATURES);
+	pfdev->features.max_threads = gpu_read(pfdev, GPU_THREAD_MAX_THREADS);
+	pfdev->features.thread_max_workgroup_sz = gpu_read(pfdev, GPU_THREAD_MAX_WORKGROUP_SIZE);
+	pfdev->features.thread_max_barrier_sz = gpu_read(pfdev, GPU_THREAD_MAX_BARRIER_SIZE);
 	pfdev->features.coherency_features = gpu_read(pfdev, GPU_COHERENCY_FEATURES);
 	for (i = 0; i < 4; i++)
 		pfdev->features.texture_features[i] = gpu_read(pfdev, GPU_TEXTURE_FEATURES(i));
@@ -227,6 +234,8 @@ static void panfrost_gpu_init_features(struct panfrost_device *pfdev)
 
 	pfdev->features.stack_present = gpu_read(pfdev, GPU_STACK_PRESENT_LO);
 	pfdev->features.stack_present |= (u64)gpu_read(pfdev, GPU_STACK_PRESENT_HI) << 32;
+
+	pfdev->features.thread_tls_alloc = gpu_read(pfdev, GPU_THREAD_TLS_ALLOC);
 
 	gpu_id = gpu_read(pfdev, GPU_ID);
 	pfdev->features.revision = gpu_id & 0xffff;
@@ -299,28 +308,26 @@ void panfrost_gpu_power_on(struct panfrost_device *pfdev)
 	gpu_write(pfdev, L2_PWRON_LO, pfdev->features.l2_present);
 	ret = readl_relaxed_poll_timeout(pfdev->iomem + L2_READY_LO,
 		val, val == pfdev->features.l2_present, 100, 1000);
-
-	gpu_write(pfdev, STACK_PWRON_LO, pfdev->features.stack_present);
-	ret |= readl_relaxed_poll_timeout(pfdev->iomem + STACK_READY_LO,
-		val, val == pfdev->features.stack_present, 100, 1000);
+	if (ret)
+		dev_err(pfdev->dev, "error powering up gpu L2");
 
 	gpu_write(pfdev, SHADER_PWRON_LO, pfdev->features.shader_present);
-	ret |= readl_relaxed_poll_timeout(pfdev->iomem + SHADER_READY_LO,
+	ret = readl_relaxed_poll_timeout(pfdev->iomem + SHADER_READY_LO,
 		val, val == pfdev->features.shader_present, 100, 1000);
+	if (ret)
+		dev_err(pfdev->dev, "error powering up gpu shader");
 
 	gpu_write(pfdev, TILER_PWRON_LO, pfdev->features.tiler_present);
-	ret |= readl_relaxed_poll_timeout(pfdev->iomem + TILER_READY_LO,
+	ret = readl_relaxed_poll_timeout(pfdev->iomem + TILER_READY_LO,
 		val, val == pfdev->features.tiler_present, 100, 1000);
-
 	if (ret)
-		dev_err(pfdev->dev, "error powering up gpu");
+		dev_err(pfdev->dev, "error powering up gpu tiler");
 }
 
 void panfrost_gpu_power_off(struct panfrost_device *pfdev)
 {
 	gpu_write(pfdev, TILER_PWROFF_LO, 0);
 	gpu_write(pfdev, SHADER_PWROFF_LO, 0);
-	gpu_write(pfdev, STACK_PWROFF_LO, 0);
 	gpu_write(pfdev, L2_PWROFF_LO, 0);
 }
 
@@ -342,7 +349,7 @@ int panfrost_gpu_init(struct panfrost_device *pfdev)
 		return -ENODEV;
 
 	err = devm_request_irq(pfdev->dev, irq, panfrost_gpu_irq_handler,
-			       IRQF_SHARED, "gpu", pfdev);
+			       IRQF_SHARED, KBUILD_MODNAME "-gpu", pfdev);
 	if (err) {
 		dev_err(pfdev->dev, "failed to request gpu irq");
 		return err;

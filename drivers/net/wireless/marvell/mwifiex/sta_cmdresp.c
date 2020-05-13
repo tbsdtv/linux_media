@@ -1,10 +1,10 @@
 /*
- * Marvell Wireless LAN device driver: station command response handling
+ * NXP Wireless LAN device driver: station command response handling
  *
- * Copyright (C) 2011-2014, Marvell International Ltd.
+ * Copyright 2011-2020 NXP
  *
- * This software file (the "File") is distributed by Marvell International
- * Ltd. under the terms of the GNU General Public License Version 2, June 1991
+ * This software file (the "File") is distributed by NXP
+ * under the terms of the GNU General Public License Version 2, June 1991
  * (the "License").  You may use, redistribute and/or modify this File in
  * accordance with the terms and conditions of the License, a copy of which
  * is available by writing to the Free Software Foundation, Inc.,
@@ -46,7 +46,6 @@ mwifiex_process_cmdresp_error(struct mwifiex_private *priv,
 {
 	struct mwifiex_adapter *adapter = priv->adapter;
 	struct host_cmd_ds_802_11_ps_mode_enh *pm;
-	unsigned long flags;
 
 	mwifiex_dbg(adapter, ERROR,
 		    "CMD_RESP: cmd %#x error, result=%#x\n",
@@ -87,9 +86,9 @@ mwifiex_process_cmdresp_error(struct mwifiex_private *priv,
 	/* Handling errors here */
 	mwifiex_recycle_cmd_node(adapter, adapter->curr_cmd);
 
-	spin_lock_irqsave(&adapter->mwifiex_cmd_lock, flags);
+	spin_lock_bh(&adapter->mwifiex_cmd_lock);
 	adapter->curr_cmd = NULL;
-	spin_unlock_irqrestore(&adapter->mwifiex_cmd_lock, flags);
+	spin_unlock_bh(&adapter->mwifiex_cmd_lock);
 }
 
 /*

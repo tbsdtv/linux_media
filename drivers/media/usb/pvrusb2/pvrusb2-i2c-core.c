@@ -1,17 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *
- *
  *  Copyright (C) 2005 Mike Isely <isely@pobox.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
  */
 
 #include <linux/i2c.h>
@@ -574,7 +564,7 @@ static void pvr2_i2c_register_ir(struct pvr2_hdw *hdw)
 		strscpy(info.type, "ir_video", I2C_NAME_SIZE);
 		pvr2_trace(PVR2_TRACE_INFO, "Binding %s to i2c address 0x%02x.",
 			   info.type, info.addr);
-		i2c_new_device(&hdw->i2c_adap, &info);
+		i2c_new_client_device(&hdw->i2c_adap, &info);
 		break;
 	case PVR2_IR_SCHEME_ZILOG:     /* HVR-1950 style */
 	case PVR2_IR_SCHEME_24XXX_MCE: /* 24xxx MCE device */
@@ -589,7 +579,7 @@ static void pvr2_i2c_register_ir(struct pvr2_hdw *hdw)
 		strscpy(info.type, "ir_z8f0811_haup", I2C_NAME_SIZE);
 		pvr2_trace(PVR2_TRACE_INFO, "Binding %s to i2c address 0x%02x.",
 			   info.type, info.addr);
-		i2c_new_device(&hdw->i2c_adap, &info);
+		i2c_new_client_device(&hdw->i2c_adap, &info);
 		break;
 	default:
 		/* The device either doesn't support I2C-based IR or we

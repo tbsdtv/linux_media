@@ -6,16 +6,17 @@
  *	Eric Anholt <eric@anholt.net>
  */
 
+#include <linux/delay.h>
 #include <linux/i2c.h>
 
-#include <drm/drmP.h>
 #include <drm/drm_plane_helper.h>
+
 #include "framebuffer.h"
+#include "gma_display.h"
+#include "power.h"
 #include "psb_drv.h"
 #include "psb_intel_drv.h"
 #include "psb_intel_reg.h"
-#include "gma_display.h"
-#include "power.h"
 
 #define INTEL_LIMIT_I9XX_SDVO_DAC   0
 #define INTEL_LIMIT_I9XX_LVDS	    1
@@ -431,6 +432,10 @@ const struct drm_crtc_funcs psb_intel_crtc_funcs = {
 	.gamma_set = gma_crtc_gamma_set,
 	.set_config = gma_crtc_set_config,
 	.destroy = gma_crtc_destroy,
+	.page_flip = gma_crtc_page_flip,
+	.enable_vblank = psb_enable_vblank,
+	.disable_vblank = psb_disable_vblank,
+	.get_vblank_counter = psb_get_vblank_counter,
 };
 
 const struct gma_clock_funcs psb_clock_funcs = {

@@ -1,27 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2018, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 
-#include <drm/drm_crtc.h>
 #include <linux/debugfs.h>
-#include <linux/of_irq.h>
 #include <linux/dma-buf.h>
+#include <linux/of_irq.h>
+
+#include <drm/drm_crtc.h>
+#include <drm/drm_file.h>
 
 #include "msm_drv.h"
 #include "msm_mmu.h"
@@ -39,10 +30,6 @@
 #define CREATE_TRACE_POINTS
 #include "dpu_trace.h"
 
-static const char * const iommu_ports[] = {
-		"mdp_0",
-};
-
 /*
  * To enable overall DRM driver logging
  * # echo 0x2 > /sys/module/drm/parameters/debug
@@ -56,7 +43,7 @@ static const char * const iommu_ports[] = {
 #define DPU_DEBUGFS_HWMASKNAME "hw_log_mask"
 
 static int dpu_kms_hw_init(struct msm_kms *kms);
-static int _dpu_kms_mmu_destroy(struct dpu_kms *dpu_kms);
+static void _dpu_kms_mmu_destroy(struct dpu_kms *dpu_kms);
 
 static unsigned long dpu_iomap_size(struct platform_device *pdev,
 				    const char *name)
@@ -77,16 +64,14 @@ static int _dpu_danger_signal_status(struct seq_file *s,
 		bool danger_status)
 {
 	struct dpu_kms *kms = (struct dpu_kms *)s->private;
-	struct msm_drm_private *priv;
 	struct dpu_danger_safe_status status;
 	int i;
 
-	if (!kms->dev || !kms->dev->dev_private || !kms->hw_mdp) {
+	if (!kms->hw_mdp) {
 		DPU_ERROR("invalid arg(s)\n");
 		return 0;
 	}
 
-	priv = kms->dev->dev_private;
 	memset(&status, 0, sizeof(struct dpu_danger_safe_status));
 
 	pm_runtime_get_sync(&kms->pdev->dev);
@@ -142,8 +127,6 @@ static void dpu_debugfs_danger_init(struct dpu_kms *dpu_kms,
 		struct dentry *parent)
 {
 	struct dentry *entry = debugfs_create_dir("danger", parent);
-	if (IS_ERR_OR_NULL(entry))
-		return;
 
 	debugfs_create_file("danger_status", 0600, entry,
 			dpu_kms, &dpu_debugfs_danger_stats_fops);
@@ -155,20 +138,10 @@ static int _dpu_debugfs_show_regset32(struct seq_file *s, void *data)
 {
 	struct dpu_debugfs_regset32 *regset = s->private;
 	struct dpu_kms *dpu_kms = regset->dpu_kms;
-	struct drm_device *dev;
-	struct msm_drm_private *priv;
 	void __iomem *base;
 	uint32_t i, addr;
 
 	if (!dpu_kms->mmio)
-		return 0;
-
-	dev = dpu_kms->dev;
-	if (!dev)
-		return 0;
-
-	priv = dev->dev_private;
-	if (!priv)
 		return 0;
 
 	base = dpu_kms->mmio + regset->offset;
@@ -218,32 +191,29 @@ void dpu_debugfs_setup_regset32(struct dpu_debugfs_regset32 *regset,
 	}
 }
 
-void *dpu_debugfs_create_regset32(const char *name, umode_t mode,
+void dpu_debugfs_create_regset32(const char *name, umode_t mode,
 		void *parent, struct dpu_debugfs_regset32 *regset)
 {
 	if (!name || !regset || !regset->dpu_kms || !regset->blk_len)
-		return NULL;
+		return;
 
 	/* make sure offset is a multiple of 4 */
 	regset->offset = round_down(regset->offset, 4);
 
-	return debugfs_create_file(name, mode, parent,
-			regset, &dpu_fops_regset32);
+	debugfs_create_file(name, mode, parent, regset, &dpu_fops_regset32);
 }
 
-static int _dpu_debugfs_init(struct dpu_kms *dpu_kms)
+static int dpu_kms_debugfs_init(struct msm_kms *kms, struct drm_minor *minor)
 {
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
 	void *p = dpu_hw_util_get_log_mask_ptr();
 	struct dentry *entry;
 
 	if (!p)
 		return -EINVAL;
 
-	entry = debugfs_create_dir("debug", dpu_kms->dev->primary->debugfs_root);
-	if (IS_ERR_OR_NULL(entry))
-		return -ENODEV;
+	entry = debugfs_create_dir("debug", minor->debugfs_root);
 
-	/* allow root to be NULL */
 	debugfs_create_x32(DPU_DEBUGFS_HWMASKNAME, 0600, entry, p);
 
 	dpu_debugfs_danger_init(dpu_kms, entry);
@@ -253,6 +223,85 @@ static int _dpu_debugfs_init(struct dpu_kms *dpu_kms)
 	return dpu_core_perf_debugfs_init(dpu_kms, entry);
 }
 #endif
+
+/* Global/shared object state funcs */
+
+/*
+ * This is a helper that returns the private state currently in operation.
+ * Note that this would return the "old_state" if called in the atomic check
+ * path, and the "new_state" after the atomic swap has been done.
+ */
+struct dpu_global_state *
+dpu_kms_get_existing_global_state(struct dpu_kms *dpu_kms)
+{
+	return to_dpu_global_state(dpu_kms->global_state.state);
+}
+
+/*
+ * This acquires the modeset lock set aside for global state, creates
+ * a new duplicated private object state.
+ */
+struct dpu_global_state *dpu_kms_get_global_state(struct drm_atomic_state *s)
+{
+	struct msm_drm_private *priv = s->dev->dev_private;
+	struct dpu_kms *dpu_kms = to_dpu_kms(priv->kms);
+	struct drm_private_state *priv_state;
+	int ret;
+
+	ret = drm_modeset_lock(&dpu_kms->global_state_lock, s->acquire_ctx);
+	if (ret)
+		return ERR_PTR(ret);
+
+	priv_state = drm_atomic_get_private_obj_state(s,
+						&dpu_kms->global_state);
+	if (IS_ERR(priv_state))
+		return ERR_CAST(priv_state);
+
+	return to_dpu_global_state(priv_state);
+}
+
+static struct drm_private_state *
+dpu_kms_global_duplicate_state(struct drm_private_obj *obj)
+{
+	struct dpu_global_state *state;
+
+	state = kmemdup(obj->state, sizeof(*state), GFP_KERNEL);
+	if (!state)
+		return NULL;
+
+	__drm_atomic_helper_private_obj_duplicate_state(obj, &state->base);
+
+	return &state->base;
+}
+
+static void dpu_kms_global_destroy_state(struct drm_private_obj *obj,
+				      struct drm_private_state *state)
+{
+	struct dpu_global_state *dpu_state = to_dpu_global_state(state);
+
+	kfree(dpu_state);
+}
+
+static const struct drm_private_state_funcs dpu_kms_global_state_funcs = {
+	.atomic_duplicate_state = dpu_kms_global_duplicate_state,
+	.atomic_destroy_state = dpu_kms_global_destroy_state,
+};
+
+static int dpu_kms_global_obj_init(struct dpu_kms *dpu_kms)
+{
+	struct dpu_global_state *state;
+
+	drm_modeset_lock_init(&dpu_kms->global_state_lock);
+
+	state = kzalloc(sizeof(*state), GFP_KERNEL);
+	if (!state)
+		return -ENOMEM;
+
+	drm_atomic_private_obj_init(dpu_kms->dev, &dpu_kms->global_state,
+				    &state->base,
+				    &dpu_kms_global_state_funcs);
+	return 0;
+}
 
 static int dpu_kms_enable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 {
@@ -264,12 +313,35 @@ static void dpu_kms_disable_vblank(struct msm_kms *kms, struct drm_crtc *crtc)
 	dpu_crtc_vblank(crtc, false);
 }
 
+static void dpu_kms_enable_commit(struct msm_kms *kms)
+{
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
+	pm_runtime_get_sync(&dpu_kms->pdev->dev);
+}
+
+static void dpu_kms_disable_commit(struct msm_kms *kms)
+{
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
+	pm_runtime_put_sync(&dpu_kms->pdev->dev);
+}
+
+static ktime_t dpu_kms_vsync_time(struct msm_kms *kms, struct drm_crtc *crtc)
+{
+	struct drm_encoder *encoder;
+
+	drm_for_each_encoder_mask(encoder, crtc->dev, crtc->state->encoder_mask) {
+		ktime_t vsync_time;
+
+		if (dpu_encoder_vsync_time(encoder, &vsync_time) == 0)
+			return vsync_time;
+	}
+
+	return ktime_get();
+}
+
 static void dpu_kms_prepare_commit(struct msm_kms *kms,
 		struct drm_atomic_state *state)
 {
-	struct dpu_kms *dpu_kms;
-	struct msm_drm_private *priv;
-	struct drm_device *dev;
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *crtc_state;
 	struct drm_encoder *encoder;
@@ -277,13 +349,6 @@ static void dpu_kms_prepare_commit(struct msm_kms *kms,
 
 	if (!kms)
 		return;
-	dpu_kms = to_dpu_kms(kms);
-	dev = dpu_kms->dev;
-
-	if (!dev || !dev->dev_private)
-		return;
-	priv = dev->dev_private;
-	pm_runtime_get_sync(&dpu_kms->pdev->dev);
 
 	/* Call prepare_commit for all affected encoders */
 	for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
@@ -291,6 +356,20 @@ static void dpu_kms_prepare_commit(struct msm_kms *kms,
 					  crtc_state->encoder_mask) {
 			dpu_encoder_prepare_commit(encoder);
 		}
+	}
+}
+
+static void dpu_kms_flush_commit(struct msm_kms *kms, unsigned crtc_mask)
+{
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
+	struct drm_crtc *crtc;
+
+	for_each_crtc_mask(dpu_kms->dev, crtc, crtc_mask) {
+		if (!crtc->state->active)
+			continue;
+
+		trace_dpu_kms_commit(DRMID(crtc));
+		dpu_crtc_commit_kickoff(crtc);
 	}
 }
 
@@ -308,58 +387,23 @@ void dpu_kms_encoder_enable(struct drm_encoder *encoder)
 	if (funcs && funcs->commit)
 		funcs->commit(encoder);
 
-	WARN_ON(!drm_modeset_is_locked(&dev->mode_config.connection_mutex));
 	drm_for_each_crtc(crtc, dev) {
 		if (!(crtc->state->encoder_mask & drm_encoder_mask(encoder)))
 			continue;
 
 		trace_dpu_kms_enc_enable(DRMID(crtc));
-		dpu_crtc_commit_kickoff(crtc, false);
 	}
 }
 
-static void dpu_kms_commit(struct msm_kms *kms, struct drm_atomic_state *state)
+static void dpu_kms_complete_commit(struct msm_kms *kms, unsigned crtc_mask)
 {
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
 	struct drm_crtc *crtc;
-	struct drm_crtc_state *crtc_state;
-	int i;
-
-	for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
-		/* If modeset is required, kickoff is run in encoder_enable */
-		if (drm_atomic_crtc_needs_modeset(crtc_state))
-			continue;
-
-		if (crtc->state->active) {
-			trace_dpu_kms_commit(DRMID(crtc));
-			dpu_crtc_commit_kickoff(crtc,
-						state->legacy_cursor_update);
-		}
-	}
-}
-
-static void dpu_kms_complete_commit(struct msm_kms *kms,
-		struct drm_atomic_state *old_state)
-{
-	struct dpu_kms *dpu_kms;
-	struct msm_drm_private *priv;
-	struct drm_crtc *crtc;
-	struct drm_crtc_state *old_crtc_state;
-	int i;
-
-	if (!kms || !old_state)
-		return;
-	dpu_kms = to_dpu_kms(kms);
-
-	if (!dpu_kms->dev || !dpu_kms->dev->dev_private)
-		return;
-	priv = dpu_kms->dev->dev_private;
 
 	DPU_ATRACE_BEGIN("kms_complete_commit");
 
-	for_each_old_crtc_in_state(old_state, crtc, old_crtc_state, i)
-		dpu_crtc_complete_commit(crtc, old_crtc_state);
-
-	pm_runtime_put_sync(&dpu_kms->pdev->dev);
+	for_each_crtc_mask(dpu_kms->dev, crtc, crtc_mask)
+		dpu_crtc_complete_commit(crtc);
 
 	DPU_ATRACE_END("kms_complete_commit");
 }
@@ -403,6 +447,15 @@ static void dpu_kms_wait_for_commit_done(struct msm_kms *kms,
 			break;
 		}
 	}
+}
+
+static void dpu_kms_wait_flush(struct msm_kms *kms, unsigned crtc_mask)
+{
+	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
+	struct drm_crtc *crtc;
+
+	for_each_crtc_mask(dpu_kms->dev, crtc, crtc_mask)
+		dpu_kms_wait_for_commit_done(kms, crtc);
 }
 
 static int _dpu_kms_initialize_dsi(struct drm_device *dev,
@@ -464,16 +517,6 @@ static void _dpu_kms_drm_obj_destroy(struct dpu_kms *dpu_kms)
 	struct msm_drm_private *priv;
 	int i;
 
-	if (!dpu_kms) {
-		DPU_ERROR("invalid dpu_kms\n");
-		return;
-	} else if (!dpu_kms->dev) {
-		DPU_ERROR("invalid dev\n");
-		return;
-	} else if (!dpu_kms->dev->dev_private) {
-		DPU_ERROR("invalid dev_private\n");
-		return;
-	}
 	priv = dpu_kms->dev->dev_private;
 
 	for (i = 0; i < priv->num_crtcs; i++)
@@ -505,12 +548,6 @@ static int _dpu_kms_drm_obj_init(struct dpu_kms *dpu_kms)
 
 	int primary_planes_idx = 0, cursor_planes_idx = 0, i, ret;
 	int max_crtc_count;
-
-	if (!dpu_kms || !dpu_kms->dev || !dpu_kms->dev->dev) {
-		DPU_ERROR("invalid dpu_kms\n");
-		return -EINVAL;
-	}
-
 	dev = dpu_kms->dev;
 	priv = dev->dev_private;
 	catalog = dpu_kms->catalog;
@@ -578,13 +615,6 @@ fail:
 	return ret;
 }
 
-#ifdef CONFIG_DEBUG_FS
-static int dpu_kms_debugfs_init(struct msm_kms *kms, struct drm_minor *minor)
-{
-	return _dpu_debugfs_init(to_dpu_kms(kms));
-}
-#endif
-
 static long dpu_kms_round_pixclk(struct msm_kms *kms, unsigned long rate,
 		struct drm_encoder *encoder)
 {
@@ -593,12 +623,7 @@ static long dpu_kms_round_pixclk(struct msm_kms *kms, unsigned long rate,
 
 static void _dpu_kms_hw_destroy(struct dpu_kms *dpu_kms)
 {
-	struct drm_device *dev;
 	int i;
-
-	dev = dpu_kms->dev;
-	if (!dev)
-		return;
 
 	if (dpu_kms->hw_intr)
 		dpu_hw_intr_destroy(dpu_kms->hw_intr);
@@ -709,10 +734,13 @@ static const struct msm_kms_funcs kms_funcs = {
 	.irq_preinstall  = dpu_irq_preinstall,
 	.irq_uninstall   = dpu_irq_uninstall,
 	.irq             = dpu_irq,
+	.enable_commit   = dpu_kms_enable_commit,
+	.disable_commit  = dpu_kms_disable_commit,
+	.vsync_time      = dpu_kms_vsync_time,
 	.prepare_commit  = dpu_kms_prepare_commit,
-	.commit          = dpu_kms_commit,
+	.flush_commit    = dpu_kms_flush_commit,
+	.wait_flush      = dpu_kms_wait_flush,
 	.complete_commit = dpu_kms_complete_commit,
-	.wait_for_crtc_commit_done = dpu_kms_wait_for_commit_done,
 	.enable_vblank   = dpu_kms_enable_vblank,
 	.disable_vblank  = dpu_kms_disable_vblank,
 	.check_modified_format = dpu_format_check_modified_format,
@@ -725,17 +753,19 @@ static const struct msm_kms_funcs kms_funcs = {
 #endif
 };
 
-static int _dpu_kms_mmu_destroy(struct dpu_kms *dpu_kms)
+static void _dpu_kms_mmu_destroy(struct dpu_kms *dpu_kms)
 {
 	struct msm_mmu *mmu;
 
+	if (!dpu_kms->base.aspace)
+		return;
+
 	mmu = dpu_kms->base.aspace->mmu;
 
-	mmu->funcs->detach(mmu, (const char **)iommu_ports,
-			ARRAY_SIZE(iommu_ports));
+	mmu->funcs->detach(mmu);
 	msm_gem_address_space_put(dpu_kms->base.aspace);
 
-	return 0;
+	dpu_kms->base.aspace = NULL;
 }
 
 static int _dpu_kms_mmu_init(struct dpu_kms *dpu_kms)
@@ -754,25 +784,19 @@ static int _dpu_kms_mmu_init(struct dpu_kms *dpu_kms)
 	aspace = msm_gem_address_space_create(dpu_kms->dev->dev,
 			domain, "dpu1");
 	if (IS_ERR(aspace)) {
-		ret = PTR_ERR(aspace);
-		goto fail;
+		iommu_domain_free(domain);
+		return PTR_ERR(aspace);
 	}
 
-	dpu_kms->base.aspace = aspace;
-
-	ret = aspace->mmu->funcs->attach(aspace->mmu, iommu_ports,
-			ARRAY_SIZE(iommu_ports));
+	ret = aspace->mmu->funcs->attach(aspace->mmu);
 	if (ret) {
 		DPU_ERROR("failed to attach iommu %d\n", ret);
 		msm_gem_address_space_put(aspace);
-		goto fail;
+		return ret;
 	}
 
+	dpu_kms->base.aspace = aspace;
 	return 0;
-fail:
-	_dpu_kms_mmu_destroy(dpu_kms);
-
-	return ret;
 }
 
 static struct dss_clk *_dpu_kms_get_clk(struct dpu_kms *dpu_kms,
@@ -804,7 +828,6 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
 {
 	struct dpu_kms *dpu_kms;
 	struct drm_device *dev;
-	struct msm_drm_private *priv;
 	int i, rc = -EINVAL;
 
 	if (!kms) {
@@ -814,16 +837,12 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
 
 	dpu_kms = to_dpu_kms(kms);
 	dev = dpu_kms->dev;
-	if (!dev) {
-		DPU_ERROR("invalid device\n");
-		return rc;
-	}
 
-	priv = dev->dev_private;
-	if (!priv) {
-		DPU_ERROR("invalid private data\n");
+	rc = dpu_kms_global_obj_init(dpu_kms);
+	if (rc)
 		return rc;
-	}
+
+	atomic_set(&dpu_kms->bandwidth_ref, 0);
 
 	dpu_kms->mmio = msm_ioremap(dpu_kms->pdev, "mdp", "mdp");
 	if (IS_ERR(dpu_kms->mmio)) {
@@ -983,7 +1002,7 @@ struct msm_kms *dpu_kms_init(struct drm_device *dev)
 	struct dpu_kms *dpu_kms;
 	int irq;
 
-	if (!dev || !dev->dev_private) {
+	if (!dev) {
 		DPU_ERROR("drm device node invalid\n");
 		return ERR_PTR(-EINVAL);
 	}
@@ -1069,14 +1088,7 @@ static int __maybe_unused dpu_runtime_suspend(struct device *dev)
 	int rc = -1;
 	struct platform_device *pdev = to_platform_device(dev);
 	struct dpu_kms *dpu_kms = platform_get_drvdata(pdev);
-	struct drm_device *ddev;
 	struct dss_module_power *mp = &dpu_kms->mp;
-
-	ddev = dpu_kms->dev;
-	if (!ddev) {
-		DPU_ERROR("invalid drm_device\n");
-		return rc;
-	}
 
 	rc = msm_dss_enable_clk(mp->clk_config, mp->num_clk, false);
 	if (rc)
@@ -1095,11 +1107,6 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
 	struct dss_module_power *mp = &dpu_kms->mp;
 
 	ddev = dpu_kms->dev;
-	if (!ddev) {
-		DPU_ERROR("invalid drm_device\n");
-		return rc;
-	}
-
 	rc = msm_dss_enable_clk(mp->clk_config, mp->num_clk, true);
 	if (rc) {
 		DPU_ERROR("clock enable failed rc:%d\n", rc);
@@ -1120,6 +1127,7 @@ static const struct dev_pm_ops dpu_pm_ops = {
 
 static const struct of_device_id dpu_dt_match[] = {
 	{ .compatible = "qcom,sdm845-dpu", },
+	{ .compatible = "qcom,sc7180-dpu", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, dpu_dt_match);

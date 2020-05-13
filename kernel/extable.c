@@ -34,10 +34,19 @@ u32 __initdata __visible main_extable_sort_needed = 1;
 /* Sort the kernel's built-in exception table */
 void __init sort_main_extable(void)
 {
-	if (main_extable_sort_needed && __stop___ex_table > __start___ex_table) {
+	if (main_extable_sort_needed &&
+	    &__stop___ex_table > &__start___ex_table) {
 		pr_notice("Sorting __ex_table...\n");
 		sort_extable(__start___ex_table, __stop___ex_table);
 	}
+}
+
+/* Given an address, look for it in the kernel exception table */
+const
+struct exception_table_entry *search_kernel_exception_table(unsigned long addr)
+{
+	return search_extable(__start___ex_table,
+			      __stop___ex_table - __start___ex_table, addr);
 }
 
 /* Given an address, look for it in the exception tables. */
@@ -45,10 +54,11 @@ const struct exception_table_entry *search_exception_tables(unsigned long addr)
 {
 	const struct exception_table_entry *e;
 
-	e = search_extable(__start___ex_table,
-			   __stop___ex_table - __start___ex_table, addr);
+	e = search_kernel_exception_table(addr);
 	if (!e)
 		e = search_module_extables(addr);
+	if (!e)
+		e = search_bpf_extables(addr);
 	return e;
 }
 
@@ -122,8 +132,9 @@ int kernel_text_address(unsigned long addr)
 	 * triggers a stack trace, or a WARN() that happens during
 	 * coming back from idle, or cpu on or offlining.
 	 *
-	 * is_module_text_address() as well as the kprobe slots
-	 * and is_bpf_text_address() require RCU to be watching.
+	 * is_module_text_address() as well as the kprobe slots,
+	 * is_bpf_text_address() and is_bpf_image_address require
+	 * RCU to be watching.
 	 */
 	no_rcu = !rcu_is_watching();
 

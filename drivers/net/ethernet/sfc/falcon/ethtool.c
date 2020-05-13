@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /****************************************************************************
  * Driver for Solarflare network controllers and boards
  * Copyright 2005-2006 Fen Systems Ltd.
  * Copyright 2006-2013 Solarflare Communications Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, incorporated herein by reference.
  */
 
 #include <linux/netdevice.h>
@@ -605,9 +602,6 @@ static int ef4_ethtool_set_coalesce(struct net_device *net_dev,
 	unsigned int tx_usecs, rx_usecs;
 	bool adaptive, rx_may_override_tx;
 	int rc;
-
-	if (coalesce->use_adaptive_tx_coalesce)
-		return -EINVAL;
 
 	ef4_get_irq_moderation(efx, &tx_usecs, &rx_usecs, &adaptive);
 
@@ -1314,6 +1308,9 @@ static int ef4_ethtool_get_module_info(struct net_device *net_dev,
 }
 
 const struct ethtool_ops ef4_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
+				     ETHTOOL_COALESCE_USECS_IRQ |
+				     ETHTOOL_COALESCE_USE_ADAPTIVE_RX,
 	.get_drvinfo		= ef4_ethtool_get_drvinfo,
 	.get_regs_len		= ef4_ethtool_get_regs_len,
 	.get_regs		= ef4_ethtool_get_regs,

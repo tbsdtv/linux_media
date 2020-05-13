@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: MIT */
 #ifndef __NVKM_FB_H__
 #define __NVKM_FB_H__
 #include <core/subdev.h>
@@ -32,6 +32,8 @@ struct nvkm_fb_tile {
 struct nvkm_fb {
 	const struct nvkm_fb_func *func;
 	struct nvkm_subdev subdev;
+
+	struct nvkm_blob vpr_scrubber;
 
 	struct nvkm_ram *ram;
 	struct nvkm_mm tags;

@@ -24,6 +24,7 @@
 #include <linux/bug.h>
 #include <linux/pci.h>
 #include <linux/cpufreq.h>
+#include <linux/memblock.h>
 
 #include <asm/machdep.h>
 #include <asm/firmware.h>
@@ -166,6 +167,14 @@ static void __init pnv_init(void)
 	else
 #endif
 		add_preferred_console("hvc", 0, NULL);
+
+	if (!radix_enabled()) {
+		int i;
+
+		/* Allocate per cpu area to save old slb contents during MCE */
+		for_each_possible_cpu(i)
+			paca_ptrs[i]->mce_faulty_slbs = memblock_alloc_node(mmu_slb_size, __alignof__(*paca_ptrs[i]->mce_faulty_slbs), cpu_to_node(i));
+	}
 }
 
 static void __init pnv_init_IRQ(void)
@@ -220,10 +229,16 @@ static void  __noreturn pnv_restart(char *cmd)
 	pnv_prepare_going_down();
 
 	do {
-		if (!cmd)
+		if (!cmd || !strlen(cmd))
 			rc = opal_cec_reboot();
 		else if (strcmp(cmd, "full") == 0)
 			rc = opal_cec_reboot2(OPAL_REBOOT_FULL_IPL, NULL);
+		else if (strcmp(cmd, "mpipl") == 0)
+			rc = opal_cec_reboot2(OPAL_REBOOT_MPIPL, NULL);
+		else if (strcmp(cmd, "error") == 0)
+			rc = opal_cec_reboot2(OPAL_REBOOT_PLATFORM_ERROR, NULL);
+		else if (strcmp(cmd, "fast") == 0)
+			rc = opal_cec_reboot2(OPAL_REBOOT_FAST, NULL);
 		else
 			rc = OPAL_UNSUPPORTED;
 

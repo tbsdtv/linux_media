@@ -1048,8 +1048,9 @@ ecryptfs_parse_tag_70_packet(char **filename, size_t *filename_size,
 		       "rc = [%d]\n", __func__, rc);
 		goto out_free_unlock;
 	}
-	while (s->decrypted_filename[s->i] != '\0'
-	       && s->i < s->block_aligned_filename_size)
+
+	while (s->i < s->block_aligned_filename_size &&
+	       s->decrypted_filename[s->i] != '\0')
 		s->i++;
 	if (s->i == s->block_aligned_filename_size) {
 		printk(KERN_WARNING "%s: Invalid tag 70 packet; could not "
@@ -1303,7 +1304,7 @@ parse_tag_1_packet(struct ecryptfs_crypt_stat *crypt_stat,
 		printk(KERN_WARNING "Tag 1 packet contains key larger "
 		       "than ECRYPTFS_MAX_ENCRYPTED_KEY_BYTES\n");
 		rc = -EINVAL;
-		goto out;
+		goto out_free;
 	}
 	memcpy((*new_auth_tok)->session_key.encrypted_key,
 	       &data[(*packet_size)], (body_size - (ECRYPTFS_SIG_SIZE + 2)));
@@ -1611,9 +1612,9 @@ int ecryptfs_keyring_auth_tok_for_sig(struct key **auth_tok_key,
 	int rc = 0;
 
 	(*auth_tok_key) = request_key(&key_type_user, sig, NULL);
-	if (!(*auth_tok_key) || IS_ERR(*auth_tok_key)) {
+	if (IS_ERR(*auth_tok_key)) {
 		(*auth_tok_key) = ecryptfs_get_encrypted_key(sig);
-		if (!(*auth_tok_key) || IS_ERR(*auth_tok_key)) {
+		if (IS_ERR(*auth_tok_key)) {
 			printk(KERN_ERR "Could not find key with description: [%s]\n",
 			      sig);
 			rc = process_request_key_err(PTR_ERR(*auth_tok_key));
@@ -2203,9 +2204,9 @@ write_tag_3_packet(char *dest, size_t *remaining_bytes,
 	if (mount_crypt_stat->global_default_cipher_key_size == 0) {
 		printk(KERN_WARNING "No key size specified at mount; "
 		       "defaulting to [%d]\n",
-		       crypto_skcipher_default_keysize(tfm));
+		       crypto_skcipher_max_keysize(tfm));
 		mount_crypt_stat->global_default_cipher_key_size =
-			crypto_skcipher_default_keysize(tfm);
+			crypto_skcipher_max_keysize(tfm);
 	}
 	if (crypt_stat->key_size == 0)
 		crypt_stat->key_size =

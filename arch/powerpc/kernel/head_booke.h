@@ -83,7 +83,7 @@ END_BTB_FLUSH_SECTION
 	SAVE_4GPRS(3, r11);						     \
 	SAVE_2GPRS(7, r11)
 
-.macro SYSCALL_ENTRY trapno intno
+.macro SYSCALL_ENTRY trapno intno srr1
 	mfspr	r10, SPRN_SPRG_THREAD
 #ifdef CONFIG_KVM_BOOKE_HV
 BEGIN_FTR_SECTION
@@ -94,7 +94,7 @@ BEGIN_FTR_SECTION
 	mfspr	r11, SPRN_SRR1
 	mtocrf	0x80, r11	/* check MSR[GS] without clobbering reg */
 	bf	3, 1975f
-	b	kvmppc_handler_BOOKE_INTERRUPT_\intno\()_SPRN_SRR1
+	b	kvmppc_handler_\intno\()_\srr1
 1975:
 	mr	r12, r13
 	lwz	r13, THREAD_NORMSAVE(2)(r10)
@@ -104,16 +104,18 @@ FTR_SECTION_ELSE
 #ifdef CONFIG_KVM_BOOKE_HV
 ALT_FTR_SECTION_END_IFSET(CPU_FTR_EMB_HV)
 #endif
+	mfspr	r9, SPRN_SRR1
 	BOOKE_CLEAR_BTB(r11)
+	andi.	r11, r9, MSR_PR
 	lwz	r11, TASK_STACK - THREAD(r10)
 	rlwinm	r12,r12,0,4,2	/* Clear SO bit in CR */
+	beq-	99f
 	ALLOC_STACK_FRAME(r11, THREAD_SIZE - INT_FRAME_SIZE)
 	stw	r12, _CCR(r11)		/* save various registers */
 	mflr	r12
 	stw	r12,_LINK(r11)
 	mfspr	r12,SPRN_SRR0
 	stw	r1, GPR1(r11)
-	mfspr	r9,SPRN_SRR1
 	stw	r1, 0(r11)
 	mr	r1, r11
 	stw	r12,_NIP(r11)
@@ -145,9 +147,9 @@ ALT_FTR_SECTION_END_IFSET(CPU_FTR_EMB_HV)
 	tophys(r11,r11)
 	addi	r11,r11,global_dbcr0@l
 #ifdef CONFIG_SMP
-	lwz	r9,TASK_CPU(r2)
-	slwi	r9,r9,3
-	add	r11,r11,r9
+	lwz	r10, TASK_CPU(r2)
+	slwi	r10, r10, 3
+	add	r11, r11, r10
 #endif
 	lwz	r12,0(r11)
 	mtspr	SPRN_DBCR0,r12
@@ -176,6 +178,7 @@ ALT_FTR_SECTION_END_IFSET(CPU_FTR_EMB_HV)
 	mtspr	SPRN_SRR0,r11
 	SYNC
 	RFI				/* jump to handler, enable MMU */
+99:	b	ret_from_kernel_syscall
 .endm
 
 /* To handle the additional exception priority levels on 40x and Book-E
@@ -467,6 +470,7 @@ label:
 	mfspr	r5,SPRN_ESR;		/* Grab the ESR and save it */	      \
 	stw	r5,_ESR(r11);						      \
 	mfspr	r4,SPRN_DEAR;		/* Grab the DEAR */		      \
+	stw	r4, _DEAR(r11);						      \
 	EXC_XFER_LITE(0x0300, handle_page_fault)
 
 #define INSTRUCTION_STORAGE_EXCEPTION					      \
@@ -475,6 +479,7 @@ label:
 	mfspr	r5,SPRN_ESR;		/* Grab the ESR and save it */	      \
 	stw	r5,_ESR(r11);						      \
 	mr      r4,r12;                 /* Pass SRR0 as arg2 */		      \
+	stw	r4, _DEAR(r11);						      \
 	li      r5,0;                   /* Pass zero as arg3 */		      \
 	EXC_XFER_LITE(0x0400, handle_page_fault)
 

@@ -103,9 +103,9 @@ static const struct stratix10_perip_cnt_clock s10_main_perip_cnt_clks[] = {
 	{ STRATIX10_NOC_CLK, "noc_clk", NULL, noc_mux, ARRAY_SIZE(noc_mux),
 	  0, 0, 0, 0x3C, 1},
 	{ STRATIX10_EMAC_A_FREE_CLK, "emaca_free_clk", NULL, emaca_free_mux, ARRAY_SIZE(emaca_free_mux),
-	  0, 0, 4, 0xB0, 0},
+	  0, 0, 2, 0xB0, 0},
 	{ STRATIX10_EMAC_B_FREE_CLK, "emacb_free_clk", NULL, emacb_free_mux, ARRAY_SIZE(emacb_free_mux),
-	  0, 0, 4, 0xB0, 1},
+	  0, 0, 2, 0xB0, 1},
 	{ STRATIX10_EMAC_PTP_FREE_CLK, "emac_ptp_free_clk", NULL, emac_ptp_free_mux,
 	  ARRAY_SIZE(emac_ptp_free_mux), 0, 0, 4, 0xB0, 2},
 	{ STRATIX10_GPIO_DB_FREE_CLK, "gpio_db_free_clk", NULL, gpio_db_free_mux,
@@ -161,8 +161,12 @@ static const struct stratix10_gate_clock s10_gate_clks[] = {
 	  8, 0, 0, 0, 0, 0, 0},
 	{ STRATIX10_SPI_M_CLK, "spi_m_clk", "l4_mp_clk", NULL, 1, 0, 0xA4,
 	  9, 0, 0, 0, 0, 0, 0},
-	{ STRATIX10_NAND_CLK, "nand_clk", "l4_main_clk", NULL, 1, 0, 0xA4,
+	{ STRATIX10_NAND_X_CLK, "nand_x_clk", "l4_mp_clk", NULL, 1, 0, 0xA4,
 	  10, 0, 0, 0, 0, 0, 0},
+	{ STRATIX10_NAND_CLK, "nand_clk", "nand_x_clk", NULL, 1, 0, 0xA4,
+	  10, 0, 0, 0, 0, 0, 4},
+	{ STRATIX10_NAND_ECC_CLK, "nand_ecc_clk", "nand_x_clk", NULL, 1, 0, 0xA4,
+	  10, 0, 0, 0, 0, 0, 4},
 };
 
 static int s10_clk_register_c_perip(const struct stratix10_perip_c_clock *clks,
@@ -173,9 +177,7 @@ static int s10_clk_register_c_perip(const struct stratix10_perip_c_clock *clks,
 	int i;
 
 	for (i = 0; i < nums; i++) {
-		clk = s10_register_periph(clks[i].name, clks[i].parent_name,
-					  clks[i].parent_names, clks[i].num_parents,
-					  clks[i].flags, base, clks[i].offset);
+		clk = s10_register_periph(&clks[i], base);
 		if (IS_ERR(clk)) {
 			pr_err("%s: failed to register clock %s\n",
 			       __func__, clks[i].name);
@@ -194,14 +196,7 @@ static int s10_clk_register_cnt_perip(const struct stratix10_perip_cnt_clock *cl
 	int i;
 
 	for (i = 0; i < nums; i++) {
-		clk = s10_register_cnt_periph(clks[i].name, clks[i].parent_name,
-					      clks[i].parent_names,
-					      clks[i].num_parents,
-					      clks[i].flags, base,
-					      clks[i].offset,
-					      clks[i].fixed_divider,
-					      clks[i].bypass_reg,
-					      clks[i].bypass_shift);
+		clk = s10_register_cnt_periph(&clks[i], base);
 		if (IS_ERR(clk)) {
 			pr_err("%s: failed to register clock %s\n",
 			       __func__, clks[i].name);
@@ -221,16 +216,7 @@ static int s10_clk_register_gate(const struct stratix10_gate_clock *clks,
 	int i;
 
 	for (i = 0; i < nums; i++) {
-		clk = s10_register_gate(clks[i].name, clks[i].parent_name,
-					clks[i].parent_names,
-					clks[i].num_parents,
-					clks[i].flags, base,
-					clks[i].gate_reg,
-					clks[i].gate_idx, clks[i].div_reg,
-					clks[i].div_offset, clks[i].div_width,
-					clks[i].bypass_reg,
-					clks[i].bypass_shift,
-					clks[i].fixed_div);
+		clk = s10_register_gate(&clks[i], base);
 		if (IS_ERR(clk)) {
 			pr_err("%s: failed to register clock %s\n",
 			       __func__, clks[i].name);
@@ -250,10 +236,7 @@ static int s10_clk_register_pll(const struct stratix10_pll_clock *clks,
 	int i;
 
 	for (i = 0; i < nums; i++) {
-		clk = s10_register_pll(clks[i].name, clks[i].parent_names,
-				    clks[i].num_parents,
-				    clks[i].flags, base,
-				    clks[i].offset);
+		clk = s10_register_pll(&clks[i], base);
 		if (IS_ERR(clk)) {
 			pr_err("%s: failed to register clock %s\n",
 			       __func__, clks[i].name);

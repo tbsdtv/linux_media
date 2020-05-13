@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * (C) 2007 Patrick McHardy <kaber@trash.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/module.h>
 #include <linux/skbuff.h>
@@ -33,7 +30,7 @@ static unsigned int jhash_rnd __read_mostly;
 
 static unsigned int xt_rateest_hash(const char *name)
 {
-	return jhash(name, FIELD_SIZEOF(struct xt_rateest, name), jhash_rnd) &
+	return jhash(name, sizeof_field(struct xt_rateest, name), jhash_rnd) &
 	       (RATEEST_HSIZE - 1);
 }
 

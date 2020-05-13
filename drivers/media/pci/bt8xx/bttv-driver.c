@@ -503,77 +503,65 @@ static const unsigned int BTTV_TVNORMS = ARRAY_SIZE(bttv_tvnorms);
    packed pixel formats must come first */
 static const struct bttv_format formats[] = {
 	{
-		.name     = "8 bpp, gray",
 		.fourcc   = V4L2_PIX_FMT_GREY,
 		.btformat = BT848_COLOR_FMT_Y8,
 		.depth    = 8,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "8 bpp, dithered color",
 		.fourcc   = V4L2_PIX_FMT_HI240,
 		.btformat = BT848_COLOR_FMT_RGB8,
 		.depth    = 8,
 		.flags    = FORMAT_FLAGS_PACKED | FORMAT_FLAGS_DITHER,
 	},{
-		.name     = "15 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_RGB555,
 		.btformat = BT848_COLOR_FMT_RGB15,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "15 bpp RGB, be",
 		.fourcc   = V4L2_PIX_FMT_RGB555X,
 		.btformat = BT848_COLOR_FMT_RGB15,
 		.btswap   = 0x03, /* byteswap */
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "16 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_RGB565,
 		.btformat = BT848_COLOR_FMT_RGB16,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "16 bpp RGB, be",
 		.fourcc   = V4L2_PIX_FMT_RGB565X,
 		.btformat = BT848_COLOR_FMT_RGB16,
 		.btswap   = 0x03, /* byteswap */
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "24 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_BGR24,
 		.btformat = BT848_COLOR_FMT_RGB24,
 		.depth    = 24,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "32 bpp RGB, le",
 		.fourcc   = V4L2_PIX_FMT_BGR32,
 		.btformat = BT848_COLOR_FMT_RGB32,
 		.depth    = 32,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "32 bpp RGB, be",
 		.fourcc   = V4L2_PIX_FMT_RGB32,
 		.btformat = BT848_COLOR_FMT_RGB32,
 		.btswap   = 0x0f, /* byte+word swap */
 		.depth    = 32,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "4:2:2, packed, YUYV",
 		.fourcc   = V4L2_PIX_FMT_YUYV,
 		.btformat = BT848_COLOR_FMT_YUY2,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "4:2:2, packed, UYVY",
 		.fourcc   = V4L2_PIX_FMT_UYVY,
 		.btformat = BT848_COLOR_FMT_YUY2,
 		.btswap   = 0x03, /* byteswap */
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "4:2:2, planar, Y-Cb-Cr",
 		.fourcc   = V4L2_PIX_FMT_YUV422P,
 		.btformat = BT848_COLOR_FMT_YCrCb422,
 		.depth    = 16,
@@ -581,7 +569,6 @@ static const struct bttv_format formats[] = {
 		.hshift   = 1,
 		.vshift   = 0,
 	},{
-		.name     = "4:2:0, planar, Y-Cb-Cr",
 		.fourcc   = V4L2_PIX_FMT_YUV420,
 		.btformat = BT848_COLOR_FMT_YCrCb422,
 		.depth    = 12,
@@ -589,7 +576,6 @@ static const struct bttv_format formats[] = {
 		.hshift   = 1,
 		.vshift   = 1,
 	},{
-		.name     = "4:2:0, planar, Y-Cr-Cb",
 		.fourcc   = V4L2_PIX_FMT_YVU420,
 		.btformat = BT848_COLOR_FMT_YCrCb422,
 		.depth    = 12,
@@ -597,7 +583,6 @@ static const struct bttv_format formats[] = {
 		.hshift   = 1,
 		.vshift   = 1,
 	},{
-		.name     = "4:1:1, planar, Y-Cb-Cr",
 		.fourcc   = V4L2_PIX_FMT_YUV411P,
 		.btformat = BT848_COLOR_FMT_YCrCb411,
 		.depth    = 12,
@@ -605,7 +590,6 @@ static const struct bttv_format formats[] = {
 		.hshift   = 2,
 		.vshift   = 0,
 	},{
-		.name     = "4:1:0, planar, Y-Cb-Cr",
 		.fourcc   = V4L2_PIX_FMT_YUV410,
 		.btformat = BT848_COLOR_FMT_YCrCb411,
 		.depth    = 9,
@@ -613,7 +597,6 @@ static const struct bttv_format formats[] = {
 		.hshift   = 2,
 		.vshift   = 2,
 	},{
-		.name     = "4:1:0, planar, Y-Cr-Cb",
 		.fourcc   = V4L2_PIX_FMT_YVU410,
 		.btformat = BT848_COLOR_FMT_YCrCb411,
 		.depth    = 9,
@@ -621,7 +604,6 @@ static const struct bttv_format formats[] = {
 		.hshift   = 2,
 		.vshift   = 2,
 	},{
-		.name     = "raw scanlines",
 		.fourcc   = -1,
 		.btformat = BT848_COLOR_FMT_RAW,
 		.depth    = 8,
@@ -2500,7 +2482,6 @@ static int bttv_enum_fmt_cap_ovr(struct v4l2_fmtdesc *f)
 		return -EINVAL;
 
 	f->pixelformat = formats[i].fourcc;
-	strscpy(f->description, formats[i].name, sizeof(f->description));
 
 	return i;
 }
@@ -2983,7 +2964,7 @@ static int bttv_open(struct file *file)
 
 	dprintk("open dev=%s\n", video_device_node_name(vdev));
 
-	if (vdev->vfl_type == VFL_TYPE_GRABBER) {
+	if (vdev->vfl_type == VFL_TYPE_VIDEO) {
 		type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	} else if (vdev->vfl_type == VFL_TYPE_VBI) {
 		type = V4L2_BUF_TYPE_VBI_CAPTURE;
@@ -3924,7 +3905,7 @@ static int bttv_register_video(struct bttv *btv)
 	if (no_overlay <= 0)
 		btv->video_dev.device_caps |= V4L2_CAP_VIDEO_OVERLAY;
 
-	if (video_register_device(&btv->video_dev, VFL_TYPE_GRABBER,
+	if (video_register_device(&btv->video_dev, VFL_TYPE_VIDEO,
 				  video_nr[btv->c.nr]) < 0)
 		goto err;
 	pr_info("%d: registered device %s\n",

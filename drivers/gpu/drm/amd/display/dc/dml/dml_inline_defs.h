@@ -27,7 +27,7 @@
 #define __DML_INLINE_DEFS_H__
 
 #include "dml_common_defs.h"
-#include "../calcs/dcn_calc_math.h"
+#include "dcn_calc_math.h"
 #include "dml_logger.h"
 
 static inline double dml_min(double a, double b)
@@ -129,4 +129,12 @@ static inline unsigned int dml_round_to_multiple(unsigned int num,
 	else
 		return (num - remainder);
 }
+static inline double dml_abs(double a)
+{
+	if (a > 0)
+		return a;
+	else
+		return (a*(-1));
+}
+
 #endif

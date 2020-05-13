@@ -16,12 +16,13 @@
 #include <linux/wait.h>
 
 struct completion;
-struct reservation_object;
+struct dma_resv;
 
 struct i915_sw_fence {
 	wait_queue_head_t wait;
 	unsigned long flags;
 	atomic_t pending;
+	int error;
 };
 
 #define I915_SW_FENCE_CHECKED_BIT	0 /* used internally for DAG checking */
@@ -53,6 +54,8 @@ do {								\
 	__i915_sw_fence_init((fence), (fn), NULL, NULL)
 #endif
 
+void i915_sw_fence_reinit(struct i915_sw_fence *fence);
+
 #ifdef CONFIG_DRM_I915_SW_FENCE_DEBUG_OBJECTS
 void i915_sw_fence_fini(struct i915_sw_fence *fence);
 #else
@@ -82,13 +85,13 @@ int i915_sw_fence_await_dma_fence(struct i915_sw_fence *fence,
 				  gfp_t gfp);
 
 int i915_sw_fence_await_reservation(struct i915_sw_fence *fence,
-				    struct reservation_object *resv,
+				    struct dma_resv *resv,
 				    const struct dma_fence_ops *exclude,
 				    bool write,
 				    unsigned long timeout,
 				    gfp_t gfp);
 
-void i915_sw_fence_await(struct i915_sw_fence *fence);
+bool i915_sw_fence_await(struct i915_sw_fence *fence);
 void i915_sw_fence_complete(struct i915_sw_fence *fence);
 
 static inline bool i915_sw_fence_signaled(const struct i915_sw_fence *fence)
@@ -104,6 +107,13 @@ static inline bool i915_sw_fence_done(const struct i915_sw_fence *fence)
 static inline void i915_sw_fence_wait(struct i915_sw_fence *fence)
 {
 	wait_event(fence->wait, i915_sw_fence_done(fence));
+}
+
+static inline void
+i915_sw_fence_set_error_once(struct i915_sw_fence *fence, int error)
+{
+	if (unlikely(error))
+		cmpxchg(&fence->error, 0, error);
 }
 
 #endif /* _I915_SW_FENCE_H_ */

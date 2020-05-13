@@ -27,16 +27,20 @@
  *	firmware file lookup on storage is avoided. Used for calls where the
  *	file may be too big, or where the driver takes charge of its own
  *	firmware caching mechanism.
- * @FW_OPT_NOFALLBACK: Disable the fallback mechanism. Takes precedence over
- *	&FW_OPT_UEVENT and &FW_OPT_USERHELPER.
+ * @FW_OPT_NOFALLBACK_SYSFS: Disable the sysfs fallback mechanism. Takes
+ *	precedence over &FW_OPT_UEVENT and &FW_OPT_USERHELPER.
+ * @FW_OPT_FALLBACK_PLATFORM: Enable fallback to device fw copy embedded in
+ *	the platform's main firmware. If both this fallback and the sysfs
+ *      fallback are enabled, then this fallback will be tried first.
  */
 enum fw_opt {
-	FW_OPT_UEVENT =         BIT(0),
-	FW_OPT_NOWAIT =         BIT(1),
-	FW_OPT_USERHELPER =     BIT(2),
-	FW_OPT_NO_WARN =        BIT(3),
-	FW_OPT_NOCACHE =        BIT(4),
-	FW_OPT_NOFALLBACK =     BIT(5),
+	FW_OPT_UEVENT			= BIT(0),
+	FW_OPT_NOWAIT			= BIT(1),
+	FW_OPT_USERHELPER		= BIT(2),
+	FW_OPT_NO_WARN			= BIT(3),
+	FW_OPT_NOCACHE			= BIT(4),
+	FW_OPT_NOFALLBACK_SYSFS		= BIT(5),
+	FW_OPT_FALLBACK_PLATFORM	= BIT(6),
 };
 
 enum fw_status {
@@ -64,12 +68,14 @@ struct fw_priv {
 	void *data;
 	size_t size;
 	size_t allocated_size;
-#ifdef CONFIG_FW_LOADER_USER_HELPER
+#ifdef CONFIG_FW_LOADER_PAGED_BUF
 	bool is_paged_buf;
-	bool need_uevent;
 	struct page **pages;
 	int nr_pages;
 	int page_array_size;
+#endif
+#ifdef CONFIG_FW_LOADER_USER_HELPER
+	bool need_uevent;
 	struct list_head pending_list;
 #endif
 	const char *fw_name;
@@ -132,5 +138,15 @@ static inline void fw_state_done(struct fw_priv *fw_priv)
 
 int assign_fw(struct firmware *fw, struct device *device,
 	      enum fw_opt opt_flags);
+
+#ifdef CONFIG_FW_LOADER_PAGED_BUF
+void fw_free_paged_buf(struct fw_priv *fw_priv);
+int fw_grow_paged_buf(struct fw_priv *fw_priv, int pages_needed);
+int fw_map_paged_buf(struct fw_priv *fw_priv);
+#else
+static inline void fw_free_paged_buf(struct fw_priv *fw_priv) {}
+static inline int fw_grow_paged_buf(struct fw_priv *fw_priv, int pages_needed) { return -ENXIO; }
+static inline int fw_map_paged_buf(struct fw_priv *fw_priv) { return -ENXIO; }
+#endif
 
 #endif /* __FIRMWARE_LOADER_H */

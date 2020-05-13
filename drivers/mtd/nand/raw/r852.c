@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright © 2009 - Maxim Levitsky
  * driver for Ricoh xD readers
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define DRV_NAME "r852"
@@ -1001,7 +998,7 @@ static void r852_shutdown(struct pci_dev *pci_dev)
 #ifdef CONFIG_PM_SLEEP
 static int r852_suspend(struct device *device)
 {
-	struct r852_device *dev = pci_get_drvdata(to_pci_dev(device));
+	struct r852_device *dev = dev_get_drvdata(device);
 
 	if (dev->ctlreg & R852_CTL_CARDENABLE)
 		return -EBUSY;
@@ -1022,7 +1019,7 @@ static int r852_suspend(struct device *device)
 
 static int r852_resume(struct device *device)
 {
-	struct r852_device *dev = pci_get_drvdata(to_pci_dev(device));
+	struct r852_device *dev = dev_get_drvdata(device);
 
 	r852_disable_irqs(dev);
 	r852_card_update_present(dev);

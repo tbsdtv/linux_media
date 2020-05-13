@@ -134,7 +134,7 @@ static int e1000_mii_ioctl(struct net_device *netdev, struct ifreq *ifr,
 			   int cmd);
 static void e1000_enter_82542_rst(struct e1000_adapter *adapter);
 static void e1000_leave_82542_rst(struct e1000_adapter *adapter);
-static void e1000_tx_timeout(struct net_device *dev);
+static void e1000_tx_timeout(struct net_device *dev, unsigned int txqueue);
 static void e1000_reset_task(struct work_struct *work);
 static void e1000_smartspeed(struct e1000_adapter *adapter);
 static int e1000_82547_fifo_workaround(struct e1000_adapter *adapter,
@@ -977,7 +977,7 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_ioremap;
 
 	if (adapter->need_ioport) {
-		for (i = BAR_1; i <= BAR_5; i++) {
+		for (i = BAR_1; i < PCI_STD_NUM_BARS; i++) {
 			if (pci_resource_len(pdev, i) == 0)
 				continue;
 			if (pci_resource_flags(pdev, i) & IORESOURCE_IO) {
@@ -2715,11 +2715,7 @@ static int e1000_tso(struct e1000_adapter *adapter,
 			cmd_length = E1000_TXD_CMD_IP;
 			ipcse = skb_transport_offset(skb) - 1;
 		} else if (skb_is_gso_v6(skb)) {
-			ipv6_hdr(skb)->payload_len = 0;
-			tcp_hdr(skb)->check =
-				~csum_ipv6_magic(&ipv6_hdr(skb)->saddr,
-						 &ipv6_hdr(skb)->daddr,
-						 0, IPPROTO_TCP, 0);
+			tcp_v6_gso_csum_prep(skb);
 			ipcse = 0;
 		}
 		ipcss = skb_network_offset(skb);
@@ -2889,9 +2885,8 @@ static int e1000_tx_map(struct e1000_adapter *adapter,
 	}
 
 	for (f = 0; f < nr_frags; f++) {
-		const struct skb_frag_struct *frag;
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[f];
 
-		frag = &skb_shinfo(skb)->frags[f];
 		len = skb_frag_size(frag);
 		offset = 0;
 
@@ -3019,7 +3014,7 @@ static void e1000_tx_queue(struct e1000_adapter *adapter,
 	 * applicable for weak-ordered memory model archs,
 	 * such as IA-64).
 	 */
-	wmb();
+	dma_wmb();
 
 	tx_ring->next_to_use = i;
 }
@@ -3489,7 +3484,7 @@ exit:
  * e1000_tx_timeout - Respond to a Tx Hang
  * @netdev: network interface device structure
  **/
-static void e1000_tx_timeout(struct net_device *netdev)
+static void e1000_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 {
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 
@@ -3566,8 +3561,8 @@ static int e1000_change_mtu(struct net_device *netdev, int new_mtu)
 	     (max_frame == MAXIMUM_ETHERNET_VLAN_SIZE)))
 		adapter->rx_buffer_len = MAXIMUM_ETHERNET_VLAN_SIZE;
 
-	pr_info("%s changing MTU from %d to %d\n",
-		netdev->name, netdev->mtu, new_mtu);
+	netdev_dbg(netdev, "changing MTU from %d to %d\n",
+		   netdev->mtu, new_mtu);
 	netdev->mtu = new_mtu;
 
 	if (netif_running(netdev))
@@ -4176,8 +4171,7 @@ static bool e1000_clean_jumbo_rx_irq(struct e1000_adapter *adapter,
 				/* an error means any chain goes out the window
 				 * too
 				 */
-				if (rx_ring->rx_skb_top)
-					dev_kfree_skb(rx_ring->rx_skb_top);
+				dev_kfree_skb(rx_ring->rx_skb_top);
 				rx_ring->rx_skb_top = NULL;
 				goto next_desc;
 			}
@@ -4540,7 +4534,7 @@ e1000_alloc_jumbo_rx_buffers(struct e1000_adapter *adapter,
 		 * applicable for weak-ordered memory model archs,
 		 * such as IA-64).
 		 */
-		wmb();
+		dma_wmb();
 		writel(i, adapter->hw.hw_addr + rx_ring->rdt);
 	}
 }
@@ -4655,7 +4649,7 @@ static void e1000_alloc_rx_buffers(struct e1000_adapter *adapter,
 		 * applicable for weak-ordered memory model archs,
 		 * such as IA-64).
 		 */
-		wmb();
+		dma_wmb();
 		writel(i, hw->hw_addr + rx_ring->rdt);
 	}
 }

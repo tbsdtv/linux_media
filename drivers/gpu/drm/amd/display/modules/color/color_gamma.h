@@ -79,9 +79,20 @@ struct freesync_hdr_tf_params {
 	unsigned int max_content; // luminance in nits
 	unsigned int min_display; // luminance in 1/10000 nits
 	unsigned int max_display; // luminance in nits
+	unsigned int skip_tm; // skip tm
+};
+
+struct translate_from_linear_space_args {
+	struct fixed31_32 arg;
+	struct fixed31_32 a0;
+	struct fixed31_32 a1;
+	struct fixed31_32 a2;
+	struct fixed31_32 a3;
+	struct fixed31_32 gamma;
 };
 
 void setup_x_points_distribution(void);
+void log_x_points_distribution(struct dal_logger *logger);
 void precompute_pq(void);
 void precompute_de_pq(void);
 
@@ -91,10 +102,6 @@ bool mod_color_calculate_regamma_params(struct dc_transfer_func *output_tf,
 
 bool mod_color_calculate_degamma_params(struct dc_transfer_func *output_tf,
 		const struct dc_gamma *ramp, bool mapUserRamp);
-
-bool mod_color_calculate_curve(enum dc_transfer_func_predefined  trans,
-		struct dc_transfer_func_distributed_points *points,
-		uint32_t sdr_ref_white_level);
 
 bool mod_color_calculate_degamma_curve(enum dc_transfer_func_predefined trans,
 				struct dc_transfer_func_distributed_points *points);

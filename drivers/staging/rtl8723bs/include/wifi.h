@@ -347,7 +347,7 @@ enum WIFI_REG_DOMAIN {
 	(addr[4] == 0xff) && (addr[5] == 0xff))  ? true : false \
 )
 
-__inline static int IS_MCAST(unsigned char *da)
+static inline int IS_MCAST(unsigned char *da)
 {
 	if ((*da) & 0x01)
 		return true;
@@ -355,20 +355,20 @@ __inline static int IS_MCAST(unsigned char *da)
 		return false;
 }
 
-__inline static unsigned char * get_ra(unsigned char *pframe)
+static inline unsigned char * get_ra(unsigned char *pframe)
 {
 	unsigned char *ra;
 	ra = GetAddr1Ptr(pframe);
 	return ra;
 }
-__inline static unsigned char * get_ta(unsigned char *pframe)
+static inline unsigned char * get_ta(unsigned char *pframe)
 {
 	unsigned char *ta;
 	ta = GetAddr2Ptr(pframe);
 	return ta;
 }
 
-__inline static unsigned char * get_da(unsigned char *pframe)
+static inline unsigned char * get_da(unsigned char *pframe)
 {
 	unsigned char *da;
 	unsigned int	to_fr_ds	= (GetToDs(pframe) << 1) | GetFrDs(pframe);
@@ -392,7 +392,7 @@ __inline static unsigned char * get_da(unsigned char *pframe)
 }
 
 
-__inline static unsigned char * get_sa(unsigned char *pframe)
+static inline unsigned char * get_sa(unsigned char *pframe)
 {
 	unsigned char *sa;
 	unsigned int	to_fr_ds	= (GetToDs(pframe) << 1) | GetFrDs(pframe);
@@ -415,7 +415,7 @@ __inline static unsigned char * get_sa(unsigned char *pframe)
 	return sa;
 }
 
-__inline static unsigned char * get_hdr_bssid(unsigned char *pframe)
+static inline unsigned char * get_hdr_bssid(unsigned char *pframe)
 {
 	unsigned char *sa = NULL;
 	unsigned int	to_fr_ds	= (GetToDs(pframe) << 1) | GetFrDs(pframe);
@@ -439,7 +439,7 @@ __inline static unsigned char * get_hdr_bssid(unsigned char *pframe)
 }
 
 
-__inline static int IsFrameTypeCtrl(unsigned char *pframe)
+static inline int IsFrameTypeCtrl(unsigned char *pframe)
 {
 	if (WIFI_CTRL_TYPE == GetFrameType(pframe))
 		return true;
@@ -707,7 +707,7 @@ struct HT_caps_element
 			unsigned char ASEL_caps;
 		} HT_cap_element;
 		unsigned char HT_cap[26];
-	}u;
+	} u;
 } __attribute__ ((packed));
 
 struct HT_info_element
@@ -1102,7 +1102,7 @@ enum P2P_PROTO_WK_ID
 	P2P_PRE_TX_PROVDISC_PROCESS_WK = 2,
 	P2P_PRE_TX_NEGOREQ_PROCESS_WK = 3,
 	P2P_PRE_TX_INVITEREQ_PROCESS_WK = 4,
-	P2P_AP_P2P_CH_SWITCH_PROCESS_WK =5,
+	P2P_AP_P2P_CH_SWITCH_PROCESS_WK = 5,
 	P2P_RO_CH_WK = 6,
 };
 
@@ -1126,8 +1126,8 @@ enum P2P_PROTO_WK_ID
 #define	WFD_DEVINFO_PC_TDLS					0x0080
 #define	WFD_DEVINFO_HDCP_SUPPORT			0x0100
 
-#define IP_MCAST_MAC(mac)		((mac[0]== 0x01) && (mac[1]== 0x00) && (mac[2]== 0x5e))
-#define ICMPV6_MCAST_MAC(mac)	((mac[0]== 0x33) && (mac[1]== 0x33) && (mac[2]!= 0xff))
+#define IP_MCAST_MAC(mac)		((mac[0] == 0x01) && (mac[1] == 0x00) && (mac[2] == 0x5e))
+#define ICMPV6_MCAST_MAC(mac)	((mac[0] == 0x33) && (mac[1] == 0x33) && (mac[2] != 0xff))
 
 /* Regulatroy Domain */
 struct regd_pair_mapping {

@@ -227,8 +227,8 @@ mediatek_gpio_bank_probe(struct device *dev,
 	ctrl = mtk->base + GPIO_REG_DCLR + (rg->bank * GPIO_BANK_STRIDE);
 	diro = mtk->base + GPIO_REG_CTRL + (rg->bank * GPIO_BANK_STRIDE);
 
-	ret = bgpio_init(&rg->chip, dev, 4,
-			 dat, set, ctrl, diro, NULL, 0);
+	ret = bgpio_init(&rg->chip, dev, 4, dat, set, ctrl, diro, NULL,
+			 BGPIOF_NO_SET_ON_INPUT);
 	if (ret) {
 		dev_err(dev, "bgpio_init() failed\n");
 		return ret;
@@ -241,13 +241,6 @@ mediatek_gpio_bank_probe(struct device *dev,
 	if (!rg->chip.label)
 		return -ENOMEM;
 
-	ret = devm_gpiochip_add_data(dev, &rg->chip, mtk);
-	if (ret < 0) {
-		dev_err(dev, "Could not register gpio %d, ret=%d\n",
-			rg->chip.ngpio, ret);
-		return ret;
-	}
-
 	rg->irq_chip.name = dev_name(dev);
 	rg->irq_chip.parent_device = dev;
 	rg->irq_chip.irq_unmask = mediatek_gpio_irq_unmask;
@@ -256,10 +249,11 @@ mediatek_gpio_bank_probe(struct device *dev,
 	rg->irq_chip.irq_set_type = mediatek_gpio_irq_type;
 
 	if (mtk->gpio_irq) {
+		struct gpio_irq_chip *girq;
+
 		/*
-		 * Manually request the irq here instead of passing
-		 * a flow-handler to gpiochip_set_chained_irqchip,
-		 * because the irq is shared.
+		 * Directly request the irq here instead of passing
+		 * a flow-handler because the irq is shared.
 		 */
 		ret = devm_request_irq(dev, mtk->gpio_irq,
 				       mediatek_gpio_irq_handler, IRQF_SHARED,
@@ -271,15 +265,21 @@ mediatek_gpio_bank_probe(struct device *dev,
 			return ret;
 		}
 
-		ret = gpiochip_irqchip_add(&rg->chip, &rg->irq_chip,
-					   0, handle_simple_irq, IRQ_TYPE_NONE);
-		if (ret) {
-			dev_err(dev, "failed to add gpiochip_irqchip\n");
-			return ret;
-		}
+		girq = &rg->chip.irq;
+		girq->chip = &rg->irq_chip;
+		/* This will let us handle the parent IRQ in the driver */
+		girq->parent_handler = NULL;
+		girq->num_parents = 0;
+		girq->parents = NULL;
+		girq->default_type = IRQ_TYPE_NONE;
+		girq->handler = handle_simple_irq;
+	}
 
-		gpiochip_set_chained_irqchip(&rg->chip, &rg->irq_chip,
-					     mtk->gpio_irq, NULL);
+	ret = devm_gpiochip_add_data(dev, &rg->chip, mtk);
+	if (ret < 0) {
+		dev_err(dev, "Could not register gpio %d, ret=%d\n",
+			rg->chip.ngpio, ret);
+		return ret;
 	}
 
 	/* set polarity to low for all gpios */

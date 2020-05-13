@@ -715,8 +715,28 @@ static struct notifier_block ppc_panic_block = {
 	.priority = INT_MIN /* may not return; must be done last */
 };
 
+/*
+ * Dump out kernel offset information on panic.
+ */
+static int dump_kernel_offset(struct notifier_block *self, unsigned long v,
+			      void *p)
+{
+	pr_emerg("Kernel Offset: 0x%lx from 0x%lx\n",
+		 kaslr_offset(), KERNELBASE);
+
+	return 0;
+}
+
+static struct notifier_block kernel_offset_notifier = {
+	.notifier_call = dump_kernel_offset
+};
+
 void __init setup_panic(void)
 {
+	if (IS_ENABLED(CONFIG_RANDOMIZE_BASE) && kaslr_offset() > 0)
+		atomic_notifier_chain_register(&panic_notifier_list,
+					       &kernel_offset_notifier);
+
 	/* PPC64 always does a hard irq disable in its panic handler */
 	if (!IS_ENABLED(CONFIG_PPC64) && !ppc_md.panic)
 		return;
@@ -767,8 +787,7 @@ EXPORT_SYMBOL(powerpc_debugfs_root);
 static int powerpc_debugfs_init(void)
 {
 	powerpc_debugfs_root = debugfs_create_dir("powerpc", NULL);
-
-	return powerpc_debugfs_root == NULL;
+	return 0;
 }
 arch_initcall(powerpc_debugfs_init);
 #endif
@@ -776,12 +795,6 @@ arch_initcall(powerpc_debugfs_init);
 void ppc_printk_progress(char *s, unsigned short hex)
 {
 	pr_info("%s\n", s);
-}
-
-void arch_setup_pdev_archdata(struct platform_device *pdev)
-{
-	pdev->archdata.dma_mask = DMA_BIT_MASK(32);
-	pdev->dev.dma_mask = &pdev->archdata.dma_mask;
 }
 
 static __init void print_system_info(void)
@@ -806,9 +819,15 @@ static __init void print_system_info(void)
 	pr_info("mmu_features      = 0x%08x\n", cur_cpu_spec->mmu_features);
 #ifdef CONFIG_PPC64
 	pr_info("firmware_features = 0x%016lx\n", powerpc_firmware_features);
+#ifdef CONFIG_PPC_BOOK3S
+	pr_info("vmalloc start     = 0x%lx\n", KERN_VIRT_START);
+	pr_info("IO start          = 0x%lx\n", KERN_IO_START);
+	pr_info("vmemmap start     = 0x%lx\n", (unsigned long)vmemmap);
+#endif
 #endif
 
-	print_system_hash_info();
+	if (!early_radix_enabled())
+		print_system_hash_info();
 
 	if (PHYSICAL_START > 0)
 		pr_info("physical_start    = 0x%llx\n",
@@ -928,9 +947,6 @@ void __init setup_arch(char **cmdline_p)
 	initmem_init();
 
 	early_memtest(min_low_pfn << PAGE_SHIFT, max_low_pfn << PAGE_SHIFT);
-
-	if (IS_ENABLED(CONFIG_DUMMY_CONSOLE))
-		conswitchp = &dummy_con;
 
 	if (ppc_md.setup_arch)
 		ppc_md.setup_arch();

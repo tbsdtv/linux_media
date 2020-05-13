@@ -380,7 +380,7 @@ int ks_wlan_hw_tx(struct ks_wlan_private *priv, void *p, unsigned long size,
 					   struct sk_buff *skb),
 		  struct sk_buff *skb)
 {
-	int result = 0;
+	int result;
 	struct hostif_hdr *hdr;
 
 	hdr = (struct hostif_hdr *)p;
@@ -446,7 +446,8 @@ static void ks_wlan_hw_rx(struct ks_wlan_private *priv, size_t size)
 				     DUMP_PREFIX_OFFSET,
 				     rx_buffer->data, 32);
 #endif
-		ret = ks7010_sdio_writeb(priv, READ_STATUS_REG, REG_STATUS_IDLE);
+		ret = ks7010_sdio_writeb(priv, READ_STATUS_REG,
+					 REG_STATUS_IDLE);
 		if (ret)
 			netdev_err(priv->net_dev, "write READ_STATUS_REG\n");
 

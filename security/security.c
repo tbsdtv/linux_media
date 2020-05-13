@@ -34,8 +34,41 @@
 /* How many LSMs were built into the kernel? */
 #define LSM_COUNT (__end_lsm_info - __start_lsm_info)
 
+/*
+ * These are descriptions of the reasons that can be passed to the
+ * security_locked_down() LSM hook. Placing this array here allows
+ * all security modules to use the same descriptions for auditing
+ * purposes.
+ */
+const char *const lockdown_reasons[LOCKDOWN_CONFIDENTIALITY_MAX+1] = {
+	[LOCKDOWN_NONE] = "none",
+	[LOCKDOWN_MODULE_SIGNATURE] = "unsigned module loading",
+	[LOCKDOWN_DEV_MEM] = "/dev/mem,kmem,port",
+	[LOCKDOWN_EFI_TEST] = "/dev/efi_test access",
+	[LOCKDOWN_KEXEC] = "kexec of unsigned images",
+	[LOCKDOWN_HIBERNATION] = "hibernation",
+	[LOCKDOWN_PCI_ACCESS] = "direct PCI access",
+	[LOCKDOWN_IOPORT] = "raw io port access",
+	[LOCKDOWN_MSR] = "raw MSR access",
+	[LOCKDOWN_ACPI_TABLES] = "modifying ACPI tables",
+	[LOCKDOWN_PCMCIA_CIS] = "direct PCMCIA CIS storage",
+	[LOCKDOWN_TIOCSSERIAL] = "reconfiguration of serial port IO",
+	[LOCKDOWN_MODULE_PARAMETERS] = "unsafe module parameters",
+	[LOCKDOWN_MMIOTRACE] = "unsafe mmio",
+	[LOCKDOWN_DEBUGFS] = "debugfs access",
+	[LOCKDOWN_XMON_WR] = "xmon write access",
+	[LOCKDOWN_INTEGRITY_MAX] = "integrity",
+	[LOCKDOWN_KCORE] = "/proc/kcore access",
+	[LOCKDOWN_KPROBES] = "use of kprobes",
+	[LOCKDOWN_BPF_READ] = "use of bpf to read kernel RAM",
+	[LOCKDOWN_PERF] = "unsafe use of perf",
+	[LOCKDOWN_TRACEFS] = "use of tracefs",
+	[LOCKDOWN_XMON_RW] = "xmon read and write access",
+	[LOCKDOWN_CONFIDENTIALITY_MAX] = "confidentiality",
+};
+
 struct security_hook_heads security_hook_heads __lsm_ro_after_init;
-static ATOMIC_NOTIFIER_HEAD(lsm_notifier_chain);
+static BLOCKING_NOTIFIER_HEAD(blocking_lsm_notifier_chain);
 
 static struct kmem_cache *lsm_file_cache;
 static struct kmem_cache *lsm_inode_cache;
@@ -277,6 +310,8 @@ static void __init ordered_lsm_parse(const char *order, const char *origin)
 static void __init lsm_early_cred(struct cred *cred);
 static void __init lsm_early_task(struct task_struct *task);
 
+static int lsm_append(const char *new, char **result);
+
 static void __init ordered_lsm_init(void)
 {
 	struct lsm_info **lsm;
@@ -323,6 +358,26 @@ static void __init ordered_lsm_init(void)
 	kfree(ordered_lsms);
 }
 
+int __init early_security_init(void)
+{
+	int i;
+	struct hlist_head *list = (struct hlist_head *) &security_hook_heads;
+	struct lsm_info *lsm;
+
+	for (i = 0; i < sizeof(security_hook_heads) / sizeof(struct hlist_head);
+	     i++)
+		INIT_HLIST_HEAD(&list[i]);
+
+	for (lsm = __start_early_lsm_info; lsm < __end_early_lsm_info; lsm++) {
+		if (!lsm->enabled)
+			lsm->enabled = &lsm_enabled_true;
+		prepare_lsm(lsm);
+		initialize_lsm(lsm);
+	}
+
+	return 0;
+}
+
 /**
  * security_init - initializes the security framework
  *
@@ -330,14 +385,18 @@ static void __init ordered_lsm_init(void)
  */
 int __init security_init(void)
 {
-	int i;
-	struct hlist_head *list = (struct hlist_head *) &security_hook_heads;
+	struct lsm_info *lsm;
 
 	pr_info("Security Framework initializing\n");
 
-	for (i = 0; i < sizeof(security_hook_heads) / sizeof(struct hlist_head);
-	     i++)
-		INIT_HLIST_HEAD(&list[i]);
+	/*
+	 * Append the names of the early LSM modules now that kmalloc() is
+	 * available
+	 */
+	for (lsm = __start_early_lsm_info; lsm < __end_early_lsm_info; lsm++) {
+		if (lsm->enabled)
+			lsm_append(lsm->name, &lsm_names);
+	}
 
 	/* Load LSMs in specified order. */
 	ordered_lsm_init();
@@ -384,7 +443,7 @@ static bool match_last_lsm(const char *list, const char *lsm)
 	return !strcmp(last, lsm);
 }
 
-static int lsm_append(char *new, char **result)
+static int lsm_append(const char *new, char **result)
 {
 	char *cp;
 
@@ -422,27 +481,37 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 		hooks[i].lsm = lsm;
 		hlist_add_tail_rcu(&hooks[i].list, hooks[i].head);
 	}
-	if (lsm_append(lsm, &lsm_names) < 0)
-		panic("%s - Cannot get early memory.\n", __func__);
+
+	/*
+	 * Don't try to append during early_security_init(), we'll come back
+	 * and fix this up afterwards.
+	 */
+	if (slab_is_available()) {
+		if (lsm_append(lsm, &lsm_names) < 0)
+			panic("%s - Cannot get early memory.\n", __func__);
+	}
 }
 
-int call_lsm_notifier(enum lsm_event event, void *data)
+int call_blocking_lsm_notifier(enum lsm_event event, void *data)
 {
-	return atomic_notifier_call_chain(&lsm_notifier_chain, event, data);
+	return blocking_notifier_call_chain(&blocking_lsm_notifier_chain,
+					    event, data);
 }
-EXPORT_SYMBOL(call_lsm_notifier);
+EXPORT_SYMBOL(call_blocking_lsm_notifier);
 
-int register_lsm_notifier(struct notifier_block *nb)
+int register_blocking_lsm_notifier(struct notifier_block *nb)
 {
-	return atomic_notifier_chain_register(&lsm_notifier_chain, nb);
+	return blocking_notifier_chain_register(&blocking_lsm_notifier_chain,
+						nb);
 }
-EXPORT_SYMBOL(register_lsm_notifier);
+EXPORT_SYMBOL(register_blocking_lsm_notifier);
 
-int unregister_lsm_notifier(struct notifier_block *nb)
+int unregister_blocking_lsm_notifier(struct notifier_block *nb)
 {
-	return atomic_notifier_chain_unregister(&lsm_notifier_chain, nb);
+	return blocking_notifier_chain_unregister(&blocking_lsm_notifier_chain,
+						  nb);
 }
-EXPORT_SYMBOL(unregister_lsm_notifier);
+EXPORT_SYMBOL(unregister_blocking_lsm_notifier);
 
 /**
  * lsm_cred_alloc - allocate a composite cred blob
@@ -598,6 +667,25 @@ static void __init lsm_early_task(struct task_struct *task)
 	if (rc)
 		panic("%s: Early task alloc failed.\n", __func__);
 }
+
+/*
+ * The default value of the LSM hook is defined in linux/lsm_hook_defs.h and
+ * can be accessed with:
+ *
+ *	LSM_RET_DEFAULT(<hook_name>)
+ *
+ * The macros below define static constants for the default value of each
+ * LSM hook.
+ */
+#define LSM_RET_DEFAULT(NAME) (NAME##_default)
+#define DECLARE_LSM_RET_DEFAULT_void(DEFAULT, NAME)
+#define DECLARE_LSM_RET_DEFAULT_int(DEFAULT, NAME) \
+	static const int LSM_RET_DEFAULT(NAME) = (DEFAULT);
+#define LSM_HOOK(RET, DEFAULT, NAME, ...) \
+	DECLARE_LSM_RET_DEFAULT_##RET(DEFAULT, NAME)
+
+#include <linux/lsm_hook_defs.h>
+#undef LSM_HOOK
 
 /*
  * Hook list operation macros.
@@ -865,6 +953,12 @@ EXPORT_SYMBOL(security_add_mnt_opt);
 int security_move_mount(const struct path *from_path, const struct path *to_path)
 {
 	return call_int_hook(move_mount, 0, from_path, to_path);
+}
+
+int security_path_notify(const struct path *path, u64 mask,
+				unsigned int obj_type)
+{
+	return call_int_hook(path_notify, 0, path, mask, obj_type);
 }
 
 int security_inode_alloc(struct inode *inode)
@@ -1263,16 +1357,16 @@ int security_inode_getsecurity(struct inode *inode, const char *name, void **buf
 	int rc;
 
 	if (unlikely(IS_PRIVATE(inode)))
-		return -EOPNOTSUPP;
+		return LSM_RET_DEFAULT(inode_getsecurity);
 	/*
 	 * Only one module will provide an attribute with a given name.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.inode_getsecurity, list) {
 		rc = hp->hook.inode_getsecurity(inode, name, buffer, alloc);
-		if (rc != -EOPNOTSUPP)
+		if (rc != LSM_RET_DEFAULT(inode_getsecurity))
 			return rc;
 	}
-	return -EOPNOTSUPP;
+	return LSM_RET_DEFAULT(inode_getsecurity);
 }
 
 int security_inode_setsecurity(struct inode *inode, const char *name, const void *value, size_t size, int flags)
@@ -1281,17 +1375,17 @@ int security_inode_setsecurity(struct inode *inode, const char *name, const void
 	int rc;
 
 	if (unlikely(IS_PRIVATE(inode)))
-		return -EOPNOTSUPP;
+		return LSM_RET_DEFAULT(inode_setsecurity);
 	/*
 	 * Only one module will provide an attribute with a given name.
 	 */
 	hlist_for_each_entry(hp, &security_hook_heads.inode_setsecurity, list) {
 		rc = hp->hook.inode_setsecurity(inode, name, value, size,
 								flags);
-		if (rc != -EOPNOTSUPP)
+		if (rc != LSM_RET_DEFAULT(inode_setsecurity))
 			return rc;
 	}
-	return -EOPNOTSUPP;
+	return LSM_RET_DEFAULT(inode_setsecurity);
 }
 
 int security_inode_listsecurity(struct inode *inode, char *buffer, size_t buffer_size)
@@ -1665,12 +1759,12 @@ int security_task_prctl(int option, unsigned long arg2, unsigned long arg3,
 			 unsigned long arg4, unsigned long arg5)
 {
 	int thisrc;
-	int rc = -ENOSYS;
+	int rc = LSM_RET_DEFAULT(task_prctl);
 	struct security_hook_list *hp;
 
 	hlist_for_each_entry(hp, &security_hook_heads.task_prctl, list) {
 		thisrc = hp->hook.task_prctl(option, arg2, arg3, arg4, arg5);
-		if (thisrc != -ENOSYS) {
+		if (thisrc != LSM_RET_DEFAULT(task_prctl)) {
 			rc = thisrc;
 			if (thisrc != 0)
 				break;
@@ -1842,7 +1936,7 @@ int security_getprocattr(struct task_struct *p, const char *lsm, char *name,
 			continue;
 		return hp->hook.getprocattr(p, name, value);
 	}
-	return -EINVAL;
+	return LSM_RET_DEFAULT(getprocattr);
 }
 
 int security_setprocattr(const char *lsm, const char *name, void *value,
@@ -1855,7 +1949,7 @@ int security_setprocattr(const char *lsm, const char *name, void *value,
 			continue;
 		return hp->hook.setprocattr(name, value, size);
 	}
-	return -EINVAL;
+	return LSM_RET_DEFAULT(setprocattr);
 }
 
 int security_netlink_send(struct sock *sk, struct sk_buff *skb)
@@ -2240,7 +2334,7 @@ int security_xfrm_state_pol_flow_match(struct xfrm_state *x,
 				       const struct flowi *fl)
 {
 	struct security_hook_list *hp;
-	int rc = 1;
+	int rc = LSM_RET_DEFAULT(xfrm_state_pol_flow_match);
 
 	/*
 	 * Since this function is expected to return 0 or 1, the judgment
@@ -2355,3 +2449,36 @@ void security_bpf_prog_free(struct bpf_prog_aux *aux)
 	call_void_hook(bpf_prog_free_security, aux);
 }
 #endif /* CONFIG_BPF_SYSCALL */
+
+int security_locked_down(enum lockdown_reason what)
+{
+	return call_int_hook(locked_down, 0, what);
+}
+EXPORT_SYMBOL(security_locked_down);
+
+#ifdef CONFIG_PERF_EVENTS
+int security_perf_event_open(struct perf_event_attr *attr, int type)
+{
+	return call_int_hook(perf_event_open, 0, attr, type);
+}
+
+int security_perf_event_alloc(struct perf_event *event)
+{
+	return call_int_hook(perf_event_alloc, 0, event);
+}
+
+void security_perf_event_free(struct perf_event *event)
+{
+	call_void_hook(perf_event_free, event);
+}
+
+int security_perf_event_read(struct perf_event *event)
+{
+	return call_int_hook(perf_event_read, 0, event);
+}
+
+int security_perf_event_write(struct perf_event *event)
+{
+	return call_int_hook(perf_event_write, 0, event);
+}
+#endif /* CONFIG_PERF_EVENTS */

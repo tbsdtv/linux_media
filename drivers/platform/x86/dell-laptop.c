@@ -1,16 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Driver for Dell laptop extras
  *
  *  Copyright (c) Red Hat <mjg@redhat.com>
  *  Copyright (c) 2014 Gabriele Mazzotta <gabriele.mzt@gmail.com>
- *  Copyright (c) 2014 Pali Rohár <pali.rohar@gmail.com>
+ *  Copyright (c) 2014 Pali Rohár <pali@kernel.org>
  *
  *  Based on documentation in the libsmbios package:
  *  Copyright (C) 2005-2014 Dell Inc.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -36,6 +33,7 @@
 
 struct quirk_entry {
 	bool touchpad_led;
+	bool kbd_led_not_present;
 	bool kbd_led_levels_off_1;
 	bool kbd_missing_ac_tag;
 
@@ -74,6 +72,10 @@ static struct quirk_entry quirk_dell_xps13_9370 = {
 
 static struct quirk_entry quirk_dell_latitude_e6410 = {
 	.kbd_led_levels_off_1 = true,
+};
+
+static struct quirk_entry quirk_dell_inspiron_1012 = {
+	.kbd_led_not_present = true,
 };
 
 static struct platform_driver platform_driver = {
@@ -312,6 +314,24 @@ static const struct dmi_system_id dell_quirks[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Latitude E6410"),
 		},
 		.driver_data = &quirk_dell_latitude_e6410,
+	},
+	{
+		.callback = dmi_matched,
+		.ident = "Dell Inspiron 1012",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron 1012"),
+		},
+		.driver_data = &quirk_dell_inspiron_1012,
+	},
+	{
+		.callback = dmi_matched,
+		.ident = "Dell Inspiron 1018",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron 1018"),
+		},
+		.driver_data = &quirk_dell_inspiron_1012,
 	},
 	{ }
 };
@@ -1496,6 +1516,9 @@ static void kbd_init(void)
 {
 	int ret;
 
+	if (quirks && quirks->kbd_led_not_present)
+		return;
+
 	ret = kbd_init_info();
 	kbd_init_tokens();
 
@@ -2176,9 +2199,8 @@ static int __init dell_init(void)
 	kbd_led_init(&platform_device->dev);
 
 	dell_laptop_dir = debugfs_create_dir("dell_laptop", NULL);
-	if (dell_laptop_dir != NULL)
-		debugfs_create_file("rfkill", 0444, dell_laptop_dir, NULL,
-				    &dell_debugfs_fops);
+	debugfs_create_file("rfkill", 0444, dell_laptop_dir, NULL,
+			    &dell_debugfs_fops);
 
 	dell_laptop_register_notifier(&dell_laptop_notifier);
 
@@ -2273,6 +2295,6 @@ module_exit(dell_exit);
 
 MODULE_AUTHOR("Matthew Garrett <mjg@redhat.com>");
 MODULE_AUTHOR("Gabriele Mazzotta <gabriele.mzt@gmail.com>");
-MODULE_AUTHOR("Pali Rohár <pali.rohar@gmail.com>");
+MODULE_AUTHOR("Pali Rohár <pali@kernel.org>");
 MODULE_DESCRIPTION("Dell laptop driver");
 MODULE_LICENSE("GPL");

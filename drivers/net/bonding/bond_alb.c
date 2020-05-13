@@ -50,11 +50,6 @@ struct arp_pkt {
 };
 #pragma pack()
 
-static inline struct arp_pkt *arp_pkt(const struct sk_buff *skb)
-{
-	return (struct arp_pkt *)skb_network_header(skb);
-}
-
 /* Forward declaration */
 static void alb_send_learning_packets(struct slave *slave, u8 mac_addr[],
 				      bool strict_match);
@@ -300,7 +295,7 @@ static int rlb_arp_recv(const struct sk_buff *skb, struct bonding *bond,
 	if (arp->op_code == htons(ARPOP_REPLY)) {
 		/* update rx hash table for this ARP */
 		rlb_update_entry_from_arp(bond, arp);
-		netdev_dbg(bond->dev, "Server received an ARP Reply from client\n");
+		slave_dbg(bond->dev, slave->dev, "Server received an ARP Reply from client\n");
 	}
 out:
 	return RX_HANDLER_ANOTHER;
@@ -442,8 +437,9 @@ static void rlb_update_client(struct rlb_client_info *client_info)
 				 client_info->slave->dev->dev_addr,
 				 client_info->mac_dst);
 		if (!skb) {
-			netdev_err(client_info->slave->bond->dev,
-				   "failed to create an ARP packet\n");
+			slave_err(client_info->slave->bond->dev,
+				  client_info->slave->dev,
+				  "failed to create an ARP packet\n");
 			continue;
 		}
 
@@ -552,10 +548,11 @@ static void rlb_req_update_subnet_clients(struct bonding *bond, __be32 src_ip)
 	spin_unlock(&bond->mode_lock);
 }
 
-static struct slave *rlb_choose_channel(struct sk_buff *skb, struct bonding *bond)
+static struct slave *rlb_choose_channel(struct sk_buff *skb,
+					struct bonding *bond,
+					const struct arp_pkt *arp)
 {
 	struct alb_bond_info *bond_info = &(BOND_ALB_INFO(bond));
-	struct arp_pkt *arp = arp_pkt(skb);
 	struct slave *assigned_slave, *curr_active_slave;
 	struct rlb_client_info *client_info;
 	u32 hash_index = 0;
@@ -652,8 +649,12 @@ static struct slave *rlb_choose_channel(struct sk_buff *skb, struct bonding *bon
  */
 static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 {
-	struct arp_pkt *arp = arp_pkt(skb);
 	struct slave *tx_slave = NULL;
+	struct arp_pkt *arp;
+
+	if (!pskb_network_may_pull(skb, sizeof(*arp)))
+		return NULL;
+	arp = (struct arp_pkt *)skb_network_header(skb);
 
 	/* Don't modify or load balance ARPs that do not originate locally
 	 * (e.g.,arrive via a bridge).
@@ -663,18 +664,19 @@ static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 
 	if (arp->op_code == htons(ARPOP_REPLY)) {
 		/* the arp must be sent on the selected rx channel */
-		tx_slave = rlb_choose_channel(skb, bond);
+		tx_slave = rlb_choose_channel(skb, bond, arp);
 		if (tx_slave)
 			bond_hw_addr_copy(arp->mac_src, tx_slave->dev->dev_addr,
 					  tx_slave->dev->addr_len);
-		netdev_dbg(bond->dev, "Server sent ARP Reply packet\n");
+		netdev_dbg(bond->dev, "(slave %s): Server sent ARP Reply packet\n",
+			   tx_slave ? tx_slave->dev->name : "NULL");
 	} else if (arp->op_code == htons(ARPOP_REQUEST)) {
 		/* Create an entry in the rx_hashtbl for this client as a
 		 * place holder.
 		 * When the arp reply is received the entry will be updated
 		 * with the correct unicast address of the client.
 		 */
-		rlb_choose_channel(skb, bond);
+		tx_slave = rlb_choose_channel(skb, bond, arp);
 
 		/* The ARP reply packets must be delayed so that
 		 * they can cancel out the influence of the ARP request.
@@ -687,7 +689,8 @@ static struct slave *rlb_arp_xmit(struct sk_buff *skb, struct bonding *bond)
 		 * updated with their assigned mac.
 		 */
 		rlb_req_update_subnet_clients(bond, arp->ip_src);
-		netdev_dbg(bond->dev, "Server sent ARP Request packet\n");
+		netdev_dbg(bond->dev, "(slave %s): Server sent ARP Request packet\n",
+			   tx_slave ? tx_slave->dev->name : "NULL");
 	}
 
 	return tx_slave;
@@ -923,9 +926,8 @@ static void alb_send_lp_vid(struct slave *slave, u8 mac_addr[],
 	skb->priority = TC_PRIO_CONTROL;
 	skb->dev = slave->dev;
 
-	netdev_dbg(slave->bond->dev,
-		   "Send learning packet: dev %s mac %pM vlan %d\n",
-		   slave->dev->name, mac_addr, vid);
+	slave_dbg(slave->bond->dev, slave->dev,
+		  "Send learning packet: mac %pM vlan %d\n", mac_addr, vid);
 
 	if (vid)
 		__vlan_hwaccel_put_tag(skb, vlan_proto, vid);
@@ -950,7 +952,7 @@ static int alb_upper_dev_walk(struct net_device *upper, void *_data)
 	struct bond_vlan_tag *tags;
 
 	if (is_vlan_dev(upper) &&
-	    bond->nest_level == vlan_get_encap_level(upper) - 1) {
+	    bond->dev->lower_level == upper->lower_level - 1) {
 		if (upper->addr_assign_type == NET_ADDR_STOLEN) {
 			alb_send_lp_vid(slave, mac_addr,
 					vlan_dev_vlan_proto(upper),
@@ -1016,8 +1018,7 @@ static int alb_set_slave_mac_addr(struct slave *slave, u8 addr[],
 	memcpy(ss.__data, addr, len);
 	ss.ss_family = dev->type;
 	if (dev_set_mac_address(dev, (struct sockaddr *)&ss, NULL)) {
-		netdev_err(slave->bond->dev, "dev_set_mac_address of dev %s failed! ALB mode requires that the base driver support setting the hw address also when the network device's interface is open\n",
-			   dev->name);
+		slave_err(slave->bond->dev, dev, "dev_set_mac_address on slave failed! ALB mode requires that the base driver support setting the hw address also when the network device's interface is open\n");
 		return -EOPNOTSUPP;
 	}
 	return 0;
@@ -1192,12 +1193,11 @@ static int alb_handle_addr_collision_on_attach(struct bonding *bond, struct slav
 		alb_set_slave_mac_addr(slave, free_mac_slave->perm_hwaddr,
 				       free_mac_slave->dev->addr_len);
 
-		netdev_warn(bond->dev, "the hw address of slave %s is in use by the bond; giving it the hw address of %s\n",
-			    slave->dev->name, free_mac_slave->dev->name);
+		slave_warn(bond->dev, slave->dev, "the slave hw address is in use by the bond; giving it the hw address of %s\n",
+			   free_mac_slave->dev->name);
 
 	} else if (has_bond_addr) {
-		netdev_err(bond->dev, "the hw address of slave %s is in use by the bond; couldn't find a slave with a free hw address to give it (this should not have happened)\n",
-			   slave->dev->name);
+		slave_err(bond->dev, slave->dev, "the slave hw address is in use by the bond; couldn't find a slave with a free hw address to give it (this should not have happened)\n");
 		return -EFAULT;
 	}
 
@@ -1383,26 +1383,31 @@ netdev_tx_t bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 	bool do_tx_balance = true;
 	u32 hash_index = 0;
 	const u8 *hash_start = NULL;
-	struct ipv6hdr *ip6hdr;
 
 	skb_reset_mac_header(skb);
 	eth_data = eth_hdr(skb);
 
 	switch (ntohs(skb->protocol)) {
 	case ETH_P_IP: {
-		const struct iphdr *iph = ip_hdr(skb);
+		const struct iphdr *iph;
 
 		if (is_broadcast_ether_addr(eth_data->h_dest) ||
-		    iph->daddr == ip_bcast ||
-		    iph->protocol == IPPROTO_IGMP) {
+		    !pskb_network_may_pull(skb, sizeof(*iph))) {
+			do_tx_balance = false;
+			break;
+		}
+		iph = ip_hdr(skb);
+		if (iph->daddr == ip_bcast || iph->protocol == IPPROTO_IGMP) {
 			do_tx_balance = false;
 			break;
 		}
 		hash_start = (char *)&(iph->daddr);
 		hash_size = sizeof(iph->daddr);
-	}
 		break;
-	case ETH_P_IPV6:
+	}
+	case ETH_P_IPV6: {
+		const struct ipv6hdr *ip6hdr;
+
 		/* IPv6 doesn't really use broadcast mac address, but leave
 		 * that here just in case.
 		 */
@@ -1419,7 +1424,11 @@ netdev_tx_t bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 			break;
 		}
 
-		/* Additianally, DAD probes should not be tx-balanced as that
+		if (!pskb_network_may_pull(skb, sizeof(*ip6hdr))) {
+			do_tx_balance = false;
+			break;
+		}
+		/* Additionally, DAD probes should not be tx-balanced as that
 		 * will lead to false positives for duplicate addresses and
 		 * prevent address configuration from working.
 		 */
@@ -1429,17 +1438,26 @@ netdev_tx_t bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 			break;
 		}
 
-		hash_start = (char *)&(ipv6_hdr(skb)->daddr);
-		hash_size = sizeof(ipv6_hdr(skb)->daddr);
+		hash_start = (char *)&ip6hdr->daddr;
+		hash_size = sizeof(ip6hdr->daddr);
 		break;
-	case ETH_P_IPX:
-		if (ipx_hdr(skb)->ipx_checksum != IPX_NO_CHECKSUM) {
+	}
+	case ETH_P_IPX: {
+		const struct ipxhdr *ipxhdr;
+
+		if (pskb_network_may_pull(skb, sizeof(*ipxhdr))) {
+			do_tx_balance = false;
+			break;
+		}
+		ipxhdr = (struct ipxhdr *)skb_network_header(skb);
+
+		if (ipxhdr->ipx_checksum != IPX_NO_CHECKSUM) {
 			/* something is wrong with this packet */
 			do_tx_balance = false;
 			break;
 		}
 
-		if (ipx_hdr(skb)->ipx_type != IPX_TYPE_NCP) {
+		if (ipxhdr->ipx_type != IPX_TYPE_NCP) {
 			/* The only protocol worth balancing in
 			 * this family since it has an "ARP" like
 			 * mechanism
@@ -1448,9 +1466,11 @@ netdev_tx_t bond_alb_xmit(struct sk_buff *skb, struct net_device *bond_dev)
 			break;
 		}
 
+		eth_data = eth_hdr(skb);
 		hash_start = (char *)eth_data->h_dest;
 		hash_size = ETH_ALEN;
 		break;
+	}
 	case ETH_P_ARP:
 		do_tx_balance = false;
 		if (bond_info->rlb_enabled)

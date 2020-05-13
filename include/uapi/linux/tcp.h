@@ -127,6 +127,9 @@ enum {
 
 #define TCP_CM_INQ		TCP_INQ
 
+#define TCP_TX_DELAY		37	/* delay outgoing packets by XX usec */
+
+
 #define TCP_REPAIR_ON		1
 #define TCP_REPAIR_OFF		0
 #define TCP_REPAIR_OFF_NO_WP	-1	/* Turn off without window probes */
@@ -150,6 +153,14 @@ enum {
 	TCP_RECV_QUEUE,
 	TCP_SEND_QUEUE,
 	TCP_QUEUES_NR,
+};
+
+/* why fastopen failed from client perspective */
+enum tcp_fastopen_client_fail {
+	TFO_STATUS_UNSPEC, /* catch-all */
+	TFO_COOKIE_UNAVAILABLE, /* if not in TFO_CLIENT_NO_COOKIE mode */
+	TFO_DATA_NOT_ACKED, /* SYN-ACK did not ack SYN data */
+	TFO_SYN_RETRANSMITTED, /* SYN-ACK did not ack SYN data after timeout */
 };
 
 /* for TCP_INFO socket option */
@@ -208,7 +219,7 @@ struct tcp_info {
 	__u8	tcpi_backoff;
 	__u8	tcpi_options;
 	__u8	tcpi_snd_wscale : 4, tcpi_rcv_wscale : 4;
-	__u8	tcpi_delivery_rate_app_limited:1;
+	__u8	tcpi_delivery_rate_app_limited:1, tcpi_fastopen_client_fail:2;
 
 	__u32	tcpi_rto;
 	__u32	tcpi_ato;
@@ -267,6 +278,12 @@ struct tcp_info {
 	__u64	tcpi_bytes_retrans;  /* RFC4898 tcpEStatsPerfOctetsRetrans */
 	__u32	tcpi_dsack_dups;     /* RFC4898 tcpEStatsStackDSACKDups */
 	__u32	tcpi_reord_seen;     /* reordering events seen */
+
+	__u32	tcpi_rcv_ooopack;    /* Out-of-order packets received */
+
+	__u32	tcpi_snd_wnd;	     /* peer's advertised receive window after
+				      * scaling (bytes)
+				      */
 };
 
 /* netlink attributes types for SCM_TIMESTAMPING_OPT_STATS */
@@ -294,20 +311,23 @@ enum {
 	TCP_NLA_DSACK_DUPS,	/* DSACK blocks received */
 	TCP_NLA_REORD_SEEN,	/* reordering events seen */
 	TCP_NLA_SRTT,		/* smoothed RTT in usecs */
+	TCP_NLA_TIMEOUT_REHASH, /* Timeout-triggered rehash attempts */
+	TCP_NLA_BYTES_NOTSENT,	/* Bytes in write queue not yet sent */
 };
 
 /* for TCP_MD5SIG socket option */
 #define TCP_MD5SIG_MAXKEYLEN	80
 
 /* tcp_md5sig extension flags for TCP_MD5SIG_EXT */
-#define TCP_MD5SIG_FLAG_PREFIX		1	/* address prefix length */
+#define TCP_MD5SIG_FLAG_PREFIX		0x1	/* address prefix length */
+#define TCP_MD5SIG_FLAG_IFINDEX		0x2	/* ifindex set */
 
 struct tcp_md5sig {
 	struct __kernel_sockaddr_storage tcpm_addr;	/* address associated */
 	__u8	tcpm_flags;				/* extension flags */
 	__u8	tcpm_prefixlen;				/* address prefix */
 	__u16	tcpm_keylen;				/* key length */
-	__u32	__tcpm_pad;				/* zero */
+	int	tcpm_ifindex;				/* device index for scope */
 	__u8	tcpm_key[TCP_MD5SIG_MAXKEYLEN];		/* key (binary) */
 };
 
@@ -326,5 +346,7 @@ struct tcp_zerocopy_receive {
 	__u64 address;		/* in: address of mapping */
 	__u32 length;		/* in/out: number of bytes to map/mapped */
 	__u32 recv_skip_hint;	/* out: amount of bytes to skip */
+	__u32 inq; /* out: amount of bytes in read queue */
+	__s32 err; /* out: socket error */
 };
 #endif /* _UAPI_LINUX_TCP_H */

@@ -6,15 +6,18 @@
  *	Eric Anholt <eric@anholt.net>
  */
 
+#include <linux/delay.h>
 #include <linux/i2c.h>
 #include <linux/pm_runtime.h>
 
-#include <drm/drmP.h>
-#include "psb_intel_reg.h"
-#include "gma_display.h"
+#include <drm/drm_crtc.h>
+#include <drm/drm_fourcc.h>
+
 #include "framebuffer.h"
-#include "mdfld_output.h"
+#include "gma_display.h"
 #include "mdfld_dsi_output.h"
+#include "mdfld_output.h"
+#include "psb_intel_reg.h"
 
 /* Hardcoded currently */
 static int ksel = KSEL_CRYSTAL_19;
@@ -110,27 +113,6 @@ static int psb_intel_panel_fitter_pipe(struct drm_device *dev)
 	return (pfit_control >> 29) & 0x3;
 }
 
-static struct drm_device globle_dev;
-
-void mdfld__intel_plane_set_alpha(int enable)
-{
-	struct drm_device *dev = &globle_dev;
-	int dspcntr_reg = DSPACNTR;
-	u32 dspcntr;
-
-	dspcntr = REG_READ(dspcntr_reg);
-
-	if (enable) {
-		dspcntr &= ~DISPPLANE_32BPP_NO_ALPHA;
-		dspcntr |= DISPPLANE_32BPP;
-	} else {
-		dspcntr &= ~DISPPLANE_32BPP;
-		dspcntr |= DISPPLANE_32BPP_NO_ALPHA;
-	}
-
-	REG_WRITE(dspcntr_reg, dspcntr);
-}
-
 static int check_fb(struct drm_framebuffer *fb)
 {
 	if (!fb)
@@ -160,8 +142,6 @@ static int mdfld__intel_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 	unsigned long start, offset;
 	u32 dspcntr;
 	int ret;
-
-	memcpy(&globle_dev, dev, sizeof(struct drm_device));
 
 	dev_dbg(dev->dev, "pipe = 0x%x.\n", pipe);
 

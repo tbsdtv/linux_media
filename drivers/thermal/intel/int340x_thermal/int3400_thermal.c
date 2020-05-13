@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * INT3400 thermal driver
  *
  * Copyright (C) 2014, Intel Corporation
  * Authors: Zhang Rui <rui.zhang@intel.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/module.h>
@@ -69,7 +65,7 @@ static ssize_t available_uuids_show(struct device *dev,
 	for (i = 0; i < INT3400_THERMAL_MAXIMUM_UUID; i++) {
 		if (priv->uuid_bitmap & (1 << i))
 			if (PAGE_SIZE - length > 0)
-				length += snprintf(&buf[length],
+				length += scnprintf(&buf[length],
 						   PAGE_SIZE - length,
 						   "%s\n",
 						   int3400_thermal_uuids[i]);
@@ -374,6 +370,7 @@ static int int3400_thermal_remove(struct platform_device *pdev)
 
 static const struct acpi_device_id int3400_thermal_match[] = {
 	{"INT3400", 0},
+	{"INTC1040", 0},
 	{}
 };
 

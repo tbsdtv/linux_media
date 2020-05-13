@@ -48,7 +48,7 @@ struct eeprom_rw_param {
 struct EFUSE_ACCESS_STRUCT {
 	u16	start_addr;
 	u16	cnts;
-	u8	data[0];
+	u8	data[];
 };
 
 struct burst_rw_reg {
@@ -70,8 +70,6 @@ struct DR_VARIABLE_STRUCT {
 	u8 offset;
 	u32 variable;
 };
-
-int mp_start_joinbss(struct _adapter *padapter, struct ndis_802_11_ssid *pssid);
 
 /* oid_rtl_seg_87_11_00 */
 uint oid_rt_pro_read_register_hdl(struct oid_par_priv *poid_par_priv);
@@ -326,7 +324,7 @@ struct mp_ioctl_handler {
 struct mp_ioctl_param {
 	unsigned int subcode;
 	unsigned int len;
-	unsigned char data[0];
+	unsigned char data[];
 };
 
 #define GEN_MP_IOCTL_SUBCODE(code) _MP_IOCTL_ ## code ## _CMD_

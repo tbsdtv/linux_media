@@ -92,6 +92,7 @@ struct mod_vrr_params_btr {
 	uint32_t inserted_duration_in_us;
 	uint32_t frames_to_insert;
 	uint32_t frame_counter;
+	uint32_t margin_in_us;
 };
 
 struct mod_vrr_params_fixed_refresh {
@@ -172,5 +173,7 @@ bool mod_freesync_is_valid_range(struct mod_freesync *mod_freesync,
 		uint32_t max_refresh_cap_in_uhz,
 		uint32_t min_refresh_request_in_uhz,
 		uint32_t max_refresh_request_in_uhz);
+
+
 
 #endif

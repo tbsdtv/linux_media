@@ -1,5 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0
+
+if MEDIA_DIGITAL_TV_SUPPORT
+
+comment "DVB Frontend drivers auto-selected by 'Autoselect ancillary drivers'"
+	depends on MEDIA_HIDE_ANCILLARY_SUBDRV
+
 menu "Customise DVB Frontends"
-	visible if !MEDIA_SUBDRV_AUTOSELECT || COMPILE_TEST || EXPERT
+	visible if !MEDIA_HIDE_ANCILLARY_SUBDRV
 
 comment "Multistandard (satellite) frontends"
 	depends on DVB_CORE
@@ -155,6 +162,13 @@ config DVB_TBSPRIV
 	help
 	  A DVB-S demod and tuner module.
 	  Say Y when you want to support this frontend.
+
+config DVB_TAS2971
+	tristate "Tmax TAS2971 based"
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	Say Y when you want to support this frontend.
 
 comment "Multistandard (cable + terrestrial) frontends"
 	depends on DVB_CORE
@@ -1026,16 +1040,15 @@ config DVB_SP2
 	help
 	  CIMaX SP2/SP2HF Common Interface module.
 
+endmenu # Customise DVB Frontends
+
+endif # MEDIA_DIGITAL_TV_SUPPORT
+
 comment "Tools to develop new frontends"
+	depends on MEDIA_TEST_SUPPORT
 
 config DVB_DUMMY_FE
 	tristate "Dummy frontend driver"
-	depends on DVB_CORE
-endmenu
-
-config DVB_TAS2971
-	tristate "Tmax TAS2971 based"
-	depends on DVB_CORE && I2C
-	default m if !MEDIA_SUBDRV_AUTOSELECT
+	depends on MEDIA_TEST_SUPPORT && DVB_CORE
 	help
-	Say Y when you want to support this frontend.
+	  Dummy skeleton frontend driver.

@@ -357,7 +357,7 @@ static void octeon_write_lcd(const char *s)
 {
 	if (octeon_bootinfo->led_display_base_addr) {
 		void __iomem *lcd_address =
-			ioremap_nocache(octeon_bootinfo->led_display_base_addr,
+			ioremap(octeon_bootinfo->led_display_base_addr,
 					8);
 		int i;
 		for (i = 0; i < 8; i++, s++) {
@@ -844,7 +844,7 @@ void __init prom_init(void)
 	 * BIST should always be enabled when doing a soft reset. L2
 	 * Cache locking for instance is not cleared unless BIST is
 	 * enabled.  Unfortunately due to a chip errata G-200 for
-	 * Cn38XX and CN31XX, BIST msut be disabled on these parts.
+	 * Cn38XX and CN31XX, BIST must be disabled on these parts.
 	 */
 	if (OCTEON_IS_MODEL(OCTEON_CN38XX_PASS2) ||
 	    OCTEON_IS_MODEL(OCTEON_CN31XX))
@@ -1007,8 +1007,7 @@ void __init plat_mem_setup(void)
 	 * regions next to each other.
 	 */
 	cvmx_bootmem_lock();
-	while ((boot_mem_map.nr_map < BOOT_MEM_MAP_MAX)
-		&& (total < max_memory)) {
+	while (total < max_memory) {
 		memory = cvmx_bootmem_phy_alloc(mem_alloc_size,
 						__pa_symbol(&_end), -1,
 						0x100000,

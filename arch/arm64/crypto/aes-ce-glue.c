@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * aes-ce-cipher.c - core AES cipher using ARMv8 Crypto Extensions
  *
  * Copyright (C) 2013 - 2017 Linaro Ltd <ard.biesheuvel@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <asm/neon.h>
@@ -22,9 +19,6 @@
 MODULE_DESCRIPTION("Synchronous AES cipher using ARMv8 Crypto Extensions");
 MODULE_AUTHOR("Ard Biesheuvel <ard.biesheuvel@linaro.org>");
 MODULE_LICENSE("GPL v2");
-
-asmlinkage void __aes_arm64_encrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
-asmlinkage void __aes_arm64_decrypt(u32 *rk, u8 *out, const u8 *in, int rounds);
 
 struct aes_block {
 	u8 b[AES_BLOCK_SIZE];
@@ -54,7 +48,7 @@ static void aes_cipher_encrypt(struct crypto_tfm *tfm, u8 dst[], u8 const src[])
 	struct crypto_aes_ctx *ctx = crypto_tfm_ctx(tfm);
 
 	if (!crypto_simd_usable()) {
-		__aes_arm64_encrypt(ctx->key_enc, dst, src, num_rounds(ctx));
+		aes_encrypt(ctx, dst, src);
 		return;
 	}
 
@@ -68,7 +62,7 @@ static void aes_cipher_decrypt(struct crypto_tfm *tfm, u8 dst[], u8 const src[])
 	struct crypto_aes_ctx *ctx = crypto_tfm_ctx(tfm);
 
 	if (!crypto_simd_usable()) {
-		__aes_arm64_decrypt(ctx->key_dec, dst, src, num_rounds(ctx));
+		aes_decrypt(ctx, dst, src);
 		return;
 	}
 
@@ -149,14 +143,8 @@ int ce_aes_setkey(struct crypto_tfm *tfm, const u8 *in_key,
 		  unsigned int key_len)
 {
 	struct crypto_aes_ctx *ctx = crypto_tfm_ctx(tfm);
-	int ret;
 
-	ret = ce_aes_expandkey(ctx, in_key, key_len);
-	if (!ret)
-		return 0;
-
-	tfm->crt_flags |= CRYPTO_TFM_RES_BAD_KEY_LEN;
-	return -EINVAL;
+	return ce_aes_expandkey(ctx, in_key, key_len);
 }
 EXPORT_SYMBOL(ce_aes_setkey);
 

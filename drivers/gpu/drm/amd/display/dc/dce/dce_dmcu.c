@@ -23,6 +23,9 @@
  *
  */
 
+#include <linux/delay.h>
+#include <linux/slab.h>
+
 #include "core_types.h"
 #include "link_encoder.h"
 #include "dce_dmcu.h"
@@ -55,6 +58,12 @@
 #define MCP_SYNC_PHY_UNLOCK 0x91
 #define MCP_BL_SET_PWM_FRAC 0x6A  /* Enable or disable Fractional PWM */
 #define MASTER_COMM_CNTL_REG__MASTER_COMM_INTERRUPT_MASK   0x00000001L
+
+// PSP FW version
+#define mmMP0_SMN_C2PMSG_58				0x1607A
+
+//Register access policy version
+#define mmMP0_SMN_C2PMSG_91				0x1609B
 
 static bool dce_dmcu_init(struct dmcu *dmcu)
 {
@@ -315,7 +324,7 @@ static void dce_get_psr_wait_loop(
 	return;
 }
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
+#if defined(CONFIG_DRM_AMD_DC_DCN)
 static void dcn10_get_dmcu_version(struct dmcu *dmcu)
 {
 	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
@@ -369,13 +378,28 @@ static bool dcn10_dmcu_init(struct dmcu *dmcu)
 	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
 	const struct dc_config *config = &dmcu->ctx->dc->config;
 	bool status = false;
+	struct dc_context *ctx = dmcu->ctx;
+	unsigned int i;
+	//  5 4 3 2 1 0
+	//  F E D C B A - bit 0 is A, bit 5 is F
+	unsigned int tx_interrupt_mask = 0;
 
+	PERF_TRACE();
 	/*  Definition of DC_DMCU_SCRATCH
 	 *  0 : firmare not loaded
 	 *  1 : PSP load DMCU FW but not initialized
 	 *  2 : Firmware already initialized
 	 */
 	dmcu->dmcu_state = REG_READ(DC_DMCU_SCRATCH);
+
+	for (i = 0; i < ctx->dc->link_count; i++) {
+		if (ctx->dc->links[i]->link_enc->features.flags.bits.DP_IS_USB_C) {
+			if (ctx->dc->links[i]->link_enc->transmitter >= TRANSMITTER_UNIPHY_A &&
+					ctx->dc->links[i]->link_enc->transmitter <= TRANSMITTER_UNIPHY_F) {
+				tx_interrupt_mask |= 1 << ctx->dc->links[i]->link_enc->transmitter;
+			}
+		}
+	}
 
 	switch (dmcu->dmcu_state) {
 	case DMCU_UNLOADED:
@@ -387,6 +411,11 @@ static bool dcn10_dmcu_init(struct dmcu *dmcu)
 
 		/* Set initialized ramping boundary value */
 		REG_WRITE(MASTER_COMM_DATA_REG1, 0xFFFF);
+
+		/* Set backlight ramping stepsize */
+		REG_WRITE(MASTER_COMM_DATA_REG2, abm_gain_stepsize);
+
+		REG_WRITE(MASTER_COMM_DATA_REG3, tx_interrupt_mask);
 
 		/* Set command to initialize microcontroller */
 		REG_UPDATE(MASTER_COMM_CMD_REG, MASTER_COMM_CMD_REG_BYTE0,
@@ -423,9 +452,21 @@ static bool dcn10_dmcu_init(struct dmcu *dmcu)
 		break;
 	}
 
+	PERF_TRACE();
 	return status;
 }
 
+static bool dcn21_dmcu_init(struct dmcu *dmcu)
+{
+	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
+	uint32_t dmcub_psp_version = REG_READ(DMCUB_SCRATCH15);
+
+	if (dmcu->auto_load_dmcu && dmcub_psp_version == 0) {
+		return false;
+	}
+
+	return dcn10_dmcu_init(dmcu);
+}
 
 static bool dcn10_dmcu_load_iram(struct dmcu *dmcu,
 		unsigned int start_offset,
@@ -512,9 +553,6 @@ static void dcn10_dmcu_set_psr_enable(struct dmcu *dmcu, bool enable, bool wait)
 	if (dmcu->dmcu_state != DMCU_RUNNING)
 		return;
 
-	dcn10_get_dmcu_psr_state(dmcu, &psr_state);
-	if (psr_state == 0 && !enable)
-		return;
 	/* waitDMCUReadyForCmd */
 	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0,
 				dmcu_wait_reg_ready_interval,
@@ -721,7 +759,55 @@ static bool dcn10_is_dmcu_initialized(struct dmcu *dmcu)
 	return true;
 }
 
-#endif //(CONFIG_DRM_AMD_DC_DCN1_0)
+
+
+static bool dcn20_lock_phy(struct dmcu *dmcu)
+{
+	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
+
+	/* If microcontroller is not running, do nothing */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return false;
+
+	/* waitDMCUReadyForCmd */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 1, 10000);
+
+	/* setDMCUParam_Cmd */
+	REG_UPDATE(MASTER_COMM_CMD_REG, MASTER_COMM_CMD_REG_BYTE0, MCP_SYNC_PHY_LOCK);
+
+	/* notifyDMCUMsg */
+	REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
+
+	/* waitDMCUReadyForCmd */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 1, 10000);
+
+	return true;
+}
+
+static bool dcn20_unlock_phy(struct dmcu *dmcu)
+{
+	struct dce_dmcu *dmcu_dce = TO_DCE_DMCU(dmcu);
+
+	/* If microcontroller is not running, do nothing */
+	if (dmcu->dmcu_state != DMCU_RUNNING)
+		return false;
+
+	/* waitDMCUReadyForCmd */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 1, 10000);
+
+	/* setDMCUParam_Cmd */
+	REG_UPDATE(MASTER_COMM_CMD_REG, MASTER_COMM_CMD_REG_BYTE0, MCP_SYNC_PHY_UNLOCK);
+
+	/* notifyDMCUMsg */
+	REG_UPDATE(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 1);
+
+	/* waitDMCUReadyForCmd */
+	REG_WAIT(MASTER_COMM_CNTL_REG, MASTER_COMM_INTERRUPT, 0, 1, 10000);
+
+	return true;
+}
+
+#endif //(CONFIG_DRM_AMD_DC_DCN)
 
 static const struct dmcu_funcs dce_funcs = {
 	.dmcu_init = dce_dmcu_init,
@@ -734,7 +820,7 @@ static const struct dmcu_funcs dce_funcs = {
 	.is_dmcu_initialized = dce_is_dmcu_initialized
 };
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
+#if defined(CONFIG_DRM_AMD_DC_DCN)
 static const struct dmcu_funcs dcn10_funcs = {
 	.dmcu_init = dcn10_dmcu_init,
 	.load_iram = dcn10_dmcu_load_iram,
@@ -744,6 +830,32 @@ static const struct dmcu_funcs dcn10_funcs = {
 	.set_psr_wait_loop = dcn10_psr_wait_loop,
 	.get_psr_wait_loop = dcn10_get_psr_wait_loop,
 	.is_dmcu_initialized = dcn10_is_dmcu_initialized
+};
+
+static const struct dmcu_funcs dcn20_funcs = {
+	.dmcu_init = dcn10_dmcu_init,
+	.load_iram = dcn10_dmcu_load_iram,
+	.set_psr_enable = dcn10_dmcu_set_psr_enable,
+	.setup_psr = dcn10_dmcu_setup_psr,
+	.get_psr_state = dcn10_get_dmcu_psr_state,
+	.set_psr_wait_loop = dcn10_psr_wait_loop,
+	.get_psr_wait_loop = dcn10_get_psr_wait_loop,
+	.is_dmcu_initialized = dcn10_is_dmcu_initialized,
+	.lock_phy = dcn20_lock_phy,
+	.unlock_phy = dcn20_unlock_phy
+};
+
+static const struct dmcu_funcs dcn21_funcs = {
+	.dmcu_init = dcn21_dmcu_init,
+	.load_iram = dcn10_dmcu_load_iram,
+	.set_psr_enable = dcn10_dmcu_set_psr_enable,
+	.setup_psr = dcn10_dmcu_setup_psr,
+	.get_psr_state = dcn10_get_dmcu_psr_state,
+	.set_psr_wait_loop = dcn10_psr_wait_loop,
+	.get_psr_wait_loop = dcn10_get_psr_wait_loop,
+	.is_dmcu_initialized = dcn10_is_dmcu_initialized,
+	.lock_phy = dcn20_lock_phy,
+	.unlock_phy = dcn20_unlock_phy
 };
 #endif
 
@@ -764,6 +876,26 @@ static void dce_dmcu_construct(
 	dmcu_dce->dmcu_shift = dmcu_shift;
 	dmcu_dce->dmcu_mask = dmcu_mask;
 }
+
+#if defined(CONFIG_DRM_AMD_DC_DCN)
+static void dcn21_dmcu_construct(
+		struct dce_dmcu *dmcu_dce,
+		struct dc_context *ctx,
+		const struct dce_dmcu_registers *regs,
+		const struct dce_dmcu_shift *dmcu_shift,
+		const struct dce_dmcu_mask *dmcu_mask)
+{
+	uint32_t psp_version = 0;
+
+	dce_dmcu_construct(dmcu_dce, ctx, regs, dmcu_shift, dmcu_mask);
+
+	if (!IS_FPGA_MAXIMUS_DC(ctx->dce_environment)) {
+		psp_version = dm_read_reg(ctx, mmMP0_SMN_C2PMSG_58);
+		dmcu_dce->base.auto_load_dmcu = ((psp_version & 0x00FF00FF) > 0x00110029);
+		dmcu_dce->base.psp_version = psp_version;
+	}
+}
+#endif
 
 struct dmcu *dce_dmcu_create(
 	struct dc_context *ctx,
@@ -786,7 +918,7 @@ struct dmcu *dce_dmcu_create(
 	return &dmcu_dce->base;
 }
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
+#if defined(CONFIG_DRM_AMD_DC_DCN)
 struct dmcu *dcn10_dmcu_create(
 	struct dc_context *ctx,
 	const struct dce_dmcu_registers *regs,
@@ -804,6 +936,48 @@ struct dmcu *dcn10_dmcu_create(
 		dmcu_dce, ctx, regs, dmcu_shift, dmcu_mask);
 
 	dmcu_dce->base.funcs = &dcn10_funcs;
+
+	return &dmcu_dce->base;
+}
+
+struct dmcu *dcn20_dmcu_create(
+	struct dc_context *ctx,
+	const struct dce_dmcu_registers *regs,
+	const struct dce_dmcu_shift *dmcu_shift,
+	const struct dce_dmcu_mask *dmcu_mask)
+{
+	struct dce_dmcu *dmcu_dce = kzalloc(sizeof(*dmcu_dce), GFP_KERNEL);
+
+	if (dmcu_dce == NULL) {
+		BREAK_TO_DEBUGGER();
+		return NULL;
+	}
+
+	dce_dmcu_construct(
+		dmcu_dce, ctx, regs, dmcu_shift, dmcu_mask);
+
+	dmcu_dce->base.funcs = &dcn20_funcs;
+
+	return &dmcu_dce->base;
+}
+
+struct dmcu *dcn21_dmcu_create(
+	struct dc_context *ctx,
+	const struct dce_dmcu_registers *regs,
+	const struct dce_dmcu_shift *dmcu_shift,
+	const struct dce_dmcu_mask *dmcu_mask)
+{
+	struct dce_dmcu *dmcu_dce = kzalloc(sizeof(*dmcu_dce), GFP_KERNEL);
+
+	if (dmcu_dce == NULL) {
+		BREAK_TO_DEBUGGER();
+		return NULL;
+	}
+
+	dcn21_dmcu_construct(
+		dmcu_dce, ctx, regs, dmcu_shift, dmcu_mask);
+
+	dmcu_dce->base.funcs = &dcn21_funcs;
 
 	return &dmcu_dce->base;
 }

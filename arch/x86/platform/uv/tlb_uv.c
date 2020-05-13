@@ -66,7 +66,6 @@ static struct tunables tunables[] = {
 };
 
 static struct dentry *tunables_dir;
-static struct dentry *tunables_file;
 
 /* these correspond to the statistics printed by ptc_seq_show() */
 static char *stat_description[] = {
@@ -1669,12 +1668,12 @@ static int tunables_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static const struct file_operations proc_uv_ptc_operations = {
-	.open		= ptc_proc_open,
-	.read		= seq_read,
-	.write		= ptc_proc_write,
-	.llseek		= seq_lseek,
-	.release	= seq_release,
+static const struct proc_ops uv_ptc_proc_ops = {
+	.proc_open	= ptc_proc_open,
+	.proc_read	= seq_read,
+	.proc_write	= ptc_proc_write,
+	.proc_lseek	= seq_lseek,
+	.proc_release	= seq_release,
 };
 
 static const struct file_operations tunables_fops = {
@@ -1692,7 +1691,7 @@ static int __init uv_ptc_init(void)
 		return 0;
 
 	proc_uv_ptc = proc_create(UV_PTC_BASENAME, 0444, NULL,
-				  &proc_uv_ptc_operations);
+				  &uv_ptc_proc_ops);
 	if (!proc_uv_ptc) {
 		pr_err("unable to create %s proc entry\n",
 		       UV_PTC_BASENAME);
@@ -1700,18 +1699,8 @@ static int __init uv_ptc_init(void)
 	}
 
 	tunables_dir = debugfs_create_dir(UV_BAU_TUNABLES_DIR, NULL);
-	if (!tunables_dir) {
-		pr_err("unable to create debugfs directory %s\n",
-		       UV_BAU_TUNABLES_DIR);
-		return -EINVAL;
-	}
-	tunables_file = debugfs_create_file(UV_BAU_TUNABLES_FILE, 0600,
-					tunables_dir, NULL, &tunables_fops);
-	if (!tunables_file) {
-		pr_err("unable to create debugfs file %s\n",
-		       UV_BAU_TUNABLES_FILE);
-		return -EINVAL;
-	}
+	debugfs_create_file(UV_BAU_TUNABLES_FILE, 0600, tunables_dir, NULL,
+			    &tunables_fops);
 	return 0;
 }
 
@@ -1815,9 +1804,9 @@ static void pq_init(int node, int pnode)
 
 	plsize = (DEST_Q_SIZE + 1) * sizeof(struct bau_pq_entry);
 	vp = kmalloc_node(plsize, GFP_KERNEL, node);
-	pqp = (struct bau_pq_entry *)vp;
-	BUG_ON(!pqp);
+	BUG_ON(!vp);
 
+	pqp = (struct bau_pq_entry *)vp;
 	cp = (char *)pqp + 31;
 	pqp = (struct bau_pq_entry *)(((unsigned long)cp >> 5) << 5);
 

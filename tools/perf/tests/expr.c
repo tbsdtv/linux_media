@@ -3,12 +3,14 @@
 #include "util/expr.h"
 #include "tests.h"
 #include <stdlib.h>
+#include <string.h>
+#include <linux/zalloc.h>
 
 static int test(struct parse_ctx *ctx, const char *e, double val2)
 {
 	double val;
 
-	if (expr__parse(&val, ctx, &e))
+	if (expr__parse(&val, ctx, e))
 		TEST_ASSERT_VAL("parse test failed", 0);
 	TEST_ASSERT_VAL("unexpected value", val == val2);
 	return 0;
@@ -42,12 +44,12 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 		return ret;
 
 	p = "FOO/0";
-	ret = expr__parse(&val, &ctx, &p);
-	TEST_ASSERT_VAL("division by zero", ret == 1);
+	ret = expr__parse(&val, &ctx, p);
+	TEST_ASSERT_VAL("division by zero", ret == -1);
 
 	p = "BAR/";
-	ret = expr__parse(&val, &ctx, &p);
-	TEST_ASSERT_VAL("missing operand", ret == 1);
+	ret = expr__parse(&val, &ctx, p);
+	TEST_ASSERT_VAL("missing operand", ret == -1);
 
 	TEST_ASSERT_VAL("find other",
 			expr__find_other("FOO + BAR + BAZ + BOZO", "FOO", &other, &num_other) == 0);
@@ -58,7 +60,7 @@ int test__expr(struct test *t __maybe_unused, int subtest __maybe_unused)
 	TEST_ASSERT_VAL("find other", other[3] == NULL);
 
 	for (i = 0; i < num_other; i++)
-		free((void *)other[i]);
+		zfree(&other[i]);
 	free((void *)other);
 
 	return 0;

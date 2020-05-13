@@ -33,5 +33,6 @@ struct dvb_mod_channel_params {
 #define MODULATOR_RESET          36
 #define MODULATOR_STATUS         37
 #define MODULATOR_OUTPUT_ARI     64
+#define MODULATOR_INTERLEAVE     65
 
 #endif /*_UAPI_DVBMOD_H_*/

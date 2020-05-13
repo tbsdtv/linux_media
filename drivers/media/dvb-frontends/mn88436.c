@@ -1104,7 +1104,7 @@ static int  log10_easy( u32  cnr )
 static int DMD_send_registers(struct i2c_client *client,u8*regset)
 {
 	struct mn88436_dev*dev = i2c_get_clientdata(client);
-	int ret;
+	int ret=0;
 	u32 i;
 	for(i=0;;)
 	{
@@ -1153,14 +1153,13 @@ static int mn88436_read_status(struct dvb_frontend *fe,enum fe_status *status)
 	int i =0;
 	for(i=0;i<50;i++)
 	{
-	ret = regmap_read(dev->regmap[0],DMD_MAIN_STSMON1,&utemp);
-	if(utemp&0x1){
-		*status = FE_HAS_VITERBI | FE_HAS_SYNC | FE_HAS_LOCK;
-		break;
+		ret = regmap_read(dev->regmap[0],DMD_MAIN_STSMON1,&utemp);
+		if(utemp&0x1){
+			*status = FE_HAS_VITERBI | FE_HAS_SYNC | FE_HAS_LOCK;
+			break;			
 		}
-	else
-		*status = FE_HAS_SIGNAL | FE_HAS_CARRIER;
-
+		else
+			*status = FE_HAS_SIGNAL | FE_HAS_CARRIER;		
 		msleep(1);
 	}
 	
@@ -1292,7 +1291,6 @@ static int mn88436_read_snr(struct dvb_frontend* fe, u16* snr)
 	struct i2c_client *client = fe->demodulator_priv;
 	struct mn88436_dev *dev = i2c_get_clientdata(client);
 	int	rd;
-	u32	cni,cnd;
 	u32	x,y;
 
 	regmap_read(dev->regmap[1], DMD_USR_CNMON1 , &rd );
@@ -1377,14 +1375,13 @@ static int mn88436_probe(struct i2c_client *client ,
 		goto err_regmap_0_regmap_exit;
 
 	/*chip has two IIC address for different register bank, 0x18 and 0x10,so we need register a dummy clients */
-	dev->client[1] = i2c_new_dummy(client->adapter,0x10);
-	if(!dev->client[1]){
-		ret = -ENODEV;
+	dev->client[1] = i2c_new_dummy_device(client->adapter,0x10);
+	if (IS_ERR(dev->client[1])) {
+		ret = PTR_ERR(dev->client[1]);
 		dev_err(&client->dev,"I2C registeration failed\n");
 		if(ret)
 			goto err_regmap_0_regmap_exit;
 	}
-
 
 	dev->regmap[1] = regmap_init_i2c(dev->client[1],&regmap_config);
 	if(IS_ERR(dev->regmap[1])){

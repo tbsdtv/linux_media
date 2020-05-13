@@ -23,6 +23,7 @@ static const struct snd_soc_dapm_widget skl_hda_widgets[] = {
 	SND_SOC_DAPM_MIC("Alt Analog In", NULL),
 	SND_SOC_DAPM_SPK("Digital Out", NULL),
 	SND_SOC_DAPM_MIC("Digital In", NULL),
+	SND_SOC_DAPM_MIC("SoC DMIC", NULL),
 };
 
 static const struct snd_soc_dapm_route skl_hda_map[] = {
@@ -41,6 +42,9 @@ static const struct snd_soc_dapm_route skl_hda_map[] = {
 	{ "Codec Input Pin2", NULL, "Digital In" },
 	{ "Codec Input Pin3", NULL, "Alt Analog In" },
 
+	/* digital mics */
+	{"DMic", NULL, "SoC DMIC"},
+
 	/* CODEC BE connections */
 	{ "Analog Codec Playback", NULL, "Analog CPU Playback" },
 	{ "Analog CPU Playback", NULL, "codec0_out" },
@@ -57,6 +61,9 @@ static const struct snd_soc_dapm_route skl_hda_map[] = {
 	{ "Alt Analog CPU Capture", NULL, "Alt Analog Codec Capture" },
 };
 
+SND_SOC_DAILINK_DEF(dummy_codec,
+	DAILINK_COMP_ARRAY(COMP_CODEC("snd-soc-dummy", "snd-soc-dummy-dai")));
+
 static int skl_hda_card_late_probe(struct snd_soc_card *card)
 {
 	return skl_hda_hdmi_jack_init(card);
@@ -69,7 +76,7 @@ skl_hda_add_dai_link(struct snd_soc_card *card, struct snd_soc_dai_link *link)
 	int ret = 0;
 
 	dev_dbg(card->dev, "%s: dai link name - %s\n", __func__, link->name);
-	link->platform_name = ctx->platform_name;
+	link->platforms->name = ctx->platform_name;
 	link->nonatomic = 1;
 
 	if (strstr(link->name, "HDMI")) {
@@ -86,7 +93,7 @@ skl_hda_add_dai_link(struct snd_soc_card *card, struct snd_soc_dai_link *link)
 }
 
 static struct snd_soc_card hda_soc_card = {
-	.name = "skl_hda_card",
+	.name = "hda-dsp",
 	.owner = THIS_MODULE,
 	.dai_link = skl_hda_be_dai_links,
 	.dapm_widgets = skl_hda_widgets,
@@ -95,6 +102,8 @@ static struct snd_soc_card hda_soc_card = {
 	.fully_routed = true,
 	.late_probe = skl_hda_card_late_probe,
 };
+
+static char hda_soc_components[30];
 
 #define IDISP_DAI_COUNT		3
 #define HDAC_DAI_COUNT		2
@@ -108,13 +117,19 @@ static int skl_hda_fill_card_info(struct snd_soc_acpi_mach_params *mach_params)
 {
 	struct snd_soc_card *card = &hda_soc_card;
 	struct snd_soc_dai_link *dai_link;
-	u32 codec_count, codec_mask;
+	u32 codec_count, codec_mask, idisp_mask;
 	int i, num_links, num_route;
 
 	codec_mask = mach_params->codec_mask;
 	codec_count = hweight_long(codec_mask);
+	idisp_mask = codec_mask & IDISP_CODEC_MASK;
 
-	if (codec_count == 1 && codec_mask & IDISP_CODEC_MASK) {
+	if (!codec_count || codec_count > 2 ||
+	    (codec_count == 2 && !idisp_mask))
+		return -EINVAL;
+
+	if (codec_mask == idisp_mask) {
+		/* topology with iDisp as the only HDA codec */
 		num_links = IDISP_DAI_COUNT + DMIC_DAI_COUNT;
 		num_route = IDISP_ROUTE_COUNT;
 
@@ -129,20 +144,26 @@ static int skl_hda_fill_card_info(struct snd_soc_acpi_mach_params *mach_params)
 				skl_hda_be_dai_links[IDISP_DAI_COUNT +
 					HDAC_DAI_COUNT + i];
 		}
-	} else if (codec_count == 2 && codec_mask & IDISP_CODEC_MASK) {
+	} else {
+		/* topology with external and iDisp HDA codecs */
 		num_links = ARRAY_SIZE(skl_hda_be_dai_links);
 		num_route = ARRAY_SIZE(skl_hda_map);
 		card->dapm_widgets = skl_hda_widgets;
 		card->num_dapm_widgets = ARRAY_SIZE(skl_hda_widgets);
-	} else {
-		return -EINVAL;
+		if (!idisp_mask) {
+			for (i = 0; i < IDISP_DAI_COUNT; i++) {
+				skl_hda_be_dai_links[i].codecs = dummy_codec;
+				skl_hda_be_dai_links[i].num_codecs =
+					ARRAY_SIZE(dummy_codec);
+			}
+		}
 	}
 
 	card->num_links = num_links;
 	card->num_dapm_routes = num_route;
 
 	for_each_card_prelinks(card, i, dai_link)
-		dai_link->platform_name = mach_params->platform;
+		dai_link->platforms->name = mach_params->platform;
 
 	return 0;
 }
@@ -161,7 +182,7 @@ static int skl_hda_audio_probe(struct platform_device *pdev)
 
 	INIT_LIST_HEAD(&ctx->hdmi_pcm_list);
 
-	mach = (&pdev->dev)->platform_data;
+	mach = pdev->dev.platform_data;
 	if (!mach)
 		return -EINVAL;
 
@@ -174,9 +195,16 @@ static int skl_hda_audio_probe(struct platform_device *pdev)
 	ctx->pcm_count = hda_soc_card.num_links;
 	ctx->dai_index = 1; /* hdmi codec dai name starts from index 1 */
 	ctx->platform_name = mach->mach_params.platform;
+	ctx->common_hdmi_codec_drv = mach->mach_params.common_hdmi_codec_drv;
 
 	hda_soc_card.dev = &pdev->dev;
 	snd_soc_card_set_drvdata(&hda_soc_card, ctx);
+
+	if (mach->mach_params.dmic_num > 0) {
+		snprintf(hda_soc_components, sizeof(hda_soc_components),
+				"cfg-dmics:%d", mach->mach_params.dmic_num);
+		hda_soc_card.components = hda_soc_components;
+	}
 
 	return devm_snd_soc_register_card(&pdev->dev, &hda_soc_card);
 }

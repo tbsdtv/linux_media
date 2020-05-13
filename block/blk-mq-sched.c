@@ -224,7 +224,7 @@ void blk_mq_sched_dispatch_requests(struct blk_mq_hw_ctx *hctx)
 }
 
 bool blk_mq_sched_try_merge(struct request_queue *q, struct bio *bio,
-			    struct request **merged_request)
+		unsigned int nr_segs, struct request **merged_request)
 {
 	struct request *rq;
 
@@ -232,7 +232,7 @@ bool blk_mq_sched_try_merge(struct request_queue *q, struct bio *bio,
 	case ELEVATOR_BACK_MERGE:
 		if (!blk_mq_sched_allow_merge(q, rq, bio))
 			return false;
-		if (!bio_attempt_back_merge(q, rq, bio))
+		if (!bio_attempt_back_merge(rq, bio, nr_segs))
 			return false;
 		*merged_request = attempt_back_merge(q, rq);
 		if (!*merged_request)
@@ -241,7 +241,7 @@ bool blk_mq_sched_try_merge(struct request_queue *q, struct bio *bio,
 	case ELEVATOR_FRONT_MERGE:
 		if (!blk_mq_sched_allow_merge(q, rq, bio))
 			return false;
-		if (!bio_attempt_front_merge(q, rq, bio))
+		if (!bio_attempt_front_merge(rq, bio, nr_segs))
 			return false;
 		*merged_request = attempt_front_merge(q, rq);
 		if (!*merged_request)
@@ -260,7 +260,7 @@ EXPORT_SYMBOL_GPL(blk_mq_sched_try_merge);
  * of them.
  */
 bool blk_mq_bio_list_merge(struct request_queue *q, struct list_head *list,
-			   struct bio *bio)
+			   struct bio *bio, unsigned int nr_segs)
 {
 	struct request *rq;
 	int checked = 8;
@@ -277,11 +277,13 @@ bool blk_mq_bio_list_merge(struct request_queue *q, struct list_head *list,
 		switch (blk_try_merge(rq, bio)) {
 		case ELEVATOR_BACK_MERGE:
 			if (blk_mq_sched_allow_merge(q, rq, bio))
-				merged = bio_attempt_back_merge(q, rq, bio);
+				merged = bio_attempt_back_merge(rq, bio,
+						nr_segs);
 			break;
 		case ELEVATOR_FRONT_MERGE:
 			if (blk_mq_sched_allow_merge(q, rq, bio))
-				merged = bio_attempt_front_merge(q, rq, bio);
+				merged = bio_attempt_front_merge(rq, bio,
+						nr_segs);
 			break;
 		case ELEVATOR_DISCARD_MERGE:
 			merged = bio_attempt_discard_merge(q, rq, bio);
@@ -304,13 +306,14 @@ EXPORT_SYMBOL_GPL(blk_mq_bio_list_merge);
  */
 static bool blk_mq_attempt_merge(struct request_queue *q,
 				 struct blk_mq_hw_ctx *hctx,
-				 struct blk_mq_ctx *ctx, struct bio *bio)
+				 struct blk_mq_ctx *ctx, struct bio *bio,
+				 unsigned int nr_segs)
 {
 	enum hctx_type type = hctx->type;
 
 	lockdep_assert_held(&ctx->lock);
 
-	if (blk_mq_bio_list_merge(q, &ctx->rq_lists[type], bio)) {
+	if (blk_mq_bio_list_merge(q, &ctx->rq_lists[type], bio, nr_segs)) {
 		ctx->rq_merged++;
 		return true;
 	}
@@ -318,7 +321,8 @@ static bool blk_mq_attempt_merge(struct request_queue *q,
 	return false;
 }
 
-bool __blk_mq_sched_bio_merge(struct request_queue *q, struct bio *bio)
+bool __blk_mq_sched_bio_merge(struct request_queue *q, struct bio *bio,
+		unsigned int nr_segs)
 {
 	struct elevator_queue *e = q->elevator;
 	struct blk_mq_ctx *ctx = blk_mq_get_ctx(q);
@@ -326,21 +330,18 @@ bool __blk_mq_sched_bio_merge(struct request_queue *q, struct bio *bio)
 	bool ret = false;
 	enum hctx_type type;
 
-	if (e && e->type->ops.bio_merge) {
-		blk_mq_put_ctx(ctx);
-		return e->type->ops.bio_merge(hctx, bio);
-	}
+	if (e && e->type->ops.bio_merge)
+		return e->type->ops.bio_merge(hctx, bio, nr_segs);
 
 	type = hctx->type;
 	if ((hctx->flags & BLK_MQ_F_SHOULD_MERGE) &&
 			!list_empty_careful(&ctx->rq_lists[type])) {
 		/* default per sw-queue merge */
 		spin_lock(&ctx->lock);
-		ret = blk_mq_attempt_merge(q, hctx, ctx, bio);
+		ret = blk_mq_attempt_merge(q, hctx, ctx, bio, nr_segs);
 		spin_unlock(&ctx->lock);
 	}
 
-	blk_mq_put_ctx(ctx);
 	return ret;
 }
 
@@ -360,13 +361,19 @@ static bool blk_mq_sched_bypass_insert(struct blk_mq_hw_ctx *hctx,
 				       bool has_sched,
 				       struct request *rq)
 {
-	/* dispatch flush rq directly */
-	if (rq->rq_flags & RQF_FLUSH_SEQ) {
-		spin_lock(&hctx->lock);
-		list_add(&rq->queuelist, &hctx->dispatch);
-		spin_unlock(&hctx->lock);
+	/*
+	 * dispatch flush and passthrough rq directly
+	 *
+	 * passthrough request has to be added to hctx->dispatch directly.
+	 * For some reason, device may be in one situation which can't
+	 * handle FS request, so STS_RESOURCE is always returned and the
+	 * FS request will be added to hctx->dispatch. However passthrough
+	 * request may be required at that time for fixing the problem. If
+	 * passthrough request is added to scheduler queue, there isn't any
+	 * chance to dispatch it given we prioritize requests in hctx->dispatch.
+	 */
+	if ((rq->rq_flags & RQF_FLUSH_SEQ) || blk_rq_is_passthrough(rq))
 		return true;
-	}
 
 	if (has_sched)
 		rq->rq_flags |= RQF_SORTED;
@@ -390,8 +397,32 @@ void blk_mq_sched_insert_request(struct request *rq, bool at_head,
 
 	WARN_ON(e && (rq->tag != -1));
 
-	if (blk_mq_sched_bypass_insert(hctx, !!e, rq))
+	if (blk_mq_sched_bypass_insert(hctx, !!e, rq)) {
+		/*
+		 * Firstly normal IO request is inserted to scheduler queue or
+		 * sw queue, meantime we add flush request to dispatch queue(
+		 * hctx->dispatch) directly and there is at most one in-flight
+		 * flush request for each hw queue, so it doesn't matter to add
+		 * flush request to tail or front of the dispatch queue.
+		 *
+		 * Secondly in case of NCQ, flush request belongs to non-NCQ
+		 * command, and queueing it will fail when there is any
+		 * in-flight normal IO request(NCQ command). When adding flush
+		 * rq to the front of hctx->dispatch, it is easier to introduce
+		 * extra time to flush rq's latency because of S_SCHED_RESTART
+		 * compared with adding to the tail of dispatch queue, then
+		 * chance of flush merge is increased, and less flush requests
+		 * will be issued to controller. It is observed that ~10% time
+		 * is saved in blktests block/004 on disk attached to AHCI/NCQ
+		 * drive when adding flush rq to the front of hctx->dispatch.
+		 *
+		 * Simply queue flush rq to the front of hctx->dispatch so that
+		 * intensive flush workloads can benefit in case of NCQ HW.
+		 */
+		at_head = (rq->rq_flags & RQF_FLUSH_SEQ) ? true : at_head;
+		blk_mq_request_bypass_insert(rq, at_head, false);
 		goto run;
+	}
 
 	if (e && e->type->ops.insert_requests) {
 		LIST_HEAD(list);
@@ -553,8 +584,6 @@ void blk_mq_sched_free_requests(struct request_queue *q)
 {
 	struct blk_mq_hw_ctx *hctx;
 	int i;
-
-	lockdep_assert_held(&q->sysfs_lock);
 
 	queue_for_each_hw_ctx(q, hctx, i) {
 		if (hctx->sched_tags)

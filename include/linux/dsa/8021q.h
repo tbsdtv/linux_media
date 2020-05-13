@@ -20,9 +20,6 @@ int dsa_port_setup_8021q_tagging(struct dsa_switch *ds, int index,
 struct sk_buff *dsa_8021q_xmit(struct sk_buff *skb, struct net_device *netdev,
 			       u16 tpid, u16 tci);
 
-struct sk_buff *dsa_8021q_rcv(struct sk_buff *skb, struct net_device *netdev,
-			      struct packet_type *pt, u16 *tpid, u16 *tci);
-
 u16 dsa_8021q_tx_vid(struct dsa_switch *ds, int port);
 
 u16 dsa_8021q_rx_vid(struct dsa_switch *ds, int port);
@@ -41,12 +38,6 @@ int dsa_port_setup_8021q_tagging(struct dsa_switch *ds, int index,
 
 struct sk_buff *dsa_8021q_xmit(struct sk_buff *skb, struct net_device *netdev,
 			       u16 tpid, u16 tci)
-{
-	return NULL;
-}
-
-struct sk_buff *dsa_8021q_rcv(struct sk_buff *skb, struct net_device *netdev,
-			      struct packet_type *pt, u16 *tpid, u16 *tci)
 {
 	return NULL;
 }

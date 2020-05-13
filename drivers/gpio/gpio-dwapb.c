@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011 Jamie Iles
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * All enquiries to support@picochip.com
  */
@@ -30,6 +27,7 @@
 #include <linux/slab.h>
 
 #include "gpiolib.h"
+#include "gpiolib-acpi.h"
 
 #define GPIO_SWPORTA_DR		0x00
 #define GPIO_SWPORTA_DDR	0x04

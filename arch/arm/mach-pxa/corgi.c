@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Support for Sharp SL-C7xx PDAs
  * Models: SL-C700 (Corgi), SL-C750 (Shepherd), SL-C760 (Husky)
@@ -5,11 +6,6 @@
  * Copyright (c) 2004-2005 Richard Purdie
  *
  * Based on Sharp's 2.4 kernel patches/lubbock.c
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/kernel.h>
@@ -567,13 +563,20 @@ static void corgi_bl_kick_battery(void)
 	}
 }
 
+static struct gpiod_lookup_table corgi_lcdcon_gpio_table = {
+	.dev_id = "spi1.1",
+	.table = {
+		GPIO_LOOKUP("gpio-pxa", CORGI_GPIO_BACKLIGHT_CONT,
+			    "BL_CONT", GPIO_ACTIVE_HIGH),
+		{ },
+	},
+};
+
 static struct corgi_lcd_platform_data corgi_lcdcon_info = {
 	.init_mode		= CORGI_LCD_MODE_VGA,
 	.max_intensity		= 0x2f,
 	.default_intensity	= 0x1f,
 	.limit_mask		= 0x0b,
-	.gpio_backlight_cont	= CORGI_GPIO_BACKLIGHT_CONT,
-	.gpio_backlight_on	= -1,
 	.kick_battery		= corgi_bl_kick_battery,
 };
 
@@ -613,6 +616,7 @@ static struct spi_board_info corgi_spi_devices[] = {
 static void __init corgi_init_spi(void)
 {
 	pxa2xx_set_spi_info(1, &corgi_spi_info);
+	gpiod_add_lookup_table(&corgi_lcdcon_gpio_table);
 	spi_register_board_info(ARRAY_AND_SIZE(corgi_spi_devices));
 }
 #else

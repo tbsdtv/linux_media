@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2012-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2012-2020  B.A.T.M.A.N. contributors:
  *
  * Edo Monticelli, Antonio Quartulli
  */
@@ -9,9 +9,8 @@
 
 #include "main.h"
 
+#include <linux/skbuff.h>
 #include <linux/types.h>
-
-struct sk_buff;
 
 void batadv_tp_meter_init(void);
 void batadv_tp_start(struct batadv_priv *bat_priv, const u8 *dst,

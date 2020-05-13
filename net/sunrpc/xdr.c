@@ -436,13 +436,12 @@ xdr_shrink_bufhead(struct xdr_buf *buf, size_t len)
 }
 
 /**
- * xdr_shrink_pagelen
+ * xdr_shrink_pagelen - shrinks buf->pages by up to @len bytes
  * @buf: xdr_buf
  * @len: bytes to remove from buf->pages
  *
- * Shrinks XDR buffer's page array buf->pages by
- * 'len' bytes. The extra data is not lost, but is instead
- * moved into the tail.
+ * The extra data is not lost, but is instead moved into buf->tail.
+ * Returns the actual number of bytes moved.
  */
 static unsigned int
 xdr_shrink_pagelen(struct xdr_buf *buf, size_t len)
@@ -455,8 +454,8 @@ xdr_shrink_pagelen(struct xdr_buf *buf, size_t len)
 
 	result = 0;
 	tail = buf->tail;
-	BUG_ON (len > pglen);
-
+	if (len > buf->page_len)
+		len = buf-> page_len;
 	tailbuf_len = buf->buflen - buf->head->iov_len - buf->page_len;
 
 	/* Shift the tail first */
@@ -560,7 +559,7 @@ EXPORT_SYMBOL_GPL(xdr_init_encode);
  * required at the end of encoding, or any other time when the xdr_buf
  * data might be read.
  */
-void xdr_commit_encode(struct xdr_stream *xdr)
+inline void xdr_commit_encode(struct xdr_stream *xdr)
 {
 	int shift = xdr->scratch.iov_len;
 	void *page;
@@ -1080,7 +1079,7 @@ void xdr_enter_page(struct xdr_stream *xdr, unsigned int len)
 }
 EXPORT_SYMBOL_GPL(xdr_enter_page);
 
-static struct kvec empty_iov = {.iov_base = NULL, .iov_len = 0};
+static const struct kvec empty_iov = {.iov_base = NULL, .iov_len = 0};
 
 void
 xdr_buf_from_iov(struct kvec *iov, struct xdr_buf *buf)
@@ -1235,44 +1234,6 @@ xdr_encode_word(struct xdr_buf *buf, unsigned int base, u32 obj)
 	return write_bytes_to_xdr_buf(buf, base, &raw, sizeof(obj));
 }
 EXPORT_SYMBOL_GPL(xdr_encode_word);
-
-/* If the netobj starting offset bytes from the start of xdr_buf is contained
- * entirely in the head or the tail, set object to point to it; otherwise
- * try to find space for it at the end of the tail, copy it there, and
- * set obj to point to it. */
-int xdr_buf_read_netobj(struct xdr_buf *buf, struct xdr_netobj *obj, unsigned int offset)
-{
-	struct xdr_buf subbuf;
-
-	if (xdr_decode_word(buf, offset, &obj->len))
-		return -EFAULT;
-	if (xdr_buf_subsegment(buf, &subbuf, offset + 4, obj->len))
-		return -EFAULT;
-
-	/* Is the obj contained entirely in the head? */
-	obj->data = subbuf.head[0].iov_base;
-	if (subbuf.head[0].iov_len == obj->len)
-		return 0;
-	/* ..or is the obj contained entirely in the tail? */
-	obj->data = subbuf.tail[0].iov_base;
-	if (subbuf.tail[0].iov_len == obj->len)
-		return 0;
-
-	/* use end of tail as storage for obj:
-	 * (We don't copy to the beginning because then we'd have
-	 * to worry about doing a potentially overlapping copy.
-	 * This assumes the object is at most half the length of the
-	 * tail.) */
-	if (obj->len > buf->buflen - buf->len)
-		return -ENOMEM;
-	if (buf->tail[0].iov_len != 0)
-		obj->data = buf->tail[0].iov_base + buf->tail[0].iov_len;
-	else
-		obj->data = buf->head[0].iov_base + buf->head[0].iov_len;
-	__read_bytes_from_xdr_buf(&subbuf, obj->data, obj->len);
-	return 0;
-}
-EXPORT_SYMBOL_GPL(xdr_buf_read_netobj);
 
 /* Returns 0 on success, or else a negative error code. */
 static int

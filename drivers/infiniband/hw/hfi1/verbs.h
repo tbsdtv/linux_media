@@ -107,9 +107,9 @@ enum {
 	HFI1_HAS_GRH = (1 << 0),
 };
 
-#define LRH_16B_BYTES (FIELD_SIZEOF(struct hfi1_16b_header, lrh))
+#define LRH_16B_BYTES (sizeof_field(struct hfi1_16b_header, lrh))
 #define LRH_16B_DWORDS (LRH_16B_BYTES / sizeof(u32))
-#define LRH_9B_BYTES (FIELD_SIZEOF(struct ib_header, lrh))
+#define LRH_9B_BYTES (sizeof_field(struct ib_header, lrh))
 #define LRH_9B_DWORDS (LRH_9B_BYTES / sizeof(u32))
 
 /* 24Bits for qpn, upper 8Bits reserved */
@@ -330,9 +330,8 @@ void hfi1_sys_guid_chg(struct hfi1_ibport *ibp);
 void hfi1_node_desc_chg(struct hfi1_ibport *ibp);
 int hfi1_process_mad(struct ib_device *ibdev, int mad_flags, u8 port,
 		     const struct ib_wc *in_wc, const struct ib_grh *in_grh,
-		     const struct ib_mad_hdr *in_mad, size_t in_mad_size,
-		     struct ib_mad_hdr *out_mad, size_t *out_mad_size,
-		     u16 *out_mad_pkey_index);
+		     const struct ib_mad *in_mad, struct ib_mad *out_mad,
+		     size_t *out_mad_size, u16 *out_mad_pkey_index);
 
 /*
  * The PSN_MASK and PSN_SHIFT allow for
@@ -416,6 +415,7 @@ void hfi1_rc_hdrerr(
 
 u8 ah_to_sc(struct ib_device *ibdev, struct rdma_ah_attr *ah_attr);
 
+void hfi1_rc_verbs_aborted(struct rvt_qp *qp, struct hfi1_opa_header *opah);
 void hfi1_rc_send_complete(struct rvt_qp *qp, struct hfi1_opa_header *opah);
 
 void hfi1_ud_rcv(struct hfi1_packet *packet);

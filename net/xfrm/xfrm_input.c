@@ -36,6 +36,7 @@ struct xfrm_trans_cb {
 #endif
 	} header;
 	int (*finish)(struct net *net, struct sock *sk, struct sk_buff *skb);
+	struct net *net;
 };
 
 #define XFRM_TRANS_SKB_CB(__skb) ((struct xfrm_trans_cb *)&((__skb)->cb[0]))
@@ -359,28 +360,29 @@ static int xfrm_prepare_input(struct xfrm_state *x, struct sk_buff *skb)
 	afinfo = xfrm_state_afinfo_get_rcu(x->outer_mode.family);
 	if (likely(afinfo))
 		err = afinfo->extract_input(x, skb);
+	rcu_read_unlock();
 
-	if (err) {
-		rcu_read_unlock();
+	if (err)
 		return err;
-	}
 
 	if (x->sel.family == AF_UNSPEC) {
 		inner_mode = xfrm_ip2inner_mode(x, XFRM_MODE_SKB_CB(skb)->protocol);
-		if (!inner_mode) {
-			rcu_read_unlock();
+		if (!inner_mode)
 			return -EAFNOSUPPORT;
-		}
 	}
 
-	afinfo = xfrm_state_afinfo_get_rcu(inner_mode->family);
-	if (unlikely(!afinfo)) {
-		rcu_read_unlock();
-		return -EAFNOSUPPORT;
+	switch (inner_mode->family) {
+	case AF_INET:
+		skb->protocol = htons(ETH_P_IP);
+		break;
+	case AF_INET6:
+		skb->protocol = htons(ETH_P_IPV6);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		break;
 	}
 
-	skb->protocol = afinfo->eth_proto;
-	rcu_read_unlock();
 	return xfrm_inner_mode_encap_remove(x, inner_mode, skb);
 }
 
@@ -479,6 +481,9 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 			else
 				XFRM_INC_STATS(net,
 					       LINUX_MIB_XFRMINSTATEINVALID);
+
+			if (encap_type == -1)
+				dev_put(skb->dev);
 			goto drop;
 		}
 
@@ -705,7 +710,7 @@ resume:
 	if (err)
 		goto drop;
 
-	nf_reset(skb);
+	nf_reset_ct(skb);
 
 	if (decaps) {
 		sp = skb_sec_path(skb);
@@ -762,12 +767,13 @@ static void xfrm_trans_reinject(unsigned long data)
 	skb_queue_splice_init(&trans->queue, &queue);
 
 	while ((skb = __skb_dequeue(&queue)))
-		XFRM_TRANS_SKB_CB(skb)->finish(dev_net(skb->dev), NULL, skb);
+		XFRM_TRANS_SKB_CB(skb)->finish(XFRM_TRANS_SKB_CB(skb)->net,
+					       NULL, skb);
 }
 
-int xfrm_trans_queue(struct sk_buff *skb,
-		     int (*finish)(struct net *, struct sock *,
-				   struct sk_buff *))
+int xfrm_trans_queue_net(struct net *net, struct sk_buff *skb,
+			 int (*finish)(struct net *, struct sock *,
+				       struct sk_buff *))
 {
 	struct xfrm_trans_tasklet *trans;
 
@@ -776,10 +782,21 @@ int xfrm_trans_queue(struct sk_buff *skb,
 	if (skb_queue_len(&trans->queue) >= netdev_max_backlog)
 		return -ENOBUFS;
 
+	BUILD_BUG_ON(sizeof(struct xfrm_trans_cb) > sizeof(skb->cb));
+
 	XFRM_TRANS_SKB_CB(skb)->finish = finish;
+	XFRM_TRANS_SKB_CB(skb)->net = net;
 	__skb_queue_tail(&trans->queue, skb);
 	tasklet_schedule(&trans->tasklet);
 	return 0;
+}
+EXPORT_SYMBOL(xfrm_trans_queue_net);
+
+int xfrm_trans_queue(struct sk_buff *skb,
+		     int (*finish)(struct net *, struct sock *,
+				   struct sk_buff *))
+{
+	return xfrm_trans_queue_net(dev_net(skb->dev), skb, finish);
 }
 EXPORT_SYMBOL(xfrm_trans_queue);
 

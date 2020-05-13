@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013 Heiko Stuebner <heiko@sntech.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Common Clock Framework support for s3c24xx external clock output.
  */
@@ -241,7 +238,6 @@ static SIMPLE_DEV_PM_OPS(s3c24xx_dclk_pm_ops,
 static int s3c24xx_dclk_probe(struct platform_device *pdev)
 {
 	struct s3c24xx_dclk *s3c24xx_dclk;
-	struct resource *mem;
 	struct s3c24xx_dclk_drv_data *dclk_variant;
 	struct clk_hw **clk_table;
 	int ret, i;
@@ -260,8 +256,7 @@ static int s3c24xx_dclk_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, s3c24xx_dclk);
 	spin_lock_init(&s3c24xx_dclk->dclk_lock);
 
-	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	s3c24xx_dclk->base = devm_ioremap_resource(&pdev->dev, mem);
+	s3c24xx_dclk->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(s3c24xx_dclk->base))
 		return PTR_ERR(s3c24xx_dclk->base);
 

@@ -12,12 +12,24 @@
 #include <linux/bitfield.h>
 
 #define MT76_INCR(_var, _size) \
-	_var = (((_var) + 1) % _size)
+	(_var = (((_var) + 1) % (_size)))
 
 int mt76_wcid_alloc(unsigned long *mask, int size);
 
+static inline bool
+mt76_wcid_mask_test(unsigned long *mask, int idx)
+{
+	return mask[idx / BITS_PER_LONG] & BIT(idx % BITS_PER_LONG);
+}
+
 static inline void
-mt76_wcid_free(unsigned long *mask, int idx)
+mt76_wcid_mask_set(unsigned long *mask, int idx)
+{
+	mask[idx / BITS_PER_LONG] |= BIT(idx % BITS_PER_LONG);
+}
+
+static inline void
+mt76_wcid_mask_clear(unsigned long *mask, int idx)
 {
 	mask[idx / BITS_PER_LONG] &= ~BIT(idx % BITS_PER_LONG);
 }
@@ -25,7 +37,7 @@ mt76_wcid_free(unsigned long *mask, int idx)
 static inline void
 mt76_skb_set_moredata(struct sk_buff *skb, bool enable)
 {
-	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *) skb->data;
+	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
 
 	if (enable)
 		hdr->frame_control |= cpu_to_le16(IEEE80211_FCTL_MOREDATA);

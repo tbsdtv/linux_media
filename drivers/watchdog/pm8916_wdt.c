@@ -163,9 +163,17 @@ static int pm8916_wdt_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq > 0) {
-		if (devm_request_irq(dev, irq, pm8916_wdt_isr, 0, "pm8916_wdt",
-				     wdt))
-			irq = 0;
+		err = devm_request_irq(dev, irq, pm8916_wdt_isr, 0,
+				       "pm8916_wdt", wdt);
+		if (err)
+			return err;
+
+		wdt->wdev.info = &pm8916_wdt_pt_ident;
+	} else {
+		if (irq == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+
+		wdt->wdev.info = &pm8916_wdt_ident;
 	}
 
 	/* Configure watchdog to hard-reset mode */
@@ -177,7 +185,6 @@ static int pm8916_wdt_probe(struct platform_device *pdev)
 		return err;
 	}
 
-	wdt->wdev.info = (irq > 0) ? &pm8916_wdt_pt_ident : &pm8916_wdt_ident,
 	wdt->wdev.ops = &pm8916_wdt_ops,
 	wdt->wdev.parent = dev;
 	wdt->wdev.min_timeout = PM8916_WDT_MIN_TIMEOUT;
@@ -185,12 +192,36 @@ static int pm8916_wdt_probe(struct platform_device *pdev)
 	wdt->wdev.timeout = PM8916_WDT_DEFAULT_TIMEOUT;
 	wdt->wdev.pretimeout = 0;
 	watchdog_set_drvdata(&wdt->wdev, wdt);
+	platform_set_drvdata(pdev, wdt);
 
 	watchdog_init_timeout(&wdt->wdev, 0, dev);
 	pm8916_wdt_configure_timers(&wdt->wdev);
 
 	return devm_watchdog_register_device(dev, &wdt->wdev);
 }
+
+static int __maybe_unused pm8916_wdt_suspend(struct device *dev)
+{
+	struct pm8916_wdt *wdt = dev_get_drvdata(dev);
+
+	if (watchdog_active(&wdt->wdev))
+		return pm8916_wdt_stop(&wdt->wdev);
+
+	return 0;
+}
+
+static int __maybe_unused pm8916_wdt_resume(struct device *dev)
+{
+	struct pm8916_wdt *wdt = dev_get_drvdata(dev);
+
+	if (watchdog_active(&wdt->wdev))
+		return pm8916_wdt_start(&wdt->wdev);
+
+	return 0;
+}
+
+static SIMPLE_DEV_PM_OPS(pm8916_wdt_pm_ops, pm8916_wdt_suspend,
+			 pm8916_wdt_resume);
 
 static const struct of_device_id pm8916_wdt_id_table[] = {
 	{ .compatible = "qcom,pm8916-wdt" },
@@ -203,6 +234,7 @@ static struct platform_driver pm8916_wdt_driver = {
 	.driver = {
 		.name = "pm8916-wdt",
 		.of_match_table = of_match_ptr(pm8916_wdt_id_table),
+		.pm = &pm8916_wdt_pm_ops,
 	},
 };
 module_platform_driver(pm8916_wdt_driver);

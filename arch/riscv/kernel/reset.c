@@ -4,15 +4,16 @@
  */
 
 #include <linux/reboot.h>
-#include <asm/sbi.h>
+#include <linux/pm.h>
 
 static void default_power_off(void)
 {
-	sbi_shutdown();
-	while (1);
+	while (1)
+		wait_for_interrupt();
 }
 
 void (*pm_power_off)(void) = default_power_off;
+EXPORT_SYMBOL(pm_power_off);
 
 void machine_restart(char *cmd)
 {

@@ -134,7 +134,7 @@ struct dwc2_hsotg_req;
  * @target_frame: Targeted frame num to setup next ISOC transfer
  * @frame_overrun: Indicates SOF number overrun in DSTS
  *
- * This is the driver's state for each registered enpoint, allowing it
+ * This is the driver's state for each registered endpoint, allowing it
  * to keep track of transactions that need doing. Each endpoint has a
  * lock to protect the state, to try and avoid using an overall lock
  * for the host controller as much as possible.
@@ -411,6 +411,10 @@ enum dwc2_ep0_state {
  *			register.
  *			0 - Deactivate the transceiver (default)
  *			1 - Activate the transceiver
+ * @activate_stm_id_vb_detection: Activate external ID pin and Vbus level
+ *			detection using GGPIO register.
+ *			0 - Deactivate the external level detection (default)
+ *			1 - Activate the external level detection
  * @g_dma:              Enables gadget dma usage (default: autodetect).
  * @g_dma_desc:         Enables gadget descriptor DMA (default: autodetect).
  * @g_rx_fifo_size:	The periodic rx fifo size for the device, in
@@ -481,6 +485,7 @@ struct dwc2_core_params {
 	bool service_interval;
 	u8 hird_threshold;
 	bool activate_stm_fs_transceiver;
+	bool activate_stm_id_vb_detection;
 	bool ipg_isoc_en;
 	u16 max_packet_count;
 	u32 max_transfer_size;
@@ -861,6 +866,9 @@ struct dwc2_hregs_backup {
  * @hibernated:		True if core is hibernated
  * @reset_phy_on_wake:	Quirk saying that we should assert PHY reset on a
  *			remote wakeup.
+ * @phy_off_for_suspend: Status of whether we turned the PHY off at suspend.
+ * @need_phy_for_wake:	Quirk saying that we should keep the PHY on at
+ *			suspend if we need USB to wake us up.
  * @frame_number:       Frame number read from the core. For both device
  *			and host modes. The value ranges are from 0
  *			to HFNUM_MAX_FRNUM.
@@ -871,6 +879,8 @@ struct dwc2_hregs_backup {
  *                      removed once all SoCs support usb transceiver.
  * @supplies:           Definition of USB power supplies
  * @vbus_supply:        Regulator supplying vbus.
+ * @usb33d:		Optional 3.3v regulator used on some stm32 devices to
+ *			supply ID and VBUS detection hardware.
  * @lock:		Spinlock that protects all the driver data structures
  * @priv:		Stores a pointer to the struct usb_hcd
  * @queuing_high_bandwidth: True if multiple packets of a high-bandwidth
@@ -1049,6 +1059,8 @@ struct dwc2_hsotg {
 	unsigned int ll_hw_enabled:1;
 	unsigned int hibernated:1;
 	unsigned int reset_phy_on_wake:1;
+	unsigned int need_phy_for_wake:1;
+	unsigned int phy_off_for_suspend:1;
 	u16 frame_number;
 
 	struct phy *phy;
@@ -1056,6 +1068,7 @@ struct dwc2_hsotg {
 	struct dwc2_hsotg_plat *plat;
 	struct regulator_bulk_data supplies[DWC2_NUM_SUPPLIES];
 	struct regulator *vbus_supply;
+	struct regulator *usb33d;
 
 	spinlock_t lock;
 	void *priv;
@@ -1438,6 +1451,7 @@ int dwc2_restore_host_registers(struct dwc2_hsotg *hsotg);
 int dwc2_host_enter_hibernation(struct dwc2_hsotg *hsotg);
 int dwc2_host_exit_hibernation(struct dwc2_hsotg *hsotg,
 			       int rem_wakeup, int reset);
+bool dwc2_host_can_poweroff_phy(struct dwc2_hsotg *dwc2);
 static inline void dwc2_host_schedule_phy_reset(struct dwc2_hsotg *hsotg)
 { schedule_work(&hsotg->phy_reset_work); }
 #else
@@ -1463,6 +1477,8 @@ static inline int dwc2_host_enter_hibernation(struct dwc2_hsotg *hsotg)
 static inline int dwc2_host_exit_hibernation(struct dwc2_hsotg *hsotg,
 					     int rem_wakeup, int reset)
 { return 0; }
+static inline bool dwc2_host_can_poweroff_phy(struct dwc2_hsotg *dwc2)
+{ return false; }
 static inline void dwc2_host_schedule_phy_reset(struct dwc2_hsotg *hsotg) {}
 
 #endif

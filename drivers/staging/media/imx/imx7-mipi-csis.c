@@ -14,32 +14,29 @@
 #include <linux/errno.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/irq.h>
 #include <linux/kernel.h>
-#include <linux/mfd/syscon.h>
 #include <linux/module.h>
-#include <linux/of_graph.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/reset.h>
 #include <linux/regulator/consumer.h>
+#include <linux/reset.h>
 #include <linux/spinlock.h>
 
 #include <media/v4l2-device.h>
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-#include "imx-media.h"
+#define CSIS_DRIVER_NAME			"imx7-mipi-csis"
+#define CSIS_SUBDEV_NAME			CSIS_DRIVER_NAME
 
-#define CSIS_DRIVER_NAME	"imx7-mipi-csis"
-#define CSIS_SUBDEV_NAME	CSIS_DRIVER_NAME
+#define CSIS_PAD_SINK				0
+#define CSIS_PAD_SOURCE				1
+#define CSIS_PADS_NUM				2
 
-#define CSIS_PAD_SINK		0
-#define CSIS_PAD_SOURCE		1
-#define CSIS_PADS_NUM		2
-
-#define MIPI_CSIS_DEF_PIX_WIDTH		640
-#define MIPI_CSIS_DEF_PIX_HEIGHT	480
+#define MIPI_CSIS_DEF_PIX_WIDTH			640
+#define MIPI_CSIS_DEF_PIX_HEIGHT		480
 
 /* Register map definition */
 
@@ -64,42 +61,42 @@
 #define MIPI_CSIS_CLK_CTRL_WCLK_SRC		BIT(0)
 
 /* CSIS Interrupt mask */
-#define MIPI_CSIS_INTMSK		0x10
-#define MIPI_CSIS_INTMSK_EVEN_BEFORE	BIT(31)
-#define MIPI_CSIS_INTMSK_EVEN_AFTER	BIT(30)
-#define MIPI_CSIS_INTMSK_ODD_BEFORE	BIT(29)
-#define MIPI_CSIS_INTMSK_ODD_AFTER	BIT(28)
-#define MIPI_CSIS_INTMSK_FRAME_START	BIT(24)
-#define MIPI_CSIS_INTMSK_FRAME_END	BIT(20)
-#define MIPI_CSIS_INTMSK_ERR_SOT_HS	BIT(16)
-#define MIPI_CSIS_INTMSK_ERR_LOST_FS	BIT(12)
-#define MIPI_CSIS_INTMSK_ERR_LOST_FE	BIT(8)
-#define MIPI_CSIS_INTMSK_ERR_OVER	BIT(4)
-#define MIPI_CSIS_INTMSK_ERR_WRONG_CFG	BIT(3)
-#define MIPI_CSIS_INTMSK_ERR_ECC	BIT(2)
-#define MIPI_CSIS_INTMSK_ERR_CRC	BIT(1)
-#define MIPI_CSIS_INTMSK_ERR_UNKNOWN	BIT(0)
+#define MIPI_CSIS_INTMSK			0x10
+#define MIPI_CSIS_INTMSK_EVEN_BEFORE		BIT(31)
+#define MIPI_CSIS_INTMSK_EVEN_AFTER		BIT(30)
+#define MIPI_CSIS_INTMSK_ODD_BEFORE		BIT(29)
+#define MIPI_CSIS_INTMSK_ODD_AFTER		BIT(28)
+#define MIPI_CSIS_INTMSK_FRAME_START		BIT(24)
+#define MIPI_CSIS_INTMSK_FRAME_END		BIT(20)
+#define MIPI_CSIS_INTMSK_ERR_SOT_HS		BIT(16)
+#define MIPI_CSIS_INTMSK_ERR_LOST_FS		BIT(12)
+#define MIPI_CSIS_INTMSK_ERR_LOST_FE		BIT(8)
+#define MIPI_CSIS_INTMSK_ERR_OVER		BIT(4)
+#define MIPI_CSIS_INTMSK_ERR_WRONG_CFG		BIT(3)
+#define MIPI_CSIS_INTMSK_ERR_ECC		BIT(2)
+#define MIPI_CSIS_INTMSK_ERR_CRC		BIT(1)
+#define MIPI_CSIS_INTMSK_ERR_UNKNOWN		BIT(0)
 
 /* CSIS Interrupt source */
-#define MIPI_CSIS_INTSRC		0x14
-#define MIPI_CSIS_INTSRC_EVEN_BEFORE	BIT(31)
-#define MIPI_CSIS_INTSRC_EVEN_AFTER	BIT(30)
-#define MIPI_CSIS_INTSRC_EVEN		BIT(30)
-#define MIPI_CSIS_INTSRC_ODD_BEFORE	BIT(29)
-#define MIPI_CSIS_INTSRC_ODD_AFTER	BIT(28)
-#define MIPI_CSIS_INTSRC_ODD		(0x3 << 28)
-#define MIPI_CSIS_INTSRC_NON_IMAGE_DATA	(0xf << 28)
-#define MIPI_CSIS_INTSRC_FRAME_START	BIT(24)
-#define MIPI_CSIS_INTSRC_FRAME_END	BIT(20)
-#define MIPI_CSIS_INTSRC_ERR_SOT_HS	BIT(16)
-#define MIPI_CSIS_INTSRC_ERR_LOST_FS	BIT(12)
-#define MIPI_CSIS_INTSRC_ERR_LOST_FE	BIT(8)
-#define MIPI_CSIS_INTSRC_ERR_OVER	BIT(4)
-#define MIPI_CSIS_INTSRC_ERR_WRONG_CFG	BIT(3)
-#define MIPI_CSIS_INTSRC_ERR_ECC	BIT(2)
-#define MIPI_CSIS_INTSRC_ERR_CRC	BIT(1)
-#define MIPI_CSIS_INTSRC_ERR_UNKNOWN	BIT(0)
-#define MIPI_CSIS_INTSRC_ERRORS		0xfffff
+#define MIPI_CSIS_INTSRC			0x14
+#define MIPI_CSIS_INTSRC_EVEN_BEFORE		BIT(31)
+#define MIPI_CSIS_INTSRC_EVEN_AFTER		BIT(30)
+#define MIPI_CSIS_INTSRC_EVEN			BIT(30)
+#define MIPI_CSIS_INTSRC_ODD_BEFORE		BIT(29)
+#define MIPI_CSIS_INTSRC_ODD_AFTER		BIT(28)
+#define MIPI_CSIS_INTSRC_ODD			(0x3 << 28)
+#define MIPI_CSIS_INTSRC_NON_IMAGE_DATA		(0xf << 28)
+#define MIPI_CSIS_INTSRC_FRAME_START		BIT(24)
+#define MIPI_CSIS_INTSRC_FRAME_END		BIT(20)
+#define MIPI_CSIS_INTSRC_ERR_SOT_HS		BIT(16)
+#define MIPI_CSIS_INTSRC_ERR_LOST_FS		BIT(12)
+#define MIPI_CSIS_INTSRC_ERR_LOST_FE		BIT(8)
+#define MIPI_CSIS_INTSRC_ERR_OVER		BIT(4)
+#define MIPI_CSIS_INTSRC_ERR_WRONG_CFG		BIT(3)
+#define MIPI_CSIS_INTSRC_ERR_ECC		BIT(2)
+#define MIPI_CSIS_INTSRC_ERR_CRC		BIT(1)
+#define MIPI_CSIS_INTSRC_ERR_UNKNOWN		BIT(0)
+#define MIPI_CSIS_INTSRC_ERRORS			0xfffff
 
 /* D-PHY status control */
 #define MIPI_CSIS_DPHYSTATUS			0x20
@@ -121,19 +118,19 @@
 #define MIPI_CSIS_DPHYCTRL_ENABLE		(0x1f << 0)
 
 /* D-PHY Master and Slave Control register Low */
-#define MIPI_CSIS_DPHYBCTRL_L		0x30
+#define MIPI_CSIS_DPHYBCTRL_L			0x30
 /* D-PHY Master and Slave Control register High */
-#define MIPI_CSIS_DPHYBCTRL_H		0x34
+#define MIPI_CSIS_DPHYBCTRL_H			0x34
 /* D-PHY Slave Control register Low */
-#define MIPI_CSIS_DPHYSCTRL_L		0x38
+#define MIPI_CSIS_DPHYSCTRL_L			0x38
 /* D-PHY Slave Control register High */
-#define MIPI_CSIS_DPHYSCTRL_H		0x3c
+#define MIPI_CSIS_DPHYSCTRL_H			0x3c
 
 /* ISP Configuration register */
-#define MIPI_CSIS_ISPCONFIG_CH0		0x40
-#define MIPI_CSIS_ISPCONFIG_CH1		0x50
-#define MIPI_CSIS_ISPCONFIG_CH2		0x60
-#define MIPI_CSIS_ISPCONFIG_CH3		0x70
+#define MIPI_CSIS_ISPCONFIG_CH0			0x40
+#define MIPI_CSIS_ISPCONFIG_CH1			0x50
+#define MIPI_CSIS_ISPCONFIG_CH2			0x60
+#define MIPI_CSIS_ISPCONFIG_CH3			0x70
 
 #define MIPI_CSIS_ISPCFG_MEM_FULL_GAP_MSK	(0xff << 24)
 #define MIPI_CSIS_ISPCFG_MEM_FULL_GAP(x)	((x) << 24)
@@ -143,35 +140,36 @@
 #define MIPI_CSIS_ISPCFG_FMT_RAW8		(0x2a << 2)
 #define MIPI_CSIS_ISPCFG_FMT_RAW10		(0x2b << 2)
 #define MIPI_CSIS_ISPCFG_FMT_RAW12		(0x2c << 2)
+#define MIPI_CSIS_ISPCFG_FMT_RAW14		(0x2d << 2)
 
 /* User defined formats, x = 1...4 */
-#define MIPI_CSIS_ISPCFG_FMT_USER(x)	((0x30 + (x) - 1) << 2)
-#define MIPI_CSIS_ISPCFG_FMT_MASK	(0x3f << 2)
+#define MIPI_CSIS_ISPCFG_FMT_USER(x)		((0x30 + (x) - 1) << 2)
+#define MIPI_CSIS_ISPCFG_FMT_MASK		(0x3f << 2)
 
 /* ISP Image Resolution register */
-#define MIPI_CSIS_ISPRESOL_CH0		0x44
-#define MIPI_CSIS_ISPRESOL_CH1		0x54
-#define MIPI_CSIS_ISPRESOL_CH2		0x64
-#define MIPI_CSIS_ISPRESOL_CH3		0x74
-#define CSIS_MAX_PIX_WIDTH		0xffff
-#define CSIS_MAX_PIX_HEIGHT		0xffff
+#define MIPI_CSIS_ISPRESOL_CH0			0x44
+#define MIPI_CSIS_ISPRESOL_CH1			0x54
+#define MIPI_CSIS_ISPRESOL_CH2			0x64
+#define MIPI_CSIS_ISPRESOL_CH3			0x74
+#define CSIS_MAX_PIX_WIDTH			0xffff
+#define CSIS_MAX_PIX_HEIGHT			0xffff
 
 /* ISP SYNC register */
-#define MIPI_CSIS_ISPSYNC_CH0		0x48
-#define MIPI_CSIS_ISPSYNC_CH1		0x58
-#define MIPI_CSIS_ISPSYNC_CH2		0x68
-#define MIPI_CSIS_ISPSYNC_CH3		0x78
+#define MIPI_CSIS_ISPSYNC_CH0			0x48
+#define MIPI_CSIS_ISPSYNC_CH1			0x58
+#define MIPI_CSIS_ISPSYNC_CH2			0x68
+#define MIPI_CSIS_ISPSYNC_CH3			0x78
 
 #define MIPI_CSIS_ISPSYNC_HSYNC_LINTV_OFFSET	18
 #define MIPI_CSIS_ISPSYNC_VSYNC_SINTV_OFFSET	12
 #define MIPI_CSIS_ISPSYNC_VSYNC_EINTV_OFFSET	0
 
 /* Non-image packet data buffers */
-#define MIPI_CSIS_PKTDATA_ODD		0x2000
-#define MIPI_CSIS_PKTDATA_EVEN		0x3000
-#define MIPI_CSIS_PKTDATA_SIZE		SZ_4K
+#define MIPI_CSIS_PKTDATA_ODD			0x2000
+#define MIPI_CSIS_PKTDATA_EVEN			0x3000
+#define MIPI_CSIS_PKTDATA_SIZE			SZ_4K
 
-#define DEFAULT_SCLK_CSIS_FREQ		166000000UL
+#define DEFAULT_SCLK_CSIS_FREQ			166000000UL
 
 enum {
 	ST_POWERED	= 1,
@@ -251,37 +249,104 @@ struct csi_state {
 
 	struct mipi_csis_event events[MIPI_CSIS_NUM_EVENTS];
 
-	struct v4l2_async_notifier subdev_notifier;
-
 	struct csis_hw_reset hw_reset;
 	struct regulator *mipi_phy_regulator;
-	bool sink_linked;
 };
 
 struct csis_pix_format {
-	unsigned int pix_width_alignment;
 	u32 code;
 	u32 fmt_reg;
-	u8 data_alignment;
+	u8 width;
 };
 
 static const struct csis_pix_format mipi_csis_formats[] = {
+	/* YUV formats. */
 	{
-		.code = MEDIA_BUS_FMT_SBGGR10_1X10,
-		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW10,
-		.data_alignment = 16,
-	}, {
-		.code = MEDIA_BUS_FMT_VYUY8_2X8,
+		.code = MEDIA_BUS_FMT_UYVY8_2X8,
 		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_YCBCR422_8BIT,
-		.data_alignment = 16,
+		.width = 8,
 	}, {
+		.code = MEDIA_BUS_FMT_UYVY10_2X10,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_YCBCR422_8BIT,
+		.width = 10,
+	},
+	/* RAW (Bayer and greyscale) formats. */
+	{
 		.code = MEDIA_BUS_FMT_SBGGR8_1X8,
 		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW8,
-		.data_alignment = 8,
+		.width = 8,
 	}, {
-		.code = MEDIA_BUS_FMT_YUYV8_2X8,
-		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_YCBCR422_8BIT,
-		.data_alignment = 16,
+		.code = MEDIA_BUS_FMT_SGBRG8_1X8,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW8,
+		.width = 8,
+	}, {
+		.code = MEDIA_BUS_FMT_SGRBG8_1X8,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW8,
+		.width = 8,
+	}, {
+		.code = MEDIA_BUS_FMT_SRGGB8_1X8,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW8,
+		.width = 8,
+	}, {
+		.code = MEDIA_BUS_FMT_Y8_1X8,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW8,
+		.width = 8,
+	}, {
+		.code = MEDIA_BUS_FMT_SBGGR10_1X10,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW10,
+		.width = 10,
+	}, {
+		.code = MEDIA_BUS_FMT_SGBRG10_1X10,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW10,
+		.width = 10,
+	}, {
+		.code = MEDIA_BUS_FMT_SGRBG10_1X10,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW10,
+		.width = 10,
+	}, {
+		.code = MEDIA_BUS_FMT_SRGGB10_1X10,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW10,
+		.width = 10,
+	}, {
+		.code = MEDIA_BUS_FMT_Y10_1X10,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW10,
+		.width = 10,
+	}, {
+		.code = MEDIA_BUS_FMT_SBGGR12_1X12,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW12,
+		.width = 12,
+	}, {
+		.code = MEDIA_BUS_FMT_SGBRG12_1X12,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW12,
+		.width = 12,
+	}, {
+		.code = MEDIA_BUS_FMT_SGRBG12_1X12,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW12,
+		.width = 12,
+	}, {
+		.code = MEDIA_BUS_FMT_SRGGB12_1X12,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW12,
+		.width = 12,
+	}, {
+		.code = MEDIA_BUS_FMT_Y12_1X12,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW12,
+		.width = 12,
+	}, {
+		.code = MEDIA_BUS_FMT_SBGGR14_1X14,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW14,
+		.width = 14,
+	}, {
+		.code = MEDIA_BUS_FMT_SGBRG14_1X14,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW14,
+		.width = 14,
+	}, {
+		.code = MEDIA_BUS_FMT_SGRBG14_1X14,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW14,
+		.width = 14,
+	}, {
+		.code = MEDIA_BUS_FMT_SRGGB14_1X14,
+		.fmt_reg = MIPI_CSIS_ISPCFG_FMT_RAW14,
+		.width = 14,
 	}
 };
 
@@ -293,7 +358,7 @@ static int mipi_csis_dump_regs(struct csi_state *state)
 	struct device *dev = &state->pdev->dev;
 	unsigned int i;
 	u32 cfg;
-	struct {
+	static const struct {
 		u32 offset;
 		const char * const name;
 	} registers[] = {
@@ -303,6 +368,7 @@ static int mipi_csis_dump_regs(struct csi_state *state)
 		{ 0x20, "DPHYSTS" },
 		{ 0x10, "INTMSK" },
 		{ 0x40, "CONFIG_CH0" },
+		{ 0x44, "RESOL_CH0" },
 		{ 0xC0, "DBG_CONFIG" },
 		{ 0x38, "DPHYSLAVE_L" },
 		{ 0x3C, "DPHYSLAVE_H" },
@@ -350,6 +416,8 @@ static void mipi_csis_sw_reset(struct csi_state *state)
 static int mipi_csis_phy_init(struct csi_state *state)
 {
 	state->mipi_phy_regulator = devm_regulator_get(state->dev, "phy");
+	if (IS_ERR(state->mipi_phy_regulator))
+		return PTR_ERR(state->mipi_phy_regulator);
 
 	return regulator_set_voltage(state->mipi_phy_regulator, 1000000,
 				     1000000);
@@ -392,7 +460,8 @@ static void __mipi_csis_set_format(struct csi_state *state)
 
 	/* Color format */
 	val = mipi_csis_read(state, MIPI_CSIS_ISPCONFIG_CH0);
-	val = (val & ~MIPI_CSIS_ISPCFG_FMT_MASK) | state->csis_fmt->fmt_reg;
+	val &= ~(MIPI_CSIS_ISPCFG_ALIGN_32BIT | MIPI_CSIS_ISPCFG_FMT_MASK);
+	val |= state->csis_fmt->fmt_reg;
 	mipi_csis_write(state, MIPI_CSIS_ISPCONFIG_CH0, val);
 
 	/* Pixel resolution */
@@ -404,7 +473,7 @@ static void mipi_csis_set_hsync_settle(struct csi_state *state, int hs_settle)
 {
 	u32 val = mipi_csis_read(state, MIPI_CSIS_DPHYCTRL);
 
-	val = ((val & ~MIPI_CSIS_DPHYCTRL_HSS_MASK) | (hs_settle << 24));
+	val = (val & ~MIPI_CSIS_DPHYCTRL_HSS_MASK) | (hs_settle << 24);
 
 	mipi_csis_write(state, MIPI_CSIS_DPHYCTRL, val);
 }
@@ -417,18 +486,12 @@ static void mipi_csis_set_params(struct csi_state *state)
 	val = mipi_csis_read(state, MIPI_CSIS_CMN_CTRL);
 	val &= ~MIPI_CSIS_CMN_CTRL_LANE_NR_MASK;
 	val |= (lanes - 1) << MIPI_CSIS_CMN_CTRL_LANE_NR_OFFSET;
+	val |= MIPI_CSIS_CMN_CTRL_INTER_MODE;
 	mipi_csis_write(state, MIPI_CSIS_CMN_CTRL, val);
 
 	__mipi_csis_set_format(state);
 
 	mipi_csis_set_hsync_settle(state, state->hs_settle);
-
-	val = mipi_csis_read(state, MIPI_CSIS_ISPCONFIG_CH0);
-	if (state->csis_fmt->data_alignment == 32)
-		val |= MIPI_CSIS_ISPCFG_ALIGN_32BIT;
-	else
-		val &= ~MIPI_CSIS_ISPCFG_ALIGN_32BIT;
-	mipi_csis_write(state, MIPI_CSIS_ISPCONFIG_CH0, val);
 
 	val = (0 << MIPI_CSIS_ISPSYNC_HSYNC_LINTV_OFFSET) |
 		(0 << MIPI_CSIS_ISPSYNC_VSYNC_SINTV_OFFSET) |
@@ -577,7 +640,7 @@ static int mipi_csis_s_stream(struct v4l2_subdev *mipi_sd, int enable)
 		state->flags |= ST_STREAMING;
 	} else {
 		v4l2_subdev_call(state->src_sd, video, s_stream, 0);
-		ret = v4l2_subdev_call(state->src_sd, core, s_power, 1);
+		ret = v4l2_subdev_call(state->src_sd, core, s_power, 0);
 		mipi_csis_stop_stream(state);
 		state->flags &= ~ST_STREAMING;
 		if (state->debug)
@@ -608,17 +671,7 @@ static int mipi_csis_link_setup(struct media_entity *entity,
 
 	mutex_lock(&state->lock);
 
-	if (local_pad->flags & MEDIA_PAD_FL_SOURCE) {
-		if (flags & MEDIA_LNK_FL_ENABLED) {
-			if (state->sink_linked) {
-				ret = -EBUSY;
-				goto out;
-			}
-			state->sink_linked = true;
-		} else {
-			state->sink_linked = false;
-		}
-	} else {
+	if (local_pad->flags & MEDIA_PAD_FL_SINK) {
 		if (flags & MEDIA_LNK_FL_ENABLED) {
 			if (state->src_sd) {
 				ret = -EBUSY;
@@ -635,48 +688,6 @@ out:
 	return ret;
 }
 
-static int mipi_csis_init_cfg(struct v4l2_subdev *mipi_sd,
-			      struct v4l2_subdev_pad_config *cfg)
-{
-	struct v4l2_mbus_framefmt *mf;
-	unsigned int i;
-	int ret;
-
-	for (i = 0; i < CSIS_PADS_NUM; i++) {
-		mf = v4l2_subdev_get_try_format(mipi_sd, cfg, i);
-
-		ret = imx_media_init_mbus_fmt(mf, MIPI_CSIS_DEF_PIX_HEIGHT,
-					      MIPI_CSIS_DEF_PIX_WIDTH, 0,
-					      V4L2_FIELD_NONE, NULL);
-		if (ret < 0)
-			return ret;
-	}
-
-	return 0;
-}
-
-static struct csis_pix_format const *
-mipi_csis_try_format(struct v4l2_subdev *mipi_sd, struct v4l2_mbus_framefmt *mf)
-{
-	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
-	struct csis_pix_format const *csis_fmt;
-
-	csis_fmt = find_csis_format(mf->code);
-	if (!csis_fmt)
-		csis_fmt = &mipi_csis_formats[0];
-
-	v4l_bound_align_image(&mf->width, 1, CSIS_MAX_PIX_WIDTH,
-			      csis_fmt->pix_width_alignment,
-			      &mf->height, 1, CSIS_MAX_PIX_HEIGHT, 1,
-			      0);
-
-	state->format_mbus.code = csis_fmt->code;
-	state->format_mbus.width = mf->width;
-	state->format_mbus.height = mf->height;
-
-	return csis_fmt;
-}
-
 static struct v4l2_mbus_framefmt *
 mipi_csis_get_format(struct csi_state *state,
 		     struct v4l2_subdev_pad_config *cfg,
@@ -689,36 +700,39 @@ mipi_csis_get_format(struct csi_state *state,
 	return &state->format_mbus;
 }
 
-static int mipi_csis_set_fmt(struct v4l2_subdev *mipi_sd,
-			     struct v4l2_subdev_pad_config *cfg,
-			     struct v4l2_subdev_format *sdformat)
+static int mipi_csis_init_cfg(struct v4l2_subdev *mipi_sd,
+			      struct v4l2_subdev_pad_config *cfg)
 {
 	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
-	struct csis_pix_format const *csis_fmt;
-	struct v4l2_mbus_framefmt *fmt;
+	struct v4l2_mbus_framefmt *fmt_sink;
+	struct v4l2_mbus_framefmt *fmt_source;
+	enum v4l2_subdev_format_whence which;
 
-	if (sdformat->pad >= CSIS_PADS_NUM)
-		return -EINVAL;
+	which = cfg ? V4L2_SUBDEV_FORMAT_TRY : V4L2_SUBDEV_FORMAT_ACTIVE;
+	fmt_sink = mipi_csis_get_format(state, cfg, which, CSIS_PAD_SINK);
 
-	fmt = mipi_csis_get_format(state, cfg, sdformat->which, sdformat->pad);
+	fmt_sink->code = MEDIA_BUS_FMT_UYVY8_2X8;
+	fmt_sink->width = MIPI_CSIS_DEF_PIX_WIDTH;
+	fmt_sink->height = MIPI_CSIS_DEF_PIX_HEIGHT;
+	fmt_sink->field = V4L2_FIELD_NONE;
 
-	mutex_lock(&state->lock);
-	if (sdformat->pad == CSIS_PAD_SOURCE) {
-		sdformat->format = *fmt;
-		goto unlock;
-	}
+	fmt_sink->colorspace = V4L2_COLORSPACE_SMPTE170M;
+	fmt_sink->xfer_func = V4L2_MAP_XFER_FUNC_DEFAULT(fmt_sink->colorspace);
+	fmt_sink->ycbcr_enc = V4L2_MAP_YCBCR_ENC_DEFAULT(fmt_sink->colorspace);
+	fmt_sink->quantization =
+		V4L2_MAP_QUANTIZATION_DEFAULT(false, fmt_sink->colorspace,
+					      fmt_sink->ycbcr_enc);
 
-	csis_fmt = mipi_csis_try_format(mipi_sd, &sdformat->format);
+	/*
+	 * When called from mipi_csis_subdev_init() to initialize the active
+	 * configuration, cfg is NULL, which indicates there's no source pad
+	 * configuration to set.
+	 */
+	if (!cfg)
+		return 0;
 
-	sdformat->format = *fmt;
-
-	if (csis_fmt && sdformat->which == V4L2_SUBDEV_FORMAT_ACTIVE)
-		state->csis_fmt = csis_fmt;
-	else
-		cfg->try_fmt = sdformat->format;
-
-unlock:
-	mutex_unlock(&state->lock);
+	fmt_source = mipi_csis_get_format(state, cfg, which, CSIS_PAD_SOURCE);
+	*fmt_source = *fmt_sink;
 
 	return 0;
 }
@@ -731,10 +745,114 @@ static int mipi_csis_get_fmt(struct v4l2_subdev *mipi_sd,
 	struct v4l2_mbus_framefmt *fmt;
 
 	mutex_lock(&state->lock);
+	fmt = mipi_csis_get_format(state, cfg, sdformat->which, sdformat->pad);
+	sdformat->format = *fmt;
+	mutex_unlock(&state->lock);
+
+	return 0;
+}
+
+static int mipi_csis_enum_mbus_code(struct v4l2_subdev *mipi_sd,
+				    struct v4l2_subdev_pad_config *cfg,
+				    struct v4l2_subdev_mbus_code_enum *code)
+{
+	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
+
+	/*
+	 * The CSIS can't transcode in any way, the source format is identical
+	 * to the sink format.
+	 */
+	if (code->pad == CSIS_PAD_SOURCE) {
+		struct v4l2_mbus_framefmt *fmt;
+
+		if (code->index > 0)
+			return -EINVAL;
+
+		fmt = mipi_csis_get_format(state, cfg, code->which, code->pad);
+		code->code = fmt->code;
+		return 0;
+	}
+
+	if (code->pad != CSIS_PAD_SINK)
+		return -EINVAL;
+
+	if (code->index >= ARRAY_SIZE(mipi_csis_formats))
+		return -EINVAL;
+
+	code->code = mipi_csis_formats[code->index].code;
+
+	return 0;
+}
+
+static int mipi_csis_set_fmt(struct v4l2_subdev *mipi_sd,
+			     struct v4l2_subdev_pad_config *cfg,
+			     struct v4l2_subdev_format *sdformat)
+{
+	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
+	struct csis_pix_format const *csis_fmt;
+	struct v4l2_mbus_framefmt *fmt;
+	unsigned int align;
+
+	/*
+	 * The CSIS can't transcode in any way, the source format can't be
+	 * modified.
+	 */
+	if (sdformat->pad == CSIS_PAD_SOURCE)
+		return mipi_csis_get_fmt(mipi_sd, cfg, sdformat);
+
+	if (sdformat->pad != CSIS_PAD_SINK)
+		return -EINVAL;
 
 	fmt = mipi_csis_get_format(state, cfg, sdformat->which, sdformat->pad);
 
+	mutex_lock(&state->lock);
+
+	/* Validate the media bus code and clamp the size. */
+	csis_fmt = find_csis_format(sdformat->format.code);
+	if (!csis_fmt)
+		csis_fmt = &mipi_csis_formats[0];
+
+	fmt->code = csis_fmt->code;
+	fmt->width = sdformat->format.width;
+	fmt->height = sdformat->format.height;
+
+	/*
+	 * The total number of bits per line must be a multiple of 8. We thus
+	 * need to align the width for formats that are not multiples of 8
+	 * bits.
+	 */
+	switch (csis_fmt->width % 8) {
+	case 0:
+		align = 1;
+		break;
+	case 4:
+		align = 2;
+		break;
+	case 2:
+	case 6:
+		align = 4;
+		break;
+	case 1:
+	case 3:
+	case 5:
+	case 7:
+		align = 8;
+		break;
+	}
+
+	v4l_bound_align_image(&fmt->width, 1, CSIS_MAX_PIX_WIDTH, align,
+			      &fmt->height, 1, CSIS_MAX_PIX_HEIGHT, 1, 0);
+
 	sdformat->format = *fmt;
+
+	/* Propagate the format from sink to source. */
+	fmt = mipi_csis_get_format(state, cfg, sdformat->which,
+				   CSIS_PAD_SOURCE);
+	*fmt = sdformat->format;
+
+	/* Store the CSIS format descriptor for active formats. */
+	if (sdformat->which == V4L2_SUBDEV_FORMAT_ACTIVE)
+		state->csis_fmt = csis_fmt;
 
 	mutex_unlock(&state->lock);
 
@@ -780,17 +898,6 @@ static irqreturn_t mipi_csis_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static int mipi_csis_registered(struct v4l2_subdev *mipi_sd)
-{
-	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
-
-	state->pads[CSIS_PAD_SINK].flags = MEDIA_PAD_FL_SINK;
-	state->pads[CSIS_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
-
-	return media_entity_pads_init(&state->mipi_sd.entity, CSIS_PADS_NUM,
-				      state->pads);
-}
-
 static const struct v4l2_subdev_core_ops mipi_csis_core_ops = {
 	.log_status	= mipi_csis_log_status,
 };
@@ -806,6 +913,7 @@ static const struct v4l2_subdev_video_ops mipi_csis_video_ops = {
 
 static const struct v4l2_subdev_pad_ops mipi_csis_pad_ops = {
 	.init_cfg		= mipi_csis_init_cfg,
+	.enum_mbus_code		= mipi_csis_enum_mbus_code,
 	.get_fmt		= mipi_csis_get_fmt,
 	.set_fmt		= mipi_csis_set_fmt,
 };
@@ -814,10 +922,6 @@ static const struct v4l2_subdev_ops mipi_csis_subdev_ops = {
 	.core	= &mipi_csis_core_ops,
 	.video	= &mipi_csis_video_ops,
 	.pad	= &mipi_csis_pad_ops,
-};
-
-static const struct v4l2_subdev_internal_ops mipi_csis_internal_ops = {
-	.registered = mipi_csis_registered,
 };
 
 static int mipi_csis_parse_dt(struct platform_device *pdev,
@@ -880,17 +984,20 @@ static int mipi_csis_subdev_init(struct v4l2_subdev *mipi_sd,
 
 	mipi_sd->entity.function = MEDIA_ENT_F_VID_IF_BRIDGE;
 	mipi_sd->entity.ops = &mipi_csis_entity_ops;
-	mipi_sd->internal_ops = &mipi_csis_internal_ops;
 
 	mipi_sd->dev = &pdev->dev;
 
 	state->csis_fmt = &mipi_csis_formats[0];
-	state->format_mbus.code = mipi_csis_formats[0].code;
-	state->format_mbus.width = MIPI_CSIS_DEF_PIX_WIDTH;
-	state->format_mbus.height = MIPI_CSIS_DEF_PIX_HEIGHT;
-	state->format_mbus.field = V4L2_FIELD_NONE;
+	mipi_csis_init_cfg(mipi_sd, NULL);
 
 	v4l2_set_subdevdata(mipi_sd, &pdev->dev);
+
+	state->pads[CSIS_PAD_SINK].flags = MEDIA_PAD_FL_SINK;
+	state->pads[CSIS_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
+	ret = media_entity_pads_init(&mipi_sd->entity, CSIS_PADS_NUM,
+				     state->pads);
+	if (ret)
+		return ret;
 
 	ret = v4l2_async_register_fwnode_subdev(mipi_sd,
 						sizeof(struct v4l2_async_subdev),
@@ -910,33 +1017,14 @@ static int mipi_csis_dump_regs_show(struct seq_file *m, void *private)
 }
 DEFINE_SHOW_ATTRIBUTE(mipi_csis_dump_regs);
 
-static int mipi_csis_debugfs_init(struct csi_state *state)
+static void mipi_csis_debugfs_init(struct csi_state *state)
 {
-	struct dentry *d;
-
-	if (!debugfs_initialized())
-		return -ENODEV;
-
 	state->debugfs_root = debugfs_create_dir(dev_name(state->dev), NULL);
-	if (!state->debugfs_root)
-		return -ENOMEM;
 
-	d = debugfs_create_bool("debug_enable", 0600, state->debugfs_root,
-				&state->debug);
-	if (!d)
-		goto remove_debugfs;
-
-	d = debugfs_create_file("dump_regs", 0600, state->debugfs_root,
-				state, &mipi_csis_dump_regs_fops);
-	if (!d)
-		goto remove_debugfs;
-
-	return 0;
-
-remove_debugfs:
-	debugfs_remove_recursive(state->debugfs_root);
-
-	return -ENOMEM;
+	debugfs_create_bool("debug_enable", 0600, state->debugfs_root,
+			    &state->debug);
+	debugfs_create_file("dump_regs", 0600, state->debugfs_root, state,
+			    &mipi_csis_dump_regs_fops);
 }
 
 static void mipi_csis_debugfs_exit(struct csi_state *state)
@@ -947,7 +1035,6 @@ static void mipi_csis_debugfs_exit(struct csi_state *state)
 static int mipi_csis_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct resource *mem_res;
 	struct csi_state *state;
 	int ret;
 
@@ -966,19 +1053,19 @@ static int mipi_csis_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	mipi_csis_phy_init(state);
+	ret = mipi_csis_phy_init(state);
+	if (ret < 0)
+		return ret;
+
 	mipi_csis_phy_reset(state);
 
-	mem_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	state->regs = devm_ioremap_resource(dev, mem_res);
+	state->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(state->regs))
 		return PTR_ERR(state->regs);
 
 	state->irq = platform_get_irq(pdev, 0);
-	if (state->irq < 0) {
-		dev_err(dev, "Failed to get irq\n");
+	if (state->irq < 0)
 		return state->irq;
-	}
 
 	ret = mipi_csis_clk_get(state);
 	if (ret < 0)
@@ -1112,7 +1199,6 @@ static int mipi_csis_remove(struct platform_device *pdev)
 
 	mipi_csis_debugfs_exit(state);
 	v4l2_async_unregister_subdev(&state->mipi_sd);
-	v4l2_async_notifier_unregister(&state->subdev_notifier);
 
 	pm_runtime_disable(&pdev->dev);
 	mipi_csis_pm_suspend(&pdev->dev, true);

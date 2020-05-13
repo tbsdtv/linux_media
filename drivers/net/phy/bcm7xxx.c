@@ -181,6 +181,10 @@ static int bcm7xxx_28nm_config_init(struct phy_device *phydev)
 	if (ret)
 		return ret;
 
+	ret =  bcm_phy_enable_jumbo(phydev);
+	if (ret)
+		return ret;
+
 	ret = bcm_phy_downshift_get(phydev, &count);
 	if (ret)
 		return ret;
@@ -572,6 +576,7 @@ static int bcm7xxx_28nm_probe(struct phy_device *phydev)
 	.name           = _name,					\
 	/* PHY_BASIC_FEATURES */					\
 	.flags          = PHY_IS_INTERNAL,				\
+	.soft_reset	= genphy_soft_reset,				\
 	.config_init    = bcm7xxx_config_init,				\
 	.suspend        = bcm7xxx_suspend,				\
 	.resume         = bcm7xxx_config_init,				\

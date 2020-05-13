@@ -23,11 +23,14 @@
  * Authors: Dave Airlie
  *          Alex Deucher
  */
-#include <drm/drmP.h>
+
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_helper.h>
-#include <drm/radeon_drm.h>
 #include <drm/drm_fixed.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_vblank.h>
+#include <drm/radeon_drm.h>
+
 #include "radeon.h"
 #include "atom.h"
 #include "atom-bits.h"
@@ -241,9 +244,8 @@ static void atombios_blank_crtc(struct drm_crtc *crtc, int state)
 
 	atom_execute_table(rdev->mode_info.atom_context, index, (uint32_t *)&args);
 
-	if (ASIC_IS_DCE8(rdev)) {
+	if (ASIC_IS_DCE8(rdev))
 		WREG32(vga_control_regs[radeon_crtc->crtc_id], vga_control);
-	}
 }
 
 static void atombios_powergate_crtc(struct drm_crtc *crtc, int state)
@@ -2229,6 +2231,7 @@ static const struct drm_crtc_helper_funcs atombios_helper_funcs = {
 	.prepare = atombios_crtc_prepare,
 	.commit = atombios_crtc_commit,
 	.disable = atombios_crtc_disable,
+	.get_scanout_position = radeon_get_crtc_scanout_position,
 };
 
 void radeon_atombios_init_crtc(struct drm_device *dev,

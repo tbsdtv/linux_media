@@ -1,12 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * linux/include/linux/cpufreq.h
  *
  * Copyright (C) 2001 Russell King
  *           (C) 2002 - 2003 Dominik Brodowski <linux@brodo.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef _LINUX_CPUFREQ_H
 #define _LINUX_CPUFREQ_H
@@ -16,6 +13,7 @@
 #include <linux/completion.h>
 #include <linux/kobject.h>
 #include <linux/notifier.h>
+#include <linux/pm_qos.h>
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
 
@@ -50,11 +48,6 @@ struct cpufreq_cpuinfo {
 	unsigned int		transition_latency;
 };
 
-struct cpufreq_user_policy {
-	unsigned int		min;    /* in kHz */
-	unsigned int		max;    /* in kHz */
-};
-
 struct cpufreq_policy {
 	/* CPUs sharing clock, require sw coordination */
 	cpumask_var_t		cpus;	/* Online CPUs only */
@@ -84,7 +77,10 @@ struct cpufreq_policy {
 	struct work_struct	update; /* if update_policy() needs to be
 					 * called, but you're in IRQ context */
 
-	struct cpufreq_user_policy user_policy;
+	struct freq_constraints	constraints;
+	struct freq_qos_request	*min_freq_req;
+	struct freq_qos_request	*max_freq_req;
+
 	struct cpufreq_frequency_table	*freq_table;
 	enum cpufreq_table_sorting freq_table_sorted;
 
@@ -147,6 +143,23 @@ struct cpufreq_policy {
 
 	/* Pointer to the cooling device if used for thermal mitigation */
 	struct thermal_cooling_device *cdev;
+
+	struct notifier_block nb_min;
+	struct notifier_block nb_max;
+};
+
+/*
+ * Used for passing new cpufreq policy data to the cpufreq driver's ->verify()
+ * callback for sanitization.  That callback is only expected to modify the min
+ * and max values, if necessary, and specifically it must not update the
+ * frequency table.
+ */
+struct cpufreq_policy_data {
+	struct cpufreq_cpuinfo		cpuinfo;
+	struct cpufreq_frequency_table	*freq_table;
+	unsigned int			cpu;
+	unsigned int			min;    /* in kHz */
+	unsigned int			max;    /* in kHz */
 };
 
 struct cpufreq_freqs {
@@ -188,13 +201,11 @@ static inline bool policy_is_shared(struct cpufreq_policy *policy)
 	return cpumask_weight(policy->cpus) > 1;
 }
 
-/* /sys/devices/system/cpu/cpufreq: entry point for global variables */
-extern struct kobject *cpufreq_global_kobject;
-
 #ifdef CONFIG_CPU_FREQ
 unsigned int cpufreq_get(unsigned int cpu);
 unsigned int cpufreq_quick_get(unsigned int cpu);
 unsigned int cpufreq_quick_get_max(unsigned int cpu);
+unsigned int cpufreq_get_hw_max_freq(unsigned int cpu);
 void disable_cpufreq(void);
 
 u64 get_cpu_idle_time(unsigned int cpu, u64 *wall, int io_busy);
@@ -202,8 +213,7 @@ u64 get_cpu_idle_time(unsigned int cpu, u64 *wall, int io_busy);
 struct cpufreq_policy *cpufreq_cpu_acquire(unsigned int cpu);
 void cpufreq_cpu_release(struct cpufreq_policy *policy);
 int cpufreq_get_policy(struct cpufreq_policy *policy, unsigned int cpu);
-int cpufreq_set_policy(struct cpufreq_policy *policy,
-		       struct cpufreq_policy *new_policy);
+void refresh_frequency_limits(struct cpufreq_policy *policy);
 void cpufreq_update_policy(unsigned int cpu);
 void cpufreq_update_limits(unsigned int cpu);
 bool have_governor_per_policy(void);
@@ -220,6 +230,10 @@ static inline unsigned int cpufreq_quick_get(unsigned int cpu)
 	return 0;
 }
 static inline unsigned int cpufreq_quick_get_max(unsigned int cpu)
+{
+	return 0;
+}
+static inline unsigned int cpufreq_get_hw_max_freq(unsigned int cpu)
 {
 	return 0;
 }
@@ -284,7 +298,7 @@ struct cpufreq_driver {
 
 	/* needed by all drivers */
 	int		(*init)(struct cpufreq_policy *policy);
-	int		(*verify)(struct cpufreq_policy *policy);
+	int		(*verify)(struct cpufreq_policy_data *policy);
 
 	/* define one out of two */
 	int		(*setpolicy)(struct cpufreq_policy *policy);
@@ -409,8 +423,15 @@ int cpufreq_unregister_driver(struct cpufreq_driver *driver_data);
 const char *cpufreq_get_current_driver(void);
 void *cpufreq_get_driver_data(void);
 
-static inline void cpufreq_verify_within_limits(struct cpufreq_policy *policy,
-		unsigned int min, unsigned int max)
+static inline int cpufreq_thermal_control_enabled(struct cpufreq_driver *drv)
+{
+	return IS_ENABLED(CONFIG_CPU_THERMAL) &&
+		(drv->flags & CPUFREQ_IS_COOLING_DEV);
+}
+
+static inline void cpufreq_verify_within_limits(struct cpufreq_policy_data *policy,
+						unsigned int min,
+						unsigned int max)
 {
 	if (policy->min < min)
 		policy->min = min;
@@ -426,10 +447,10 @@ static inline void cpufreq_verify_within_limits(struct cpufreq_policy *policy,
 }
 
 static inline void
-cpufreq_verify_within_cpu_limits(struct cpufreq_policy *policy)
+cpufreq_verify_within_cpu_limits(struct cpufreq_policy_data *policy)
 {
 	cpufreq_verify_within_limits(policy, policy->cpuinfo.min_freq,
-			policy->cpuinfo.max_freq);
+				     policy->cpuinfo.max_freq);
 }
 
 #ifdef CONFIG_CPU_FREQ
@@ -453,8 +474,8 @@ static inline void cpufreq_resume(void) {}
 #define CPUFREQ_POSTCHANGE		(1)
 
 /* Policy Notifiers  */
-#define CPUFREQ_ADJUST			(0)
-#define CPUFREQ_NOTIFY			(1)
+#define CPUFREQ_CREATE_POLICY		(0)
+#define CPUFREQ_REMOVE_POLICY		(1)
 
 #ifdef CONFIG_CPU_FREQ
 int cpufreq_register_notifier(struct notifier_block *nb, unsigned int list);
@@ -507,6 +528,7 @@ static inline unsigned long cpufreq_scale(unsigned long old, u_int div,
  *                          CPUFREQ GOVERNORS                        *
  *********************************************************************/
 
+#define CPUFREQ_POLICY_UNKNOWN		(0)
 /*
  * If (cpufreq_driver->target) exists, the ->governor decides what frequency
  * within the limits is used. If (cpufreq_driver->setpolicy> exists, these
@@ -588,17 +610,6 @@ struct governor_attr {
 	ssize_t (*store)(struct gov_attr_set *attr_set, const char *buf,
 			 size_t count);
 };
-
-static inline bool cpufreq_this_cpu_can_update(struct cpufreq_policy *policy)
-{
-	/*
-	 * Allow remote callbacks if:
-	 * - dvfs_possible_from_any_cpu flag is set
-	 * - the local and remote CPUs share cpufreq policy
-	 */
-	return policy->dvfs_possible_from_any_cpu ||
-		cpumask_test_cpu(smp_processor_id(), policy->cpus);
-}
 
 /*********************************************************************
  *                     FREQUENCY TABLE HELPERS                       *
@@ -689,9 +700,9 @@ static inline void dev_pm_opp_free_cpufreq_table(struct device *dev,
 int cpufreq_frequency_table_cpuinfo(struct cpufreq_policy *policy,
 				    struct cpufreq_frequency_table *table);
 
-int cpufreq_frequency_table_verify(struct cpufreq_policy *policy,
+int cpufreq_frequency_table_verify(struct cpufreq_policy_data *policy,
 				   struct cpufreq_frequency_table *table);
-int cpufreq_generic_frequency_table_verify(struct cpufreq_policy *policy);
+int cpufreq_generic_frequency_table_verify(struct cpufreq_policy_data *policy);
 
 int cpufreq_table_index_unsorted(struct cpufreq_policy *policy,
 				 unsigned int target_freq,
@@ -989,7 +1000,7 @@ extern struct freq_attr *cpufreq_generic_attr[];
 int cpufreq_table_validate_and_sort(struct cpufreq_policy *policy);
 
 unsigned int cpufreq_generic_get(unsigned int cpu);
-int cpufreq_generic_init(struct cpufreq_policy *policy,
+void cpufreq_generic_init(struct cpufreq_policy *policy,
 		struct cpufreq_frequency_table *table,
 		unsigned int transition_latency);
 #endif /* _LINUX_CPUFREQ_H */

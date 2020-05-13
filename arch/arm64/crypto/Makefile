@@ -1,11 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # linux/arch/arm64/crypto/Makefile
 #
 # Copyright (C) 2014 Linaro Ltd <ard.biesheuvel@linaro.org>
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License version 2 as
-# published by the Free Software Foundation.
 #
 
 obj-$(CONFIG_CRYPTO_SHA1_ARM64_CE) += sha1-ce.o
@@ -53,6 +50,10 @@ sha512-arm64-y := sha512-glue.o sha512-core.o
 obj-$(CONFIG_CRYPTO_CHACHA20_NEON) += chacha-neon.o
 chacha-neon-y := chacha-neon-core.o chacha-neon-glue.o
 
+obj-$(CONFIG_CRYPTO_POLY1305_NEON) += poly1305-neon.o
+poly1305-neon-y := poly1305-core.o poly1305-glue.o
+AFLAGS_poly1305-core.o += -Dpoly1305_init=poly1305_init_arm64
+
 obj-$(CONFIG_CRYPTO_NHPOLY1305_NEON) += nhpoly1305-neon.o
 nhpoly1305-neon-y := nh-neon-core.o nhpoly1305-neon-glue.o
 
@@ -71,11 +72,15 @@ ifdef REGENERATE_ARM64_CRYPTO
 quiet_cmd_perlasm = PERLASM $@
       cmd_perlasm = $(PERL) $(<) void $(@)
 
+$(src)/poly1305-core.S_shipped: $(src)/poly1305-armv8.pl
+	$(call cmd,perlasm)
+
 $(src)/sha256-core.S_shipped: $(src)/sha512-armv8.pl
 	$(call cmd,perlasm)
 
 $(src)/sha512-core.S_shipped: $(src)/sha512-armv8.pl
 	$(call cmd,perlasm)
+
 endif
 
-clean-files += sha256-core.S sha512-core.S
+clean-files += poly1305-core.S sha256-core.S sha512-core.S

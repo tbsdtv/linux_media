@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * tools/testing/selftests/kvm/lib/kvm_util_internal.h
  *
  * Copyright (C) 2018, Google LLC.
- *
- * This work is licensed under the terms of the GNU GPL, version 2.
  */
 
 #ifndef SELFTEST_KVM_UTIL_INTERNAL_H
@@ -12,17 +11,6 @@
 #include "sparsebit.h"
 
 #define KVM_DEV_PATH		"/dev/kvm"
-
-#ifndef BITS_PER_BYTE
-#define BITS_PER_BYTE		8
-#endif
-
-#ifndef BITS_PER_LONG
-#define BITS_PER_LONG		(BITS_PER_BYTE * sizeof(long))
-#endif
-
-#define DIV_ROUND_UP(n, d)	(((n) + (d) - 1) / (d))
-#define BITS_TO_LONGS(nr)	DIV_ROUND_UP(nr, BITS_PER_LONG)
 
 struct userspace_mem_region {
 	struct userspace_mem_region *next, *prev;
@@ -65,10 +53,59 @@ struct kvm_vm {
 };
 
 struct vcpu *vcpu_find(struct kvm_vm *vm, uint32_t vcpuid);
-void vcpu_setup(struct kvm_vm *vm, int vcpuid, int pgd_memslot,
-		int gdt_memslot);
+
+/*
+ * Virtual Translation Tables Dump
+ *
+ * Input Args:
+ *   stream - Output FILE stream
+ *   vm     - Virtual Machine
+ *   indent - Left margin indent amount
+ *
+ * Output Args: None
+ *
+ * Return: None
+ *
+ * Dumps to the FILE stream given by @stream, the contents of all the
+ * virtual translation tables for the VM given by @vm.
+ */
 void virt_dump(FILE *stream, struct kvm_vm *vm, uint8_t indent);
+
+/*
+ * Register Dump
+ *
+ * Input Args:
+ *   stream - Output FILE stream
+ *   regs   - Registers
+ *   indent - Left margin indent amount
+ *
+ * Output Args: None
+ *
+ * Return: None
+ *
+ * Dumps the state of the registers given by @regs, to the FILE stream
+ * given by @stream.
+ */
 void regs_dump(FILE *stream, struct kvm_regs *regs, uint8_t indent);
+
+/*
+ * System Register Dump
+ *
+ * Input Args:
+ *   stream - Output FILE stream
+ *   sregs  - System registers
+ *   indent - Left margin indent amount
+ *
+ * Output Args: None
+ *
+ * Return: None
+ *
+ * Dumps the state of the system registers given by @sregs, to the FILE stream
+ * given by @stream.
+ */
 void sregs_dump(FILE *stream, struct kvm_sregs *sregs, uint8_t indent);
+
+struct userspace_mem_region *
+memslot2region(struct kvm_vm *vm, uint32_t memslot);
 
 #endif /* SELFTEST_KVM_UTIL_INTERNAL_H */

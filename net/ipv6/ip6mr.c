@@ -97,7 +97,8 @@ static void ipmr_expire_process(struct timer_list *t);
 
 #ifdef CONFIG_IPV6_MROUTE_MULTIPLE_TABLES
 #define ip6mr_for_each_table(mrt, net) \
-	list_for_each_entry_rcu(mrt, &net->ipv6.mr6_tables, list)
+	list_for_each_entry_rcu(mrt, &net->ipv6.mr6_tables, list, \
+				lockdep_rtnl_is_held())
 
 static struct mr_table *ip6mr_mr_table_iter(struct net *net,
 					    struct mr_table *mrt)
@@ -265,9 +266,10 @@ static void __net_exit ip6mr_rules_exit(struct net *net)
 	rtnl_unlock();
 }
 
-static int ip6mr_rules_dump(struct net *net, struct notifier_block *nb)
+static int ip6mr_rules_dump(struct net *net, struct notifier_block *nb,
+			    struct netlink_ext_ack *extack)
 {
-	return fib_rules_dump(net, nb, RTNL_FAMILY_IP6MR);
+	return fib_rules_dump(net, nb, RTNL_FAMILY_IP6MR, extack);
 }
 
 static unsigned int ip6mr_rules_seq_read(struct net *net)
@@ -324,7 +326,8 @@ static void __net_exit ip6mr_rules_exit(struct net *net)
 	rtnl_unlock();
 }
 
-static int ip6mr_rules_dump(struct net *net, struct notifier_block *nb)
+static int ip6mr_rules_dump(struct net *net, struct notifier_block *nb,
+			    struct netlink_ext_ack *extack)
 {
 	return 0;
 }
@@ -1148,8 +1151,8 @@ static int ip6mr_cache_unresolved(struct mr_table *mrt, mifi_t mifi,
 		 *	Create a new entry if allowable
 		 */
 
-		if (atomic_read(&mrt->cache_resolve_queue_len) >= 10 ||
-		    (c = ip6mr_cache_alloc_unres()) == NULL) {
+		c = ip6mr_cache_alloc_unres();
+		if (!c) {
 			spin_unlock_bh(&mfc_unres_lock);
 
 			kfree_skb(skb);
@@ -1256,10 +1259,11 @@ static unsigned int ip6mr_seq_read(struct net *net)
 	return net->ipv6.ipmr_seq + ip6mr_rules_seq_read(net);
 }
 
-static int ip6mr_dump(struct net *net, struct notifier_block *nb)
+static int ip6mr_dump(struct net *net, struct notifier_block *nb,
+		      struct netlink_ext_ack *extack)
 {
 	return mr_dump(net, nb, RTNL_FAMILY_IP6MR, ip6mr_rules_dump,
-		       ip6mr_mr_table_iter, &mrt_lock);
+		       ip6mr_mr_table_iter, &mrt_lock, extack);
 }
 
 static struct notifier_block ip6_mr_notifier = {
@@ -1687,7 +1691,7 @@ int ip6_mroute_setsockopt(struct sock *sk, int optname, char __user *optval, uns
 	case MRT6_ADD_MFC:
 	case MRT6_DEL_MFC:
 		parent = -1;
-		/* fall through */
+		fallthrough;
 	case MRT6_ADD_MFC_PROXY:
 	case MRT6_DEL_MFC_PROXY:
 		if (optlen < sizeof(mfc))

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-pxa/income.c
  *
@@ -6,10 +7,6 @@
  * Copyright (C) 2010
  * Marek Vasut <marek.vasut@gmail.com>
  * Pavel Revak <palo@bielyvlk.sk>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/bitops.h>
@@ -205,7 +202,6 @@ static struct pwm_lookup income_pwm_lookup[] = {
 static struct platform_pwm_backlight_data income_backlight_data = {
 	.max_brightness	= 0x3ff,
 	.dft_brightness	= 0x1ff,
-	.enable_gpio	= -1,
 };
 
 static struct platform_device income_backlight = {

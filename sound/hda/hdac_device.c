@@ -57,6 +57,7 @@ int snd_hdac_device_init(struct hdac_device *codec, struct hdac_bus *bus,
 	codec->addr = addr;
 	codec->type = HDA_DEV_CORE;
 	mutex_init(&codec->widget_lock);
+	mutex_init(&codec->regmap_lock);
 	pm_runtime_set_active(&codec->dev);
 	pm_runtime_get_noresume(&codec->dev);
 	atomic_set(&codec->in_pm, 0);
@@ -90,7 +91,7 @@ int snd_hdac_device_init(struct hdac_device *codec, struct hdac_bus *bus,
 
 	fg = codec->afg ? codec->afg : codec->mfg;
 
-	err = snd_hdac_refresh_widgets(codec, false);
+	err = snd_hdac_refresh_widgets(codec);
 	if (err < 0)
 		goto error;
 
@@ -134,7 +135,7 @@ EXPORT_SYMBOL_GPL(snd_hdac_device_exit);
 
 /**
  * snd_hdac_device_register - register the hd-audio codec base device
- * codec: the device to register
+ * @codec: the device to register
  */
 int snd_hdac_device_register(struct hdac_device *codec)
 {
@@ -157,7 +158,7 @@ EXPORT_SYMBOL_GPL(snd_hdac_device_register);
 
 /**
  * snd_hdac_device_unregister - unregister the hd-audio codec base device
- * codec: the device to unregister
+ * @codec: the device to unregister
  */
 void snd_hdac_device_unregister(struct hdac_device *codec)
 {
@@ -203,7 +204,7 @@ EXPORT_SYMBOL_GPL(snd_hdac_device_set_chip_name);
  */
 int snd_hdac_codec_modalias(struct hdac_device *codec, char *buf, size_t size)
 {
-	return snprintf(buf, size, "hdaudio:v%08Xr%08Xa%02X\n",
+	return scnprintf(buf, size, "hdaudio:v%08Xr%08Xa%02X\n",
 			codec->vendor_id, codec->revision_id, codec->type);
 }
 EXPORT_SYMBOL_GPL(snd_hdac_codec_modalias);
@@ -218,8 +219,8 @@ EXPORT_SYMBOL_GPL(snd_hdac_codec_modalias);
  *
  * Return an encoded command verb or -1 for error.
  */
-unsigned int snd_hdac_make_cmd(struct hdac_device *codec, hda_nid_t nid,
-			       unsigned int verb, unsigned int parm)
+static unsigned int snd_hdac_make_cmd(struct hdac_device *codec, hda_nid_t nid,
+				      unsigned int verb, unsigned int parm)
 {
 	u32 val, addr;
 
@@ -237,7 +238,6 @@ unsigned int snd_hdac_make_cmd(struct hdac_device *codec, hda_nid_t nid,
 	val |= parm;
 	return val;
 }
-EXPORT_SYMBOL_GPL(snd_hdac_make_cmd);
 
 /**
  * snd_hdac_exec_verb - execute an encoded verb
@@ -258,7 +258,6 @@ int snd_hdac_exec_verb(struct hdac_device *codec, unsigned int cmd,
 		return codec->exec_verb(codec, cmd, flags, res);
 	return snd_hdac_bus_exec_verb(codec->bus, codec->addr, cmd, res);
 }
-EXPORT_SYMBOL_GPL(snd_hdac_exec_verb);
 
 
 /**
@@ -282,6 +281,10 @@ EXPORT_SYMBOL_GPL(snd_hdac_read);
 
 /**
  * _snd_hdac_read_parm - read a parmeter
+ * @codec: the codec object
+ * @nid: NID to read a parameter
+ * @parm: parameter to read
+ * @res: pointer to store the read value
  *
  * This function returns zero or an error unlike snd_hdac_read_parm().
  */
@@ -395,32 +398,35 @@ static void setup_fg_nodes(struct hdac_device *codec)
 /**
  * snd_hdac_refresh_widgets - Reset the widget start/end nodes
  * @codec: the codec object
- * @sysfs: re-initialize sysfs tree, too
  */
-int snd_hdac_refresh_widgets(struct hdac_device *codec, bool sysfs)
+int snd_hdac_refresh_widgets(struct hdac_device *codec)
 {
 	hda_nid_t start_nid;
-	int nums, err;
+	int nums, err = 0;
 
+	/*
+	 * Serialize against multiple threads trying to update the sysfs
+	 * widgets array.
+	 */
+	mutex_lock(&codec->widget_lock);
 	nums = snd_hdac_get_sub_nodes(codec, codec->afg, &start_nid);
 	if (!start_nid || nums <= 0 || nums >= 0xff) {
 		dev_err(&codec->dev, "cannot read sub nodes for FG 0x%02x\n",
 			codec->afg);
-		return -EINVAL;
+		err = -EINVAL;
+		goto unlock;
 	}
 
-	if (sysfs) {
-		mutex_lock(&codec->widget_lock);
-		err = hda_widget_sysfs_reinit(codec, start_nid, nums);
-		mutex_unlock(&codec->widget_lock);
-		if (err < 0)
-			return err;
-	}
+	err = hda_widget_sysfs_reinit(codec, start_nid, nums);
+	if (err < 0)
+		goto unlock;
 
 	codec->num_nodes = nums;
 	codec->start_nid = start_nid;
 	codec->end_nid = start_nid + nums;
-	return 0;
+unlock:
+	mutex_unlock(&codec->widget_lock);
+	return err;
 }
 EXPORT_SYMBOL_GPL(snd_hdac_refresh_widgets);
 
@@ -636,7 +642,7 @@ struct hda_vendor_id {
 	const char *name;
 };
 
-static struct hda_vendor_id hda_vendor_ids[] = {
+static const struct hda_vendor_id hda_vendor_ids[] = {
 	{ 0x1002, "ATI" },
 	{ 0x1013, "Cirrus Logic" },
 	{ 0x1057, "Motorola" },
@@ -691,7 +697,7 @@ struct hda_rate_tbl {
 	(AC_FMT_BASE_##base##K | (((mult) - 1) << AC_FMT_MULT_SHIFT) | \
 	 (((div) - 1) << AC_FMT_DIV_SHIFT))
 
-static struct hda_rate_tbl rate_bits[] = {
+static const struct hda_rate_tbl rate_bits[] = {
 	/* rate in Hz, ALSA rate bitmask, HDA format value */
 
 	/* autodetected value used in snd_hda_query_supported_pcm */
@@ -1060,9 +1066,9 @@ EXPORT_SYMBOL_GPL(snd_hdac_check_power_state);
  * snd_hdac_sync_power_state - wait until actual power state matches
  * with the target state
  *
- * @hdac: the HDAC device
+ * @codec: the HDAC device
  * @nid: NID to send the command
- * @target_state: target state to check for
+ * @power_state: target power state to wait for
  *
  * Return power state or PS_ERROR if codec rejects GET verb.
  */

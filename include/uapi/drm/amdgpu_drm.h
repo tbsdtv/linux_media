@@ -125,9 +125,14 @@ extern "C" {
 /* Flag that BO sharing will be explicitly synchronized */
 #define AMDGPU_GEM_CREATE_EXPLICIT_SYNC		(1 << 7)
 /* Flag that indicates allocating MQD gart on GFX9, where the mtype
- * for the second page onward should be set to NC.
+ * for the second page onward should be set to NC. It should never
+ * be used by user space applications.
  */
-#define AMDGPU_GEM_CREATE_MQD_GFX9		(1 << 8)
+#define AMDGPU_GEM_CREATE_CP_MQD_GFX9		(1 << 8)
+/* Flag that BO may contain sensitive data that must be wiped before
+ * releasing the memory
+ */
+#define AMDGPU_GEM_CREATE_VRAM_WIPE_ON_RELEASE	(1 << 9)
 
 struct drm_amdgpu_gem_create_in  {
 	/** the requested memory size */
@@ -219,7 +224,10 @@ union drm_amdgpu_bo_list {
 #define AMDGPU_CTX_PRIORITY_VERY_LOW    -1023
 #define AMDGPU_CTX_PRIORITY_LOW         -512
 #define AMDGPU_CTX_PRIORITY_NORMAL      0
-/* Selecting a priority above NORMAL requires CAP_SYS_NICE or DRM_MASTER */
+/*
+ * When used in struct drm_amdgpu_ctx_in, a priority above NORMAL requires
+ * CAP_SYS_NICE or DRM_MASTER
+*/
 #define AMDGPU_CTX_PRIORITY_HIGH        512
 #define AMDGPU_CTX_PRIORITY_VERY_HIGH   1023
 
@@ -229,6 +237,7 @@ struct drm_amdgpu_ctx_in {
 	/** For future use, no flags defined so far */
 	__u32	flags;
 	__u32	ctx_id;
+	/** AMDGPU_CTX_PRIORITY_* */
 	__s32	priority;
 };
 
@@ -281,6 +290,7 @@ struct drm_amdgpu_sched_in {
 	/* AMDGPU_SCHED_OP_* */
 	__u32	op;
 	__u32	fd;
+	/** AMDGPU_CTX_PRIORITY_* */
 	__s32	priority;
 	__u32   ctx_id;
 };
@@ -491,6 +501,8 @@ struct drm_amdgpu_gem_op {
 #define AMDGPU_VM_MTYPE_CC		(3 << 5)
 /* Use UC MTYPE instead of default MTYPE */
 #define AMDGPU_VM_MTYPE_UC		(4 << 5)
+/* Use RW MTYPE instead of default MTYPE */
+#define AMDGPU_VM_MTYPE_RW		(5 << 5)
 
 struct drm_amdgpu_gem_va {
 	/** GEM object handle */
@@ -692,6 +704,9 @@ struct drm_amdgpu_cs_chunk_data {
 	/* Subquery id: Query DMCU firmware version */
 	#define AMDGPU_INFO_FW_DMCU		0x12
 	#define AMDGPU_INFO_FW_TA		0x13
+	/* Subquery id: Query DMCUB firmware version */
+	#define AMDGPU_INFO_FW_DMCUB		0x14
+
 /* number of bytes moved for TTM migration */
 #define AMDGPU_INFO_NUM_BYTES_MOVED		0x0f
 /* the used VRAM size */
@@ -912,6 +927,7 @@ struct drm_amdgpu_info_firmware {
 #define AMDGPU_VRAM_TYPE_HBM   6
 #define AMDGPU_VRAM_TYPE_DDR3  7
 #define AMDGPU_VRAM_TYPE_DDR4  8
+#define AMDGPU_VRAM_TYPE_GDDR6 9
 
 struct drm_amdgpu_info_device {
 	/** PCI Device ID */
@@ -991,6 +1007,10 @@ struct drm_amdgpu_info_device {
 	__u64 high_va_offset;
 	/** The maximum high virtual address */
 	__u64 high_va_max;
+	/* gfx10 pa_sc_tile_steering_override */
+	__u32 pa_sc_tile_steering_override;
+	/* disabled TCCs */
+	__u64 tcc_disabled_mask;
 };
 
 struct drm_amdgpu_info_hw_ip {
@@ -1044,6 +1064,7 @@ struct drm_amdgpu_info_vce_clock_table {
 #define AMDGPU_FAMILY_CZ			135 /* Carrizo, Stoney */
 #define AMDGPU_FAMILY_AI			141 /* Vega10 */
 #define AMDGPU_FAMILY_RV			142 /* Raven */
+#define AMDGPU_FAMILY_NV			143 /* Navi10 */
 
 #if defined(__cplusplus)
 }

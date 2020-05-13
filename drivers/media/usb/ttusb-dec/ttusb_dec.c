@@ -250,6 +250,7 @@ static void ttusb_dec_handle_irq( struct urb *urb)
 	struct ttusb_dec *dec = urb->context;
 	char *buffer = dec->irq_buffer;
 	int retval;
+	int index = buffer[4];
 
 	switch(urb->status) {
 		case 0: /*success*/
@@ -281,11 +282,11 @@ static void ttusb_dec_handle_irq( struct urb *urb)
 		 * this should/could be added later ...
 		 * for now lets report each signal as a key down and up
 		 */
-		if (buffer[4] - 1 < ARRAY_SIZE(rc_keys)) {
-			dprintk("%s:rc signal:%d\n", __func__, buffer[4]);
-			input_report_key(dec->rc_input_dev, rc_keys[buffer[4] - 1], 1);
+		if (index - 1 < ARRAY_SIZE(rc_keys)) {
+			dprintk("%s:rc signal:%d\n", __func__, index);
+			input_report_key(dec->rc_input_dev, rc_keys[index - 1], 1);
 			input_sync(dec->rc_input_dev);
-			input_report_key(dec->rc_input_dev, rc_keys[buffer[4] - 1], 0);
+			input_report_key(dec->rc_input_dev, rc_keys[index - 1], 0);
 			input_sync(dec->rc_input_dev);
 		}
 	}
@@ -319,7 +320,7 @@ static int ttusb_dec_send_command(struct ttusb_dec *dec, const u8 command,
 
 	dprintk("%s\n", __func__);
 
-	b = kmalloc(COMMAND_PACKET_SIZE + 4, GFP_KERNEL);
+	b = kzalloc(COMMAND_PACKET_SIZE + 4, GFP_KERNEL);
 	if (!b)
 		return -ENOMEM;
 

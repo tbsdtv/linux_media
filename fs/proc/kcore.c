@@ -31,6 +31,7 @@
 #include <linux/ioport.h>
 #include <linux/memory.h>
 #include <linux/sched/task.h>
+#include <linux/security.h>
 #include <asm/sections.h>
 #include "internal.h"
 
@@ -545,8 +546,13 @@ out:
 
 static int open_kcore(struct inode *inode, struct file *filp)
 {
+	int ret = security_locked_down(LOCKDOWN_KCORE);
+
 	if (!capable(CAP_SYS_RAWIO))
 		return -EPERM;
+
+	if (ret)
+		return ret;
 
 	filp->private_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!filp->private_data)
@@ -568,11 +574,11 @@ static int release_kcore(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static const struct file_operations proc_kcore_operations = {
-	.read		= read_kcore,
-	.open		= open_kcore,
-	.release	= release_kcore,
-	.llseek		= default_llseek,
+static const struct proc_ops kcore_proc_ops = {
+	.proc_read	= read_kcore,
+	.proc_open	= open_kcore,
+	.proc_release	= release_kcore,
+	.proc_lseek	= default_llseek,
 };
 
 /* just remember that we have to update kcore */
@@ -631,8 +637,7 @@ static void __init add_modules_range(void)
 
 static int __init proc_kcore_init(void)
 {
-	proc_root_kcore = proc_create("kcore", S_IRUSR, NULL,
-				      &proc_kcore_operations);
+	proc_root_kcore = proc_create("kcore", S_IRUSR, NULL, &kcore_proc_ops);
 	if (!proc_root_kcore) {
 		pr_err("couldn't create /proc/kcore\n");
 		return 0; /* Always returns 0. */

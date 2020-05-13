@@ -25,6 +25,7 @@
 #include <linux/micrel_phy.h>
 #include <linux/of.h>
 #include <linux/clk.h>
+#include <linux/delay.h>
 
 /* Operation Mode Strap Override */
 #define MII_KSZPHY_OMSO				0x16
@@ -341,6 +342,35 @@ static int ksz8041_config_aneg(struct phy_device *phydev)
 	return genphy_config_aneg(phydev);
 }
 
+static int ksz8051_ksz8795_match_phy_device(struct phy_device *phydev,
+					    const u32 ksz_phy_id)
+{
+	int ret;
+
+	if ((phydev->phy_id & MICREL_PHY_ID_MASK) != ksz_phy_id)
+		return 0;
+
+	ret = phy_read(phydev, MII_BMSR);
+	if (ret < 0)
+		return ret;
+
+	/* KSZ8051 PHY and KSZ8794/KSZ8795/KSZ8765 switch share the same
+	 * exact PHY ID. However, they can be told apart by the extended
+	 * capability registers presence. The KSZ8051 PHY has them while
+	 * the switch does not.
+	 */
+	ret &= BMSR_ERCAP;
+	if (ksz_phy_id == PHY_ID_KSZ8051)
+		return ret;
+	else
+		return !ret;
+}
+
+static int ksz8051_match_phy_device(struct phy_device *phydev)
+{
+	return ksz8051_ksz8795_match_phy_device(phydev, PHY_ID_KSZ8051);
+}
+
 static int ksz8081_config_init(struct phy_device *phydev)
 {
 	/* KSZPHY_OMSO_FACTORY_TEST is set at de-assertion of the reset line
@@ -362,6 +392,11 @@ static int ksz8061_config_init(struct phy_device *phydev)
 		return ret;
 
 	return kszphy_config_init(phydev);
+}
+
+static int ksz8795_match_phy_device(struct phy_device *phydev)
+{
+	return ksz8051_ksz8795_match_phy_device(phydev, PHY_ID_KSZ87XX);
 }
 
 static int ksz9021_load_values_from_of(struct phy_device *phydev,
@@ -670,6 +705,50 @@ static int ksz9131_of_load_skew_values(struct phy_device *phydev,
 	return phy_write_mmd(phydev, 2, reg, newval);
 }
 
+#define KSZ9131RN_MMD_COMMON_CTRL_REG	2
+#define KSZ9131RN_RXC_DLL_CTRL		76
+#define KSZ9131RN_TXC_DLL_CTRL		77
+#define KSZ9131RN_DLL_CTRL_BYPASS	BIT_MASK(12)
+#define KSZ9131RN_DLL_ENABLE_DELAY	0
+#define KSZ9131RN_DLL_DISABLE_DELAY	BIT(12)
+
+static int ksz9131_config_rgmii_delay(struct phy_device *phydev)
+{
+	u16 rxcdll_val, txcdll_val;
+	int ret;
+
+	switch (phydev->interface) {
+	case PHY_INTERFACE_MODE_RGMII:
+		rxcdll_val = KSZ9131RN_DLL_DISABLE_DELAY;
+		txcdll_val = KSZ9131RN_DLL_DISABLE_DELAY;
+		break;
+	case PHY_INTERFACE_MODE_RGMII_ID:
+		rxcdll_val = KSZ9131RN_DLL_ENABLE_DELAY;
+		txcdll_val = KSZ9131RN_DLL_ENABLE_DELAY;
+		break;
+	case PHY_INTERFACE_MODE_RGMII_RXID:
+		rxcdll_val = KSZ9131RN_DLL_ENABLE_DELAY;
+		txcdll_val = KSZ9131RN_DLL_DISABLE_DELAY;
+		break;
+	case PHY_INTERFACE_MODE_RGMII_TXID:
+		rxcdll_val = KSZ9131RN_DLL_DISABLE_DELAY;
+		txcdll_val = KSZ9131RN_DLL_ENABLE_DELAY;
+		break;
+	default:
+		return 0;
+	}
+
+	ret = phy_modify_mmd(phydev, KSZ9131RN_MMD_COMMON_CTRL_REG,
+			     KSZ9131RN_RXC_DLL_CTRL, KSZ9131RN_DLL_CTRL_BYPASS,
+			     rxcdll_val);
+	if (ret < 0)
+		return ret;
+
+	return phy_modify_mmd(phydev, KSZ9131RN_MMD_COMMON_CTRL_REG,
+			      KSZ9131RN_TXC_DLL_CTRL, KSZ9131RN_DLL_CTRL_BYPASS,
+			      txcdll_val);
+}
+
 static int ksz9131_config_init(struct phy_device *phydev)
 {
 	const struct device *dev = &phydev->mdio.dev;
@@ -695,6 +774,12 @@ static int ksz9131_config_init(struct phy_device *phydev)
 
 	if (!of_node)
 		return 0;
+
+	if (phy_interface_is_rgmii(phydev)) {
+		ret = ksz9131_config_rgmii_delay(phydev);
+		if (ret < 0)
+			return ret;
+	}
 
 	ret = ksz9131_of_load_skew_values(phydev, of_node,
 					  MII_KSZ9031RN_CLK_PAD_SKEW, 5,
@@ -762,6 +847,8 @@ static int ksz9031_get_features(struct phy_device *phydev)
 	/* Silicon Errata Sheet (DS80000691D or DS80000692D):
 	 * Whenever the device's Asymmetric Pause capability is set to 1,
 	 * link-up may fail after a link-up to link-down transition.
+	 *
+	 * The Errata Sheet is for ksz9031, but ksz9021 has the same issue
 	 *
 	 * Workaround:
 	 * Do not enable the Asymmetric Pause capability bit.
@@ -865,6 +952,12 @@ static int kszphy_resume(struct phy_device *phydev)
 	int ret;
 
 	genphy_resume(phydev);
+
+	/* After switching from power-down to normal mode, an internal global
+	 * reset is automatically generated. Wait a minimum of 1 ms before
+	 * read/write access to the PHY registers.
+	 */
+	usleep_range(1000, 2000);
 
 	ret = kszphy_config_reset(phydev);
 	if (ret)
@@ -1015,8 +1108,6 @@ static struct phy_driver ksphy_driver[] = {
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
 }, {
-	.phy_id		= PHY_ID_KSZ8051,
-	.phy_id_mask	= MICREL_PHY_ID_MASK,
 	.name		= "Micrel KSZ8051",
 	/* PHY_BASIC_FEATURES */
 	.driver_data	= &ksz8051_type,
@@ -1027,6 +1118,7 @@ static struct phy_driver ksphy_driver[] = {
 	.get_sset_count = kszphy_get_sset_count,
 	.get_strings	= kszphy_get_strings,
 	.get_stats	= kszphy_get_stats,
+	.match_phy_device = ksz8051_match_phy_device,
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
 }, {
@@ -1076,6 +1168,7 @@ static struct phy_driver ksphy_driver[] = {
 	/* PHY_GBIT_FEATURES */
 	.driver_data	= &ksz9021_type,
 	.probe		= kszphy_probe,
+	.get_features	= ksz9031_get_features,
 	.config_init	= ksz9021_config_init,
 	.ack_interrupt	= kszphy_ack_interrupt,
 	.config_intr	= kszphy_config_intr,
@@ -1111,7 +1204,7 @@ static struct phy_driver ksphy_driver[] = {
 	.driver_data	= &ksz9021_type,
 	.probe		= kszphy_probe,
 	.config_init	= ksz9131_config_init,
-	.read_status	= ksz9031_read_status,
+	.read_status	= genphy_read_status,
 	.ack_interrupt	= kszphy_ack_interrupt,
 	.config_intr	= kszphy_config_intr,
 	.get_sset_count = kszphy_get_sset_count,
@@ -1138,13 +1231,12 @@ static struct phy_driver ksphy_driver[] = {
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
 }, {
-	.phy_id		= PHY_ID_KSZ8795,
-	.phy_id_mask	= MICREL_PHY_ID_MASK,
-	.name		= "Micrel KSZ8795",
+	.name		= "Micrel KSZ87XX Switch",
 	/* PHY_BASIC_FEATURES */
 	.config_init	= kszphy_config_init,
 	.config_aneg	= ksz8873mll_config_aneg,
 	.read_status	= ksz8873mll_read_status,
+	.match_phy_device = ksz8795_match_phy_device,
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
 }, {

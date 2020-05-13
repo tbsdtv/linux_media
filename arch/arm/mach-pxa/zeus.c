@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Support for the Arcom ZEUS.
  *
@@ -5,10 +6,6 @@
  *
  *  Loosely based on Arcom's 2.6.16.28.
  *  Maintained by Marc Zyngier <maz@misterjones.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 
 #include <linux/cpufreq.h>
@@ -16,6 +13,7 @@
 #include <linux/leds.h>
 #include <linux/irq.h>
 #include <linux/pm.h>
+#include <linux/property.h>
 #include <linux/gpio.h>
 #include <linux/gpio/machine.h>
 #include <linux/serial_8250.h>
@@ -30,7 +28,6 @@
 #include <linux/platform_data/i2c-pxa.h>
 #include <linux/platform_data/pca953x.h>
 #include <linux/apm-emulation.h>
-#include <linux/can/platform/mcp251x.h>
 #include <linux/regulator/fixed.h>
 #include <linux/regulator/machine.h>
 
@@ -431,14 +428,15 @@ static struct gpiod_lookup_table can_regulator_gpiod_table = {
 	},
 };
 
-static struct mcp251x_platform_data zeus_mcp2515_pdata = {
-	.oscillator_frequency	= 16*1000*1000,
+static const struct property_entry mcp251x_properties[] = {
+	PROPERTY_ENTRY_U32("clock-frequency", 16000000),
+	{}
 };
 
 static struct spi_board_info zeus_spi_board_info[] = {
 	[0] = {
 		.modalias	= "mcp2515",
-		.platform_data	= &zeus_mcp2515_pdata,
+		.properties	= mcp251x_properties,
 		.irq		= PXA_GPIO_TO_IRQ(ZEUS_CAN_GPIO),
 		.max_speed_hz	= 1*1000*1000,
 		.bus_num	= 3,

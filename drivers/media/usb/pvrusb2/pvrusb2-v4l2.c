@@ -1,18 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- *
  *
  *  Copyright (C) 2005 Mike Isely <isely@pobox.com>
  *  Copyright (C) 2004 Aurelien Alleaume <slts@free.fr>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
  */
 
 #include <linux/kernel.h>
@@ -908,8 +898,12 @@ static void pvr2_v4l2_internal_check(struct pvr2_channel *chp)
 	pvr2_v4l2_dev_disassociate_parent(vp->dev_video);
 	pvr2_v4l2_dev_disassociate_parent(vp->dev_radio);
 	if (!list_empty(&vp->dev_video->devbase.fh_list) ||
-	    !list_empty(&vp->dev_radio->devbase.fh_list))
+	    (vp->dev_radio &&
+	     !list_empty(&vp->dev_radio->devbase.fh_list))) {
+		pvr2_trace(PVR2_TRACE_STRUCT,
+			   "pvr2_v4l2 internal_check exit-empty id=%p", vp);
 		return;
+	}
 	pvr2_v4l2_destroy_no_lock(vp);
 }
 
@@ -945,7 +939,8 @@ static int pvr2_v4l2_release(struct file *file)
 	kfree(fhp);
 	if (vp->channel.mc_head->disconnect_flag &&
 	    list_empty(&vp->dev_video->devbase.fh_list) &&
-	    list_empty(&vp->dev_radio->devbase.fh_list)) {
+	    (!vp->dev_radio ||
+	     list_empty(&vp->dev_radio->devbase.fh_list))) {
 		pvr2_v4l2_destroy_no_lock(vp);
 	}
 	return 0;
@@ -1013,7 +1008,7 @@ static int pvr2_v4l2_open(struct file *file)
 	input_mask &= pvr2_hdw_get_input_available(hdw);
 	input_cnt = 0;
 	for (idx = 0; idx < (sizeof(input_mask) << 3); idx++) {
-		if (input_mask & (1 << idx)) input_cnt++;
+		if (input_mask & (1UL << idx)) input_cnt++;
 	}
 	fhp->input_cnt = input_cnt;
 	fhp->input_map = kzalloc(input_cnt,GFP_KERNEL);
@@ -1028,7 +1023,7 @@ static int pvr2_v4l2_open(struct file *file)
 	}
 	input_cnt = 0;
 	for (idx = 0; idx < (sizeof(input_mask) << 3); idx++) {
-		if (!(input_mask & (1 << idx))) continue;
+		if (!(input_mask & (1UL << idx))) continue;
 		fhp->input_map[input_cnt++] = idx;
 	}
 
@@ -1201,7 +1196,7 @@ static void pvr2_v4l2_dev_init(struct pvr2_v4l2_dev *dip,
 	hdw = vp->channel.mc_head->hdw;
 	dip->v4l_type = v4l_type;
 	switch (v4l_type) {
-	case VFL_TYPE_GRABBER:
+	case VFL_TYPE_VIDEO:
 		dip->stream = &vp->channel.mc_head->video_stream;
 		dip->config = pvr2_config_mpeg;
 		dip->minor_type = pvr2_v4l_type_video;
@@ -1281,7 +1276,7 @@ struct pvr2_v4l2 *pvr2_v4l2_create(struct pvr2_context *mnp)
 	/* register streams */
 	vp->dev_video = kzalloc(sizeof(*vp->dev_video),GFP_KERNEL);
 	if (!vp->dev_video) goto fail;
-	pvr2_v4l2_dev_init(vp->dev_video,vp,VFL_TYPE_GRABBER);
+	pvr2_v4l2_dev_init(vp->dev_video,vp,VFL_TYPE_VIDEO);
 	if (pvr2_hdw_get_input_available(vp->channel.mc_head->hdw) &
 	    (1 << PVR2_CVAL_INPUT_RADIO)) {
 		vp->dev_radio = kzalloc(sizeof(*vp->dev_radio),GFP_KERNEL);

@@ -157,6 +157,27 @@ enum {
 	RTM_GETCHAIN,
 #define RTM_GETCHAIN RTM_GETCHAIN
 
+	RTM_NEWNEXTHOP = 104,
+#define RTM_NEWNEXTHOP	RTM_NEWNEXTHOP
+	RTM_DELNEXTHOP,
+#define RTM_DELNEXTHOP	RTM_DELNEXTHOP
+	RTM_GETNEXTHOP,
+#define RTM_GETNEXTHOP	RTM_GETNEXTHOP
+
+	RTM_NEWLINKPROP = 108,
+#define RTM_NEWLINKPROP	RTM_NEWLINKPROP
+	RTM_DELLINKPROP,
+#define RTM_DELLINKPROP	RTM_DELLINKPROP
+	RTM_GETLINKPROP,
+#define RTM_GETLINKPROP	RTM_GETLINKPROP
+
+	RTM_NEWVLAN = 112,
+#define RTM_NEWNVLAN	RTM_NEWVLAN
+	RTM_DELVLAN,
+#define RTM_DELVLAN	RTM_DELVLAN
+	RTM_GETVLAN,
+#define RTM_GETVLAN	RTM_GETVLAN
+
 	__RTM_MAX,
 #define RTM_MAX		(((__RTM_MAX + 3) & ~3) - 1)
 };
@@ -295,6 +316,8 @@ enum rt_scope_t {
 #define RTM_F_PREFIX		0x800	/* Prefix addresses		*/
 #define RTM_F_LOOKUP_TABLE	0x1000	/* set rtm_table to FIB lookup result */
 #define RTM_F_FIB_MATCH	        0x2000	/* return full fib lookup match */
+#define RTM_F_OFFLOAD		0x4000	/* route is offloaded */
+#define RTM_F_TRAP		0x8000	/* route is trapping packets */
 
 /* Reserved table identifiers */
 
@@ -342,6 +365,7 @@ enum rtattr_type_t {
 	RTA_IP_PROTO,
 	RTA_SPORT,
 	RTA_DPORT,
+	RTA_NH_ID,
 	__RTA_MAX
 };
 
@@ -704,6 +728,10 @@ enum rtnetlink_groups {
 #define RTNLGRP_IPV4_MROUTE_R	RTNLGRP_IPV4_MROUTE_R
 	RTNLGRP_IPV6_MROUTE_R,
 #define RTNLGRP_IPV6_MROUTE_R	RTNLGRP_IPV6_MROUTE_R
+	RTNLGRP_NEXTHOP,
+#define RTNLGRP_NEXTHOP		RTNLGRP_NEXTHOP
+	RTNLGRP_BRVLAN,
+#define RTNLGRP_BRVLAN		RTNLGRP_BRVLAN
 	__RTNLGRP_MAX
 };
 #define RTNLGRP_MAX	(__RTNLGRP_MAX - 1)

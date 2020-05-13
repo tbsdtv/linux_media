@@ -136,8 +136,7 @@ int ft_queue_data_in(struct se_cmd *se_cmd)
 					   page, off_in_page, tlen);
 			fr_len(fp) += tlen;
 			fp_skb(fp)->data_len += tlen;
-			fp_skb(fp)->truesize +=
-					PAGE_SIZE << compound_order(page);
+			fp_skb(fp)->truesize += page_size(page);
 		} else {
 			BUG_ON(!page);
 			from = kmap_atomic(page + (mem_off >> PAGE_SHIFT));
@@ -222,7 +221,6 @@ void ft_recv_write_data(struct ft_cmd *cmd, struct fc_frame *fp)
 	ep = fc_seq_exch(seq);
 	lport = ep->lp;
 	if (cmd->was_ddp_setup) {
-		BUG_ON(!ep);
 		BUG_ON(!lport);
 		/*
 		 * Since DDP (Large Rx offload) was setup for this request,

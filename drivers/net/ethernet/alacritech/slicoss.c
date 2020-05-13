@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Gigabit Ethernet adapters based on the Session Layer
  * Interface (SLIC) technology by Alacritech. The driver does not
  * support the hardware acceleration features provided by these cards.
  *
  * Copyright (C) 2016 Lino Sanfilippo <LinoSanfilippo@gmx.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/kernel.h>
@@ -35,7 +26,6 @@
 #include "slic.h"
 
 #define DRV_NAME			"slicoss"
-#define DRV_VERSION			"1.0"
 
 static const struct pci_device_id slic_id_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_ALACRITECH,
@@ -1542,7 +1532,6 @@ static void slic_get_drvinfo(struct net_device *dev,
 	struct slic_device *sdev = netdev_priv(dev);
 
 	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
 	strlcpy(info->bus_info, pci_name(sdev->pdev), sizeof(info->bus_info));
 }
 
@@ -1800,7 +1789,7 @@ static int slic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	sdev->is_fiber = slic_is_fiber(pdev->subsystem_device);
 	sdev->pdev = pdev;
 	sdev->netdev = dev;
-	sdev->regs = ioremap_nocache(pci_resource_start(pdev, 0),
+	sdev->regs = ioremap(pci_resource_start(pdev, 0),
 				     pci_resource_len(pdev, 0));
 	if (!sdev->regs) {
 		dev_err(&pdev->dev, "failed to map registers\n");
@@ -1861,4 +1850,3 @@ module_pci_driver(slic_driver);
 MODULE_DESCRIPTION("Alacritech non-accelerated SLIC driver");
 MODULE_AUTHOR("Lino Sanfilippo <LinoSanfilippo@gmx.de>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRV_VERSION);

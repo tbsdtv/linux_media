@@ -182,7 +182,9 @@ static const struct {
 	{ STATS_OFFSET32(driver_filtered_tx_pkt),
 				4, false, "driver_filtered_tx_pkt" },
 	{ STATS_OFFSET32(eee_tx_lpi),
-				4, true, "Tx LPI entry count"}
+				4, true, "Tx LPI entry count"},
+	{ STATS_OFFSET32(ptp_skip_tx_ts),
+				4, false, "ptp_skipped_tx_tstamp" },
 };
 
 #define BNX2X_NUM_STATS		ARRAY_SIZE(bnx2x_stats_arr)
@@ -1110,13 +1112,6 @@ static void bnx2x_get_drvinfo(struct net_device *dev,
 	u32 mbi;
 
 	strlcpy(info->driver, DRV_MODULE_NAME, sizeof(info->driver));
-	strlcpy(info->version, DRV_MODULE_VERSION, sizeof(info->version));
-
-	memset(version, 0, sizeof(version));
-	snprintf(version, ETHTOOL_FWVERS_LEN, " storm %d.%d.%d.%d",
-		 BCM_5710_FW_MAJOR_VERSION, BCM_5710_FW_MINOR_VERSION,
-		 BCM_5710_FW_REVISION_VERSION, BCM_5710_FW_ENGINEERING_VERSION);
-	strlcat(info->version, version, sizeof(info->version));
 
 	if (SHMEM2_HAS(bp, extended_dev_info_shared_addr)) {
 		ext_dev_info_offset = SHMEM2_RD(bp,
@@ -1609,7 +1604,8 @@ static int bnx2x_get_module_info(struct net_device *dev,
 	}
 
 	if (!sff8472_comp ||
-	    (diag_type & SFP_EEPROM_DIAG_ADDR_CHANGE_REQ)) {
+	    (diag_type & SFP_EEPROM_DIAG_ADDR_CHANGE_REQ) ||
+	    !(diag_type & SFP_EEPROM_DDM_IMPLEMENTED)) {
 		modinfo->type = ETH_MODULE_SFF_8079;
 		modinfo->eeprom_len = ETH_MODULE_SFF_8079_LEN;
 	} else {
@@ -3660,6 +3656,7 @@ static int bnx2x_get_ts_info(struct net_device *dev,
 }
 
 static const struct ethtool_ops bnx2x_ethtool_ops = {
+	.supported_coalesce_params = ETHTOOL_COALESCE_USECS,
 	.get_drvinfo		= bnx2x_get_drvinfo,
 	.get_regs_len		= bnx2x_get_regs_len,
 	.get_regs		= bnx2x_get_regs,

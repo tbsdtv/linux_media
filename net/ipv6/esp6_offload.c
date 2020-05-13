@@ -79,6 +79,8 @@ static struct sk_buff *esp6_gro_receive(struct list_head *head,
 		if (!x)
 			goto out_reset;
 
+		skb->mark = xfrm_smark_get(skb->mark, x);
+
 		sp->xvec[sp->len++] = x;
 		sp->olen++;
 
@@ -157,6 +159,40 @@ static struct sk_buff *xfrm6_transport_gso_segment(struct xfrm_state *x,
 	return segs;
 }
 
+static struct sk_buff *xfrm6_beet_gso_segment(struct xfrm_state *x,
+					      struct sk_buff *skb,
+					      netdev_features_t features)
+{
+	struct xfrm_offload *xo = xfrm_offload(skb);
+	struct sk_buff *segs = ERR_PTR(-EINVAL);
+	const struct net_offload *ops;
+	int proto = xo->proto;
+
+	skb->transport_header += x->props.header_len;
+
+	if (proto == IPPROTO_BEETPH) {
+		struct ip_beet_phdr *ph = (struct ip_beet_phdr *)skb->data;
+
+		skb->transport_header += ph->hdrlen * 8;
+		proto = ph->nexthdr;
+	}
+
+	if (x->sel.family != AF_INET6) {
+		skb->transport_header -=
+			(sizeof(struct ipv6hdr) - sizeof(struct iphdr));
+
+		if (proto == IPPROTO_TCP)
+			skb_shinfo(skb)->gso_type |= SKB_GSO_TCPV6;
+	}
+
+	__skb_pull(skb, skb_transport_offset(skb));
+	ops = rcu_dereference(inet6_offloads[proto]);
+	if (likely(ops && ops->callbacks.gso_segment))
+		segs = ops->callbacks.gso_segment(skb, features);
+
+	return segs;
+}
+
 static struct sk_buff *xfrm6_outer_mode_gso_segment(struct xfrm_state *x,
 						    struct sk_buff *skb,
 						    netdev_features_t features)
@@ -166,6 +202,8 @@ static struct sk_buff *xfrm6_outer_mode_gso_segment(struct xfrm_state *x,
 		return xfrm6_tunnel_gso_segment(x, skb, features);
 	case XFRM_MODE_TRANSPORT:
 		return xfrm6_transport_gso_segment(x, skb, features);
+	case XFRM_MODE_BEET:
+		return xfrm6_beet_gso_segment(x, skb, features);
 	}
 
 	return ERR_PTR(-EOPNOTSUPP);
@@ -336,9 +374,7 @@ static int __init esp6_offload_init(void)
 
 static void __exit esp6_offload_exit(void)
 {
-	if (xfrm_unregister_type_offload(&esp6_type_offload, AF_INET6) < 0)
-		pr_info("%s: can't remove xfrm type offload\n", __func__);
-
+	xfrm_unregister_type_offload(&esp6_type_offload, AF_INET6);
 	inet6_del_offload(&esp6_offload, IPPROTO_ESP);
 }
 

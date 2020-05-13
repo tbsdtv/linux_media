@@ -1,20 +1,24 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2015 Broadcom
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
-#include <linux/mm_types.h>
-#include <drm/drmP.h>
-#include <drm/drm_util.h>
+#include <linux/delay.h>
+#include <linux/refcount.h>
+#include <linux/uaccess.h>
+
+#include <drm/drm_atomic.h>
+#include <drm/drm_debugfs.h>
+#include <drm/drm_device.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_gem_cma_helper.h>
-#include <drm/drm_atomic.h>
-#include <drm/drm_syncobj.h>
+#include <drm/drm_mm.h>
+#include <drm/drm_modeset_lock.h>
 
 #include "uapi/drm/vc4_drm.h"
+
+struct drm_device;
+struct drm_gem_object;
 
 /* Don't forget to update vc4_bo.c: bo_type_names[] when adding to
  * this.
@@ -61,7 +65,7 @@ struct vc4_perfmon {
 	 * Note that counter values can't be reset, but you can fake a reset by
 	 * destroying the perfmon and creating a new one.
 	 */
-	u64 counters[0];
+	u64 counters[];
 };
 
 struct vc4_dev {
@@ -216,6 +220,11 @@ struct vc4_dev {
 	 * the minor is available (after drm_dev_register()).
 	 */
 	struct list_head debugfs_list;
+
+	/* Mutex for binner bo allocation. */
+	struct mutex bin_bo_lock;
+	/* Reference count for our binner bo. */
+	struct kref bin_bo_kref;
 };
 
 static inline struct vc4_dev *
@@ -584,6 +593,11 @@ struct vc4_exec_info {
 	 * NULL otherwise.
 	 */
 	struct vc4_perfmon *perfmon;
+
+	/* Whether the exec has taken a reference to the binner BO, which should
+	 * happen with a VC4_PACKET_TILE_BINNING_MODE_CONFIG packet.
+	 */
+	bool bin_bo_used;
 };
 
 /* Per-open file private data. Any driver-specific resource that has to be
@@ -594,6 +608,8 @@ struct vc4_file {
 		struct idr idr;
 		struct mutex lock;
 	} perfmon;
+
+	bool bin_bo_used;
 };
 
 static inline struct vc4_exec_info *
@@ -661,32 +677,41 @@ struct vc4_validated_shader_info {
 };
 
 /**
- * _wait_for - magic (register) wait macro
+ * __wait_for - magic wait macro
  *
- * Does the right thing for modeset paths when run under kdgb or similar atomic
- * contexts. Note that it's important that we check the condition again after
- * having timed out, since the timeout could be due to preemption or similar and
- * we've never had a chance to check the condition before the timeout.
+ * Macro to help avoid open coding check/wait/timeout patterns. Note that it's
+ * important that we check the condition again after having timed out, since the
+ * timeout could be due to preemption or similar and we've never had a chance to
+ * check the condition before the timeout.
  */
-#define _wait_for(COND, MS, W) ({ \
-	unsigned long timeout__ = jiffies + msecs_to_jiffies(MS) + 1;	\
-	int ret__ = 0;							\
-	while (!(COND)) {						\
-		if (time_after(jiffies, timeout__)) {			\
-			if (!(COND))					\
-				ret__ = -ETIMEDOUT;			\
+#define __wait_for(OP, COND, US, Wmin, Wmax) ({ \
+	const ktime_t end__ = ktime_add_ns(ktime_get_raw(), 1000ll * (US)); \
+	long wait__ = (Wmin); /* recommended min for usleep is 10 us */	\
+	int ret__;							\
+	might_sleep();							\
+	for (;;) {							\
+		const bool expired__ = ktime_after(ktime_get_raw(), end__); \
+		OP;							\
+		/* Guarantee COND check prior to timeout */		\
+		barrier();						\
+		if (COND) {						\
+			ret__ = 0;					\
 			break;						\
 		}							\
-		if (W && drm_can_sleep())  {				\
-			msleep(W);					\
-		} else {						\
-			cpu_relax();					\
+		if (expired__) {					\
+			ret__ = -ETIMEDOUT;				\
+			break;						\
 		}							\
+		usleep_range(wait__, wait__ * 2);			\
+		if (wait__ < (Wmax))					\
+			wait__ <<= 1;					\
 	}								\
 	ret__;								\
 })
 
-#define wait_for(COND, MS) _wait_for(COND, MS, 1)
+#define _wait_for(COND, US, Wmin, Wmax)	__wait_for(, (COND), (US), (Wmin), \
+						   (Wmax))
+#define wait_for(COND, MS)		_wait_for((COND), (MS) * 1000, 10, 1000)
 
 /* vc4_bo.c */
 struct drm_gem_object *vc4_create_object(struct drm_device *dev, size_t size);
@@ -696,8 +721,7 @@ struct vc4_bo *vc4_bo_create(struct drm_device *dev, size_t size,
 int vc4_dumb_create(struct drm_file *file_priv,
 		    struct drm_device *dev,
 		    struct drm_mode_create_dumb *args);
-struct dma_buf *vc4_prime_export(struct drm_device *dev,
-				 struct drm_gem_object *obj, int flags);
+struct dma_buf *vc4_prime_export(struct drm_gem_object *obj, int flags);
 int vc4_create_bo_ioctl(struct drm_device *dev, void *data,
 			struct drm_file *file_priv);
 int vc4_create_shader_bo_ioctl(struct drm_device *dev, void *data,
@@ -728,10 +752,6 @@ void vc4_bo_remove_from_purgeable_pool(struct vc4_bo *bo);
 
 /* vc4_crtc.c */
 extern struct platform_driver vc4_crtc_driver;
-bool vc4_crtc_get_scanoutpos(struct drm_device *dev, unsigned int crtc_id,
-			     bool in_vblank_irq, int *vpos, int *hpos,
-			     ktime_t *stime, ktime_t *etime,
-			     const struct drm_display_mode *mode);
 void vc4_crtc_handle_vblank(struct vc4_crtc *crtc);
 void vc4_crtc_txp_armed(struct drm_crtc_state *state);
 void vc4_crtc_get_margins(struct drm_crtc_state *state,
@@ -833,6 +853,8 @@ void vc4_plane_async_set_fb(struct drm_plane *plane,
 extern struct platform_driver vc4_v3d_driver;
 extern const struct of_device_id vc4_v3d_dt_match[];
 int vc4_v3d_get_bin_slot(struct vc4_dev *vc4);
+int vc4_v3d_bin_bo_get(struct vc4_dev *vc4, bool *used);
+void vc4_v3d_bin_bo_put(struct vc4_dev *vc4);
 int vc4_v3d_pm_get(struct vc4_dev *vc4);
 void vc4_v3d_pm_put(struct vc4_dev *vc4);
 
