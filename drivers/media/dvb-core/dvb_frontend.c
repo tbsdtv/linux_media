@@ -2443,17 +2443,30 @@ static int dvb_frontend_handle_ioctl(struct file *file,
 		err = 0;
 		break;
 	case FE_REGI2C_READ:
-		if (fe->ops.mcu_read) {
+		if (fe->ops.reg_i2cread) {
 			struct usbi2c_access *info = parg;	
 			fe->ops.reg_i2cread(fe, info);
 		}
 		err = 0;
 		break;
 	case FE_REGI2C_WRITE:
-		if (fe->ops.mcu_write) {
+		if (fe->ops.reg_i2cwrite) {
 			struct usbi2c_access *info = parg;	
 			fe->ops.reg_i2cwrite(fe, info);
-		
+		}
+		err = 0;
+		break;
+	case FE_EEPROM_READ:
+		if (fe->ops.eeprom_read) {
+			struct eeprom_info *info = parg;	
+			fe->ops.eeprom_read(fe, info);
+		}
+		err = 0;
+		break;
+	case FE_EEPROM_WRITE:
+		if (fe->ops.eeprom_write) {
+			struct eeprom_info *info = parg;	
+			fe->ops.eeprom_write(fe, info);
 		}
 		err = 0;
 		break;

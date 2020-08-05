@@ -348,6 +348,60 @@ extern u32 X5BANKPIONORTH[5];
 extern u32 X5BANKPIOSOUTH[5];
 extern u32 DVBSX_LNBCTRL[1];
 
+//////////////////LNA////////////////////////////////////////
+/*REG0*/
+#define RSTVVGLNA_REG0  0x0000
+#define FSTVVGLNA_LNA_IDENT  0x00000080
+#define FSTVVGLNA_CUT_IDENT  0x00000060
+#define FSTVVGLNA_RELEASE_ID  0x00000010
+#define FSTVVGLNA_AGCTUPD  0x00000008
+#define FSTVVGLNA_AGCTLOCK  0x00000004
+#define FSTVVGLNA_RFAGCHIGH  0x00000002
+#define FSTVVGLNA_RFAGCLOW  0x00000001
+
+/*REG1*/
+#define RSTVVGLNA_REG1  0x0001
+#define FSTVVGLNA_LNAGCPWD  0x00010080
+#define FSTVVGLNA_GETOFF  0x00010040
+#define FSTVVGLNA_GETAGC  0x00010020
+#define FSTVVGLNA_VGO  0x0001001f
+
+/*REG2*/
+#define RSTVVGLNA_REG2  0x0002
+#define FSTVVGLNA_PATH2OFF  0x00020080
+#define FSTVVGLNA_RFAGCPREF  0x00020070
+#define FSTVVGLNA_PATH1OFF  0x00020008
+#define FSTVVGLNA_RFAGCMODE  0x00020007
+
+/*REG3*/
+#define RSTVVGLNA_REG3  0x0003
+#define FSTVVGLNA_SELGAIN  0x00030080
+#define FSTVVGLNA_LCAL  0x00030070
+#define FSTVVGLNA_RFAGCUPDATE  0x00030008
+#define FSTVVGLNA_RFAGCCALSTART  0x00030004
+#define FSTVVGLNA_SWLNAGAIN  0x00030003
+
+#define STVVGLNA_NBREGS	4
+#define STVVGLNA_NBFIELDS	20	
+
+typedef enum
+{
+	VGLNA_RFAGC_HIGH,
+	VGLNA_RFAGC_LOW,
+	VGLNA_RFAGC_NORMAL
+	
+} SAT_VGLNA_STATUS;
+
+typedef struct
+{
+	STCHIP_Info_t	*Chip;		/* pointer to parameters to pass to the CHIP API */
+	u32 	NbDefVal;		/* number of default values (must match number of STC registers) */
+} 
+SAT_VGLNA_InitParams_t;
+
+typedef SAT_VGLNA_InitParams_t SAT_VGLNA_Params_t;
+
+
 /* ---------------- Private functions ---------------------- */
 
 fe_lla_error_t  FE_STiD135_CarrierGetQuality(stchip_handle_t hChip, 
@@ -620,6 +674,13 @@ fe_lla_error_t fe_stid135_set_symbol_rate(stchip_handle_t hchip, u32 master_cloc
 
 fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 						enum fe_stid135_demod Demod);
+
+STCHIP_Error_t stvvglna_init(SAT_VGLNA_Params_t *InitParams, STCHIP_Handle_t *hChipHandle);
+STCHIP_Error_t stvvglna_set_standby(STCHIP_Handle_t hChip, U8 StandbyOn);
+STCHIP_Error_t stvvglna_get_status(STCHIP_Handle_t hChip, U8 *Status);
+STCHIP_Error_t stvvglna_get_gain(STCHIP_Handle_t hChip,S32 *Gain);
+STCHIP_Error_t stvvglna_term(STCHIP_Handle_t hChip);
+
 
 #ifdef __cplusplus
     }

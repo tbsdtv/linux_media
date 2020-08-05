@@ -84,6 +84,9 @@ struct si2183_dev {
 
 	void (*write_properties) (struct i2c_adapter *i2c,u8 reg, u32 buf);
 	void (*read_properties) (struct i2c_adapter *i2c,u8 reg, u32 *buf);
+
+	void (*write_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 buf);
+	void (*read_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 *buf);
 };
 
 /* Own I2C adapter locking is needed because of I2C gate logic. */
@@ -1362,7 +1365,7 @@ err:
 	return ret;
 }
 
-static void si2183_spi_read(struct dvb_frontend *fe, struct ecp3_info *ecp3inf)
+static void spi_read(struct dvb_frontend *fe, struct ecp3_info *ecp3inf)
 {
 	struct i2c_client *client = fe->demodulator_priv;
 	struct si2183_dev *dev = i2c_get_clientdata(client);
@@ -1374,7 +1377,7 @@ static void si2183_spi_read(struct dvb_frontend *fe, struct ecp3_info *ecp3inf)
 	return ;
 }
 
-static void si2183_spi_write(struct dvb_frontend *fe,struct ecp3_info *ecp3inf)
+static void spi_write(struct dvb_frontend *fe,struct ecp3_info *ecp3inf)
 {
 	struct i2c_client *client = fe->demodulator_priv;
 	struct si2183_dev *dev = i2c_get_clientdata(client);
@@ -1384,6 +1387,25 @@ static void si2183_spi_write(struct dvb_frontend *fe,struct ecp3_info *ecp3inf)
 	return ;
 }
 
+static void eeprom_read(struct dvb_frontend *fe, struct eeprom_info *eepinf)
+{
+	struct i2c_client *client = fe->demodulator_priv;
+	struct si2183_dev *dev = i2c_get_clientdata(client);
+
+	if (dev->read_eeprom)
+		dev->read_eeprom(client->adapter,eepinf->reg, &(eepinf->data));
+	return ;
+}
+
+static void eeprom_write(struct dvb_frontend *fe,struct eeprom_info *eepinf)
+{
+	struct i2c_client *client = fe->demodulator_priv;
+	struct si2183_dev *dev = i2c_get_clientdata(client);
+
+	if (dev->write_eeprom)
+		dev->write_eeprom(client->adapter,eepinf->reg, eepinf->data);
+	return ;
+}
 
 static const struct dvb_frontend_ops si2183_ops = {
 	.delsys = {SYS_DVBT, SYS_DVBT2,
@@ -1431,19 +1453,19 @@ static const struct dvb_frontend_ops si2183_ops = {
 	.get_frontend_algo = si2183_get_algo,
 	.tune = si2183_tune,
 
-	.set_property			= si2183_set_property,
+	.set_property		= si2183_set_property,
 
 	.set_tone			= si2183_set_tone,
-	.diseqc_send_burst		= si2183_diseqc_send_burst,
+	.diseqc_send_burst	= si2183_diseqc_send_burst,
 	.diseqc_send_master_cmd		= si2183_diseqc_send_msg,
 #ifndef SI2183_USE_I2C_MUX
-	.i2c_gate_ctrl			= i2c_gate_ctrl,
+	.i2c_gate_ctrl		= i2c_gate_ctrl,
 #endif
 
-	.spi_read			= si2183_spi_read,
-	.spi_write			= si2183_spi_write,
-
-
+	.spi_read			= spi_read,
+	.spi_write			= spi_write,
+	.eeprom_read		= eeprom_read,
+	.eeprom_write		= eeprom_write,
 };
 
 
@@ -1541,6 +1563,8 @@ static int si2183_probe(struct i2c_client *client,
 	
 	dev->write_properties = config->write_properties;
 	dev->read_properties = config->read_properties;
+	dev->write_eeprom = config->write_eeprom;
+	dev->read_eeprom = config->read_eeprom;
 
 	i2c_set_clientdata(client, dev);
 

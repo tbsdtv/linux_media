@@ -505,6 +505,8 @@ struct dvb_frontend_ops {
 	void(*reg_i2cread)( struct dvb_frontend *fe,struct usbi2c_access *pi2cinf);
 	void(*reg_i2cwrite)( struct dvb_frontend *fe,struct usbi2c_access *pi2cinf);
 
+	void(*eeprom_read)( struct dvb_frontend *fe,struct eeprom_info *peepinf);
+	void(*eeprom_write)( struct dvb_frontend *fe,struct eeprom_info *peepinf);
 };
 
 #ifdef __DVB_CORE__

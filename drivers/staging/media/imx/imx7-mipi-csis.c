@@ -26,6 +26,7 @@
 
 #include <media/v4l2-device.h>
 #include <media/v4l2-fwnode.h>
+#include <media/v4l2-mc.h>
 #include <media/v4l2-subdev.h>
 
 #define CSIS_DRIVER_NAME			"imx7-mipi-csis"
@@ -221,6 +222,7 @@ struct csi_state {
 	struct device *dev;
 	struct media_pad pads[CSIS_PADS_NUM];
 	struct v4l2_subdev mipi_sd;
+	struct v4l2_async_notifier notifier;
 	struct v4l2_subdev *src_sd;
 
 	u8 index;
@@ -382,6 +384,12 @@ static int mipi_csis_dump_regs(struct csi_state *state)
 	}
 
 	return 0;
+}
+
+static struct csi_state *
+mipi_notifier_to_csis_state(struct v4l2_async_notifier *n)
+{
+	return container_of(n, struct csi_state, notifier);
 }
 
 static struct csi_state *mipi_sd_to_csis_state(struct v4l2_subdev *sdev)
@@ -905,6 +913,7 @@ static const struct v4l2_subdev_core_ops mipi_csis_core_ops = {
 static const struct media_entity_operations mipi_csis_entity_ops = {
 	.link_setup	= mipi_csis_link_setup,
 	.link_validate	= v4l2_subdev_link_validate,
+	.get_fwnode_pad = v4l2_subdev_get_fwnode_pad_1_to_1,
 };
 
 static const struct v4l2_subdev_video_ops mipi_csis_video_ops = {
@@ -946,33 +955,25 @@ static int mipi_csis_parse_dt(struct platform_device *pdev,
 
 static int mipi_csis_pm_resume(struct device *dev, bool runtime);
 
-static int mipi_csis_parse_endpoint(struct device *dev,
-				    struct v4l2_fwnode_endpoint *ep,
-				    struct v4l2_async_subdev *asd)
+static int mipi_csis_notify_bound(struct v4l2_async_notifier *notifier,
+				  struct v4l2_subdev *sd,
+				  struct v4l2_async_subdev *asd)
 {
-	struct v4l2_subdev *mipi_sd = dev_get_drvdata(dev);
-	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
+	struct csi_state *state = mipi_notifier_to_csis_state(notifier);
+	struct media_pad *sink = &state->mipi_sd.entity.pads[CSIS_PAD_SINK];
 
-	if (ep->bus_type != V4L2_MBUS_CSI2_DPHY) {
-		dev_err(dev, "invalid bus type, must be MIPI CSI2\n");
-		return -EINVAL;
-	}
-
-	state->bus = ep->bus.mipi_csi2;
-
-	dev_dbg(state->dev, "data lanes: %d\n", state->bus.num_data_lanes);
-	dev_dbg(state->dev, "flags: 0x%08x\n", state->bus.flags);
-
-	return 0;
+	return v4l2_create_fwnode_links_to_pad(sd, sink);
 }
+
+static const struct v4l2_async_notifier_operations mipi_csis_notify_ops = {
+	.bound = mipi_csis_notify_bound,
+};
 
 static int mipi_csis_subdev_init(struct v4l2_subdev *mipi_sd,
 				 struct platform_device *pdev,
 				 const struct v4l2_subdev_ops *ops)
 {
 	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
-	unsigned int sink_port = 0;
-	int ret;
 
 	v4l2_subdev_init(mipi_sd, ops);
 	mipi_sd->owner = THIS_MODULE;
@@ -994,17 +995,60 @@ static int mipi_csis_subdev_init(struct v4l2_subdev *mipi_sd,
 
 	state->pads[CSIS_PAD_SINK].flags = MEDIA_PAD_FL_SINK;
 	state->pads[CSIS_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
-	ret = media_entity_pads_init(&mipi_sd->entity, CSIS_PADS_NUM,
-				     state->pads);
+	return media_entity_pads_init(&mipi_sd->entity, CSIS_PADS_NUM,
+				      state->pads);
+}
+
+static int mipi_csis_async_register(struct csi_state *state)
+{
+	struct v4l2_fwnode_endpoint vep = {
+		.bus_type = V4L2_MBUS_CSI2_DPHY,
+	};
+	struct v4l2_async_subdev *asd = NULL;
+	struct fwnode_handle *ep;
+	int ret;
+
+	v4l2_async_notifier_init(&state->notifier);
+
+	ep = fwnode_graph_get_endpoint_by_id(dev_fwnode(state->dev), 0, 0,
+					     FWNODE_GRAPH_ENDPOINT_NEXT);
+	if (!ep)
+		return -ENOTCONN;
+
+	ret = v4l2_fwnode_endpoint_parse(ep, &vep);
+	if (ret)
+		goto err_parse;
+
+	state->bus = vep.bus.mipi_csi2;
+
+	dev_dbg(state->dev, "data lanes: %d\n", state->bus.num_data_lanes);
+	dev_dbg(state->dev, "flags: 0x%08x\n", state->bus.flags);
+
+	asd = kzalloc(sizeof(*asd), GFP_KERNEL);
+	if (!asd) {
+		ret = -ENOMEM;
+		goto err_parse;
+	}
+
+	ret = v4l2_async_notifier_add_fwnode_remote_subdev(
+		&state->notifier, ep, asd);
+	if (ret)
+		goto err_parse;
+
+	fwnode_handle_put(ep);
+
+	state->notifier.ops = &mipi_csis_notify_ops;
+
+	ret = v4l2_async_subdev_notifier_register(&state->mipi_sd,
+						  &state->notifier);
 	if (ret)
 		return ret;
 
-	ret = v4l2_async_register_fwnode_subdev(mipi_sd,
-						sizeof(struct v4l2_async_subdev),
-						&sink_port, 1,
-						mipi_csis_parse_endpoint);
-	if (ret < 0)
-		dev_err(&pdev->dev, "async fwnode register failed: %d\n", ret);
+	return v4l2_async_register_subdev(&state->mipi_sd);
+
+err_parse:
+	fwnode_handle_put(ep);
+	kfree(asd);
 
 	return ret;
 }
@@ -1092,6 +1136,12 @@ static int mipi_csis_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto disable_clock;
 
+	ret = mipi_csis_async_register(state);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "async register failed: %d\n", ret);
+		goto cleanup;
+	}
+
 	memcpy(state->events, mipi_csis_events, sizeof(state->events));
 
 	mipi_csis_debugfs_init(state);
@@ -1110,7 +1160,10 @@ static int mipi_csis_probe(struct platform_device *pdev)
 
 unregister_all:
 	mipi_csis_debugfs_exit(state);
+cleanup:
 	media_entity_cleanup(&state->mipi_sd.entity);
+	v4l2_async_notifier_unregister(&state->notifier);
+	v4l2_async_notifier_cleanup(&state->notifier);
 	v4l2_async_unregister_subdev(&state->mipi_sd);
 disable_clock:
 	mipi_csis_clk_disable(state);
@@ -1198,6 +1251,8 @@ static int mipi_csis_remove(struct platform_device *pdev)
 	struct csi_state *state = mipi_sd_to_csis_state(mipi_sd);
 
 	mipi_csis_debugfs_exit(state);
+	v4l2_async_notifier_unregister(&state->notifier);
+	v4l2_async_notifier_cleanup(&state->notifier);
 	v4l2_async_unregister_subdev(&state->mipi_sd);
 
 	pm_runtime_disable(&pdev->dev);

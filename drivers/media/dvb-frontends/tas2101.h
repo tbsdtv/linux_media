@@ -44,6 +44,8 @@ struct tas2101_config {
 	//spi flash op
 	void (*write_properties) (struct i2c_adapter *i2c,u8 reg, u32 buf);  
 	void (*read_properties) (struct i2c_adapter *i2c,u8 reg, u32 *buf);
+	void (*write_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 buf);
+	void (*read_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 *buf);
 
 	void (*mcuWrite_properties) (struct i2c_adapter *i2c,u32 bassaddr,u8 reg, u32 buf);  
 	void (*mcuRead_properties) (struct i2c_adapter *i2c,u32 bassaddr,u8 reg, u32 *buf);	

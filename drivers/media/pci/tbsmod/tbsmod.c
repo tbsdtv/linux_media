@@ -425,6 +425,7 @@ static void config_gain(struct tbs_pcie_dev *dev, int gain)
 
 
 }
+
 static BOOL ad9789_setFre_qamb(struct tbs_pcie_dev *dev, unsigned long freq)
 {
 	unsigned long freq_0, freq_1, freq_2, freq_3;
@@ -442,27 +443,27 @@ static BOOL ad9789_setFre_qamb(struct tbs_pcie_dev *dev, unsigned long freq)
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_0_FRE, buff);
 
 	//freq_1 = (16777216 * (freq+8))/96;
-	freq_1 = div_u64(16777216ULL * (freq + 8), 96);
+	freq_1 = div_u64(16777216ULL * (freq + 6), 96);
 	buff[2] = freq_1 & 0xff;
 	buff[1] = (freq_1 >> 8) & 0xff;
 	buff[0] = (freq_1 >> 16) & 0xff;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_1_FRE, buff);
 
 	//freq_2 = (16777216 * (freq+16))/96;
-	freq_2 = div_u64(16777216ULL * (freq + 16), 96);
+	freq_2 = div_u64(16777216ULL * (freq + 12), 96);
 	buff[2] = freq_2 & 0xff;
 	buff[1] = (freq_2 >> 8) & 0xff;
 	buff[0] = (freq_2 >> 16) & 0xff;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_2_FRE, buff);
 
 	//freq_3 = (16777216 * (freq+24))/96;
-	freq_3 = div_u64(16777216ULL * (freq + 24), 96);
+	freq_3 = div_u64(16777216ULL * (freq + 18), 96);
 	buff[2] = freq_3 & 0xff;
 	buff[1] = (freq_3 >> 8) & 0xff;
 	buff[0] = (freq_3 >> 16) & 0xff;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_3_FRE, buff);
 
-	fcenter = freq + 12;
+	fcenter = freq + 9;
 	//fcenter = (fcenter*65536)/1536;
 	fcenter = div_u64(fcenter * 65536ULL, 1536);
 	buff[1] = fcenter & 0xff;
@@ -482,6 +483,8 @@ static BOOL ad9789_setFre_qamb(struct tbs_pcie_dev *dev, unsigned long freq)
 
 	return TRUE;
 }
+
+
 
 // freq MHZ
 static BOOL ad9789_setFre_dvbc(struct tbs_pcie_dev *dev, unsigned long freq)

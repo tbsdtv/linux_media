@@ -11274,3 +11274,159 @@ fe_lla_error_t fe_stid135_unset_vtm(fe_stid135_handle_t handle, enum fe_stid135_
 		
 	return error;
 }
+
+STCHIP_Error_t stvvglna_init(SAT_VGLNA_Params_t *InitParams, STCHIP_Handle_t *hChipHandle)
+{
+	STCHIP_Handle_t hChip = NULL;
+	STCHIP_Error_t error = CHIPERR_NO_ERROR; 
+	u32 reg_value;
+	u8 i;
+	
+	STCHIP_Register_t DefSTVVGLNAVal[STVVGLNA_NBREGS]=
+	{
+		{ RSTVVGLNA_REG0, 0x20 },
+		{ RSTVVGLNA_REG1, 0x0F },
+		{ RSTVVGLNA_REG2, 0x50 },
+		{ RSTVVGLNA_REG3, 0x20 }
+	};
+
+
+		/* fill elements of external chip data structure */
+		InitParams->Chip->NbInsts  = DEMOD_NBINSTANCES;
+		InitParams->Chip->NbRegs   = STVVGLNA_NBREGS;
+		InitParams->Chip->NbFields = STVVGLNA_NBFIELDS;										  
+		InitParams->Chip->ChipMode = STCHIP_MODE_I2C2STBUS;
+		InitParams->Chip->pData = NULL;
+		
+		InitParams->Chip->WrStart  = RSTVVGLNA_REG0;	// Default mode for STBus interface A2D1S1 : many issues such as: bad accuracy of SR and freq, not possible to lock demods#5 to #8 if blind search and SR>20MS/s
+		InitParams->Chip->WrSize  = STVVGLNA_NBREGS;
+		InitParams->Chip->RdStart = RSTVVGLNA_REG0;
+		InitParams->Chip->RdSize = STVVGLNA_NBREGS;	//	ChipSetMapRegisterSize(STCHIP_REGSIZE_8);
+		
+	
+		(*hChipHandle) = ChipOpen(InitParams->Chip);
+		
+		hChip=(*hChipHandle);
+				
+		if(hChip != NULL)
+		{
+			/*******************************
+			**   CHIP REGISTER MAP IMAGE INITIALIZATION
+			**     ----------------------
+			********************************/
+			ChipUpdateDefaultValues(hChip,DefSTVVGLNAVal);
+
+			for(i=0;i<STVVGLNA_NBREGS;i++)
+				hChip->pRegMapImage[i].Size = STCHIP_REGSIZE_8;
+
+			error = ChipGetOneRegister(hChip,RSTVVGLNA_REG0, &reg_value);
+			hChip->ChipID = (u8)reg_value;
+			printk("VGLNA Chip id =0x%x\n",hChip->ChipID );
+			error = hChip->Error;
+		}
+
+	
+	return error;
+
+}
+
+
+STCHIP_Error_t stvvglna_set_standby(STCHIP_Handle_t hChip, U8 StandbyOn)
+{	
+	STCHIP_Error_t error = CHIPERR_NO_ERROR;
+
+	printk("stvvglan standby\n");
+	if(hChip!=NULL)
+	{
+		if(StandbyOn)
+		{
+			error = ChipSetField(hChip,FSTVVGLNA_LNAGCPWD,1);
+		}
+		else
+		{
+			error = ChipSetField(hChip,FSTVVGLNA_LNAGCPWD,0);
+		}
+		
+	}
+	else
+		error = CHIPERR_INVALID_HANDLE;
+	
+	return error;
+}
+
+STCHIP_Error_t stvvglna_get_status(STCHIP_Handle_t hChip, U8 *Status)
+{
+	STCHIP_Error_t error = CHIPERR_NO_ERROR;
+	s32 flagAgcLow,flagAgcHigh;
+	
+	if(hChip!=NULL)
+	{
+		error = ChipGetField(hChip, FSTVVGLNA_RFAGCHIGH, &flagAgcHigh);
+		error = ChipGetField(hChip,FSTVVGLNA_RFAGCLOW, &flagAgcLow);
+		
+		if(flagAgcHigh)
+		{
+			(*Status)=VGLNA_RFAGC_HIGH;
+		}
+		else if(flagAgcLow)
+		{
+			(*Status)=(U8)VGLNA_RFAGC_LOW;
+		}
+		else
+			(*Status)=(U8)VGLNA_RFAGC_NORMAL; 
+		
+		error = ChipGetError(hChip);	
+	}
+	else
+		error = CHIPERR_INVALID_HANDLE;
+
+
+	return error;
+}
+
+
+STCHIP_Error_t stvvglna_get_gain(STCHIP_Handle_t hChip,S32 *Gain)
+{
+
+	S32 VGO, swlnaGain;
+	STCHIP_Error_t error = CHIPERR_NO_ERROR;
+
+	if(hChip != NULL)
+	{
+		error = ChipGetField(hChip, FSTVVGLNA_VGO, &VGO);	
+		error = ChipGetError(hChip);
+		
+		/*Trig to read the VGO and SWLNAGAIN val*/
+		error = ChipSetFieldImage(hChip,FSTVVGLNA_GETAGC,1);
+		error = ChipSetRegisters(hChip,RSTVVGLNA_REG1,1);
+		WAIT_N_MS(5);
+		
+		/*(31-VGO[4:0]) * 13/31 + (3-SWLNAGAIN[1:0])*6 */ 
+		error = ChipGetField(hChip,FSTVVGLNA_VGO, &VGO);
+		error = ChipGetField(hChip,FSTVVGLNA_SWLNAGAIN, &swlnaGain);
+		(*Gain)=(31-VGO)*13;
+		(*Gain)/=31;
+		(*Gain)+=(6*(3-swlnaGain));
+	}
+	else
+		error = CHIPERR_INVALID_HANDLE;
+	
+	return error;
+}
+
+STCHIP_Error_t stvvglna_term(STCHIP_Handle_t hChip)
+{
+	STCHIP_Error_t error = CHIPERR_NO_ERROR;
+	
+	if(hChip)
+	{
+		#ifndef ST_OSLINUX 
+			if(hChip->pData)	
+				free(hChip->pData);
+			ChipClose(hChip);
+		#endif
+	}
+	
+	return error;
+}
+

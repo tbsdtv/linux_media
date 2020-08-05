@@ -38,10 +38,14 @@ struct stid135_cfg {
 		enum fe_sec_voltage voltage, u8 rf_in);
 	void (*write_properties) (struct i2c_adapter *i2c,u8 reg, u32 buf);
 	void (*read_properties) (struct i2c_adapter *i2c,u8 reg, u32 *buf);
+	void (*write_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 buf);
+	void (*read_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 *buf);
 	//for tbs6912
 	void (*set_TSsampling)(struct i2c_adapter *i2c,int tuner,int time);  
 	u32  (*set_TSparam)(struct i2c_adapter *i2c,int tuner,int time,bool  flag);
 
+	// for stvlna
+	int vglna;
 };
 
 #if IS_REACHABLE(CONFIG_DVB_STID135)

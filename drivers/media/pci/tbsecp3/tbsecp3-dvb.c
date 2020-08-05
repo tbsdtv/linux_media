@@ -87,6 +87,116 @@ static void mcu_24cxx_write(struct i2c_adapter *i2c,u32 bassaddr,u8 reg, u32 buf
 	return ;
 }
 
+static void ecp3_eeprom_read(struct i2c_adapter *i2c,u8 reg, u8 *buf)
+{
+	struct tbsecp3_i2c *i2c_adap = i2c_get_adapdata(i2c);
+	struct tbsecp3_dev *dev = i2c_adap->dev;
+	u8 eeprom_bus_nr = dev->info->eeprom_i2c;
+	struct i2c_adapter *i2c_eep = &dev->i2c_bus[eeprom_bus_nr].i2c_adap;
+
+	struct i2c_msg msg[] = {
+		{ .addr = 0x50, .flags = 0,
+		  .buf = &reg, .len = 1 },
+		{ .addr = 0x50, .flags = I2C_M_RD,
+		  .buf = buf, .len = 1 }
+	};
+	
+	i2c_transfer(i2c_eep, msg, 2);
+
+	//printk(" tbsecp3-dvb : ecp3_eeprom_read **********%x = %x*******\n",reg,*buf);
+
+	return;
+}
+static void ecp3_eeprom_write(struct i2c_adapter *i2c,u8 reg, u8 data)
+{
+	struct tbsecp3_i2c *i2c_adap = i2c_get_adapdata(i2c);
+	struct tbsecp3_dev *dev = i2c_adap->dev;
+	u8 eeprom_bus_nr = dev->info->eeprom_i2c;
+	struct i2c_adapter *i2c_eep = &dev->i2c_bus[eeprom_bus_nr].i2c_adap;
+	u8 tmp[2] = { reg, data };
+
+	struct i2c_msg msg[] = {
+		{ .addr = 0x50, .flags = 0,
+		  .buf = tmp, .len = 2 },
+	};
+
+	i2c_transfer(i2c_eep, msg, 1);
+	//printk(" ecp3_eeprom_write : ecp3_spi_write **********%x = %x*******\n",reg,buf);
+
+	return ;
+}
+
+static int tbs6302se_read_mac(struct tbsecp3_adapter *adap)
+{
+	struct tbsecp3_dev *dev = adap->dev;
+	int ret = 1;
+	int i =0;
+	u32 postaddr;
+	unsigned char tmpbuf[4]={0};
+	unsigned char rdbuffer[8]={0};
+	
+	if(adap->nr)//adapter1 is equal to adapter3 in tbs6304
+		postaddr =  0x80 *(adap->nr+2) +0x08;
+	else//adapter0 is equal to adapter1 in tbs6304
+		postaddr =  0x80 *(adap->nr+1) +0x08;
+
+	tmpbuf[0] = 0x31; //24cxx read;
+	tmpbuf[1] = 6;  //how many byte;
+	tmpbuf[2] =  (postaddr>>8);
+	tmpbuf[3] = (postaddr &255); //24cxx sub_address,0x08 for mac
+
+	
+	tbs_write( BASE_ADDRESS_24CXX, CMD_24CXX, *(u32 *)&tmpbuf[0] );
+	//wait... until the data are received correctly;
+	for(i=0;i<100;i++)
+	{
+		msleep(1);
+		*(u32 *)tmpbuf = tbs_read( BASE_ADDRESS_24CXX, STATUS_MAC16_24CXX );
+		if((tmpbuf[0]&1) == 0)
+			break;
+	}
+	if(i==100)
+	{
+		ret = 0;
+		//printk(" the receiver always busy !\n");
+		//check mcu status
+		*(u32 *)tmpbuf = tbs_read( BASE_ADDRESS_24CXX,  STATUS_MAC16_24CXX );
+		if((tmpbuf[0]&0x4) == 1) // bit2==1 mcu busy
+		{
+			//printk("MCU status is busy!!!\n" );
+			// release cs;
+			tbs_write( BASE_ADDRESS_24CXX,  CS_RELEASE, *(u32 *)&tmpbuf[0] );
+			ret = 0;
+		}
+		
+	}
+	// release cs;
+	tbs_write(  BASE_ADDRESS_24CXX, CS_RELEASE, *(u32 *)&tmpbuf[0] );
+	//check the write finished;
+	for(i=0;i<100;i++)
+	{
+		msleep(1);
+		*(u32 *)tmpbuf = tbs_read(  BASE_ADDRESS_24CXX, STATUS_MAC16_24CXX );
+		if((tmpbuf[0]&1) == 1)
+			break;
+	}
+	if(i==100)
+	{
+		ret = 0;
+		//printk(" wait wt_24cxx_done timeout! \n");
+	}
+	//read back to host;
+	*(u32 *)rdbuffer = tbs_read(  BASE_ADDRESS_24CXX, DATA0_24CXX );
+	*(u32 *)&rdbuffer[4] = tbs_read(  BASE_ADDRESS_24CXX, DATA1_24CXX );
+	if(ret!=0)
+	{
+		memcpy(adap->dvb_adapter.proposed_mac, rdbuffer,6);
+		printk("adapter %d ,mac address: %x,%x,%x,%x,%x,%x \n",adap->dvb_adapter.num,rdbuffer[0],rdbuffer[1],rdbuffer[2],rdbuffer[3],rdbuffer[4],rdbuffer[5]);
+	}
+
+	return ret;
+};
+
 static int tbs6304_read_mac(struct tbsecp3_adapter *adap)
 {
 	struct tbsecp3_dev *dev = adap->dev;
@@ -482,6 +592,32 @@ static struct av201x_config tbs6902_av201x_cfg = {
 		.xtal_freq	 = 27000,		/* kHz */
 };
 
+static struct tas2101_config tbs6302se_demod_cfg[] = {
+
+    {
+        .i2c_address   = 0x68,
+		.id            = ID_TAS2101,
+		.init          = {0xb0, 0x32, 0x81, 0x57, 0x64, 0x9a, 0x33}, // 0xb1
+		.init2         = 0,
+		.write_properties = ecp3_spi_write,  
+		.read_properties = ecp3_spi_read,
+
+		.mcuWrite_properties = mcu_24cxx_write,  
+		.mcuRead_properties = mcu_24cxx_read,
+    },    
+  
+    {
+        .i2c_address   = 0x68,
+		.id            = ID_TAS2101,
+		.init          = {0xb0, 0x32, 0x81, 0x57, 0x64, 0x9a, 0x33}, // 0xb1
+		.init2         = 0,
+		.write_properties = ecp3_spi_write,  
+		.read_properties = ecp3_spi_read,
+
+		.mcuWrite_properties = mcu_24cxx_write,  
+		.mcuRead_properties = mcu_24cxx_read,
+    } 
+};
 static struct tas2101_config tbs6308_demod_cfg = {
        		 .i2c_address   = 0x60,
 		.id            = ID_TAS2101,
@@ -569,6 +705,8 @@ static struct tas2101_config tbs6904_demod_cfg[] = {
 		.init2         = 0,
 		.write_properties = ecp3_spi_write,  
 		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,
 	},
 	{
 		.i2c_address   = 0x60,
@@ -577,6 +715,8 @@ static struct tas2101_config tbs6904_demod_cfg[] = {
 		.init2         = 0,
 		.write_properties = ecp3_spi_write,  
 		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,
 	},
 	{
 		.i2c_address   = 0x68,
@@ -585,6 +725,8 @@ static struct tas2101_config tbs6904_demod_cfg[] = {
 		.init2         = 0,
 		.write_properties = ecp3_spi_write,  
 		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,
 	}
 };
 
@@ -603,6 +745,8 @@ static struct tas2101_config tbs6910_demod_cfg[] = {
 		.init2         = 0,
 		.write_properties = ecp3_spi_write,  
 		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,
 	},
 	{
 		.i2c_address   = 0x60,
@@ -611,6 +755,8 @@ static struct tas2101_config tbs6910_demod_cfg[] = {
 		.init2         = 0,
 		.write_properties = ecp3_spi_write,  
 		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,
 	},
 };
 
@@ -695,6 +841,8 @@ static struct mxl58x_cfg tbs6909_mxl58x_cfg = {
 	.set_voltage	= max_set_voltage,
 	.write_properties = ecp3_spi_write, 
 	.read_properties = ecp3_spi_read,
+	.write_eeprom = ecp3_eeprom_write, 
+	.read_eeprom = ecp3_eeprom_read,
 };
 
 static struct stv091x_cfg tbs6903_stv0910_cfg = {
@@ -705,6 +853,8 @@ static struct stv091x_cfg tbs6903_stv0910_cfg = {
 	.dual_tuner = 1,
 	.write_properties = ecp3_spi_write, 
 	.read_properties = ecp3_spi_read,
+	.write_eeprom = ecp3_eeprom_write, 
+	.read_eeprom = ecp3_eeprom_read,
 };
 
 struct stv6120_cfg tbs6903_stv6120_cfg = {
@@ -803,8 +953,11 @@ static struct stid135_cfg tbs6903x_stid135_cfg = {
 	.set_voltage	= NULL,
 	.write_properties = ecp3_spi_write, 
 	.read_properties = ecp3_spi_read,
+	.write_eeprom = ecp3_eeprom_write, 
+	.read_eeprom = ecp3_eeprom_read,
 	.set_TSsampling = NULL,
 	.set_TSparam = NULL,
+	.vglna = 0,
 };
 
 static struct stid135_cfg tbs6909x_stid135_cfg = {
@@ -814,8 +967,40 @@ static struct stid135_cfg tbs6909x_stid135_cfg = {
 	.set_voltage	= max_set_voltage,
 	.write_properties = ecp3_spi_write, 
 	.read_properties = ecp3_spi_read,
+	.write_eeprom = ecp3_eeprom_write, 
+	.read_eeprom = ecp3_eeprom_read,
 	.set_TSsampling = NULL,
 	.set_TSparam = NULL,
+	.vglna = 0,
+	
+};
+static struct stid135_cfg tbs6903x_V2_stid135_cfg = {
+	.adr		= 0x68,
+	.clk		= 27,
+	.ts_mode	= TS_2PAR,
+	.set_voltage	= NULL,
+	.write_properties = ecp3_spi_write, 
+	.read_properties = ecp3_spi_read,
+	.write_eeprom = ecp3_eeprom_write, 
+	.read_eeprom = ecp3_eeprom_read,
+	.set_TSsampling = NULL,
+	.set_TSparam = NULL,
+	.vglna = 2,
+};
+
+static struct stid135_cfg tbs6909x_V2_stid135_cfg = {
+	.adr		= 0x68,
+	.clk		= 27,
+	.ts_mode	= TS_STFE,
+	.set_voltage	= max_set_voltage,
+	.write_properties = ecp3_spi_write, 
+	.read_properties = ecp3_spi_read,
+	.write_eeprom = ecp3_eeprom_write, 
+	.read_eeprom = ecp3_eeprom_read,
+	.set_TSsampling = NULL,
+	.set_TSparam = NULL,
+	.vglna = 1,
+	
 };
 
 static struct stid135_cfg tbs6912_stid135_cfg = {
@@ -825,8 +1010,11 @@ static struct stid135_cfg tbs6912_stid135_cfg = {
 	.set_voltage	= NULL,
 	.write_properties = ecp3_spi_write, 
 	.read_properties = ecp3_spi_read,
+	.write_eeprom = ecp3_eeprom_write, 
+	.read_eeprom = ecp3_eeprom_read,
 	.set_TSsampling = Set_TSsampling,
 	.set_TSparam = Set_TSparam,
+	.vglna = false,
 };
 
 static struct rda5816_config rda5816_cfg[] = {
@@ -862,7 +1050,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 	adapter->i2c_client_demod = NULL;
 	adapter->i2c_client_tuner = NULL;
 
-	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id)){
+	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id) && (TBSECP3_BOARD_TBS6302SE != dev->info->board_id)){
 		reset_demod(adapter);
 		set_mac_address(adapter);
 	}
@@ -1026,7 +1214,13 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		if(tbs6304_read_mac(adapter)==0)
 		    tbs6304_read_mac(adapter);
 		break;
-
+	case TBSECP3_BOARD_TBS6302SE:
+		adapter->fe = dvb_attach(tas2971_attach, &tbs6302se_demod_cfg[adapter->nr], i2c);
+		if (adapter->fe == NULL)
+		    goto frontend_atach_fail;
+		if(tbs6302se_read_mac(adapter)==0)
+		    tbs6302se_read_mac(adapter);
+		break;
 	case TBSECP3_BOARD_TBS6301:
 		adapter->fe = dvb_attach(tas2971_attach, &tbs6301_demod_cfg, i2c);
 		if (adapter->fe == NULL)
@@ -1649,8 +1843,13 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		break;
 
 	case TBSECP3_BOARD_TBS6909X:
-		adapter->fe = dvb_attach(stid135_attach, i2c,
+		if(pci->subsystem_device==0x0010)
+			adapter->fe = dvb_attach(stid135_attach, i2c,
 				&tbs6909x_stid135_cfg, adapter->nr, adapter->nr/2);
+		else
+			adapter->fe = dvb_attach(stid135_attach, i2c,
+				&tbs6909x_V2_stid135_cfg, adapter->nr, adapter->nr/2); 	
+
 		if (adapter->fe == NULL)
 			goto frontend_atach_fail;
 		break;
@@ -1660,9 +1859,13 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		if(pci->subsystem_vendor==0x6912)
 			adapter->fe = dvb_attach(stid135_attach, i2c,
 					&tbs6912_stid135_cfg, adapter->nr ? 2 : 0, adapter->nr ? 3 : 0);
-		else		
+		else if(pci->subsystem_device==0x0021)
+			adapter->fe = dvb_attach(stid135_attach, i2c,
+				&tbs6903x_V2_stid135_cfg, adapter->nr ? 2 : 0, adapter->nr ? 3 : 0);
+		else
 			adapter->fe = dvb_attach(stid135_attach, i2c,
 				&tbs6903x_stid135_cfg, adapter->nr ? 2 : 0, adapter->nr ? 3 : 0);
+
 		if (adapter->fe == NULL)
 			goto frontend_atach_fail;
 
