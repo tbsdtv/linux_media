@@ -1478,7 +1478,7 @@ static ssize_t tbsmod_write(struct file *file, const char __user *ptr, size_t si
 		unsigned int ret;
 		ret = kfifo_from_user(&pchannel->fifo, ptr, size, &copied);
 		if (size != copied)
-			printk("%s size:%d  %d\n", __func__, size, copied);
+			printk("%s size:%lu  %u\n", __func__, size, copied);
 	}
 	return size;
 }
