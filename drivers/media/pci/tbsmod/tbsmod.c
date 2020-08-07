@@ -207,6 +207,7 @@ static BOOL GS2972_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 	}
 }
 
+#if 0
 static BOOL GS2972_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Wr_buf)
 {
 	unsigned char i = 0, tmpdt = 0, tmpbuf[8];
@@ -247,6 +248,7 @@ static BOOL GS2972_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr,
 	mutex_unlock(&dev->spi_mutex);
 	return TRUE;
 }
+#endif
 
 static BOOL GS2972_rd_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Rd_buf)
 {
