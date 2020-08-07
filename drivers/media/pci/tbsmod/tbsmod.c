@@ -1512,11 +1512,15 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case FE_SET_PROPERTY:
 		//printk("%s FE_SET_PROPERTY\n", __func__);
 		//props = (struct dtv_properties *)arg;
-		copy_from_user(&props , (const char*)arg, sizeof(struct dtv_properties ));
+		ret = copy_from_user(&props , (const char*)arg, sizeof(struct dtv_properties ));
+		if (ret)
+			break;
 		if (props.num == 1)
 		{
 			//prop = props.props;
-			copy_from_user(&prop , (const char*)props.props, sizeof(struct dtv_property ));
+			ret = copy_from_user(&prop , (const char*)props.props, sizeof(struct dtv_property ));
+			if (ret)
+				break;
 			if(dev->cardid == 0x6008)
 			{
 				if(pchannel->channel_index==4)
@@ -1674,11 +1678,15 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case FE_GET_PROPERTY:
 		//printk("%s FE_GET_PROPERTY\n", __func__);
 		//props = (struct dtv_properties *)arg;
-		copy_from_user(&props , (const char*)arg, sizeof(struct dtv_properties ));
+		ret = copy_from_user(&props , (const char*)arg, sizeof(struct dtv_properties ));
+		if (ret)
+			break;
 		if (props.num == 1)
 		{		
 			//prop = props.props;
-			copy_from_user(&prop , (const char*)props.props, sizeof(struct dtv_property ));
+			ret = copy_from_user(&prop , (const char*)props.props, sizeof(struct dtv_property ));
+			if (ret)
+				break;
 			switch (prop.cmd)
 			{
 			case MODULATOR_MODULATION:
@@ -1702,7 +1710,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case FE_GET_INFO:
 		memset(&finfo, 0, sizeof(struct dvb_frontend_info));
 		snprintf(finfo.name, 16, "TBS-%X:%d", dev->pdev->subsystem_vendor, dev->mod_index);
-		copy_to_user((unsigned long)arg, &finfo, sizeof(struct dvb_frontend_info));
+		ret = copy_to_user((void *)arg, &finfo, sizeof(struct dvb_frontend_info));
 		break;
 
 	
@@ -1711,7 +1719,9 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if(pchannel->channel_index)
 			break;
 		
-		copy_from_user(&params , (const char*)arg, sizeof(struct dvb_modulator_parameters ));
+		ret = copy_from_user(&params , (const char*)arg, sizeof(struct dvb_modulator_parameters ));
+		if (ret)
+			break;
 		printk("%s fre:%d, bw: %d, \n qam: %d, carriers: %d, fec : %d, interval: %d\n",__func__, params.frequency_khz,params.bandwidth_hz,
 			params.constellation, params.transmission_mode, params.code_rate_HP, params.guard_interval);
 		
@@ -1727,12 +1737,16 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 
 	case FE_ECP3FW_READ:
-		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
+		ret = copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
+		if (ret)
+			break;
 		spi_read(dev, &wrinfo);
-		copy_to_user((unsigned long)arg, &wrinfo, sizeof(struct mcu24cxx_info ));
+		ret = copy_to_user((void *)arg, &wrinfo, sizeof(struct mcu24cxx_info ));
 		break;
 	case FE_ECP3FW_WRITE:
-		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
+		ret = copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
+		if (ret)
+			break;
 		spi_write(dev, &wrinfo);
 		break;
 
