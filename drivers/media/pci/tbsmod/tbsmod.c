@@ -1355,8 +1355,6 @@ struct class	*mod_cdev_class;
 static void start_dma_transfer(struct mod_channel *pchannel)
 {
 	struct tbs_pcie_dev *dev=pchannel->dev;
-	u32 delay;
-	u32 bitrate;
 	u32 speedctrl;
 
 	/* PikoTV 20200306 */
