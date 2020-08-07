@@ -2181,7 +2181,6 @@ static int tbsmod_probe(struct pci_dev *pdev,
 
 	mutex_init(&dev->spi_mutex);
 	mutex_init(&dev->ioctl_mutex);
-	spin_lock_init(&dev->chip_lock);
 	
 	for(index=0;index<sizeof(tbsmods);index++){
 		if(tbsmods[index] ==0 ){
@@ -2249,27 +2248,20 @@ static int tbsmod_probe(struct pci_dev *pdev,
 	switch(pdev->subsystem_vendor){
 	case 0x6004:
 		printk("tbsmod%d:tbs6004 dvbc card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
 		tbs_adapters_init_dvbc(dev);	
-		spin_unlock(&dev->chip_lock);
 	break;
 	
 	case 0x6104:
 		printk("tbsmod%d:tbs6104 dvbt card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
 		tbs_adapters_init_dvbt(dev);
-		spin_unlock(&dev->chip_lock);
 	break;
 	
 	case 0x6014:
 		printk("tbsmod%d:tbs6014 qamb card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
 		tbs_adapters_init_qamb(dev);
-		spin_unlock(&dev->chip_lock);
 	break;
 
 	case 0x690b:
-		spin_lock(&dev->chip_lock);
 		printk("tbsmod%d:tbs690b asi card\n", dev->mod_index);
 		for(i=0;i<4;i++){
 		mpbuf[0] = i; //0--3 :select value
@@ -2284,13 +2276,10 @@ static int tbsmod_probe(struct pci_dev *pdev,
 		if(mpbuf[1]==0x01)
 			printk("GS2972 hardware is ok!\n");
 		}
-		spin_unlock(&dev->chip_lock);
 	break;
 	case 0x6008:
 		printk("tbsmod%d:tbs6008 dvbc card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
 		tbs_adapters_init_dvbc8(dev);	
-		spin_unlock(&dev->chip_lock);
 	break;
 
 	default:

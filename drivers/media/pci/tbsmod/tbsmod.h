@@ -34,7 +34,6 @@ struct tbs_pcie_dev {
 	void __iomem		*mmio;
 	struct mutex           	spi_mutex; // lock spi access
 	struct mutex           	ioctl_mutex; // lock ioctls access
-	spinlock_t           	chip_lock; // lock chip access
 
 	u8 			modulation;
 	u32			frequency;
