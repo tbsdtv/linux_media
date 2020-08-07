@@ -1399,8 +1399,9 @@ static int tbsmod_open(struct inode *inode, struct file *filp)
 
 	struct tbs_pcie_dev *dev = (struct tbs_pcie_dev * )tbsmodsdev[iminor(inode)>>3];
 	struct mod_channel *pchannel =(struct mod_channel *)&dev->channel[iminor(inode)&7];
-	filp->private_data = pchannel;
 	u8 buff[4] = {0,0,0,0};
+
+	filp->private_data = pchannel;
 	/*
 	printk("%s %p\n", __func__, pchannel);
 	printk("%s devno:%d\n", __func__, pchannel->devno);
