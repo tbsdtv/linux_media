@@ -1544,8 +1544,17 @@ struct dvb_frontend *mxl58x_attach(struct i2c_adapter *i2c,
 		if((demod ==6)||(demod ==7))
 			state->rf_in = 0;
 
-		if (rfsource > 0 && rfsource < 5)
-			state->rf_in = 4 - rfsource;
+		if (rfsource > 0)
+		{
+			if(demod==0) state->rf_in = (unsigned int)(rfsource & 0x3);
+			if(demod==1) state->rf_in = (unsigned int)(rfsource >> 2) & 0x3;
+			if(demod==2) state->rf_in = (unsigned int)(rfsource >> 4) & 0x3;
+			if(demod==3) state->rf_in = (unsigned int)(rfsource >> 6) & 0x3;
+			if(demod==4) state->rf_in = (unsigned int)(rfsource >> 8) & 0x3;
+			if(demod==5) state->rf_in = (unsigned int)(rfsource >> 10) & 0x3;
+			if(demod==6) state->rf_in = (unsigned int)(rfsource >> 12) & 0x3;
+			if(demod==7) state->rf_in = (unsigned int)(rfsource >> 14) & 0x3;
+		}
 		
 		if (mode==2)
 			state->rf_in = 0;
