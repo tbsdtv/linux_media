@@ -529,7 +529,156 @@ static struct fe_sat_car_loop_vs_cnr fe_stid135_256apsk_car_loop[NB_256APSK_COEF
 	{204,	0x09,	0x09,	0x09,	0x09,	0x09,	0x09,	0x09,	0x09},	/* FE_SATX_256APSK_11_15_L */
 	{207,	0x09,	0x09,	0x09,	0x09,	0x09,	0x09,	0x09,	0x09}	/* FE_SATX_256APSK_3_4 */
 };
+static  u16 dvbs2_modcode_for_llr_x100[131] = {
+	0,	//FE_SAT_DUMMY_PLF,
+	400,	//FE_SAT_QPSK_14,
+	300,	//FE_SAT_QPSK_13,
+	250,	//FE_SAT_QPSK_25,
+	200,	//FE_SAT_QPSK_12,
+	167,	//FE_SAT_QPSK_35,
+	150,	//FE_SAT_QPSK_23,
+	133,	//FE_SAT_QPSK_34,
+	125,	//FE_SAT_QPSK_45,
+	120,	//FE_SAT_QPSK_56,
+	113,	//FE_SAT_QPSK_89,
+	111,	//FE_SAT_QPSK_910,
+	167,	//FE_SAT_8PSK_35,
+	150,	//FE_SAT_8PSK_23,
+	133,	//FE_SAT_8PSK_34,
+	120,	//FE_SAT_8PSK_56,
+	113,	//FE_SAT_8PSK_89,
+	111,	//FE_SAT_8PSK_910,
+	150,	//FE_SAT_16APSK_23,
+	133,	//FE_SAT_16APSK_34,
+	125,	//FE_SAT_16APSK_45,
+	120,	//FE_SAT_16APSK_56,
+	113,	//FE_SAT_16APSK_89,
+	111,	//FE_SAT_16APSK_910,
+	133,	//FE_SAT_32APSK_34,
+	125,	//FE_SAT_32APSK_45,
+	120,	//FE_SAT_32APSK_56,
+	113,	//FE_SAT_32APSK_89,
+	111,	//FE_SAT_32APSK_910,
+	0,		//FE_SAT_MODCODE_UNKNOWN,
+	/* below modcodes are part of DVBS2x */
 
+	0,	//FE_SAT_MODCODE_UNKNOWN_1E = 0x1E,
+	0,	//FE_SAT_MODCODE_UNKNOWN_1F  = 0x1F,
+	200,	//FE_SAT_DVBS1_QPSK_12 = 0x20,
+	150,	//FE_SAT_DVBS1_QPSK_23 = 0x21,
+	133,	//FE_SAT_DVBS1_QPSK_34 = 0x22,
+	120,	//FE_SAT_DVBS1_QPSK_56 = 0x23,
+	117,	//FE_SAT_DVBS1_QPSK_67 = 0x24,
+	114,	//FE_SAT_DVBS1_QPSK_78 = 0x25,
+	0,	//FE_SAT_MODCODE_UNKNOWN_26 = 0x26,
+	0,	//FE_SAT_MODCODE_UNKNOWN_27 = 0x27,
+	0,	//FE_SAT_MODCODE_UNKNOWN_28 = 0x28,
+	0,	//FE_SAT_MODCODE_UNKNOWN_29 = 0x29,
+	0,	//FE_SAT_MODCODE_UNKNOWN_2A = 0x2A,
+	0,	//FE_SAT_MODCODE_UNKNOWN_2B = 0x2B,
+	0,	//FE_SAT_MODCODE_UNKNOWN_2C = 0x2C,
+	0,	//FE_SAT_MODCODE_UNKNOWN_2D = 0x2D,
+	0,	//FE_SAT_MODCODE_UNKNOWN_2E = 0x2E,
+	0,	//FE_SAT_MODCODE_UNKNOWN_2F = 0x2F,
+	0,	//FE_SAT_MODCODE_UNKNOWN_30 = 0x30,
+	0,	//FE_SAT_MODCODE_UNKNOWN_31 = 0x31,
+	0,	//FE_SAT_MODCODE_UNKNOWN_32 = 0x32,
+	0,	//FE_SAT_MODCODE_UNKNOWN_33 = 0x33,
+	0,	//FE_SAT_MODCODE_UNKNOWN_34 = 0x34,
+	0,	//FE_SAT_MODCODE_UNKNOWN_35 = 0x35,
+	0,	//FE_SAT_MODCODE_UNKNOWN_36 = 0x36,
+	0,	//FE_SAT_MODCODE_UNKNOWN_37 = 0x37,
+	0,	//FE_SAT_MODCODE_UNKNOWN_38 = 0x38,
+	0,	//FE_SAT_MODCODE_UNKNOWN_39 = 0x39,
+	0,	//FE_SAT_MODCODE_UNKNOWN_3A = 0x3A,
+	0,	//FE_SAT_MODCODE_UNKNOWN_3B = 0x3B,
+	0,	//FE_SAT_MODCODE_UNKNOWN_3C = 0x3C,
+	0,	//FE_SAT_MODCODE_UNKNOWN_3D = 0x3D,
+	0,	//FE_SAT_MODCODE_UNKNOWN_3E = 0x3E,
+	0,	//FE_SAT_MODCODE_UNKNOWN_3F = 0x3F,
+	0,	//FE_SATX_VLSNR1		  = 0x40,
+	0,	//FE_SATX_VLSNR2		= 0x41,
+	346,	//FE_SATX_QPSK_13_45	  = 0x42,
+	222,	//FE_SATX_QPSK_9_20 	= 0x43,
+	182,	//FE_SATX_QPSK_11_20	  = 0x44,
+	180,	//FE_SATX_8APSK_5_9_L	= 0x45,
+	173,	//FE_SATX_8APSK_26_45_L   = 0x46,
+	157,	//FE_SATX_8PSK_23_36	= 0x47,
+	144,	//FE_SATX_8PSK_25_36	  = 0x48,
+	138,	//FE_SATX_8PSK_13_18	= 0x49,
+	200,	//FE_SATX_16APSK_1_2_L	  = 0x4A,
+	188,	//FE_SATX_16APSK_8_15_L = 0x4B,
+	180,	//FE_SATX_16APSK_5_9_L	  = 0x4C,
+	173,	//FE_SATX_16APSK_26_45	= 0x4D,
+	167,	//FE_SATX_16APSK_3_5	  = 0x4E,
+	167,	//FE_SATX_16APSK_3_5_L	= 0x4F,
+	161,	//FE_SATX_16APSK_28_45	  = 0x50,
+	157,	//FE_SATX_16APSK_23_36	= 0x51,
+	150,	//FE_SATX_16APSK_2_3_L	  = 0x52,
+	144,	//FE_SATX_16APSK_25_36	= 0x53,
+	138,	//FE_SATX_16APSK_13_18	  = 0x54,
+	129,	//FE_SATX_16APSK_7_9	= 0x55,
+	117,	//FE_SATX_16APSK_77_90	  = 0x56,
+	150,	//FE_SATX_32APSK_2_3_L	= 0x57,
+	0,	//FE_SATX_32APSK_R_58	  = 0x58,
+	141,	//FE_SATX_32APSK_32_45	= 0x59,
+	136,	//FE_SATX_32APSK_11_15	  = 0x5A,
+	129,	//FE_SATX_32APSK_7_9	= 0x5B,
+	141,	//FE_SATX_64APSK_32_45_L  = 0x5C,
+	136,	//FE_SATX_64APSK_11_15	= 0x5D,
+	0,	//FE_SATX_64APSK_R_5E	  = 0x5E,
+	129,	//FE_SATX_64APSK_7_9	= 0x5F,
+	0,	//FE_SATX_64APSK_R_60	  = 0x60,
+	125,	//FE_SATX_64APSK_4_5	= 0x61,
+	0,	//FE_SATX_64APSK_R_62	  = 0x62,
+	120,	//FE_SATX_64APSK_5_6	= 0x63,
+	133,	//FE_SATX_128APSK_3_4	  = 0x64,
+	129,	//FE_SATX_128APSK_7_9	= 0x65,
+	155,	//FE_SATX_256APSK_29_45_L = 0x66,
+	150,	//FE_SATX_256APSK_2_3_L = 0x67,
+	145,	//FE_SATX_256APSK_31_45_L = 0x68,
+	141,	//FE_SATX_256APSK_32_45 = 0x69,
+	136,	//FE_SATX_256APSK_11_15_L = 0x6A,
+	133,	//FE_SATX_256APSK_3_4	= 0x6B,
+	409,	//FE_SATX_QPSK_11_45_S	  = 0x6C,
+	375,	//FE_SATX_QPSK_4_15_S	= 0x6D,
+	321,	//FE_SATX_QPSK_14_45_S	  = 0x6E,
+	214,	//FE_SATX_QPSK_7_15_S	= 0x6F,
+	188,	//FE_SATX_QPSK_8_15_S	  = 0x70,
+	141,	//FE_SATX_QPSK_32_45_S	= 0x71,
+	214,	//FE_SATX_8PSK_7_15_S	  = 0x72,
+	188,	//FE_SATX_8PSK_8_15_S	= 0x73,
+	173,	//FE_SATX_8PSK_26_45_S	  = 0x74,
+	141,	//FE_SATX_8PSK_32_45_S	= 0x75,
+	214,	//FE_SATX_16APSK_7_15_S   = 0x76,
+	188,	//FE_SATX_16APSK_8_15_S = 0x77,
+	173,	//FE_SATX_16APSK_26_45_S  = 0x78,
+	167,	//FE_SATX_16APSK_3_5_S	= 0x79,
+	141,	//FE_SATX_16APSK_32_45_S  = 0x7A,
+	150,	//FE_SATX_32APSK_2_3_S	= 0x7B,
+	141,	//FE_SATX_32APSK_32_45_S  = 0x7C,  
+	0,	//FE_SATX_8PSK			= 0x7D,
+	0,	//FE_SATX_32APSK		= 0x7E,
+	0,	//FE_SATX_256APSK		= 0x7F,  /* POFF Modes */			
+	0,	//FE_SATX_16APSK	= 0x80,
+	0,	//FE_SATX_64APSK	= 0x81,
+	0,	//FE_SATX_1024APSK		= 0x82,
+
+};	/*ModCod for DVBS2*/
+
+	
+
+ static u8 dvbs1_modcode_for_llr_x100[8] = {
+	200,	//FE_SAT_PR_1_2 =0,
+	150,	//FE_SAT_PR_2_3,	
+	133,	//FE_SAT_PR_3_4,
+	125,	//FE_SAT_PR_4_5,	/* for turbo code only */
+	120,	//FE_SAT_PR_5_6,
+	117,	//FE_SAT_PR_6_7,	/* for DSS only */
+	114,	//FE_SAT_PR_7_8,
+	113 //FE_SAT_PR_8_9,	/* for turbo code only */
+	//FE_SAT_PR_UNKNOWN
+};	/*ModCod for DVBS1*/
 /******************* 
 Current LLA revision	
 ********************/
@@ -2281,7 +2430,7 @@ fe_lla_error_t	fe_stid135_search(fe_stid135_handle_t handle, enum fe_stid135_dem
 			error |= fe_stid135_manage_manual_rolloff(handle, demod);
 		}
 	#endif
-
+#if 1
 	if((pSearch->symbol_rate >= pParams->master_clock) && (pParams->demod_search_algo[demod-1] == FE_SAT_BLIND_SEARCH)) /* if SR >= MST_CLK  & Blind search algo : usecase forbidden */
 		return(FE_LLA_NOT_SUPPORTED);
 
@@ -2300,6 +2449,14 @@ fe_lla_error_t	fe_stid135_search(fe_stid135_handle_t handle, enum fe_stid135_dem
 		error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_DEMOD_HDEBITCFG2_DEMODFLT_XXXMODE(demod), 0x15);
 	} else {
 		error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_DEMOD_CORRELCFG(demod), 0x01);
+	}
+#endif
+	//for wideband such as 200Msymbol/s 
+	if(pSearch->symbol_rate >= pParams->master_clock) { /* if SR >= MST_CLK */   
+		if(demod == FE_SAT_DEMOD_1)
+			error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_DEMOD_HDEBITCFG2(FE_SAT_DEMOD_2), 0xD4);
+		if(demod == FE_SAT_DEMOD_3)
+			error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_DEMOD_HDEBITCFG2(FE_SAT_DEMOD_4), 0xD4);
 	}
 
 	pParams->demod_puncture_rate[demod-1] = pSearch->puncture_rate;
@@ -4771,6 +4928,10 @@ fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 					error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE1(Demod), 0x80);
 					error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE0(Demod), 0x00);
 				#else
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FORCE_CONTINUOUS(Demod), 1);
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FRAME_MODE(Demod), 1);
+				//	error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 2);
+
 					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSCFG0_TSFIFO_EMBINDVB(Demod), 1);
 					/* Go back to reset value settings */
 					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSCFG1_TSFIFO_MANSPEED(Demod), 0);
@@ -4805,6 +4966,11 @@ fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 					error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE1(Demod), 0x80);
 					error |= ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE0(Demod), 0x00);
 				#else
+
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FORCE_CONTINUOUS(Demod), 1);
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FRAME_MODE(Demod), 1);
+					//error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 2);
+
 					matype_info &= 0x0F;
 					/* Set bit 5 to ignore ISI/MIS bit because not compatible with NCR feature (latency regulation) */
 					matype_info |= 0xB0;
@@ -11428,5 +11594,87 @@ STCHIP_Error_t stvvglna_term(STCHIP_Handle_t hChip)
 	}
 	
 	return error;
+}
+
+fe_lla_error_t get_current_llr(fe_stid135_handle_t handle,enum fe_stid135_demod demod_path,s32 *current_llr)
+{
+	fe_lla_error_t error=FE_LLA_NO_ERROR;
+	s32 max_llr_allowed, raw_bit_rate;
+	s32 fld_value[2];
+	struct fe_stid135_internal_param *pParams;
+	pParams = (struct fe_stid135_internal_param *) handle;
+	// Bit rate = Mclk * tsfifo_bitrate / 16384
+
+	ChipGetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSBITRATE1_TSFIFO_BITRATE(demod_path), &(fld_value[0]));
+	ChipGetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSBITRATE0_TSFIFO_BITRATE(demod_path), &(fld_value[1]));
+
+	raw_bit_rate = ((fld_value[0]) << 8) + (fld_value[1]);
+	FE_STiD135_GetMclkFreq(pParams, (u32*)&(fld_value[0]));
+	raw_bit_rate = (s32)(((fld_value[0])/16384)) * raw_bit_rate;
+	printk("\nBit rate = %d Mbits/s\n", raw_bit_rate/1000000);
+	// LLR = TS bitrate * 1 / PR
+	if(pParams->demod_results[demod_path-1].modcode != 0) {
+		if(pParams->demod_results[demod_path-1].standard == FE_SAT_DVBS2_STANDARD) {
+			if(pParams->demod_results[demod_path-1].modcode <= 131)
+				*current_llr = (raw_bit_rate / 100) * dvbs2_modcode_for_llr_x100[pParams->demod_results[demod_path-1].modcode];
+		}
+		if(pParams->demod_results[demod_path-1].standard == FE_SAT_DVBS1_STANDARD) {
+			if(pParams->demod_results[demod_path-1].puncture_rate <= 8)
+				*current_llr = (raw_bit_rate / 100) * dvbs1_modcode_for_llr_x100[pParams->demod_results[demod_path-1].puncture_rate];
+		}
+		if(*current_llr != 0)
+			printk("Current LLR  = %d MLLR/s\n", *current_llr/1000000);
+		else
+			printk("LLR unknown\n");
+		
+
+		if((*current_llr/1000)<80000)
+			fe_stid135_set_maxllr_rate(handle,demod_path,90);
+		else if(((*current_llr/1000)>80000)&&((*current_llr/1000)<113000))
+		    fe_stid135_set_maxllr_rate(handle,demod_path,129);	
+		else if(((*current_llr/1000)>113000)&&((*current_llr/1000)<162000))
+			fe_stid135_set_maxllr_rate(handle,demod_path,180);
+		else 			
+			fe_stid135_set_maxllr_rate(handle,demod_path,250);
+
+		
+
+	} else printk("LLR cannot be computed because dummy PLF!!\n");
+
+	ChipGetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_DEMOD_HDEBITCFG0_SDEMAP_MAXLLRRATE(demod_path), &max_llr_allowed);
+
+	switch(max_llr_allowed) {
+
+		case 0:
+			printk("Absolute maximum rate allowed by the LLR clock\n");
+		break;
+		case 1:
+			printk("Max LLR allowed = 180 MLLR/s\n");
+			if(*current_llr > 162000000)
+				printk("Careful! LLR may reach max allowed LLR!\n");
+		break;
+		case 2:
+			FE_STiD135_GetMclkFreq(handle, (u32*)&(fld_value[0])) ;
+
+			printk("Max LLR allowed = %d MLLR/s\n", fld_value[0]);
+
+			FE_STiD135_GetMclkFreq(handle, (u32*)&(fld_value[0])) ;
+
+			if(*current_llr >fld_value[0]/10*9)
+				printk("Careful! LLR may reach max allowed LLR!\n");
+
+		break;
+		case 3:
+			printk("Max LLR allowed = 90 MLLR/s\n");
+			if(*current_llr >  81000000 )
+				printk("Careful! LLR may reach max allowed LLR!\n");
+
+		break;
+		default:
+			printk("Unknown max LLR\n");
+		break;
+	}
+	return FE_LLA_NO_ERROR;
+
 }
 

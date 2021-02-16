@@ -210,9 +210,8 @@ static irqreturn_t geni_i2c_irq(int irq, void *dev)
 	u32 dma;
 	u32 val;
 	struct i2c_msg *cur;
-	unsigned long flags;
 
-	spin_lock_irqsave(&gi2c->lock, flags);
+	spin_lock(&gi2c->lock);
 	m_stat = readl_relaxed(base + SE_GENI_M_IRQ_STATUS);
 	rx_st = readl_relaxed(base + SE_GENI_RX_FIFO_STATUS);
 	dm_tx_st = readl_relaxed(base + SE_DMA_TX_IRQ_STAT);
@@ -294,7 +293,7 @@ static irqreturn_t geni_i2c_irq(int irq, void *dev)
 	    dm_rx_st & RX_DMA_DONE || dm_rx_st & RX_RESET_DONE)
 		complete(&gi2c->done);
 
-	spin_unlock_irqrestore(&gi2c->lock, flags);
+	spin_unlock(&gi2c->lock);
 
 	return IRQ_HANDLED;
 }
@@ -354,13 +353,11 @@ static int geni_i2c_rx_one_msg(struct geni_i2c_dev *gi2c, struct i2c_msg *msg,
 {
 	dma_addr_t rx_dma;
 	unsigned long time_left;
-	void *dma_buf = NULL;
+	void *dma_buf;
 	struct geni_se *se = &gi2c->se;
 	size_t len = msg->len;
 
-	if (!of_machine_is_compatible("lenovo,yoga-c630"))
-		dma_buf = i2c_get_dma_safe_msg_buf(msg, 32);
-
+	dma_buf = i2c_get_dma_safe_msg_buf(msg, 32);
 	if (dma_buf)
 		geni_se_select_mode(se, GENI_SE_DMA);
 	else
@@ -395,13 +392,11 @@ static int geni_i2c_tx_one_msg(struct geni_i2c_dev *gi2c, struct i2c_msg *msg,
 {
 	dma_addr_t tx_dma;
 	unsigned long time_left;
-	void *dma_buf = NULL;
+	void *dma_buf;
 	struct geni_se *se = &gi2c->se;
 	size_t len = msg->len;
 
-	if (!of_machine_is_compatible("lenovo,yoga-c630"))
-		dma_buf = i2c_get_dma_safe_msg_buf(msg, 32);
-
+	dma_buf = i2c_get_dma_safe_msg_buf(msg, 32);
 	if (dma_buf)
 		geni_se_select_mode(se, GENI_SE_DMA);
 	else
@@ -557,6 +552,22 @@ static int geni_i2c_probe(struct platform_device *pdev)
 	gi2c->adap.dev.of_node = dev->of_node;
 	strlcpy(gi2c->adap.name, "Geni-I2C", sizeof(gi2c->adap.name));
 
+	ret = geni_icc_get(&gi2c->se, "qup-memory");
+	if (ret)
+		return ret;
+	/*
+	 * Set the bus quota for core and cpu to a reasonable value for
+	 * register access.
+	 * Set quota for DDR based on bus speed.
+	 */
+	gi2c->se.icc_paths[GENI_TO_CORE].avg_bw = GENI_DEFAULT_BW;
+	gi2c->se.icc_paths[CPU_TO_GENI].avg_bw = GENI_DEFAULT_BW;
+	gi2c->se.icc_paths[GENI_TO_DDR].avg_bw = Bps_to_icc(gi2c->clk_freq_out);
+
+	ret = geni_icc_set_bw(&gi2c->se);
+	if (ret)
+		return ret;
+
 	ret = geni_se_resources_on(&gi2c->se);
 	if (ret) {
 		dev_err(dev, "Error turning on resources %d\n", ret);
@@ -578,6 +589,10 @@ static int geni_i2c_probe(struct platform_device *pdev)
 		dev_err(dev, "Error turning off resources %d\n", ret);
 		return ret;
 	}
+
+	ret = geni_icc_disable(&gi2c->se);
+	if (ret)
+		return ret;
 
 	dev_dbg(dev, "i2c fifo/se-dma mode. fifo depth:%d\n", tx_depth);
 
@@ -623,13 +638,17 @@ static int __maybe_unused geni_i2c_runtime_suspend(struct device *dev)
 		gi2c->suspended = 1;
 	}
 
-	return 0;
+	return geni_icc_disable(&gi2c->se);
 }
 
 static int __maybe_unused geni_i2c_runtime_resume(struct device *dev)
 {
 	int ret;
 	struct geni_i2c_dev *gi2c = dev_get_drvdata(dev);
+
+	ret = geni_icc_enable(&gi2c->se);
+	if (ret)
+		return ret;
 
 	ret = geni_se_resources_on(&gi2c->se);
 	if (ret)

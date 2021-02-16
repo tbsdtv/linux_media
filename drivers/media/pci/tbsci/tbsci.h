@@ -5,13 +5,12 @@
 #define TBS_PCIE_READ(__addr, __offst)		readl((dev->mmio + (__addr + __offst)))
 
 #define CHANNELS	2
-#define	FIFOSIZE	(2048 * 1024)
+#define FIFOSIZE (2 * 1024 * 1024)
 
 #define	DMASIZE		(1024 * 1024)
 
 #define TS_PACKET_SIZE		188
 #define WRITE_TOTAL_SIZE	(TS_PACKET_SIZE*96)
-#define WRITE_BLOCK_CEEL	(96)
 
 #define READ_PKTS		(256)
 #define READ_CELLS		(16)
@@ -42,6 +41,7 @@ struct ca_channel
 	struct kfifo 		r_fifo; 
 	u8			channel_index;
 	u8			is_open;
+	u8 is_open_for_read;
 	//struct tasklet_struct	tasklet;
 
 	/*ca */

@@ -84,6 +84,8 @@ int sctp_copy_local_addr_list(struct net *net, struct sctp_bind_addr *addr,
 struct sctp_pf *sctp_get_pf_specific(sa_family_t family);
 int sctp_register_pf(struct sctp_pf *, sa_family_t);
 void sctp_addr_wq_mgmt(struct net *, struct sctp_sockaddr_entry *, int);
+int sctp_udp_sock_start(struct net *net);
+void sctp_udp_sock_stop(struct net *net);
 
 /*
  * sctp/socket.c
@@ -291,7 +293,7 @@ atomic_dec(&sctp_dbg_objcnt_## name)
 #define SCTP_DBG_OBJCNT(name) \
 atomic_t sctp_dbg_objcnt_## name = ATOMIC_INIT(0)
 
-/* Macro to help create new entries in in the global array of
+/* Macro to help create new entries in the global array of
  * objcnt counters.
  */
 #define SCTP_DBG_OBJCNT_ENTRY(name) \
@@ -412,7 +414,7 @@ static inline void sctp_skb_set_owner_r(struct sk_buff *skb, struct sock *sk)
 /* Tests if the list has one and only one entry. */
 static inline int sctp_list_single_entry(struct list_head *head)
 {
-	return (head->next != head) && (head->next == head->prev);
+	return list_is_singular(head);
 }
 
 static inline bool sctp_chunk_pending(const struct sctp_chunk *chunk)
@@ -576,10 +578,13 @@ static inline __u32 sctp_mtu_payload(const struct sctp_sock *sp,
 {
 	__u32 overhead = sizeof(struct sctphdr) + extra;
 
-	if (sp)
+	if (sp) {
 		overhead += sp->pf->af->net_header_len;
-	else
+		if (sp->udp_port)
+			overhead += sizeof(struct udphdr);
+	} else {
 		overhead += sizeof(struct ipv6hdr);
+	}
 
 	if (WARN_ON_ONCE(mtu && mtu <= overhead))
 		mtu = overhead;

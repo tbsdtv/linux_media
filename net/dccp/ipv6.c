@@ -203,7 +203,7 @@ static int dccp_v6_send_response(const struct sock *sk, struct request_sock *req
 	fl6.flowi6_oif = ireq->ir_iif;
 	fl6.fl6_dport = ireq->ir_rmt_port;
 	fl6.fl6_sport = htons(ireq->ir_num);
-	security_req_classify_flow(req, flowi6_to_flowi(&fl6));
+	security_req_classify_flow(req, flowi6_to_flowi_common(&fl6));
 
 
 	rcu_read_lock();
@@ -279,7 +279,7 @@ static void dccp_v6_ctl_send_reset(const struct sock *sk, struct sk_buff *rxskb)
 	fl6.flowi6_oif = inet6_iif(rxskb);
 	fl6.fl6_dport = dccp_hdr(skb)->dccph_dport;
 	fl6.fl6_sport = dccp_hdr(skb)->dccph_sport;
-	security_skb_classify_flow(rxskb, flowi6_to_flowi(&fl6));
+	security_skb_classify_flow(rxskb, flowi6_to_flowi_common(&fl6));
 
 	/* sk = NULL, but it is safe for now. RST socket required. */
 	dst = ip6_dst_lookup_flow(sock_net(ctl_sk), ctl_sk, &fl6, NULL);
@@ -533,7 +533,7 @@ static struct sock *dccp_v6_request_recv_sock(const struct sock *sk,
 		dccp_done(newsk);
 		goto out;
 	}
-	*own_req = inet_ehash_nolisten(newsk, req_to_sk(req_unhash));
+	*own_req = inet_ehash_nolisten(newsk, req_to_sk(req_unhash), NULL);
 	/* Clone pktoptions received with SYN, if we own the req */
 	if (*own_req && ireq->pktopts) {
 		newnp->pktoptions = skb_clone(ireq->pktopts, GFP_ATOMIC);
@@ -907,7 +907,7 @@ static int dccp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	fl6.flowi6_oif = sk->sk_bound_dev_if;
 	fl6.fl6_dport = usin->sin6_port;
 	fl6.fl6_sport = inet->inet_sport;
-	security_sk_classify_flow(sk, flowi6_to_flowi(&fl6));
+	security_sk_classify_flow(sk, flowi6_to_flowi_common(&fl6));
 
 	opt = rcu_dereference_protected(np->opt, lockdep_sock_is_held(sk));
 	final_p = fl6_update_dst(&fl6, opt, &final);
@@ -970,10 +970,6 @@ static const struct inet_connection_sock_af_ops dccp_ipv6_af_ops = {
 	.getsockopt	   = ipv6_getsockopt,
 	.addr2sockaddr	   = inet6_csk_addr2sockaddr,
 	.sockaddr_len	   = sizeof(struct sockaddr_in6),
-#ifdef CONFIG_COMPAT
-	.compat_setsockopt = compat_ipv6_setsockopt,
-	.compat_getsockopt = compat_ipv6_getsockopt,
-#endif
 };
 
 /*
@@ -990,10 +986,6 @@ static const struct inet_connection_sock_af_ops dccp_ipv6_mapped = {
 	.getsockopt	   = ipv6_getsockopt,
 	.addr2sockaddr	   = inet6_csk_addr2sockaddr,
 	.sockaddr_len	   = sizeof(struct sockaddr_in6),
-#ifdef CONFIG_COMPAT
-	.compat_setsockopt = compat_ipv6_setsockopt,
-	.compat_getsockopt = compat_ipv6_getsockopt,
-#endif
 };
 
 /* NOTE: A lot of things set to zero explicitly by call to
@@ -1049,10 +1041,6 @@ static struct proto dccp_v6_prot = {
 	.rsk_prot	   = &dccp6_request_sock_ops,
 	.twsk_prot	   = &dccp6_timewait_sock_ops,
 	.h.hashinfo	   = &dccp_hashinfo,
-#ifdef CONFIG_COMPAT
-	.compat_setsockopt = compat_dccp_setsockopt,
-	.compat_getsockopt = compat_dccp_getsockopt,
-#endif
 };
 
 static const struct inet6_protocol dccp_v6_protocol = {
@@ -1083,8 +1071,6 @@ static const struct proto_ops inet6_dccp_ops = {
 	.sendpage	   = sock_no_sendpage,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	   = inet6_compat_ioctl,
-	.compat_setsockopt = compat_sock_common_setsockopt,
-	.compat_getsockopt = compat_sock_common_getsockopt,
 #endif
 };
 

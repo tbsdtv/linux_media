@@ -31,9 +31,6 @@
  */
 static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *);
 static void cp210x_close(struct usb_serial_port *);
-static void cp210x_get_termios(struct tty_struct *, struct usb_serial_port *);
-static void cp210x_get_termios_port(struct usb_serial_port *port,
-	tcflag_t *cflagp, unsigned int *baudp);
 static void cp210x_change_speed(struct tty_struct *, struct usb_serial_port *,
 							struct ktermios *);
 static void cp210x_set_termios(struct tty_struct *, struct usb_serial_port *,
@@ -49,7 +46,10 @@ static void cp210x_disconnect(struct usb_serial *);
 static void cp210x_release(struct usb_serial *);
 static int cp210x_port_probe(struct usb_serial_port *);
 static int cp210x_port_remove(struct usb_serial_port *);
-static void cp210x_dtr_rts(struct usb_serial_port *p, int on);
+static void cp210x_dtr_rts(struct usb_serial_port *port, int on);
+static void cp210x_process_read_urb(struct urb *urb);
+static void cp210x_enable_event_mode(struct usb_serial_port *port);
+static void cp210x_disable_event_mode(struct usb_serial_port *port);
 
 static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x045B, 0x0053) }, /* Renesas RX610 RX-Stick */
@@ -253,9 +253,20 @@ struct cp210x_serial_private {
 	bool			use_actual_rate;
 };
 
+enum cp210x_event_state {
+	ES_DATA,
+	ES_ESCAPE,
+	ES_LSR,
+	ES_LSR_DATA_0,
+	ES_LSR_DATA_1,
+	ES_MSR
+};
+
 struct cp210x_port_private {
-	__u8			bInterfaceNumber;
-	bool			has_swapped_line_ctl;
+	u8			bInterfaceNumber;
+	bool			event_mode;
+	enum cp210x_event_state event_state;
+	u8 lsr;
 };
 
 static struct usb_serial_driver cp210x_device = {
@@ -272,14 +283,18 @@ static struct usb_serial_driver cp210x_device = {
 	.break_ctl		= cp210x_break_ctl,
 	.set_termios		= cp210x_set_termios,
 	.tx_empty		= cp210x_tx_empty,
+	.throttle		= usb_serial_generic_throttle,
+	.unthrottle		= usb_serial_generic_unthrottle,
 	.tiocmget		= cp210x_tiocmget,
 	.tiocmset		= cp210x_tiocmset,
+	.get_icount		= usb_serial_generic_get_icount,
 	.attach			= cp210x_attach,
 	.disconnect		= cp210x_disconnect,
 	.release		= cp210x_release,
 	.port_probe		= cp210x_port_probe,
 	.port_remove		= cp210x_port_remove,
-	.dtr_rts		= cp210x_dtr_rts
+	.dtr_rts		= cp210x_dtr_rts,
+	.process_read_urb	= cp210x_process_read_urb,
 };
 
 static struct usb_serial_driver * const serial_drivers[] = {
@@ -401,13 +416,22 @@ struct cp210x_comm_status {
  */
 #define PURGE_ALL		0x000f
 
+/* CP210X_EMBED_EVENTS */
+#define CP210X_ESCCHAR		0xec
+
+#define CP210X_LSR_OVERRUN	BIT(1)
+#define CP210X_LSR_PARITY	BIT(2)
+#define CP210X_LSR_FRAME	BIT(3)
+#define CP210X_LSR_BREAK	BIT(4)
+
+
 /* CP210X_GET_FLOW/CP210X_SET_FLOW read/write these 0x10 bytes */
 struct cp210x_flow_ctl {
 	__le32	ulControlHandshake;
 	__le32	ulFlowReplace;
 	__le32	ulXonLimit;
 	__le32	ulXoffLimit;
-} __packed;
+};
 
 /* cp210x_flow_ctl::ulControlHandshake */
 #define CP210X_SERIAL_DTR_MASK		GENMASK(1, 0)
@@ -441,7 +465,7 @@ struct cp210x_flow_ctl {
 struct cp210x_pin_mode {
 	u8	eci;
 	u8	sci;
-} __packed;
+};
 
 #define CP210X_PIN_MODE_MODEM		0
 #define CP210X_PIN_MODE_GPIO		BIT(0)
@@ -504,7 +528,7 @@ struct cp210x_single_port_config {
 struct cp210x_gpio_write {
 	u8	mask;
 	u8	state;
-} __packed;
+};
 
 /*
  * Helper to get interface number when we only have struct usb_serial.
@@ -531,14 +555,8 @@ static int cp210x_read_reg_block(struct usb_serial_port *port, u8 req,
 	int result;
 
 	dmabuf = kmalloc(bufsize, GFP_KERNEL);
-	if (!dmabuf) {
-		/*
-		 * FIXME Some callers don't bother to check for error,
-		 * at least give them consistent junk until they are fixed
-		 */
-		memset(buf, 0, bufsize);
+	if (!dmabuf)
 		return -ENOMEM;
-	}
 
 	result = usb_control_msg(serial->dev, usb_rcvctrlpipe(serial->dev, 0),
 			req, REQTYPE_INTERFACE_TO_HOST, 0,
@@ -552,57 +570,11 @@ static int cp210x_read_reg_block(struct usb_serial_port *port, u8 req,
 				req, bufsize, result);
 		if (result >= 0)
 			result = -EIO;
-
-		/*
-		 * FIXME Some callers don't bother to check for error,
-		 * at least give them consistent junk until they are fixed
-		 */
-		memset(buf, 0, bufsize);
 	}
 
 	kfree(dmabuf);
 
 	return result;
-}
-
-/*
- * Reads any 32-bit CP210X_ register identified by req.
- */
-static int cp210x_read_u32_reg(struct usb_serial_port *port, u8 req, u32 *val)
-{
-	__le32 le32_val;
-	int err;
-
-	err = cp210x_read_reg_block(port, req, &le32_val, sizeof(le32_val));
-	if (err) {
-		/*
-		 * FIXME Some callers don't bother to check for error,
-		 * at least give them consistent junk until they are fixed
-		 */
-		*val = 0;
-		return err;
-	}
-
-	*val = le32_to_cpu(le32_val);
-
-	return 0;
-}
-
-/*
- * Reads any 16-bit CP210X_ register identified by req.
- */
-static int cp210x_read_u16_reg(struct usb_serial_port *port, u8 req, u16 *val)
-{
-	__le16 le16_val;
-	int err;
-
-	err = cp210x_read_reg_block(port, req, &le16_val, sizeof(le16_val));
-	if (err)
-		return err;
-
-	*val = le16_to_cpu(le16_val);
-
-	return 0;
 }
 
 /*
@@ -752,61 +724,9 @@ static int cp210x_write_vendor_block(struct usb_serial *serial, u8 type,
 }
 #endif
 
-/*
- * Detect CP2108 GET_LINE_CTL bug and activate workaround.
- * Write a known good value 0x800, read it back.
- * If it comes back swapped the bug is detected.
- * Preserve the original register value.
- */
-static int cp210x_detect_swapped_line_ctl(struct usb_serial_port *port)
-{
-	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
-	u16 line_ctl_save;
-	u16 line_ctl_test;
-	int err;
-
-	err = cp210x_read_u16_reg(port, CP210X_GET_LINE_CTL, &line_ctl_save);
-	if (err)
-		return err;
-
-	err = cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, 0x800);
-	if (err)
-		return err;
-
-	err = cp210x_read_u16_reg(port, CP210X_GET_LINE_CTL, &line_ctl_test);
-	if (err)
-		return err;
-
-	if (line_ctl_test == 8) {
-		port_priv->has_swapped_line_ctl = true;
-		line_ctl_save = swab16(line_ctl_save);
-	}
-
-	return cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, line_ctl_save);
-}
-
-/*
- * Must always be called instead of cp210x_read_u16_reg(CP210X_GET_LINE_CTL)
- * to workaround cp2108 bug and get correct value.
- */
-static int cp210x_get_line_ctl(struct usb_serial_port *port, u16 *ctl)
-{
-	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
-	int err;
-
-	err = cp210x_read_u16_reg(port, CP210X_GET_LINE_CTL, ctl);
-	if (err)
-		return err;
-
-	/* Workaround swapped bytes in 16-bit value from CP210X_GET_LINE_CTL */
-	if (port_priv->has_swapped_line_ctl)
-		*ctl = swab16(*ctl);
-
-	return 0;
-}
-
 static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
+	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
 	int result;
 
 	result = cp210x_write_u16_reg(port, CP210X_IFC_ENABLE, UART_ENABLE);
@@ -815,24 +735,139 @@ static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *port)
 		return result;
 	}
 
-	/* Configure the termios structure */
-	cp210x_get_termios(tty, port);
-
-	/* The baud rate must be initialised on cp2104 */
 	if (tty)
-		cp210x_change_speed(tty, port, NULL);
+		cp210x_set_termios(tty, port, NULL);
 
-	return usb_serial_generic_open(tty, port);
+	result = usb_serial_generic_open(tty, port);
+	if (result)
+		goto err_disable;
+
+	return 0;
+
+err_disable:
+	cp210x_write_u16_reg(port, CP210X_IFC_ENABLE, UART_DISABLE);
+	port_priv->event_mode = false;
+
+	return result;
 }
 
 static void cp210x_close(struct usb_serial_port *port)
 {
+	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
+
 	usb_serial_generic_close(port);
 
 	/* Clear both queues; cp2108 needs this to avoid an occasional hang */
 	cp210x_write_u16_reg(port, CP210X_PURGE, PURGE_ALL);
 
 	cp210x_write_u16_reg(port, CP210X_IFC_ENABLE, UART_DISABLE);
+
+	/* Disabling the interface disables event-insertion mode. */
+	port_priv->event_mode = false;
+}
+
+static void cp210x_process_lsr(struct usb_serial_port *port, unsigned char lsr, char *flag)
+{
+	if (lsr & CP210X_LSR_BREAK) {
+		port->icount.brk++;
+		*flag = TTY_BREAK;
+	} else if (lsr & CP210X_LSR_PARITY) {
+		port->icount.parity++;
+		*flag = TTY_PARITY;
+	} else if (lsr & CP210X_LSR_FRAME) {
+		port->icount.frame++;
+		*flag = TTY_FRAME;
+	}
+
+	if (lsr & CP210X_LSR_OVERRUN) {
+		port->icount.overrun++;
+		tty_insert_flip_char(&port->port, 0, TTY_OVERRUN);
+	}
+}
+
+static bool cp210x_process_char(struct usb_serial_port *port, unsigned char *ch, char *flag)
+{
+	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
+
+	switch (port_priv->event_state) {
+	case ES_DATA:
+		if (*ch == CP210X_ESCCHAR) {
+			port_priv->event_state = ES_ESCAPE;
+			break;
+		}
+		return false;
+	case ES_ESCAPE:
+		switch (*ch) {
+		case 0:
+			dev_dbg(&port->dev, "%s - escape char\n", __func__);
+			*ch = CP210X_ESCCHAR;
+			port_priv->event_state = ES_DATA;
+			return false;
+		case 1:
+			port_priv->event_state = ES_LSR_DATA_0;
+			break;
+		case 2:
+			port_priv->event_state = ES_LSR;
+			break;
+		case 3:
+			port_priv->event_state = ES_MSR;
+			break;
+		default:
+			dev_err(&port->dev, "malformed event 0x%02x\n", *ch);
+			port_priv->event_state = ES_DATA;
+			break;
+		}
+		break;
+	case ES_LSR_DATA_0:
+		port_priv->lsr = *ch;
+		port_priv->event_state = ES_LSR_DATA_1;
+		break;
+	case ES_LSR_DATA_1:
+		dev_dbg(&port->dev, "%s - lsr = 0x%02x, data = 0x%02x\n",
+				__func__, port_priv->lsr, *ch);
+		cp210x_process_lsr(port, port_priv->lsr, flag);
+		port_priv->event_state = ES_DATA;
+		return false;
+	case ES_LSR:
+		dev_dbg(&port->dev, "%s - lsr = 0x%02x\n", __func__, *ch);
+		port_priv->lsr = *ch;
+		cp210x_process_lsr(port, port_priv->lsr, flag);
+		port_priv->event_state = ES_DATA;
+		break;
+	case ES_MSR:
+		dev_dbg(&port->dev, "%s - msr = 0x%02x\n", __func__, *ch);
+		/* unimplemented */
+		port_priv->event_state = ES_DATA;
+		break;
+	}
+
+	return true;
+}
+
+static void cp210x_process_read_urb(struct urb *urb)
+{
+	struct usb_serial_port *port = urb->context;
+	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
+	unsigned char *ch = urb->transfer_buffer;
+	char flag;
+	int i;
+
+	if (!urb->actual_length)
+		return;
+
+	if (port_priv->event_mode) {
+		for (i = 0; i < urb->actual_length; i++, ch++) {
+			flag = TTY_NORMAL;
+
+			if (cp210x_process_char(port, ch, &flag))
+				continue;
+
+			tty_insert_flip_char(&port->port, *ch, flag);
+		}
+	} else {
+		tty_insert_flip_string(&port->port, ch, urb->actual_length);
+	}
+	tty_flip_buffer_push(&port->port);
 }
 
 /*
@@ -878,150 +913,6 @@ static bool cp210x_tx_empty(struct usb_serial_port *port)
 		return true;
 
 	return !count;
-}
-
-/*
- * cp210x_get_termios
- * Reads the baud rate, data bits, parity, stop bits and flow control mode
- * from the device, corrects any unsupported values, and configures the
- * termios structure to reflect the state of the device
- */
-static void cp210x_get_termios(struct tty_struct *tty,
-	struct usb_serial_port *port)
-{
-	unsigned int baud;
-
-	if (tty) {
-		cp210x_get_termios_port(tty->driver_data,
-			&tty->termios.c_cflag, &baud);
-		tty_encode_baud_rate(tty, baud, baud);
-	} else {
-		tcflag_t cflag;
-		cflag = 0;
-		cp210x_get_termios_port(port, &cflag, &baud);
-	}
-}
-
-/*
- * cp210x_get_termios_port
- * This is the heart of cp210x_get_termios which always uses a &usb_serial_port.
- */
-static void cp210x_get_termios_port(struct usb_serial_port *port,
-	tcflag_t *cflagp, unsigned int *baudp)
-{
-	struct device *dev = &port->dev;
-	tcflag_t cflag;
-	struct cp210x_flow_ctl flow_ctl;
-	u32 baud;
-	u16 bits;
-	u32 ctl_hs;
-
-	cp210x_read_u32_reg(port, CP210X_GET_BAUDRATE, &baud);
-
-	dev_dbg(dev, "%s - baud rate = %d\n", __func__, baud);
-	*baudp = baud;
-
-	cflag = *cflagp;
-
-	cp210x_get_line_ctl(port, &bits);
-	cflag &= ~CSIZE;
-	switch (bits & BITS_DATA_MASK) {
-	case BITS_DATA_5:
-		dev_dbg(dev, "%s - data bits = 5\n", __func__);
-		cflag |= CS5;
-		break;
-	case BITS_DATA_6:
-		dev_dbg(dev, "%s - data bits = 6\n", __func__);
-		cflag |= CS6;
-		break;
-	case BITS_DATA_7:
-		dev_dbg(dev, "%s - data bits = 7\n", __func__);
-		cflag |= CS7;
-		break;
-	case BITS_DATA_8:
-		dev_dbg(dev, "%s - data bits = 8\n", __func__);
-		cflag |= CS8;
-		break;
-	case BITS_DATA_9:
-		dev_dbg(dev, "%s - data bits = 9 (not supported, using 8 data bits)\n", __func__);
-		cflag |= CS8;
-		bits &= ~BITS_DATA_MASK;
-		bits |= BITS_DATA_8;
-		cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits);
-		break;
-	default:
-		dev_dbg(dev, "%s - Unknown number of data bits, using 8\n", __func__);
-		cflag |= CS8;
-		bits &= ~BITS_DATA_MASK;
-		bits |= BITS_DATA_8;
-		cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits);
-		break;
-	}
-
-	switch (bits & BITS_PARITY_MASK) {
-	case BITS_PARITY_NONE:
-		dev_dbg(dev, "%s - parity = NONE\n", __func__);
-		cflag &= ~PARENB;
-		break;
-	case BITS_PARITY_ODD:
-		dev_dbg(dev, "%s - parity = ODD\n", __func__);
-		cflag |= (PARENB|PARODD);
-		break;
-	case BITS_PARITY_EVEN:
-		dev_dbg(dev, "%s - parity = EVEN\n", __func__);
-		cflag &= ~PARODD;
-		cflag |= PARENB;
-		break;
-	case BITS_PARITY_MARK:
-		dev_dbg(dev, "%s - parity = MARK\n", __func__);
-		cflag |= (PARENB|PARODD|CMSPAR);
-		break;
-	case BITS_PARITY_SPACE:
-		dev_dbg(dev, "%s - parity = SPACE\n", __func__);
-		cflag &= ~PARODD;
-		cflag |= (PARENB|CMSPAR);
-		break;
-	default:
-		dev_dbg(dev, "%s - Unknown parity mode, disabling parity\n", __func__);
-		cflag &= ~PARENB;
-		bits &= ~BITS_PARITY_MASK;
-		cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits);
-		break;
-	}
-
-	cflag &= ~CSTOPB;
-	switch (bits & BITS_STOP_MASK) {
-	case BITS_STOP_1:
-		dev_dbg(dev, "%s - stop bits = 1\n", __func__);
-		break;
-	case BITS_STOP_1_5:
-		dev_dbg(dev, "%s - stop bits = 1.5 (not supported, using 1 stop bit)\n", __func__);
-		bits &= ~BITS_STOP_MASK;
-		cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits);
-		break;
-	case BITS_STOP_2:
-		dev_dbg(dev, "%s - stop bits = 2\n", __func__);
-		cflag |= CSTOPB;
-		break;
-	default:
-		dev_dbg(dev, "%s - Unknown number of stop bits, using 1 stop bit\n", __func__);
-		bits &= ~BITS_STOP_MASK;
-		cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits);
-		break;
-	}
-
-	cp210x_read_reg_block(port, CP210X_GET_FLOW, &flow_ctl,
-			sizeof(flow_ctl));
-	ctl_hs = le32_to_cpu(flow_ctl.ulControlHandshake);
-	if (ctl_hs & CP210X_SERIAL_CTS_HANDSHAKE) {
-		dev_dbg(dev, "%s - flow control = CRTSCTS\n", __func__);
-		cflag |= CRTSCTS;
-	} else {
-		dev_dbg(dev, "%s - flow control = NONE\n", __func__);
-		cflag &= ~CRTSCTS;
-	}
-
-	*cflagp = cflag;
 }
 
 struct cp210x_rate {
@@ -1148,128 +1039,165 @@ static void cp210x_change_speed(struct tty_struct *tty,
 	tty_encode_baud_rate(tty, baud, baud);
 }
 
+static void cp210x_enable_event_mode(struct usb_serial_port *port)
+{
+	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
+	int ret;
+
+	if (port_priv->event_mode)
+		return;
+
+	port_priv->event_state = ES_DATA;
+	port_priv->event_mode = true;
+
+	ret = cp210x_write_u16_reg(port, CP210X_EMBED_EVENTS, CP210X_ESCCHAR);
+	if (ret) {
+		dev_err(&port->dev, "failed to enable events: %d\n", ret);
+		port_priv->event_mode = false;
+	}
+}
+
+static void cp210x_disable_event_mode(struct usb_serial_port *port)
+{
+	struct cp210x_port_private *port_priv = usb_get_serial_port_data(port);
+	int ret;
+
+	if (!port_priv->event_mode)
+		return;
+
+	ret = cp210x_write_u16_reg(port, CP210X_EMBED_EVENTS, 0);
+	if (ret) {
+		dev_err(&port->dev, "failed to disable events: %d\n", ret);
+		return;
+	}
+
+	port_priv->event_mode = false;
+}
+
+static bool cp210x_termios_change(const struct ktermios *a, const struct ktermios *b)
+{
+	bool iflag_change;
+
+	iflag_change = ((a->c_iflag ^ b->c_iflag) & INPCK);
+
+	return tty_termios_hw_change(a, b) || iflag_change;
+}
+
+static void cp210x_set_flow_control(struct tty_struct *tty,
+		struct usb_serial_port *port, struct ktermios *old_termios)
+{
+	struct cp210x_flow_ctl flow_ctl;
+	u32 flow_repl;
+	u32 ctl_hs;
+	int ret;
+
+	if (old_termios && C_CRTSCTS(tty) == (old_termios->c_cflag & CRTSCTS))
+		return;
+
+	ret = cp210x_read_reg_block(port, CP210X_GET_FLOW, &flow_ctl,
+			sizeof(flow_ctl));
+	if (ret)
+		return;
+
+	ctl_hs = le32_to_cpu(flow_ctl.ulControlHandshake);
+	flow_repl = le32_to_cpu(flow_ctl.ulFlowReplace);
+
+	ctl_hs &= ~CP210X_SERIAL_DSR_HANDSHAKE;
+	ctl_hs &= ~CP210X_SERIAL_DCD_HANDSHAKE;
+	ctl_hs &= ~CP210X_SERIAL_DSR_SENSITIVITY;
+	ctl_hs &= ~CP210X_SERIAL_DTR_MASK;
+	ctl_hs |= CP210X_SERIAL_DTR_SHIFT(CP210X_SERIAL_DTR_ACTIVE);
+
+	if (C_CRTSCTS(tty)) {
+		ctl_hs |= CP210X_SERIAL_CTS_HANDSHAKE;
+		flow_repl &= ~CP210X_SERIAL_RTS_MASK;
+		flow_repl |= CP210X_SERIAL_RTS_SHIFT(CP210X_SERIAL_RTS_FLOW_CTL);
+	} else {
+		ctl_hs &= ~CP210X_SERIAL_CTS_HANDSHAKE;
+		flow_repl &= ~CP210X_SERIAL_RTS_MASK;
+		flow_repl |= CP210X_SERIAL_RTS_SHIFT(CP210X_SERIAL_RTS_ACTIVE);
+	}
+
+	dev_dbg(&port->dev, "%s - ulControlHandshake=0x%08x, ulFlowReplace=0x%08x\n",
+			__func__, ctl_hs, flow_repl);
+
+	flow_ctl.ulControlHandshake = cpu_to_le32(ctl_hs);
+	flow_ctl.ulFlowReplace = cpu_to_le32(flow_repl);
+
+	cp210x_write_reg_block(port, CP210X_SET_FLOW, &flow_ctl,
+			sizeof(flow_ctl));
+}
+
 static void cp210x_set_termios(struct tty_struct *tty,
 		struct usb_serial_port *port, struct ktermios *old_termios)
 {
-	struct device *dev = &port->dev;
-	unsigned int cflag, old_cflag;
+	struct cp210x_serial_private *priv = usb_get_serial_data(port->serial);
 	u16 bits;
+	int ret;
 
-	cflag = tty->termios.c_cflag;
-	old_cflag = old_termios->c_cflag;
+	if (old_termios && !cp210x_termios_change(&tty->termios, old_termios))
+		return;
 
-	if (tty->termios.c_ospeed != old_termios->c_ospeed)
+	if (!old_termios || tty->termios.c_ospeed != old_termios->c_ospeed)
 		cp210x_change_speed(tty, port, old_termios);
 
-	/* If the number of data bits is to be updated */
-	if ((cflag & CSIZE) != (old_cflag & CSIZE)) {
-		cp210x_get_line_ctl(port, &bits);
-		bits &= ~BITS_DATA_MASK;
-		switch (cflag & CSIZE) {
-		case CS5:
-			bits |= BITS_DATA_5;
-			dev_dbg(dev, "%s - data bits = 5\n", __func__);
-			break;
-		case CS6:
-			bits |= BITS_DATA_6;
-			dev_dbg(dev, "%s - data bits = 6\n", __func__);
-			break;
-		case CS7:
-			bits |= BITS_DATA_7;
-			dev_dbg(dev, "%s - data bits = 7\n", __func__);
-			break;
-		case CS8:
-		default:
-			bits |= BITS_DATA_8;
-			dev_dbg(dev, "%s - data bits = 8\n", __func__);
-			break;
-		}
-		if (cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits))
-			dev_dbg(dev, "Number of data bits requested not supported by device\n");
+	/* CP2101 only supports CS8, 1 stop bit and non-stick parity. */
+	if (priv->partnum == CP210X_PARTNUM_CP2101) {
+		tty->termios.c_cflag &= ~(CSIZE | CSTOPB | CMSPAR);
+		tty->termios.c_cflag |= CS8;
 	}
 
-	if ((cflag     & (PARENB|PARODD|CMSPAR)) !=
-	    (old_cflag & (PARENB|PARODD|CMSPAR))) {
-		cp210x_get_line_ctl(port, &bits);
-		bits &= ~BITS_PARITY_MASK;
-		if (cflag & PARENB) {
-			if (cflag & CMSPAR) {
-				if (cflag & PARODD) {
-					bits |= BITS_PARITY_MARK;
-					dev_dbg(dev, "%s - parity = MARK\n", __func__);
-				} else {
-					bits |= BITS_PARITY_SPACE;
-					dev_dbg(dev, "%s - parity = SPACE\n", __func__);
-				}
-			} else {
-				if (cflag & PARODD) {
-					bits |= BITS_PARITY_ODD;
-					dev_dbg(dev, "%s - parity = ODD\n", __func__);
-				} else {
-					bits |= BITS_PARITY_EVEN;
-					dev_dbg(dev, "%s - parity = EVEN\n", __func__);
-				}
-			}
-		}
-		if (cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits))
-			dev_dbg(dev, "Parity mode not supported by device\n");
+	bits = 0;
+
+	switch (C_CSIZE(tty)) {
+	case CS5:
+		bits |= BITS_DATA_5;
+		break;
+	case CS6:
+		bits |= BITS_DATA_6;
+		break;
+	case CS7:
+		bits |= BITS_DATA_7;
+		break;
+	case CS8:
+	default:
+		bits |= BITS_DATA_8;
+		break;
 	}
 
-	if ((cflag & CSTOPB) != (old_cflag & CSTOPB)) {
-		cp210x_get_line_ctl(port, &bits);
-		bits &= ~BITS_STOP_MASK;
-		if (cflag & CSTOPB) {
-			bits |= BITS_STOP_2;
-			dev_dbg(dev, "%s - stop bits = 2\n", __func__);
+	if (C_PARENB(tty)) {
+		if (C_CMSPAR(tty)) {
+			if (C_PARODD(tty))
+				bits |= BITS_PARITY_MARK;
+			else
+				bits |= BITS_PARITY_SPACE;
 		} else {
-			bits |= BITS_STOP_1;
-			dev_dbg(dev, "%s - stop bits = 1\n", __func__);
+			if (C_PARODD(tty))
+				bits |= BITS_PARITY_ODD;
+			else
+				bits |= BITS_PARITY_EVEN;
 		}
-		if (cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits))
-			dev_dbg(dev, "Number of stop bits requested not supported by device\n");
 	}
 
-	if ((cflag & CRTSCTS) != (old_cflag & CRTSCTS)) {
-		struct cp210x_flow_ctl flow_ctl;
-		u32 ctl_hs;
-		u32 flow_repl;
+	if (C_CSTOPB(tty))
+		bits |= BITS_STOP_2;
+	else
+		bits |= BITS_STOP_1;
 
-		cp210x_read_reg_block(port, CP210X_GET_FLOW, &flow_ctl,
-				sizeof(flow_ctl));
-		ctl_hs = le32_to_cpu(flow_ctl.ulControlHandshake);
-		flow_repl = le32_to_cpu(flow_ctl.ulFlowReplace);
-		dev_dbg(dev, "%s - read ulControlHandshake=0x%08x, ulFlowReplace=0x%08x\n",
-				__func__, ctl_hs, flow_repl);
+	ret = cp210x_write_u16_reg(port, CP210X_SET_LINE_CTL, bits);
+	if (ret)
+		dev_err(&port->dev, "failed to set line control: %d\n", ret);
 
-		ctl_hs &= ~CP210X_SERIAL_DSR_HANDSHAKE;
-		ctl_hs &= ~CP210X_SERIAL_DCD_HANDSHAKE;
-		ctl_hs &= ~CP210X_SERIAL_DSR_SENSITIVITY;
-		ctl_hs &= ~CP210X_SERIAL_DTR_MASK;
-		ctl_hs |= CP210X_SERIAL_DTR_SHIFT(CP210X_SERIAL_DTR_ACTIVE);
-		if (cflag & CRTSCTS) {
-			ctl_hs |= CP210X_SERIAL_CTS_HANDSHAKE;
+	cp210x_set_flow_control(tty, port, old_termios);
 
-			flow_repl &= ~CP210X_SERIAL_RTS_MASK;
-			flow_repl |= CP210X_SERIAL_RTS_SHIFT(
-					CP210X_SERIAL_RTS_FLOW_CTL);
-			dev_dbg(dev, "%s - flow control = CRTSCTS\n", __func__);
-		} else {
-			ctl_hs &= ~CP210X_SERIAL_CTS_HANDSHAKE;
-
-			flow_repl &= ~CP210X_SERIAL_RTS_MASK;
-			flow_repl |= CP210X_SERIAL_RTS_SHIFT(
-					CP210X_SERIAL_RTS_ACTIVE);
-			dev_dbg(dev, "%s - flow control = NONE\n", __func__);
-		}
-
-		dev_dbg(dev, "%s - write ulControlHandshake=0x%08x, ulFlowReplace=0x%08x\n",
-				__func__, ctl_hs, flow_repl);
-		flow_ctl.ulControlHandshake = cpu_to_le32(ctl_hs);
-		flow_ctl.ulFlowReplace = cpu_to_le32(flow_repl);
-		cp210x_write_reg_block(port, CP210X_SET_FLOW, &flow_ctl,
-				sizeof(flow_ctl));
-	}
-
+	/*
+	 * Enable event-insertion mode only if input parity checking is
+	 * enabled for now.
+	 */
+	if (I_INPCK(tty))
+		cp210x_enable_event_mode(port);
+	else
+		cp210x_disable_event_mode(port);
 }
 
 static int cp210x_tiocmset(struct tty_struct *tty,
@@ -1306,12 +1234,12 @@ static int cp210x_tiocmset_port(struct usb_serial_port *port,
 	return cp210x_write_u16_reg(port, CP210X_SET_MHS, control);
 }
 
-static void cp210x_dtr_rts(struct usb_serial_port *p, int on)
+static void cp210x_dtr_rts(struct usb_serial_port *port, int on)
 {
 	if (on)
-		cp210x_tiocmset_port(p, TIOCM_DTR|TIOCM_RTS, 0);
+		cp210x_tiocmset_port(port, TIOCM_DTR | TIOCM_RTS, 0);
 	else
-		cp210x_tiocmset_port(p, 0, TIOCM_DTR|TIOCM_RTS);
+		cp210x_tiocmset_port(port, 0, TIOCM_DTR | TIOCM_RTS);
 }
 
 static int cp210x_tiocmget(struct tty_struct *tty)
@@ -1774,7 +1702,6 @@ static int cp210x_port_probe(struct usb_serial_port *port)
 {
 	struct usb_serial *serial = port->serial;
 	struct cp210x_port_private *port_priv;
-	int ret;
 
 	port_priv = kzalloc(sizeof(*port_priv), GFP_KERNEL);
 	if (!port_priv)
@@ -1783,12 +1710,6 @@ static int cp210x_port_probe(struct usb_serial_port *port)
 	port_priv->bInterfaceNumber = cp210x_interface_num(serial);
 
 	usb_set_serial_port_data(port, port_priv);
-
-	ret = cp210x_detect_swapped_line_ctl(port);
-	if (ret) {
-		kfree(port_priv);
-		return ret;
-	}
 
 	return 0;
 }

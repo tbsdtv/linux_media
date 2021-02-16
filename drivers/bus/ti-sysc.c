@@ -221,6 +221,37 @@ static u32 sysc_read_sysstatus(struct sysc *ddata)
 	return sysc_read(ddata, offset);
 }
 
+/* Poll on reset status */
+static int sysc_wait_softreset(struct sysc *ddata)
+{
+	u32 sysc_mask, syss_done, rstval;
+	int syss_offset, error = 0;
+
+	if (ddata->cap->regbits->srst_shift < 0)
+		return 0;
+
+	syss_offset = ddata->offsets[SYSC_SYSSTATUS];
+	sysc_mask = BIT(ddata->cap->regbits->srst_shift);
+
+	if (ddata->cfg.quirks & SYSS_QUIRK_RESETDONE_INVERTED)
+		syss_done = 0;
+	else
+		syss_done = ddata->cfg.syss_mask;
+
+	if (syss_offset >= 0) {
+		error = readx_poll_timeout_atomic(sysc_read_sysstatus, ddata,
+				rstval, (rstval & ddata->cfg.syss_mask) ==
+				syss_done, 100, MAX_MODULE_SOFTRESET_WAIT);
+
+	} else if (ddata->cfg.quirks & SYSC_QUIRK_RESET_STATUS) {
+		error = readx_poll_timeout_atomic(sysc_read_sysconfig, ddata,
+				rstval, !(rstval & sysc_mask),
+				100, MAX_MODULE_SOFTRESET_WAIT);
+	}
+
+	return error;
+}
+
 static int sysc_add_named_clock_from_child(struct sysc *ddata,
 					   const char *name,
 					   const char *optfck_name)
@@ -822,7 +853,11 @@ static int sysc_ioremap(struct sysc *ddata)
  */
 static int sysc_map_and_check_registers(struct sysc *ddata)
 {
+	struct device_node *np = ddata->dev->of_node;
 	int error;
+
+	if (!of_get_property(np, "reg", NULL))
+		return 0;
 
 	error = sysc_parse_and_check_child_range(ddata);
 	if (error)
@@ -925,18 +960,53 @@ static int sysc_enable_module(struct device *dev)
 	struct sysc *ddata;
 	const struct sysc_regbits *regbits;
 	u32 reg, idlemodes, best_mode;
+	int error;
 
 	ddata = dev_get_drvdata(dev);
+
+	/*
+	 * Some modules like DSS reset automatically on idle. Enable optional
+	 * reset clocks and wait for OCP softreset to complete.
+	 */
+	if (ddata->cfg.quirks & SYSC_QUIRK_OPT_CLKS_IN_RESET) {
+		error = sysc_enable_opt_clocks(ddata);
+		if (error) {
+			dev_err(ddata->dev,
+				"Optional clocks failed for enable: %i\n",
+				error);
+			return error;
+		}
+	}
+	/*
+	 * Some modules like i2c and hdq1w have unusable reset status unless
+	 * the module reset quirk is enabled. Skip status check on enable.
+	 */
+	if (!(ddata->cfg.quirks & SYSC_MODULE_QUIRK_ENA_RESETDONE)) {
+		error = sysc_wait_softreset(ddata);
+		if (error)
+			dev_warn(ddata->dev, "OCP softreset timed out\n");
+	}
+	if (ddata->cfg.quirks & SYSC_QUIRK_OPT_CLKS_IN_RESET)
+		sysc_disable_opt_clocks(ddata);
+
+	/*
+	 * Some subsystem private interconnects, like DSS top level module,
+	 * need only the automatic OCP softreset handling with no sysconfig
+	 * register bits to configure.
+	 */
 	if (ddata->offsets[SYSC_SYSCONFIG] == -ENODEV)
 		return 0;
 
 	regbits = ddata->cap->regbits;
 	reg = sysc_read(ddata, ddata->offsets[SYSC_SYSCONFIG]);
 
-	/* Set CLOCKACTIVITY, we only use it for ick */
+	/*
+	 * Set CLOCKACTIVITY, we only use it for ick. And we only configure it
+	 * based on the SYSC_QUIRK_USE_CLOCKACT flag, not based on the hardware
+	 * capabilities. See the old HWMOD_SET_DEFAULT_CLOCKACT flag.
+	 */
 	if (regbits->clkact_shift >= 0 &&
-	    (ddata->cfg.quirks & SYSC_QUIRK_USE_CLOCKACT ||
-	     ddata->cfg.sysc_val & BIT(regbits->clkact_shift)))
+	    (ddata->cfg.quirks & SYSC_QUIRK_USE_CLOCKACT))
 		reg |= SYSC_CLOCACT_ICK << regbits->clkact_shift;
 
 	/* Set SIDLE mode */
@@ -990,6 +1060,9 @@ set_autoidle:
 		reg |= 1 << regbits->autoidle_shift;
 		sysc_write_sysconfig(ddata, reg);
 	}
+
+	/* Flush posted write */
+	sysc_read(ddata, ddata->offsets[SYSC_SYSCONFIG]);
 
 	if (ddata->module_enable_quirk)
 		ddata->module_enable_quirk(ddata);
@@ -1071,6 +1144,9 @@ set_sidle:
 		reg |= 1 << regbits->autoidle_shift;
 	sysc_write_sysconfig(ddata, reg);
 
+	/* Flush posted write */
+	sysc_read(ddata, ddata->offsets[SYSC_SYSCONFIG]);
+
 	return 0;
 }
 
@@ -1150,9 +1226,9 @@ static int __maybe_unused sysc_runtime_suspend(struct device *dev)
 	ddata->enabled = false;
 
 err_allow_idle:
-	reset_control_assert(ddata->rsts);
-
 	sysc_clkdm_allow_idle(ddata);
+
+	reset_control_assert(ddata->rsts);
 
 	return error;
 }
@@ -1215,7 +1291,8 @@ static int __maybe_unused sysc_noirq_suspend(struct device *dev)
 
 	ddata = dev_get_drvdata(dev);
 
-	if (ddata->cfg.quirks & SYSC_QUIRK_LEGACY_IDLE)
+	if (ddata->cfg.quirks &
+	    (SYSC_QUIRK_LEGACY_IDLE | SYSC_QUIRK_NO_IDLE))
 		return 0;
 
 	return pm_runtime_force_suspend(dev);
@@ -1227,7 +1304,8 @@ static int __maybe_unused sysc_noirq_resume(struct device *dev)
 
 	ddata = dev_get_drvdata(dev);
 
-	if (ddata->cfg.quirks & SYSC_QUIRK_LEGACY_IDLE)
+	if (ddata->cfg.quirks &
+	    (SYSC_QUIRK_LEGACY_IDLE | SYSC_QUIRK_NO_IDLE))
 		return 0;
 
 	return pm_runtime_force_resume(dev);
@@ -1305,20 +1383,22 @@ static const struct sysc_revision_quirk sysc_revision_quirks[] = {
 		   SYSC_QUIRK_CLKDM_NOAUTO),
 	SYSC_QUIRK("dwc3", 0x488c0000, 0, 0x10, -ENODEV, 0x500a0200, 0xffffffff,
 		   SYSC_QUIRK_CLKDM_NOAUTO),
+	SYSC_QUIRK("gpmc", 0, 0, 0x10, 0x14, 0x00000060, 0xffffffff,
+		   SYSC_QUIRK_GPMC_DEBUG),
 	SYSC_QUIRK("hdmi", 0, 0, 0x10, -ENODEV, 0x50030200, 0xffffffff,
 		   SYSC_QUIRK_OPT_CLKS_NEEDED),
 	SYSC_QUIRK("hdq1w", 0, 0, 0x14, 0x18, 0x00000006, 0xffffffff,
-		   SYSC_MODULE_QUIRK_HDQ1W),
+		   SYSC_MODULE_QUIRK_HDQ1W | SYSC_MODULE_QUIRK_ENA_RESETDONE),
 	SYSC_QUIRK("hdq1w", 0, 0, 0x14, 0x18, 0x0000000a, 0xffffffff,
-		   SYSC_MODULE_QUIRK_HDQ1W),
+		   SYSC_MODULE_QUIRK_HDQ1W | SYSC_MODULE_QUIRK_ENA_RESETDONE),
 	SYSC_QUIRK("i2c", 0, 0, 0x20, 0x10, 0x00000036, 0x000000ff,
-		   SYSC_MODULE_QUIRK_I2C),
+		   SYSC_MODULE_QUIRK_I2C | SYSC_MODULE_QUIRK_ENA_RESETDONE),
 	SYSC_QUIRK("i2c", 0, 0, 0x20, 0x10, 0x0000003c, 0x000000ff,
-		   SYSC_MODULE_QUIRK_I2C),
+		   SYSC_MODULE_QUIRK_I2C | SYSC_MODULE_QUIRK_ENA_RESETDONE),
 	SYSC_QUIRK("i2c", 0, 0, 0x20, 0x10, 0x00000040, 0x000000ff,
-		   SYSC_MODULE_QUIRK_I2C),
+		   SYSC_MODULE_QUIRK_I2C | SYSC_MODULE_QUIRK_ENA_RESETDONE),
 	SYSC_QUIRK("i2c", 0, 0, 0x10, 0x90, 0x5040000a, 0xfffff0f0,
-		   SYSC_MODULE_QUIRK_I2C),
+		   SYSC_MODULE_QUIRK_I2C | SYSC_MODULE_QUIRK_ENA_RESETDONE),
 	SYSC_QUIRK("gpu", 0x50000000, 0x14, -ENODEV, -ENODEV, 0x00010201, 0xffffffff, 0),
 	SYSC_QUIRK("gpu", 0x50000000, 0xfe00, 0xfe10, -ENODEV, 0x40000000 , 0xffffffff,
 		   SYSC_MODULE_QUIRK_SGX),
@@ -1329,6 +1409,10 @@ static const struct sysc_revision_quirk sysc_revision_quirks[] = {
 	SYSC_QUIRK("tptc", 0, 0, 0x10, -ENODEV, 0x40006c00, 0xffffefff,
 		   SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY),
 	SYSC_QUIRK("tptc", 0, 0, -ENODEV, -ENODEV, 0x40007c00, 0xffffffff,
+		   SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY),
+	SYSC_QUIRK("usb_host_hs", 0, 0, 0x10, 0x14, 0x50700100, 0xffffffff,
+		   SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY),
+	SYSC_QUIRK("usb_host_hs", 0, 0, 0x10, -ENODEV, 0x50700101, 0xffffffff,
 		   SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY),
 	SYSC_QUIRK("usb_otg_hs", 0, 0x400, 0x404, 0x408, 0x00000050,
 		   0xffffffff, SYSC_QUIRK_SWSUP_SIDLE | SYSC_QUIRK_SWSUP_MSTANDBY),
@@ -1408,8 +1492,6 @@ static const struct sysc_revision_quirk sysc_revision_quirks[] = {
 	SYSC_QUIRK("tpcc", 0, 0, -ENODEV, -ENODEV, 0x40014c00, 0xffffffff, 0),
 	SYSC_QUIRK("usbhstll", 0, 0, 0x10, 0x14, 0x00000004, 0xffffffff, 0),
 	SYSC_QUIRK("usbhstll", 0, 0, 0x10, 0x14, 0x00000008, 0xffffffff, 0),
-	SYSC_QUIRK("usb_host_hs", 0, 0, 0x10, 0x14, 0x50700100, 0xffffffff, 0),
-	SYSC_QUIRK("usb_host_hs", 0, 0, 0x10, -ENODEV, 0x50700101, 0xffffffff, 0),
 	SYSC_QUIRK("venc", 0x58003000, 0, -ENODEV, -ENODEV, 0x00000002, 0xffffffff, 0),
 	SYSC_QUIRK("vfpe", 0, 0, 0x104, -ENODEV, 0x4d001200, 0xffffffff, 0),
 #endif
@@ -1488,7 +1570,7 @@ static u32 sysc_quirk_dispc(struct sysc *ddata, int dispc_offset,
 	bool lcd_en, digit_en, lcd2_en = false, lcd3_en = false;
 	const int lcd_en_mask = BIT(0), digit_en_mask = BIT(1);
 	int manager_count;
-	bool framedonetv_irq;
+	bool framedonetv_irq = true;
 	u32 val, irq_mask = 0;
 
 	switch (sysc_soc->soc) {
@@ -1505,6 +1587,7 @@ static u32 sysc_quirk_dispc(struct sysc *ddata, int dispc_offset,
 		break;
 	case SOC_AM4:
 		manager_count = 1;
+		framedonetv_irq = false;
 		break;
 	case SOC_UNKNOWN:
 	default:
@@ -1663,8 +1746,8 @@ static void sysc_quirk_rtc(struct sysc *ddata, bool lock)
 
 	local_irq_save(flags);
 	/* RTC_STATUS BUSY bit may stay active for 1/32768 seconds (~30 usec) */
-	error = readl_poll_timeout(ddata->module_va + 0x44, val,
-				   !(val & BIT(0)), 100, 50);
+	error = readl_poll_timeout_atomic(ddata->module_va + 0x44, val,
+					  !(val & BIT(0)), 100, 50);
 	if (error)
 		dev_warn(ddata->dev, "rtc busy timeout\n");
 	/* Now we have ~15 microseconds to read/write various registers */
@@ -1737,6 +1820,14 @@ static void sysc_init_module_quirks(struct sysc *ddata)
 		return;
 	}
 
+#ifdef CONFIG_OMAP_GPMC_DEBUG
+	if (ddata->cfg.quirks & SYSC_QUIRK_GPMC_DEBUG) {
+		ddata->cfg.quirks |= SYSC_QUIRK_NO_RESET_ON_INIT;
+
+		return;
+	}
+#endif
+
 	if (ddata->cfg.quirks & SYSC_MODULE_QUIRK_I2C) {
 		ddata->pre_reset_quirk = sysc_pre_reset_quirk_i2c;
 		ddata->post_reset_quirk = sysc_post_reset_quirk_i2c;
@@ -1781,7 +1872,7 @@ static int sysc_clockdomain_init(struct sysc *ddata)
 	switch (ddata->nr_clocks) {
 	case 2:
 		ick = ddata->clocks[SYSC_ICK];
-		/* fallthrough */
+		fallthrough;
 	case 1:
 		fck = ddata->clocks[SYSC_FCK];
 		break;
@@ -1822,11 +1913,10 @@ static int sysc_legacy_init(struct sysc *ddata)
  */
 static int sysc_reset(struct sysc *ddata)
 {
-	int sysc_offset, syss_offset, sysc_val, rstval, error = 0;
-	u32 sysc_mask, syss_done;
+	int sysc_offset, sysc_val, error;
+	u32 sysc_mask;
 
 	sysc_offset = ddata->offsets[SYSC_SYSCONFIG];
-	syss_offset = ddata->offsets[SYSC_SYSSTATUS];
 
 	if (ddata->legacy_mode ||
 	    ddata->cap->regbits->srst_shift < 0 ||
@@ -1834,11 +1924,6 @@ static int sysc_reset(struct sysc *ddata)
 		return 0;
 
 	sysc_mask = BIT(ddata->cap->regbits->srst_shift);
-
-	if (ddata->cfg.quirks & SYSS_QUIRK_RESETDONE_INVERTED)
-		syss_done = 0;
-	else
-		syss_done = ddata->cfg.syss_mask;
 
 	if (ddata->pre_reset_quirk)
 		ddata->pre_reset_quirk(ddata);
@@ -1856,18 +1941,9 @@ static int sysc_reset(struct sysc *ddata)
 	if (ddata->post_reset_quirk)
 		ddata->post_reset_quirk(ddata);
 
-	/* Poll on reset status */
-	if (syss_offset >= 0) {
-		error = readx_poll_timeout(sysc_read_sysstatus, ddata, rstval,
-					   (rstval & ddata->cfg.syss_mask) ==
-					   syss_done,
-					   100, MAX_MODULE_SOFTRESET_WAIT);
-
-	} else if (ddata->cfg.quirks & SYSC_QUIRK_RESET_STATUS) {
-		error = readx_poll_timeout(sysc_read_sysconfig, ddata, rstval,
-					   !(rstval & sysc_mask),
-					   100, MAX_MODULE_SOFTRESET_WAIT);
-	}
+	error = sysc_wait_softreset(ddata);
+	if (error)
+		dev_warn(ddata->dev, "OCP softreset timed out\n");
 
 	if (ddata->reset_done_quirk)
 		ddata->reset_done_quirk(ddata);
@@ -1883,6 +1959,7 @@ static int sysc_reset(struct sysc *ddata)
  */
 static int sysc_init_module(struct sysc *ddata)
 {
+	bool rstctrl_deasserted = false;
 	int error = 0;
 
 	error = sysc_clockdomain_init(ddata);
@@ -1907,6 +1984,7 @@ static int sysc_init_module(struct sysc *ddata)
 		error = reset_control_deassert(ddata->rsts);
 		if (error)
 			goto err_main_clocks;
+		rstctrl_deasserted = true;
 	}
 
 	ddata->revision = sysc_read_revision(ddata);
@@ -1916,13 +1994,13 @@ static int sysc_init_module(struct sysc *ddata)
 	if (ddata->legacy_mode) {
 		error = sysc_legacy_init(ddata);
 		if (error)
-			goto err_reset;
+			goto err_main_clocks;
 	}
 
 	if (!ddata->legacy_mode) {
 		error = sysc_enable_module(ddata->dev);
 		if (error)
-			goto err_reset;
+			goto err_main_clocks;
 	}
 
 	error = sysc_reset(ddata);
@@ -1931,10 +2009,6 @@ static int sysc_init_module(struct sysc *ddata)
 
 	if (error && !ddata->legacy_mode)
 		sysc_disable_module(ddata->dev);
-
-err_reset:
-	if (error && !(ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT))
-		reset_control_assert(ddata->rsts);
 
 err_main_clocks:
 	if (error)
@@ -1945,6 +2019,10 @@ err_opt_clocks:
 		sysc_disable_opt_clocks(ddata);
 		sysc_clkdm_allow_idle(ddata);
 	}
+
+	if (error && rstctrl_deasserted &&
+	    !(ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT))
+		reset_control_assert(ddata->rsts);
 
 	return error;
 }
@@ -2814,6 +2892,24 @@ static int sysc_check_disabled_devices(struct sysc *ddata)
 	return error;
 }
 
+/*
+ * Ignore timers tagged with no-reset and no-idle. These are likely in use,
+ * for example by drivers/clocksource/timer-ti-dm-systimer.c. If more checks
+ * are needed, we could also look at the timer register configuration.
+ */
+static int sysc_check_active_timer(struct sysc *ddata)
+{
+	if (ddata->cap->type != TI_SYSC_OMAP2_TIMER &&
+	    ddata->cap->type != TI_SYSC_OMAP4_TIMER)
+		return 0;
+
+	if ((ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT) &&
+	    (ddata->cfg.quirks & SYSC_QUIRK_NO_IDLE))
+		return -ENXIO;
+
+	return 0;
+}
+
 static const struct of_device_id sysc_match_table[] = {
 	{ .compatible = "simple-bus", },
 	{ /* sentinel */ },
@@ -2829,6 +2925,9 @@ static int sysc_probe(struct platform_device *pdev)
 	if (!ddata)
 		return -ENOMEM;
 
+	ddata->offsets[SYSC_REVISION] = -ENODEV;
+	ddata->offsets[SYSC_SYSCONFIG] = -ENODEV;
+	ddata->offsets[SYSC_SYSSTATUS] = -ENODEV;
 	ddata->dev = &pdev->dev;
 	platform_set_drvdata(pdev, ddata);
 
@@ -2870,6 +2969,10 @@ static int sysc_probe(struct platform_device *pdev)
 	if (error)
 		return error;
 
+	error = sysc_check_active_timer(ddata);
+	if (error)
+		return error;
+
 	error = sysc_get_clocks(ddata);
 	if (error)
 		return error;
@@ -2891,15 +2994,15 @@ static int sysc_probe(struct platform_device *pdev)
 	}
 
 	/* Balance use counts as PM runtime should have enabled these all */
-	if (!(ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT))
-		reset_control_assert(ddata->rsts);
-
 	if (!(ddata->cfg.quirks &
 	      (SYSC_QUIRK_NO_IDLE | SYSC_QUIRK_NO_IDLE_ON_INIT))) {
 		sysc_disable_main_clocks(ddata);
 		sysc_disable_opt_clocks(ddata);
 		sysc_clkdm_allow_idle(ddata);
 	}
+
+	if (!(ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT))
+		reset_control_assert(ddata->rsts);
 
 	sysc_show_registers(ddata);
 

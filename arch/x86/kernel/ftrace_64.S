@@ -140,15 +140,26 @@ SYM_FUNC_START(ftrace_caller)
 	/* save_mcount_regs fills in first two parameters */
 	save_mcount_regs
 
+	/* Stack - skipping return address of ftrace_caller */
+	leaq MCOUNT_REG_SIZE+8(%rsp), %rcx
+	movq %rcx, RSP(%rsp)
+
 SYM_INNER_LABEL(ftrace_caller_op_ptr, SYM_L_GLOBAL)
 	/* Load the ftrace_ops into the 3rd parameter */
 	movq function_trace_op(%rip), %rdx
 
-	/* regs go into 4th parameter (but make it NULL) */
-	movq $0, %rcx
+	/* regs go into 4th parameter */
+	leaq (%rsp), %rcx
+
+	/* Only ops with REGS flag set should have CS register set */
+	movq $0, CS(%rsp)
 
 SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
 	call ftrace_stub
+
+	/* Handlers can change the RIP */
+	movq RIP(%rsp), %rax
+	movq %rax, MCOUNT_REG_SIZE(%rsp)
 
 	restore_mcount_regs
 
@@ -241,22 +252,10 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	 */
 	movq ORIG_RAX(%rsp), %rax
 	testq	%rax, %rax
-	jz	1f
+SYM_INNER_LABEL(ftrace_regs_caller_jmp, SYM_L_GLOBAL)
+	jnz	1f
 
-	/* Swap the flags with orig_rax */
-	movq MCOUNT_REG_SIZE(%rsp), %rdi
-	movq %rdi, MCOUNT_REG_SIZE-8(%rsp)
-	movq %rax, MCOUNT_REG_SIZE(%rsp)
-
-	restore_mcount_regs 8
-	/* Restore flags */
-	popfq
-
-SYM_INNER_LABEL(ftrace_regs_caller_ret, SYM_L_GLOBAL);
-	UNWIND_HINT_RET_OFFSET
-	jmp	ftrace_epilogue
-
-1:	restore_mcount_regs
+	restore_mcount_regs
 	/* Restore flags */
 	popfq
 
@@ -268,6 +267,17 @@ SYM_INNER_LABEL(ftrace_regs_caller_ret, SYM_L_GLOBAL);
 	 */
 SYM_INNER_LABEL(ftrace_regs_caller_end, SYM_L_GLOBAL)
 	jmp ftrace_epilogue
+
+	/* Swap the flags with orig_rax */
+1:	movq MCOUNT_REG_SIZE(%rsp), %rdi
+	movq %rdi, MCOUNT_REG_SIZE-8(%rsp)
+	movq %rax, MCOUNT_REG_SIZE(%rsp)
+
+	restore_mcount_regs 8
+	/* Restore flags */
+	popfq
+	UNWIND_HINT_RET_OFFSET
+	jmp	ftrace_epilogue
 
 SYM_FUNC_END(ftrace_regs_caller)
 

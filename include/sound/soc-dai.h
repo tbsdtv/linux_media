@@ -39,7 +39,7 @@ struct snd_compr_stream;
 /*
  * DAI Clock gating.
  *
- * DAI bit clocks can be be gated (disabled) when the DAI is not
+ * DAI bit clocks can be gated (disabled) when the DAI is not
  * sending or receiving PCM data in a frame. This can be used to save power.
  */
 #define SND_SOC_DAIFMT_CONT		(1 << 4) /* continuous clock */
@@ -72,21 +72,29 @@ struct snd_compr_stream;
 #define SND_SOC_DAIFMT_IB_IF		(4 << 8) /* invert BCLK + FRM */
 
 /*
- * DAI hardware clock masters.
+ * DAI hardware clock providers/consumers
  *
  * This is wrt the codec, the inverse is true for the interface
- * i.e. if the codec is clk and FRM master then the interface is
- * clk and frame slave.
+ * i.e. if the codec is clk and FRM provider then the interface is
+ * clk and frame consumer.
  */
-#define SND_SOC_DAIFMT_CBM_CFM		(1 << 12) /* codec clk & FRM master */
-#define SND_SOC_DAIFMT_CBS_CFM		(2 << 12) /* codec clk slave & FRM master */
-#define SND_SOC_DAIFMT_CBM_CFS		(3 << 12) /* codec clk master & frame slave */
-#define SND_SOC_DAIFMT_CBS_CFS		(4 << 12) /* codec clk & FRM slave */
+#define SND_SOC_DAIFMT_CBP_CFP		(1 << 12) /* codec clk provider & frame provider */
+#define SND_SOC_DAIFMT_CBC_CFP		(2 << 12) /* codec clk consumer & frame provider */
+#define SND_SOC_DAIFMT_CBP_CFC		(3 << 12) /* codec clk provider & frame consumer */
+#define SND_SOC_DAIFMT_CBC_CFC		(4 << 12) /* codec clk consumer & frame follower */
 
-#define SND_SOC_DAIFMT_FORMAT_MASK	0x000f
-#define SND_SOC_DAIFMT_CLOCK_MASK	0x00f0
-#define SND_SOC_DAIFMT_INV_MASK		0x0f00
-#define SND_SOC_DAIFMT_MASTER_MASK	0xf000
+/* previous definitions kept for backwards-compatibility, do not use in new contributions */
+#define SND_SOC_DAIFMT_CBM_CFM		SND_SOC_DAIFMT_CBP_CFP
+#define SND_SOC_DAIFMT_CBS_CFM		SND_SOC_DAIFMT_CBC_CFP
+#define SND_SOC_DAIFMT_CBM_CFS		SND_SOC_DAIFMT_CBP_CFC
+#define SND_SOC_DAIFMT_CBS_CFS		SND_SOC_DAIFMT_CBC_CFC
+
+#define SND_SOC_DAIFMT_FORMAT_MASK		0x000f
+#define SND_SOC_DAIFMT_CLOCK_MASK		0x00f0
+#define SND_SOC_DAIFMT_INV_MASK			0x0f00
+#define SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK	0xf000
+
+#define SND_SOC_DAIFMT_MASTER_MASK	SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK
 
 /*
  * Master Clock Directions
@@ -149,11 +157,12 @@ int snd_soc_dai_hw_params(struct snd_soc_dai *dai,
 			  struct snd_pcm_substream *substream,
 			  struct snd_pcm_hw_params *params);
 void snd_soc_dai_hw_free(struct snd_soc_dai *dai,
-			 struct snd_pcm_substream *substream);
+			 struct snd_pcm_substream *substream,
+			 int rollback);
 int snd_soc_dai_startup(struct snd_soc_dai *dai,
 			struct snd_pcm_substream *substream);
 void snd_soc_dai_shutdown(struct snd_soc_dai *dai,
-			  struct snd_pcm_substream *substream);
+			  struct snd_pcm_substream *substream, int rollback);
 snd_pcm_sframes_t snd_soc_dai_delay(struct snd_soc_dai *dai,
 				    struct snd_pcm_substream *substream);
 void snd_soc_dai_suspend(struct snd_soc_dai *dai);
@@ -161,6 +170,7 @@ void snd_soc_dai_resume(struct snd_soc_dai *dai);
 int snd_soc_dai_compress_new(struct snd_soc_dai *dai,
 			     struct snd_soc_pcm_runtime *rtd, int num);
 bool snd_soc_dai_stream_valid(struct snd_soc_dai *dai, int stream);
+void snd_soc_dai_link_set_capabilities(struct snd_soc_dai_link *dai_link);
 void snd_soc_dai_action(struct snd_soc_dai *dai,
 			int stream, int action);
 static inline void snd_soc_dai_activate(struct snd_soc_dai *dai,
@@ -179,14 +189,16 @@ int snd_soc_pcm_dai_probe(struct snd_soc_pcm_runtime *rtd, int order);
 int snd_soc_pcm_dai_remove(struct snd_soc_pcm_runtime *rtd, int order);
 int snd_soc_pcm_dai_new(struct snd_soc_pcm_runtime *rtd);
 int snd_soc_pcm_dai_prepare(struct snd_pcm_substream *substream);
-int snd_soc_pcm_dai_trigger(struct snd_pcm_substream *substream, int cmd);
+int snd_soc_pcm_dai_trigger(struct snd_pcm_substream *substream, int cmd,
+			    int rollback);
 int snd_soc_pcm_dai_bespoke_trigger(struct snd_pcm_substream *substream,
 				    int cmd);
 
 int snd_soc_dai_compr_startup(struct snd_soc_dai *dai,
 			      struct snd_compr_stream *cstream);
 void snd_soc_dai_compr_shutdown(struct snd_soc_dai *dai,
-				struct snd_compr_stream *cstream);
+				struct snd_compr_stream *cstream,
+				int rollback);
 int snd_soc_dai_compr_trigger(struct snd_soc_dai *dai,
 			      struct snd_compr_stream *cstream, int cmd);
 int snd_soc_dai_compr_set_params(struct snd_soc_dai *dai,
@@ -246,7 +258,6 @@ struct snd_soc_dai_ops {
 	 * DAI digital mute - optional.
 	 * Called by soc-core to minimise any pops.
 	 */
-	int (*digital_mute)(struct snd_soc_dai *dai, int mute);
 	int (*mute_stream)(struct snd_soc_dai *dai, int mute, int stream);
 
 	/*
@@ -280,6 +291,9 @@ struct snd_soc_dai_ops {
 	 */
 	snd_pcm_sframes_t (*delay)(struct snd_pcm_substream *,
 		struct snd_soc_dai *);
+
+	/* bit field */
+	unsigned int no_capture_mute:1;
 };
 
 struct snd_soc_cdai_ops {
@@ -385,6 +399,12 @@ struct snd_soc_dai {
 
 	struct list_head list;
 
+	/* function mark */
+	struct snd_pcm_substream *mark_startup;
+	struct snd_pcm_substream *mark_hw_params;
+	struct snd_pcm_substream *mark_trigger;
+	struct snd_compr_stream  *mark_compr_startup;
+
 	/* bit field */
 	unsigned int probed:1;
 };
@@ -468,7 +488,8 @@ static inline int snd_soc_dai_set_sdw_stream(struct snd_soc_dai *dai,
  * This routine only retrieves that was previously configured
  * with snd_soc_dai_get_sdw_stream()
  *
- * Returns pointer to stream or -ENOTSUPP if callback is not supported;
+ * Returns pointer to stream or an ERR_PTR value, e.g.
+ * ERR_PTR(-ENOTSUPP) if callback is not supported;
  */
 static inline void *snd_soc_dai_get_sdw_stream(struct snd_soc_dai *dai,
 					       int direction)

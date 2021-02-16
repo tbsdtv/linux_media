@@ -2,7 +2,7 @@
 /*
  * K3 Ring Accelerator (RA) subsystem interface
  *
- * Copyright (C) 2019 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2019 Texas Instruments Incorporated - https://www.ti.com
  */
 
 #ifndef __SOC_TI_K3_RINGACC_API_H_
@@ -67,6 +67,10 @@ struct k3_ring;
  *	 few times. It's usable when the same ring is used as Free Host PD ring
  *	 for different flows, for example.
  *	 Note: Locking should be done by consumer if required
+ * @dma_dev: Master device which is using and accessing to the ring
+ *	memory when the mode is K3_RINGACC_RING_MODE_RING. Memory allocations
+ *	should be done using this device.
+ * @asel: Address Space Select value for physical addresses
  */
 struct k3_ring_cfg {
 	u32 size;
@@ -74,6 +78,9 @@ struct k3_ring_cfg {
 	enum k3_ring_mode mode;
 #define K3_RINGACC_RING_SHARED BIT(1)
 	u32 flags;
+
+	struct device *dma_dev;
+	u32 asel;
 };
 
 #define K3_RINGACC_RING_ID_ANY (-1)
@@ -107,6 +114,10 @@ struct k3_ringacc *of_k3_ringacc_get_by_phandle(struct device_node *np,
 struct k3_ring *k3_ringacc_request_ring(struct k3_ringacc *ringacc,
 					int id, u32 flags);
 
+int k3_ringacc_request_rings_pair(struct k3_ringacc *ringacc,
+				  int fwd_id, int compl_id,
+				  struct k3_ring **fwd_ring,
+				  struct k3_ring **compl_ring);
 /**
  * k3_ringacc_ring_reset - ring reset
  * @ring: pointer on Ring
@@ -240,5 +251,20 @@ int k3_ringacc_ring_push_head(struct k3_ring *ring, void *elem);
 int k3_ringacc_ring_pop_tail(struct k3_ring *ring, void *elem);
 
 u32 k3_ringacc_get_tisci_dev_id(struct k3_ring *ring);
+
+/* DMA ring support */
+struct ti_sci_handle;
+
+/**
+ * struct struct k3_ringacc_init_data - Initialization data for DMA rings
+ */
+struct k3_ringacc_init_data {
+	const struct ti_sci_handle *tisci;
+	u32 tisci_dev_id;
+	u32 num_rings;
+};
+
+struct k3_ringacc *k3_ringacc_dmarings_init(struct platform_device *pdev,
+					    struct k3_ringacc_init_data *data);
 
 #endif /* __SOC_TI_K3_RINGACC_API_H_ */

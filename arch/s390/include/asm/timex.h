@@ -49,9 +49,11 @@ static inline void set_clock_comparator(__u64 time)
 	asm volatile("sckc %0" : : "Q" (time));
 }
 
-static inline void store_clock_comparator(__u64 *time)
+static inline void set_tod_programmable_field(u16 val)
 {
-	asm volatile("stckc %0" : "=Q" (*time));
+	register unsigned long reg0 asm("0") = val;
+
+	asm volatile("sckpf" : : "d" (reg0));
 }
 
 void clock_comparator_work(void);

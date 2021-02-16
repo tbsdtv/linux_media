@@ -1,5 +1,8 @@
 &l4_wkup {						/* 0x44c00000 */
-	compatible = "ti,am33xx-l4-wkup", "simple-bus";
+	compatible = "ti,am33xx-l4-wkup", "simple-pm-bus";
+	power-domains = <&prm_wkup>;
+	clocks = <&l4_wkup_clkctrl AM3_L4_WKUP_L4_WKUP_CLKCTRL 0>;
+	clock-names = "fck";
 	reg = <0x44c00000 0x800>,
 	      <0x44c00800 0x800>,
 	      <0x44c01000 0x400>,
@@ -12,7 +15,7 @@
 		 <0x00200000 0x44e00000 0x100000>;	/* segment 2 */
 
 	segment@0 {					/* 0x44c00000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0x00000000 0x00000000 0x000800>,	/* ap 0 */
@@ -22,7 +25,7 @@
 	};
 
 	segment@100000 {					/* 0x44d00000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0x00000000 0x00100000 0x004000>,	/* ap 4 */
@@ -34,23 +37,27 @@
 			compatible = "ti,sysc-omap4", "ti,sysc";
 			reg = <0x0 0x4>;
 			reg-names = "rev";
+			clocks = <&l4_wkup_aon_clkctrl AM3_L4_WKUP_AON_WKUP_M3_CLKCTRL 0>;
+			clock-names = "fck";
 			#address-cells = <1>;
 			#size-cells = <1>;
-			ranges = <0x0 0x0 0x4000>;
-			status = "disabled";
-		};
+			ranges = <0x00000000 0x00000000 0x4000>,
+				 <0x00080000 0x00080000 0x2000>;
 
-		target-module@80000 {			/* 0x44d80000, ap 6 10.0 */
-			compatible = "ti,sysc";
-			status = "disabled";
-			#address-cells = <1>;
-			#size-cells = <1>;
-			ranges = <0x0 0x80000 0x2000>;
+			wkup_m3: cpu@0 {
+				compatible = "ti,am3352-wkup-m3";
+				reg = <0x00000000 0x4000>,
+				      <0x00080000 0x2000>;
+				reg-names = "umem", "dmem";
+				resets = <&prm_wkup 3>;
+				reset-names = "rstctrl";
+				ti,pm-firmware = "am335x-pm-firmware.elf";
+			};
 		};
 	};
 
 	segment@200000 {					/* 0x44e00000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0x00000000 0x00200000 0x002000>,	/* ap 8 */
@@ -151,6 +158,18 @@
 
 			gpio0: gpio@0 {
 				compatible = "ti,omap4-gpio";
+				gpio-ranges =	<&am33xx_pinmux  0  82 8>,
+						<&am33xx_pinmux  8  52 4>,
+						<&am33xx_pinmux 12  94 4>,
+						<&am33xx_pinmux 16  71 2>,
+						<&am33xx_pinmux 18 135 1>,
+						<&am33xx_pinmux 19 108 2>,
+						<&am33xx_pinmux 21  73 1>,
+						<&am33xx_pinmux 22   8 2>,
+						<&am33xx_pinmux 26  10 2>,
+						<&am33xx_pinmux 28  74 1>,
+						<&am33xx_pinmux 29  81 1>,
+						<&am33xx_pinmux 30  28 2>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				interrupt-controller;
@@ -262,6 +281,9 @@
 			compatible = "ti,sysc-omap4", "ti,sysc";
 			reg = <0x10000 0x4>;
 			reg-names = "rev";
+			clocks = <&l4_wkup_clkctrl AM3_L4_WKUP_CONTROL_CLKCTRL 0>;
+			clock-names = "fck";
+			ti,no-idle;
 			#address-cells = <1>;
 			#size-cells = <1>;
 			ranges = <0x00000000 0x00010000 0x00010000>,
@@ -278,7 +300,7 @@
 				am33xx_pinmux: pinmux@800 {
 					compatible = "pinctrl-single";
 					reg = <0x800 0x238>;
-					#pinctrl-cells = <1>;
+					#pinctrl-cells = <2>;
 					pinctrl-single,register-width = <32>;
 					pinctrl-single,function-mask = <0x7f>;
 				};
@@ -413,7 +435,6 @@
 
 		target-module@3e000 {			/* 0x44e3e000, ap 35 60.0 */
 			compatible = "ti,sysc-omap4-simple", "ti,sysc";
-			ti,hwmods = "rtc";
 			reg = <0x3e074 0x4>,
 			      <0x3e078 0x4>;
 			reg-names = "rev", "sysc";
@@ -422,6 +443,7 @@
 					<SYSC_IDLE_SMART>,
 					<SYSC_IDLE_SMART_WKUP>;
 			/* Domains (P, C): rtc_pwrdm, l4_rtc_clkdm */
+			power-domains = <&prm_rtc>;
 			clocks = <&l4_rtc_clkctrl AM3_L4_RTC_RTC_CLKCTRL 0>;
 			clock-names = "fck";
 			#address-cells = <1>;
@@ -647,7 +669,10 @@
 };
 
 &l4_fast {					/* 0x4a000000 */
-	compatible = "ti,am33xx-l4-fast", "simple-bus";
+	compatible = "ti,am33xx-l4-fast", "simple-pm-bus";
+	power-domains = <&prm_per>;
+	clocks = <&l4hs_clkctrl AM3_L4HS_L4_HS_CLKCTRL 0>;
+	clock-names = "fck";
 	reg = <0x4a000000 0x800>,
 	      <0x4a000800 0x800>,
 	      <0x4a001000 0x400>;
@@ -657,7 +682,7 @@
 	ranges = <0x00000000 0x4a000000 0x1000000>;	/* segment 0 */
 
 	segment@0 {					/* 0x4a000000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0x00000000 0x00000000 0x000800>,	/* ap 0 */
@@ -826,7 +851,10 @@
 };
 
 &l4_per {						/* 0x48000000 */
-	compatible = "ti,am33xx-l4-per", "simple-bus";
+	compatible = "ti,am33xx-l4-per", "simple-pm-bus";
+	power-domains = <&prm_per>;
+	clocks = <&l4ls_clkctrl AM3_L4LS_L4_LS_CLKCTRL 0>;
+	clock-names = "fck";
 	reg = <0x48000000 0x800>,
 	      <0x48000800 0x800>,
 	      <0x48001000 0x400>,
@@ -844,7 +872,7 @@
 		 <0x46400000 0x46400000 0x400000>;	/* l3 data port */
 
 	segment@0 {					/* 0x48000000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0x00000000 0x00000000 0x000800>,	/* ap 0 */
@@ -1296,6 +1324,10 @@
 
 			gpio1: gpio@0 {
 				compatible = "ti,omap4-gpio";
+				gpio-ranges =   <&am33xx_pinmux  0  0  8>,
+						<&am33xx_pinmux  8 90  4>,
+						<&am33xx_pinmux 12 12 16>,
+						<&am33xx_pinmux 28 30  4>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				interrupt-controller;
@@ -1335,10 +1367,8 @@
 			ranges = <0x0 0x60000 0x1000>;
 
 			mmc1: mmc@0 {
-				compatible = "ti,omap4-hsmmc";
-				ti,dual-volt;
+				compatible = "ti,am335-sdhci";
 				ti,needs-special-reset;
-				ti,needs-special-hs-handling;
 				dmas = <&edma_xbar 24 0 0
 					&edma_xbar 25 0 0>;
 				dma-names = "tx", "rx";
@@ -1453,7 +1483,7 @@
 	};
 
 	segment@100000 {					/* 0x48100000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0x0008c000 0x0018c000 0x001000>,	/* ap 42 */
@@ -1698,6 +1728,9 @@
 
 			gpio2: gpio@0 {
 				compatible = "ti,omap4-gpio";
+                                gpio-ranges =	<&am33xx_pinmux  0 34 18>,
+						<&am33xx_pinmux 18 77  4>,
+						<&am33xx_pinmux 22 56 10>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				interrupt-controller;
@@ -1731,6 +1764,11 @@
 
 			gpio3: gpio@0 {
 				compatible = "ti,omap4-gpio";
+				gpio-ranges =	<&am33xx_pinmux  0  66 5>,
+						<&am33xx_pinmux  5  98 2>,
+						<&am33xx_pinmux  7  75 2>,
+						<&am33xx_pinmux 13 141 1>,
+						<&am33xx_pinmux 14 100 8>;
 				gpio-controller;
 				#gpio-cells = <2>;
 				interrupt-controller;
@@ -1816,7 +1854,7 @@
 			ranges = <0x0 0xd8000 0x1000>;
 
 			mmc2: mmc@0 {
-				compatible = "ti,omap4-hsmmc";
+				compatible = "ti,am335-sdhci";
 				ti,needs-special-reset;
 				dmas = <&edma 2 0
 					&edma 3 0>;
@@ -1829,13 +1867,31 @@
 	};
 
 	segment@200000 {					/* 0x48200000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
+		ranges = <0x00000000 0x00200000 0x010000>;
+
+		target-module@0 {
+			compatible = "ti,sysc-omap4-simple", "ti,sysc";
+			power-domains = <&prm_mpu>;
+			clocks = <&mpu_clkctrl AM3_MPU_MPU_CLKCTRL 0>;
+			clock-names = "fck";
+			ti,no-idle;
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0 0 0x10000>;
+
+			mpu@0 {
+				compatible = "ti,omap3-mpu";
+				pm-sram = <&pm_sram_code
+					   &pm_sram_data>;
+			};
+		};
 	};
 
 	segment@300000 {					/* 0x48300000 */
-		compatible = "simple-bus";
+		compatible = "simple-pm-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
 		ranges = <0x00000000 0x00300000 0x001000>,	/* ap 66 */
@@ -1902,6 +1958,15 @@
 					status = "disabled";
 				};
 
+				eqep0: counter@180 {
+					compatible = "ti,am3352-eqep";
+					reg = <0x180 0x80>;
+					clocks = <&l4ls_gclk>;
+					clock-names = "sysclkout";
+					interrupts = <79>;
+					status = "disabled";
+				};
+
 				ehrpwm0: pwm@200 {
 					compatible = "ti,am3352-ehrpwm",
 						     "ti,am33xx-ehrpwm";
@@ -1954,6 +2019,15 @@
 					status = "disabled";
 				};
 
+				eqep1: counter@180 {
+					compatible = "ti,am3352-eqep";
+					reg = <0x180 0x80>;
+					clocks = <&l4ls_gclk>;
+					clock-names = "sysclkout";
+					interrupts = <88>;
+					status = "disabled";
+				};
+
 				ehrpwm1: pwm@200 {
 					compatible = "ti,am3352-ehrpwm",
 						     "ti,am33xx-ehrpwm";
@@ -2003,6 +2077,15 @@
 					clock-names = "fck";
 					interrupts = <61>;
 					interrupt-names = "ecap2";
+					status = "disabled";
+				};
+
+				eqep2: counter@180 {
+					compatible = "ti,am3352-eqep";
+					reg = <0x180 0x80>;
+					clocks = <&l4ls_gclk>;
+					clock-names = "sysclkout";
+					interrupts = <89>;
 					status = "disabled";
 				};
 

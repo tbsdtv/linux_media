@@ -27,6 +27,7 @@ Currently, these files are in /proc/sys/vm:
 - admin_reserve_kbytes
 - block_dump
 - compact_memory
+- compaction_proactiveness
 - compact_unevictable_allowed
 - dirty_background_bytes
 - dirty_background_ratio
@@ -37,6 +38,7 @@ Currently, these files are in /proc/sys/vm:
 - dirty_writeback_centisecs
 - drop_caches
 - extfrag_threshold
+- highmem_is_dirtyable
 - hugetlb_shm_group
 - laptop_mode
 - legacy_va_layout
@@ -119,6 +121,21 @@ all zones are compacted such that free memory is available in contiguous
 blocks where possible. This can be important for example in the allocation of
 huge pages although processes will also directly compact memory as required.
 
+compaction_proactiveness
+========================
+
+This tunable takes a value in the range [0, 100] with a default value of
+20. This tunable determines how aggressively compaction is done in the
+background. Setting it to 0 disables proactive compaction.
+
+Note that compaction has a non-trivial system-wide impact as pages
+belonging to different processes are moved around, which could also lead
+to latency spikes in unsuspecting applications. The kernel employs
+various heuristics to avoid wasting CPU cycles if it detects that
+proactive compaction is not being effective.
+
+Be careful when setting it to extreme values like 100, as that may
+cause excessive background compaction activity.
 
 compact_unevictable_allowed
 ===========================
@@ -129,7 +146,7 @@ This should be used on systems where stalls for minor page faults are an
 acceptable trade for large contiguous free memory.  Set to 0 to prevent
 compaction from moving pages that are unevictable.  Default value is 1.
 On CONFIG_PREEMPT_RT the default value is 0 in order to avoid a page fault, due
-to compaction, which would block the task from becomming active until the fault
+to compaction, which would block the task from becoming active until the fault
 is resolved.
 
 
@@ -411,7 +428,7 @@ While most applications need less than a thousand maps, certain
 programs, particularly malloc debuggers, may consume lots of them,
 e.g., up to one or two maps per allocation.
 
-The default value is 65536.
+The default value is 65530.
 
 
 memory_failure_early_kill:
@@ -583,7 +600,7 @@ trimming of allocations is initiated.
 
 The default value is 1.
 
-See Documentation/nommu-mmap.txt for more information.
+See Documentation/admin-guide/mm/nommu-mmap.rst for more information.
 
 
 numa_zonelist_order
@@ -856,12 +873,17 @@ file-backed pages is less than the high watermark in a zone.
 unprivileged_userfaultfd
 ========================
 
-This flag controls whether unprivileged users can use the userfaultfd
-system calls.  Set this to 1 to allow unprivileged users to use the
-userfaultfd system calls, or set this to 0 to restrict userfaultfd to only
-privileged users (with SYS_CAP_PTRACE capability).
+This flag controls the mode in which unprivileged users can use the
+userfaultfd system calls. Set this to 0 to restrict unprivileged users
+to handle page faults in user mode only. In this case, users without
+SYS_CAP_PTRACE must pass UFFD_USER_MODE_ONLY in order for userfaultfd to
+succeed. Prohibiting use of userfaultfd for handling faults from kernel
+mode may make certain vulnerabilities more difficult to exploit.
 
-The default value is 1.
+Set this to 1 to allow unprivileged users to use the userfaultfd system
+calls without any restrictions.
+
+The default value is 0.
 
 
 user_reserve_kbytes

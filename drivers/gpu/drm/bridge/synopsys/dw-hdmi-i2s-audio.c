@@ -61,10 +61,10 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 	switch (hparms->channels) {
 	case 7 ... 8:
 		conf0 |= HDMI_AUD_CONF0_I2S_EN3;
-		/* Fall-thru */
+		fallthrough;
 	case 5 ... 6:
 		conf0 |= HDMI_AUD_CONF0_I2S_EN2;
-		/* Fall-thru */
+		fallthrough;
 	case 3 ... 4:
 		conf0 |= HDMI_AUD_CONF0_I2S_EN1;
 		/* Fall-thru */
@@ -170,7 +170,7 @@ static int dw_hdmi_i2s_hook_plugged_cb(struct device *dev, void *data,
 	return dw_hdmi_set_plugged_cb(hdmi, fn, codec_dev);
 }
 
-static struct hdmi_codec_ops dw_hdmi_i2s_ops = {
+static const struct hdmi_codec_ops dw_hdmi_i2s_ops = {
 	.hw_params	= dw_hdmi_i2s_hw_params,
 	.audio_startup  = dw_hdmi_i2s_audio_startup,
 	.audio_shutdown	= dw_hdmi_i2s_audio_shutdown,

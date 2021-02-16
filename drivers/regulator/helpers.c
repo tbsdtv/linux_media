@@ -486,7 +486,7 @@ int regulator_map_voltage_pickable_linear_range(struct regulator_dev *rdev,
 			continue;
 		}
 
-		ret = selector + sel;
+		ret = selector + sel - range->min_sel;
 
 		voltage = rdev->desc->ops->list_voltage(rdev, ret);
 
@@ -649,6 +649,8 @@ int regulator_list_voltage_table(struct regulator_dev *rdev,
 
 	if (selector >= rdev->desc->n_voltages)
 		return -EINVAL;
+	if (selector < rdev->desc->linear_min_sel)
+		return 0;
 
 	return rdev->desc->volt_table[selector];
 }

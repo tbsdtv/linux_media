@@ -78,6 +78,7 @@
 #include <linux/namei.h>
 #include <linux/capability.h>
 #include <linux/quotaops.h>
+#include <linux/blkdev.h>
 #include "../internal.h" /* ugh */
 
 #include <linux/uaccess.h>
@@ -2454,7 +2455,7 @@ int dquot_resume(struct super_block *sb, int type)
 		ret = dquot_load_quota_sb(sb, cnt, dqopt->info[cnt].dqi_fmt_id,
 					  flags);
 		if (ret < 0)
-			vfs_cleanup_quota_inode(sb, type);
+			vfs_cleanup_quota_inode(sb, cnt);
 	}
 
 	return ret;

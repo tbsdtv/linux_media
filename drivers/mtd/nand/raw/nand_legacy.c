@@ -192,9 +192,10 @@ static void panic_nand_wait_ready(struct nand_chip *chip, unsigned long timeo)
  */
 void nand_wait_ready(struct nand_chip *chip)
 {
+	struct mtd_info *mtd = nand_to_mtd(chip);
 	unsigned long timeo = 400;
 
-	if (in_interrupt() || oops_in_progress)
+	if (mtd->oops_panic_write)
 		return panic_nand_wait_ready(chip, timeo);
 
 	/* Wait until command is processed or timeout occurs */
@@ -354,6 +355,9 @@ static void nand_command(struct nand_chip *chip, unsigned int command,
 
 static void nand_ccs_delay(struct nand_chip *chip)
 {
+	const struct nand_sdr_timings *sdr =
+		nand_get_sdr_timings(nand_get_interface_config(chip));
+
 	/*
 	 * The controller already takes care of waiting for tCCS when the RNDIN
 	 * or RNDOUT command is sent, return directly.
@@ -365,8 +369,8 @@ static void nand_ccs_delay(struct nand_chip *chip)
 	 * Wait tCCS_min if it is correctly defined, otherwise wait 500ns
 	 * (which should be safe for all NANDs).
 	 */
-	if (nand_has_setup_data_iface(chip))
-		ndelay(chip->data_interface.timings.sdr.tCCS_min / 1000);
+	if (nand_controller_can_setup_interface(chip))
+		ndelay(sdr->tCCS_min / 1000);
 	else
 		ndelay(500);
 }
@@ -528,7 +532,7 @@ EXPORT_SYMBOL(nand_get_set_features_notsupp);
  */
 static int nand_wait(struct nand_chip *chip)
 {
-
+	struct mtd_info *mtd = nand_to_mtd(chip);
 	unsigned long timeo = 400;
 	u8 status;
 	int ret;
@@ -543,9 +547,9 @@ static int nand_wait(struct nand_chip *chip)
 	if (ret)
 		return ret;
 
-	if (in_interrupt() || oops_in_progress)
+	if (mtd->oops_panic_write) {
 		panic_nand_wait(chip, timeo);
-	else {
+	} else {
 		timeo = jiffies + msecs_to_jiffies(timeo);
 		do {
 			if (chip->legacy.dev_ready) {

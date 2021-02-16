@@ -19,10 +19,12 @@ struct acp3x_dev_data {
 	bool acp3x_audio_mode;
 	struct resource *res;
 	struct platform_device *pdev[ACP3x_DEVS];
+	u32 pme_en;
 };
 
-static int acp3x_power_on(void __iomem *acp3x_base)
+static int acp3x_power_on(struct acp3x_dev_data *adata)
 {
+	void __iomem *acp3x_base = adata->acp3x_base;
 	u32 val;
 	int timeout;
 
@@ -39,10 +41,10 @@ static int acp3x_power_on(void __iomem *acp3x_base)
 	while (++timeout < 500) {
 		val = rv_readl(acp3x_base + mmACP_PGFSM_STATUS);
 		if (!val) {
-			/* Set PME_EN as after ACP power On,
-			 * PME_EN gets cleared
+			/* ACP power On clears PME_EN.
+			 * Restore the value to its prior state
 			 */
-			rv_writel(0x1, acp3x_base + mmACP_PME_EN);
+			rv_writel(adata->pme_en, acp3x_base + mmACP_PME_EN);
 			return 0;
 		}
 		udelay(1);
@@ -74,12 +76,13 @@ static int acp3x_reset(void __iomem *acp3x_base)
 	return -ETIMEDOUT;
 }
 
-static int acp3x_init(void __iomem *acp3x_base)
+static int acp3x_init(struct acp3x_dev_data *adata)
 {
+	void __iomem *acp3x_base = adata->acp3x_base;
 	int ret;
 
 	/* power on */
-	ret = acp3x_power_on(acp3x_base);
+	ret = acp3x_power_on(adata);
 	if (ret) {
 		pr_err("ACP3x power on failed\n");
 		return ret;
@@ -115,6 +118,10 @@ static int snd_acp3x_probe(struct pci_dev *pci,
 	int ret, i;
 	u32 addr, val;
 
+	/* Raven device detection */
+	if (pci->revision != 0x00)
+		return -ENODEV;
+
 	if (pci_enable_device(pci)) {
 		dev_err(&pci->dev, "pci_enable_device failed\n");
 		return -ENODEV;
@@ -133,27 +140,22 @@ static int snd_acp3x_probe(struct pci_dev *pci,
 		goto release_regions;
 	}
 
-	/* check for msi interrupt support */
-	ret = pci_enable_msi(pci);
-	if (ret)
-		/* msi is not enabled */
-		irqflags = IRQF_SHARED;
-	else
-		/* msi is enabled */
-		irqflags = 0;
+	irqflags = IRQF_SHARED;
 
 	addr = pci_resource_start(pci, 0);
 	adata->acp3x_base = devm_ioremap(&pci->dev, addr,
 					pci_resource_len(pci, 0));
 	if (!adata->acp3x_base) {
 		ret = -ENOMEM;
-		goto disable_msi;
+		goto release_regions;
 	}
 	pci_set_master(pci);
 	pci_set_drvdata(pci, adata);
-	ret = acp3x_init(adata->acp3x_base);
+	/* Save ACP_PME_EN state */
+	adata->pme_en = rv_readl(adata->acp3x_base + mmACP_PME_EN);
+	ret = acp3x_init(adata);
 	if (ret)
-		goto disable_msi;
+		goto release_regions;
 
 	val = rv_readl(adata->acp3x_base + mmACP_I2S_PIN_CONFIG);
 	switch (val) {
@@ -226,15 +228,12 @@ static int snd_acp3x_probe(struct pci_dev *pci,
 		}
 		break;
 	default:
-		dev_err(&pci->dev, "Invalid ACP audio mode : %d\n", val);
-		ret = -ENODEV;
-		goto disable_msi;
+		dev_info(&pci->dev, "ACP audio mode : %d\n", val);
+		break;
 	}
 	pm_runtime_set_autosuspend_delay(&pci->dev, 2000);
 	pm_runtime_use_autosuspend(&pci->dev);
-	pm_runtime_set_active(&pci->dev);
 	pm_runtime_put_noidle(&pci->dev);
-	pm_runtime_enable(&pci->dev);
 	pm_runtime_allow(&pci->dev);
 	return 0;
 
@@ -245,8 +244,6 @@ unregister_devs:
 de_init:
 	if (acp3x_deinit(adata->acp3x_base))
 		dev_err(&pci->dev, "ACP de-init failed\n");
-disable_msi:
-	pci_disable_msi(pci);
 release_regions:
 	pci_release_regions(pci);
 disable_pci:
@@ -276,7 +273,7 @@ static int snd_acp3x_resume(struct device *dev)
 	struct acp3x_dev_data *adata;
 
 	adata = dev_get_drvdata(dev);
-	ret = acp3x_init(adata->acp3x_base);
+	ret = acp3x_init(adata);
 	if (ret) {
 		dev_err(dev, "ACP init failed\n");
 		return ret;
@@ -303,9 +300,8 @@ static void snd_acp3x_remove(struct pci_dev *pci)
 	ret = acp3x_deinit(adata->acp3x_base);
 	if (ret)
 		dev_err(&pci->dev, "ACP de-init failed\n");
-	pm_runtime_disable(&pci->dev);
+	pm_runtime_forbid(&pci->dev);
 	pm_runtime_get_noresume(&pci->dev);
-	pci_disable_msi(pci);
 	pci_release_regions(pci);
 	pci_disable_device(pci);
 }

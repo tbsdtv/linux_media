@@ -97,8 +97,7 @@
 	(AR9331_SW_PORT_STATUS_TXMAC | AR9331_SW_PORT_STATUS_RXMAC)
 
 #define AR9331_SW_PORT_STATUS_LINK_MASK \
-	(AR9331_SW_PORT_STATUS_LINK_EN | AR9331_SW_PORT_STATUS_FLOW_LINK_EN | \
-	 AR9331_SW_PORT_STATUS_DUPLEX_MODE | \
+	(AR9331_SW_PORT_STATUS_DUPLEX_MODE | \
 	 AR9331_SW_PORT_STATUS_RX_FLOW_EN | AR9331_SW_PORT_STATUS_TX_FLOW_EN | \
 	 AR9331_SW_PORT_STATUS_SPEED_M)
 
@@ -160,6 +159,8 @@ struct ar9331_sw_priv {
 	struct dsa_switch ds;
 	struct dsa_switch_ops ops;
 	struct irq_domain *irqdomain;
+	u32 irq_mask;
+	struct mutex lock_irq;
 	struct mii_bus *mbus; /* mdio master */
 	struct mii_bus *sbus; /* mdio slave */
 	struct regmap *regmap;
@@ -410,33 +411,10 @@ static void ar9331_sw_phylink_mac_config(struct dsa_switch *ds, int port,
 	struct ar9331_sw_priv *priv = (struct ar9331_sw_priv *)ds->priv;
 	struct regmap *regmap = priv->regmap;
 	int ret;
-	u32 val;
-
-	switch (state->speed) {
-	case SPEED_1000:
-		val = AR9331_SW_PORT_STATUS_SPEED_1000;
-		break;
-	case SPEED_100:
-		val = AR9331_SW_PORT_STATUS_SPEED_100;
-		break;
-	case SPEED_10:
-		val = AR9331_SW_PORT_STATUS_SPEED_10;
-		break;
-	default:
-		return;
-	}
-
-	if (state->duplex)
-		val |= AR9331_SW_PORT_STATUS_DUPLEX_MODE;
-
-	if (state->pause & MLO_PAUSE_TX)
-		val |= AR9331_SW_PORT_STATUS_TX_FLOW_EN;
-
-	if (state->pause & MLO_PAUSE_RX)
-		val |= AR9331_SW_PORT_STATUS_RX_FLOW_EN;
 
 	ret = regmap_update_bits(regmap, AR9331_SW_REG_PORT_STATUS(port),
-				 AR9331_SW_PORT_STATUS_LINK_MASK, val);
+				 AR9331_SW_PORT_STATUS_LINK_EN |
+				 AR9331_SW_PORT_STATUS_FLOW_LINK_EN, 0);
 	if (ret)
 		dev_err_ratelimited(priv->dev, "%s: %i\n", __func__, ret);
 }
@@ -464,11 +442,37 @@ static void ar9331_sw_phylink_mac_link_up(struct dsa_switch *ds, int port,
 {
 	struct ar9331_sw_priv *priv = (struct ar9331_sw_priv *)ds->priv;
 	struct regmap *regmap = priv->regmap;
+	u32 val;
 	int ret;
 
+	val = AR9331_SW_PORT_STATUS_MAC_MASK;
+	switch (speed) {
+	case SPEED_1000:
+		val |= AR9331_SW_PORT_STATUS_SPEED_1000;
+		break;
+	case SPEED_100:
+		val |= AR9331_SW_PORT_STATUS_SPEED_100;
+		break;
+	case SPEED_10:
+		val |= AR9331_SW_PORT_STATUS_SPEED_10;
+		break;
+	default:
+		return;
+	}
+
+	if (duplex)
+		val |= AR9331_SW_PORT_STATUS_DUPLEX_MODE;
+
+	if (tx_pause)
+		val |= AR9331_SW_PORT_STATUS_TX_FLOW_EN;
+
+	if (rx_pause)
+		val |= AR9331_SW_PORT_STATUS_RX_FLOW_EN;
+
 	ret = regmap_update_bits(regmap, AR9331_SW_REG_PORT_STATUS(port),
-				 AR9331_SW_PORT_STATUS_MAC_MASK,
-				 AR9331_SW_PORT_STATUS_MAC_MASK);
+				 AR9331_SW_PORT_STATUS_MAC_MASK |
+				 AR9331_SW_PORT_STATUS_LINK_MASK,
+				 val);
 	if (ret)
 		dev_err_ratelimited(priv->dev, "%s: %i\n", __func__, ret);
 }
@@ -518,32 +522,44 @@ static irqreturn_t ar9331_sw_irq(int irq, void *data)
 static void ar9331_sw_mask_irq(struct irq_data *d)
 {
 	struct ar9331_sw_priv *priv = irq_data_get_irq_chip_data(d);
-	struct regmap *regmap = priv->regmap;
-	int ret;
 
-	ret = regmap_update_bits(regmap, AR9331_SW_REG_GINT_MASK,
-				 AR9331_SW_GINT_PHY_INT, 0);
-	if (ret)
-		dev_err(priv->dev, "could not mask IRQ\n");
+	priv->irq_mask = 0;
 }
 
 static void ar9331_sw_unmask_irq(struct irq_data *d)
+{
+	struct ar9331_sw_priv *priv = irq_data_get_irq_chip_data(d);
+
+	priv->irq_mask = AR9331_SW_GINT_PHY_INT;
+}
+
+static void ar9331_sw_irq_bus_lock(struct irq_data *d)
+{
+	struct ar9331_sw_priv *priv = irq_data_get_irq_chip_data(d);
+
+	mutex_lock(&priv->lock_irq);
+}
+
+static void ar9331_sw_irq_bus_sync_unlock(struct irq_data *d)
 {
 	struct ar9331_sw_priv *priv = irq_data_get_irq_chip_data(d);
 	struct regmap *regmap = priv->regmap;
 	int ret;
 
 	ret = regmap_update_bits(regmap, AR9331_SW_REG_GINT_MASK,
-				 AR9331_SW_GINT_PHY_INT,
-				 AR9331_SW_GINT_PHY_INT);
+				 AR9331_SW_GINT_PHY_INT, priv->irq_mask);
 	if (ret)
-		dev_err(priv->dev, "could not unmask IRQ\n");
+		dev_err(priv->dev, "failed to change IRQ mask\n");
+
+	mutex_unlock(&priv->lock_irq);
 }
 
 static struct irq_chip ar9331_sw_irq_chip = {
 	.name = AR9331_SW_NAME,
 	.irq_mask = ar9331_sw_mask_irq,
 	.irq_unmask = ar9331_sw_unmask_irq,
+	.irq_bus_lock = ar9331_sw_irq_bus_lock,
+	.irq_bus_sync_unlock = ar9331_sw_irq_bus_sync_unlock,
 };
 
 static int ar9331_sw_irq_map(struct irq_domain *domain, unsigned int irq,
@@ -582,6 +598,7 @@ static int ar9331_sw_irq_init(struct ar9331_sw_priv *priv)
 		return irq ? irq : -EINVAL;
 	}
 
+	mutex_init(&priv->lock_irq);
 	ret = devm_request_threaded_irq(dev, irq, NULL, ar9331_sw_irq,
 					IRQF_ONESHOT, AR9331_SW_NAME, priv);
 	if (ret) {

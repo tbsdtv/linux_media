@@ -21,9 +21,10 @@
 /*
  * On 64-bit we don't want to invoke hash_page on user addresses from
  * interrupt context, so if the access faults, we read the page tables
- * to find which page (if any) is mapped and access it directly.
+ * to find which page (if any) is mapped and access it directly. Radix
+ * has no need for this so it doesn't use read_user_stack_slow.
  */
-int read_user_stack_slow(void __user *ptr, void *buf, int nb)
+int read_user_stack_slow(const void __user *ptr, void *buf, int nb)
 {
 
 	unsigned long addr = (unsigned long) ptr;
@@ -44,16 +45,9 @@ int read_user_stack_slow(void __user *ptr, void *buf, int nb)
 	return -EFAULT;
 }
 
-static int read_user_stack_64(unsigned long __user *ptr, unsigned long *ret)
+static int read_user_stack_64(const unsigned long __user *ptr, unsigned long *ret)
 {
-	if ((unsigned long)ptr > TASK_SIZE - sizeof(unsigned long) ||
-	    ((unsigned long)ptr & 7))
-		return -EFAULT;
-
-	if (!probe_user_read(ret, ptr, sizeof(*ret)))
-		return 0;
-
-	return read_user_stack_slow(ptr, ret, 8);
+	return __read_user_stack(ptr, ret, sizeof(*ret));
 }
 
 /*
@@ -74,8 +68,8 @@ static int is_sigreturn_64_address(unsigned long nip, unsigned long fp)
 {
 	if (nip == fp + offsetof(struct signal_frame_64, tramp))
 		return 1;
-	if (vdso64_rt_sigtramp && current->mm->context.vdso_base &&
-	    nip == current->mm->context.vdso_base + vdso64_rt_sigtramp)
+	if (current->mm->context.vdso &&
+	    nip == VDSO64_SYMBOL(current->mm->context.vdso, sigtramp_rt64))
 		return 1;
 	return 0;
 }

@@ -234,7 +234,7 @@ static int tbs5520se_frontend_attach(struct dvb_usb_adapter *adap)
 	info.addr = 0x67;
 	info.platform_data = &si2183_config;
 	request_module(info.type);
-	client_demod = i2c_new_device(&d->i2c_adap, &info);
+	client_demod = i2c_new_client_device(&d->i2c_adap, &info);
 	if (client_demod == NULL || client_demod->dev.driver == NULL)
 		return -ENODEV;
 
@@ -268,7 +268,7 @@ static int tbs5520se_frontend_attach(struct dvb_usb_adapter *adap)
 	info.addr = 0x61;
 	info.platform_data = &si2157_config;
 	request_module(info.type);
-	client_tuner = i2c_new_device(adapter, &info);
+	client_tuner = i2c_new_client_device(adapter, &info);
 	if (client_tuner == NULL || client_tuner->dev.driver == NULL) {
 		module_put(client_demod->dev.driver->owner);
 		i2c_unregister_device(client_demod);

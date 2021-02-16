@@ -313,6 +313,7 @@ enum {
 	TCP_NLA_SRTT,		/* smoothed RTT in usecs */
 	TCP_NLA_TIMEOUT_REHASH, /* Timeout-triggered rehash attempts */
 	TCP_NLA_BYTES_NOTSENT,	/* Bytes in write queue not yet sent */
+	TCP_NLA_EDT,		/* Earliest departure time (CLOCK_MONOTONIC) */
 };
 
 /* for TCP_MD5SIG socket option */
@@ -342,11 +343,15 @@ struct tcp_diag_md5sig {
 
 /* setsockopt(fd, IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE, ...) */
 
+#define TCP_RECEIVE_ZEROCOPY_FLAG_TLB_CLEAN_HINT 0x1
 struct tcp_zerocopy_receive {
 	__u64 address;		/* in: address of mapping */
 	__u32 length;		/* in/out: number of bytes to map/mapped */
 	__u32 recv_skip_hint;	/* out: amount of bytes to skip */
 	__u32 inq; /* out: amount of bytes in read queue */
 	__s32 err; /* out: socket error */
+	__u64 copybuf_address;	/* in: copybuf address (small reads) */
+	__s32 copybuf_len; /* in/out: copybuf bytes avail/used or error */
+	__u32 flags; /* in: flags */
 };
 #endif /* _UAPI_LINUX_TCP_H */

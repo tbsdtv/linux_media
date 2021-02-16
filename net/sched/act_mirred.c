@@ -194,8 +194,6 @@ static int tcf_mirred_init(struct net *net, struct nlattr *nla,
 		spin_lock(&mirred_list_lock);
 		list_add(&m->tcfm_list, &mirred_list);
 		spin_unlock(&mirred_list_lock);
-
-		tcf_idr_insert(tn, *a);
 	}
 
 	return ret;
@@ -204,6 +202,18 @@ put_chain:
 		tcf_chain_put_by_act(goto_ch);
 release_idr:
 	tcf_idr_release(*a, bind);
+	return err;
+}
+
+static int tcf_mirred_forward(bool want_ingress, struct sk_buff *skb)
+{
+	int err;
+
+	if (!want_ingress)
+		err = tcf_dev_queue_xmit(skb, dev_queue_xmit);
+	else
+		err = netif_receive_skb(skb);
+
 	return err;
 }
 
@@ -289,18 +299,15 @@ static int tcf_mirred_act(struct sk_buff *skb, const struct tc_action *a,
 		/* let's the caller reinsert the packet, if possible */
 		if (use_reinsert) {
 			res->ingress = want_ingress;
-			if (skb_tc_reinsert(skb, res))
+			err = tcf_mirred_forward(res->ingress, skb);
+			if (err)
 				tcf_action_inc_overlimit_qstats(&m->common);
 			__this_cpu_dec(mirred_rec_level);
 			return TC_ACT_CONSUMED;
 		}
 	}
 
-	if (!want_ingress)
-		err = dev_queue_xmit(skb2);
-	else
-		err = netif_receive_skb(skb2);
-
+	err = tcf_mirred_forward(want_ingress, skb2);
 	if (err) {
 out:
 		tcf_action_inc_overlimit_qstats(&m->common);
@@ -312,13 +319,13 @@ out:
 	return retval;
 }
 
-static void tcf_stats_update(struct tc_action *a, u64 bytes, u32 packets,
-			     u64 lastuse, bool hw)
+static void tcf_stats_update(struct tc_action *a, u64 bytes, u64 packets,
+			     u64 drops, u64 lastuse, bool hw)
 {
 	struct tcf_mirred *m = to_mirred(a);
 	struct tcf_t *tm = &m->tcf_tm;
 
-	tcf_action_update_stats(a, bytes, packets, false, hw);
+	tcf_action_update_stats(a, bytes, packets, drops, hw);
 	tm->lastuse = max_t(u64, tm->lastuse, lastuse);
 }
 

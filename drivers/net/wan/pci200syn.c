@@ -4,7 +4,7 @@
  *
  * Copyright (C) 2002-2008 Krzysztof Halasa <khc@pm.waw.pl>
  *
- * For information see <http://www.kernel.org/pub/linux/utils/net/hdlc/>
+ * For information see <https://www.kernel.org/pub/linux/utils/net/hdlc/>
  *
  * Sources of information:
  *    Hitachi HD64572 SCA-II User's Manual
@@ -92,7 +92,7 @@ typedef struct card_s {
 
 
 #define get_port(card, port)	     (&card->ports[port])
-#define sca_flush(card)		     (sca_in(IER0, card));
+#define sca_flush(card)		     (sca_in(IER0, card))
 
 static inline void new_memcpy_toio(char __iomem *dest, char *src, int length)
 {

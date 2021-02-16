@@ -26,7 +26,7 @@ static int rmnet_is_real_dev_registered(const struct net_device *real_dev)
 }
 
 /* Needs rtnl lock */
-static struct rmnet_port*
+struct rmnet_port*
 rmnet_get_port_rtnl(const struct net_device *real_dev)
 {
 	return rtnl_dereference(real_dev->rx_handler_data);
@@ -47,15 +47,23 @@ static int rmnet_unregister_real_device(struct net_device *real_dev)
 	return 0;
 }
 
-static int rmnet_register_real_device(struct net_device *real_dev)
+static int rmnet_register_real_device(struct net_device *real_dev,
+				      struct netlink_ext_ack *extack)
 {
 	struct rmnet_port *port;
 	int rc, entry;
 
 	ASSERT_RTNL();
 
-	if (rmnet_is_real_dev_registered(real_dev))
+	if (rmnet_is_real_dev_registered(real_dev)) {
+		port = rmnet_get_port_rtnl(real_dev);
+		if (port->rmnet_mode != RMNET_EPMODE_VND) {
+			NL_SET_ERR_MSG_MOD(extack, "bridge device already exists");
+			return -EINVAL;
+		}
+
 		return 0;
+	}
 
 	port = kzalloc(sizeof(*port), GFP_KERNEL);
 	if (!port)
@@ -133,7 +141,7 @@ static int rmnet_newlink(struct net *src_net, struct net_device *dev,
 
 	mux_id = nla_get_u16(data[IFLA_RMNET_MUX_ID]);
 
-	err = rmnet_register_real_device(real_dev);
+	err = rmnet_register_real_device(real_dev, extack);
 	if (err)
 		goto err0;
 
@@ -245,7 +253,10 @@ static int rmnet_config_notify_cb(struct notifier_block *nb,
 		netdev_dbg(real_dev, "Kernel unregister\n");
 		rmnet_force_unassociate_device(real_dev);
 		break;
-
+	case NETDEV_CHANGEMTU:
+		if (rmnet_vnd_validate_real_dev_mtu(real_dev))
+			return NOTIFY_BAD;
+		break;
 	default:
 		break;
 	}
@@ -321,9 +332,17 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 
 	if (data[IFLA_RMNET_FLAGS]) {
 		struct ifla_rmnet_flags *flags;
+		u32 old_data_format;
 
+		old_data_format = port->data_format;
 		flags = nla_data(data[IFLA_RMNET_FLAGS]);
 		port->data_format = flags->flags & flags->mask;
+
+		if (rmnet_vnd_update_dev_mtu(port, real_dev)) {
+			port->data_format = old_data_format;
+			NL_SET_ERR_MSG_MOD(extack, "Invalid MTU on real dev");
+			return -EINVAL;
+		}
 	}
 
 	return 0;
@@ -422,7 +441,7 @@ int rmnet_add_bridge(struct net_device *rmnet_dev,
 	}
 
 	if (port->rmnet_mode != RMNET_EPMODE_VND) {
-		NL_SET_ERR_MSG_MOD(extack, "bridge device already exists");
+		NL_SET_ERR_MSG_MOD(extack, "more than one bridge dev attached");
 		return -EINVAL;
 	}
 
@@ -433,7 +452,7 @@ int rmnet_add_bridge(struct net_device *rmnet_dev,
 		return -EBUSY;
 	}
 
-	err = rmnet_register_real_device(slave_dev);
+	err = rmnet_register_real_device(slave_dev, extack);
 	if (err)
 		return -EBUSY;
 

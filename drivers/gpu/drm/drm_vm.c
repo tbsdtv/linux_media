@@ -51,7 +51,6 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
 #include <drm/drm_framebuffer.h>
-#include <drm/drm_gem.h>
 #include <drm/drm_print.h>
 
 #include "drm_internal.h"
@@ -70,9 +69,6 @@ static pgprot_t drm_io_prot(struct drm_local_map *map,
 			    struct vm_area_struct *vma)
 {
 	pgprot_t tmp = vm_get_page_prot(vma->vm_flags);
-
-	/* We don't want graphics memory to be mapped encrypted */
-	tmp = pgprot_decrypted(tmp);
 
 #if defined(__i386__) || defined(__x86_64__) || defined(__powerpc__) || \
     defined(__mips__)

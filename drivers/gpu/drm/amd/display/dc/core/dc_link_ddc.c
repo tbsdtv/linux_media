@@ -37,8 +37,13 @@
 #include "dc_link_ddc.h"
 #include "dce/dce_aux.h"
 
+/*DP to Dual link DVI converter*/
+static const uint8_t DP_DVI_CONVERTER_ID_4[] = "m2DVIa";
+static const uint8_t DP_DVI_CONVERTER_ID_5[] = "3393N2";
+
 #define AUX_POWER_UP_WA_DELAY 500
 #define I2C_OVER_AUX_DEFER_WA_DELAY 70
+#define I2C_OVER_AUX_DEFER_WA_DELAY_1MS 1
 
 /* CV smart dongle slave address for retrieving supported HDTV modes*/
 #define CV_SMART_DONGLE_ADDRESS 0x20
@@ -146,14 +151,6 @@ static struct i2c_payload *dal_ddc_i2c_payloads_get(struct i2c_payloads *p)
 static uint32_t dal_ddc_i2c_payloads_get_count(struct i2c_payloads *p)
 {
 	return p->payloads.count;
-}
-
-static void dal_ddc_i2c_payloads_destroy(struct i2c_payloads *p)
-{
-	if (!p)
-		return;
-
-	dal_vector_destruct(&p->payloads);
 }
 
 #define DDC_MIN(a, b) (((a) < (b)) ? (a) : (b))
@@ -290,11 +287,17 @@ static uint32_t defer_delay_converter_wa(
 	struct dc_link *link = ddc->link;
 
 	if (link->dpcd_caps.branch_dev_id == DP_BRANCH_DEVICE_ID_0080E1 &&
-		!memcmp(link->dpcd_caps.branch_dev_name,
-			DP_DVI_CONVERTER_ID_4,
-			sizeof(link->dpcd_caps.branch_dev_name)))
+	    !memcmp(link->dpcd_caps.branch_dev_name,
+		    DP_DVI_CONVERTER_ID_4,
+		    sizeof(link->dpcd_caps.branch_dev_name)))
 		return defer_delay > I2C_OVER_AUX_DEFER_WA_DELAY ?
 			defer_delay : I2C_OVER_AUX_DEFER_WA_DELAY;
+	if (link->dpcd_caps.branch_dev_id == DP_BRANCH_DEVICE_ID_006037 &&
+	    !memcmp(link->dpcd_caps.branch_dev_name,
+		    DP_DVI_CONVERTER_ID_5,
+		    sizeof(link->dpcd_caps.branch_dev_name)))
+		return defer_delay > I2C_OVER_AUX_DEFER_WA_DELAY_1MS ?
+			I2C_OVER_AUX_DEFER_WA_DELAY_1MS : defer_delay;
 
 	return defer_delay;
 }
@@ -503,7 +506,7 @@ bool dal_ddc_service_query_ddc_data(
 	uint8_t *read_buf,
 	uint32_t read_size)
 {
-	bool ret = false;
+	bool success = true;
 	uint32_t payload_size =
 		dal_ddc_service_is_in_aux_transaction_mode(ddc) ?
 			DEFAULT_AUX_MAX_DATA_SIZE : EDID_SEGMENT_SIZE;
@@ -527,7 +530,6 @@ bool dal_ddc_service_query_ddc_data(
 	 *  but we want to read 256 over i2c!!!!*/
 	if (dal_ddc_service_is_in_aux_transaction_mode(ddc)) {
 		struct aux_payload payload;
-		bool read_available = true;
 
 		payload.i2c_over_aux = true;
 		payload.address = address;
@@ -536,21 +538,26 @@ bool dal_ddc_service_query_ddc_data(
 
 		if (write_size != 0) {
 			payload.write = true;
-			payload.mot = false;
+			/* should not set mot (middle of transaction) to 0
+			 * if there are pending read payloads
+			 */
+			payload.mot = read_size == 0 ? false : true;
 			payload.length = write_size;
 			payload.data = write_buf;
 
-			ret = dal_ddc_submit_aux_command(ddc, &payload);
-			read_available = ret;
+			success = dal_ddc_submit_aux_command(ddc, &payload);
 		}
 
-		if (read_size != 0 && read_available) {
+		if (read_size != 0 && success) {
 			payload.write = false;
+			/* should set mot (middle of transaction) to 0
+			 * since it is the last payload to send
+			 */
 			payload.mot = false;
 			payload.length = read_size;
 			payload.data = read_buf;
 
-			ret = dal_ddc_submit_aux_command(ddc, &payload);
+			success = dal_ddc_submit_aux_command(ddc, &payload);
 		}
 	} else {
 		struct i2c_command command = {0};
@@ -573,15 +580,15 @@ bool dal_ddc_service_query_ddc_data(
 		command.number_of_payloads =
 			dal_ddc_i2c_payloads_get_count(&payloads);
 
-		ret = dm_helpers_submit_i2c(
+		success = dm_helpers_submit_i2c(
 				ddc->ctx,
 				ddc->link,
 				&command);
 
-		dal_ddc_i2c_payloads_destroy(&payloads);
+		dal_vector_destruct(&payloads.payloads);
 	}
 
-	return ret;
+	return success;
 }
 
 bool dal_ddc_submit_aux_command(struct ddc_service *ddc,
@@ -598,7 +605,7 @@ bool dal_ddc_submit_aux_command(struct ddc_service *ddc,
 
 	do {
 		struct aux_payload current_payload;
-		bool is_end_of_payload = (retrieved + DEFAULT_AUX_MAX_DATA_SIZE) >
+		bool is_end_of_payload = (retrieved + DEFAULT_AUX_MAX_DATA_SIZE) >=
 			payload->length;
 
 		current_payload.address = payload->address;
@@ -607,7 +614,10 @@ bool dal_ddc_submit_aux_command(struct ddc_service *ddc,
 		current_payload.i2c_over_aux = payload->i2c_over_aux;
 		current_payload.length = is_end_of_payload ?
 			payload->length - retrieved : DEFAULT_AUX_MAX_DATA_SIZE;
-		current_payload.mot = !is_end_of_payload;
+		/* set mot (middle of transaction) to false
+		 * if it is the last payload
+		 */
+		current_payload.mot = is_end_of_payload ? payload->mot:true;
 		current_payload.reply = payload->reply;
 		current_payload.write = payload->write;
 
@@ -648,16 +658,17 @@ bool dc_link_aux_transfer_with_retries(struct ddc_service *ddc,
 }
 
 
-uint32_t dc_link_aux_configure_timeout(struct ddc_service *ddc,
+bool dc_link_aux_try_to_configure_timeout(struct ddc_service *ddc,
 		uint32_t timeout)
 {
-	uint32_t prev_timeout = 0;
+	bool result = false;
 	struct ddc *ddc_pin = ddc->ddc_pin;
 
-	if (ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout)
-		prev_timeout =
-				ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout(ddc, timeout);
-	return prev_timeout;
+	if (ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout) {
+		ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout(ddc, timeout);
+		result = true;
+	}
+	return result;
 }
 
 /*test only function*/

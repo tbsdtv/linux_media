@@ -542,7 +542,7 @@ static int flock64_to_posix_lock(struct file *filp, struct file_lock *fl,
 	if (l->l_len > 0) {
 		if (l->l_len - 1 > OFFSET_MAX - fl->fl_start)
 			return -EOVERFLOW;
-		fl->fl_end = fl->fl_start + l->l_len - 1;
+		fl->fl_end = fl->fl_start + (l->l_len - 1);
 
 	} else if (l->l_len < 0) {
 		if (fl->fl_start + l->l_len < 0)
@@ -750,7 +750,7 @@ static void __locks_wake_up_blocks(struct file_lock *blocker)
 }
 
 /**
- *	locks_delete_lock - stop waiting for a file lock
+ *	locks_delete_block - stop waiting for a file lock
  *	@waiter: the lock which was waiting
  *
  *	lockd/nfsd need to disconnect the lock while working on it.
@@ -1282,6 +1282,7 @@ static int posix_lock_inode(struct inode *inode, struct file_lock *request,
 				if (!new_fl)
 					goto out;
 				locks_copy_lock(new_fl, request);
+				locks_move_blocks(new_fl, request);
 				request = new_fl;
 				new_fl = NULL;
 				locks_insert_lock_ctx(request, &fl->fl_list);
@@ -1498,7 +1499,7 @@ static void lease_clear_pending(struct file_lock *fl, int arg)
 	switch (arg) {
 	case F_UNLCK:
 		fl->fl_flags &= ~FL_UNLOCK_PENDING;
-		/* fall through */
+		fallthrough;
 	case F_RDLCK:
 		fl->fl_flags &= ~FL_DOWNGRADE_PENDING;
 	}
@@ -1806,6 +1807,9 @@ check_conflicting_open(struct file *filp, const long arg, int flags)
 	int self_wcount = 0, self_rcount = 0;
 
 	if (flags & FL_LAYOUT)
+		return 0;
+	if (flags & FL_DELEG)
+		/* We leave these checks to the caller. */
 		return 0;
 
 	if (arg == F_RDLCK)
@@ -2521,7 +2525,7 @@ int fcntl_setlk(unsigned int fd, struct file *filp, unsigned int cmd,
 		cmd = F_SETLKW;
 		file_lock->fl_flags |= FL_OFDLCK;
 		file_lock->fl_owner = filp;
-		/* Fallthrough */
+		fallthrough;
 	case F_SETLKW:
 		file_lock->fl_flags |= FL_SLEEP;
 	}
@@ -2535,14 +2539,15 @@ int fcntl_setlk(unsigned int fd, struct file *filp, unsigned int cmd,
 	 */
 	if (!error && file_lock->fl_type != F_UNLCK &&
 	    !(file_lock->fl_flags & FL_OFDLCK)) {
+		struct files_struct *files = current->files;
 		/*
 		 * We need that spin_lock here - it prevents reordering between
 		 * update of i_flctx->flc_posix and check for it done in
 		 * close(). rcu_read_lock() wouldn't do.
 		 */
-		spin_lock(&current->files->file_lock);
-		f = fcheck(fd);
-		spin_unlock(&current->files->file_lock);
+		spin_lock(&files->file_lock);
+		f = files_lookup_fd_locked(files, fd);
+		spin_unlock(&files->file_lock);
 		if (f != filp) {
 			file_lock->fl_type = F_UNLCK;
 			error = do_lock_file_wait(filp, cmd, file_lock);
@@ -2652,7 +2657,7 @@ int fcntl_setlk64(unsigned int fd, struct file *filp, unsigned int cmd,
 		cmd = F_SETLKW64;
 		file_lock->fl_flags |= FL_OFDLCK;
 		file_lock->fl_owner = filp;
-		/* Fallthrough */
+		fallthrough;
 	case F_SETLKW64:
 		file_lock->fl_flags |= FL_SLEEP;
 	}
@@ -2666,14 +2671,15 @@ int fcntl_setlk64(unsigned int fd, struct file *filp, unsigned int cmd,
 	 */
 	if (!error && file_lock->fl_type != F_UNLCK &&
 	    !(file_lock->fl_flags & FL_OFDLCK)) {
+		struct files_struct *files = current->files;
 		/*
 		 * We need that spin_lock here - it prevents reordering between
 		 * update of i_flctx->flc_posix and check for it done in
 		 * close(). rcu_read_lock() wouldn't do.
 		 */
-		spin_lock(&current->files->file_lock);
-		f = fcheck(fd);
-		spin_unlock(&current->files->file_lock);
+		spin_lock(&files->file_lock);
+		f = files_lookup_fd_locked(files, fd);
+		spin_unlock(&files->file_lock);
 		if (f != filp) {
 			file_lock->fl_type = F_UNLCK;
 			error = do_lock_file_wait(filp, cmd, file_lock);

@@ -23,6 +23,7 @@
 
 #include <linux/time.h>
 #include <linux/jiffies.h>
+#include <asm/bug.h>
 
 /* Nanosecond scalar representation for kernel time values */
 typedef s64	ktime_t;
@@ -229,6 +230,5 @@ static inline ktime_t ms_to_ktime(u64 ms)
 }
 
 # include <linux/timekeeping.h>
-# include <linux/timekeeping32.h>
 
 #endif

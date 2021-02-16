@@ -48,7 +48,6 @@ struct bpf_ringbuf {
 
 struct bpf_ringbuf_map {
 	struct bpf_map map;
-	struct bpf_map_memory memory;
 	struct bpf_ringbuf *rb;
 };
 
@@ -60,8 +59,8 @@ struct bpf_ringbuf_hdr {
 
 static struct bpf_ringbuf *bpf_ringbuf_area_alloc(size_t data_sz, int numa_node)
 {
-	const gfp_t flags = GFP_KERNEL | __GFP_RETRY_MAYFAIL | __GFP_NOWARN |
-			    __GFP_ZERO;
+	const gfp_t flags = GFP_KERNEL_ACCOUNT | __GFP_RETRY_MAYFAIL |
+			    __GFP_NOWARN | __GFP_ZERO;
 	int nr_meta_pages = RINGBUF_PGOFF + RINGBUF_POS_PAGES;
 	int nr_data_pages = data_sz >> PAGE_SHIFT;
 	int nr_pages = nr_meta_pages + nr_data_pages;
@@ -88,10 +87,7 @@ static struct bpf_ringbuf *bpf_ringbuf_area_alloc(size_t data_sz, int numa_node)
 	 * user-space implementations significantly.
 	 */
 	array_size = (nr_meta_pages + 2 * nr_data_pages) * sizeof(*pages);
-	if (array_size > PAGE_SIZE)
-		pages = vmalloc_node(array_size, numa_node);
-	else
-		pages = kmalloc_node(array_size, flags, numa_node);
+	pages = bpf_map_area_alloc(array_size, numa_node);
 	if (!pages)
 		return NULL;
 
@@ -132,18 +128,9 @@ static struct bpf_ringbuf *bpf_ringbuf_alloc(size_t data_sz, int numa_node)
 {
 	struct bpf_ringbuf *rb;
 
-	if (!data_sz || !PAGE_ALIGNED(data_sz))
-		return ERR_PTR(-EINVAL);
-
-#ifdef CONFIG_64BIT
-	/* on 32-bit arch, it's impossible to overflow record's hdr->pgoff */
-	if (data_sz > RINGBUF_MAX_DATA_SZ)
-		return ERR_PTR(-E2BIG);
-#endif
-
 	rb = bpf_ringbuf_area_alloc(data_sz, numa_node);
 	if (!rb)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	spin_lock_init(&rb->spinlock);
 	init_waitqueue_head(&rb->waitq);
@@ -159,42 +146,34 @@ static struct bpf_ringbuf *bpf_ringbuf_alloc(size_t data_sz, int numa_node)
 static struct bpf_map *ringbuf_map_alloc(union bpf_attr *attr)
 {
 	struct bpf_ringbuf_map *rb_map;
-	u64 cost;
-	int err;
 
 	if (attr->map_flags & ~RINGBUF_CREATE_FLAG_MASK)
 		return ERR_PTR(-EINVAL);
 
 	if (attr->key_size || attr->value_size ||
-	    attr->max_entries == 0 || !PAGE_ALIGNED(attr->max_entries))
+	    !is_power_of_2(attr->max_entries) ||
+	    !PAGE_ALIGNED(attr->max_entries))
 		return ERR_PTR(-EINVAL);
 
-	rb_map = kzalloc(sizeof(*rb_map), GFP_USER);
+#ifdef CONFIG_64BIT
+	/* on 32-bit arch, it's impossible to overflow record's hdr->pgoff */
+	if (attr->max_entries > RINGBUF_MAX_DATA_SZ)
+		return ERR_PTR(-E2BIG);
+#endif
+
+	rb_map = kzalloc(sizeof(*rb_map), GFP_USER | __GFP_ACCOUNT);
 	if (!rb_map)
 		return ERR_PTR(-ENOMEM);
 
 	bpf_map_init_from_attr(&rb_map->map, attr);
 
-	cost = sizeof(struct bpf_ringbuf_map) +
-	       sizeof(struct bpf_ringbuf) +
-	       attr->max_entries;
-	err = bpf_map_charge_init(&rb_map->map.memory, cost);
-	if (err)
-		goto err_free_map;
-
 	rb_map->rb = bpf_ringbuf_alloc(attr->max_entries, rb_map->map.numa_node);
-	if (IS_ERR(rb_map->rb)) {
-		err = PTR_ERR(rb_map->rb);
-		goto err_uncharge;
+	if (!rb_map->rb) {
+		kfree(rb_map);
+		return ERR_PTR(-ENOMEM);
 	}
 
 	return &rb_map->map;
-
-err_uncharge:
-	bpf_map_charge_finish(&rb_map->map.memory);
-err_free_map:
-	kfree(rb_map);
-	return ERR_PTR(err);
 }
 
 static void bpf_ringbuf_free(struct bpf_ringbuf *rb)
@@ -214,13 +193,6 @@ static void bpf_ringbuf_free(struct bpf_ringbuf *rb)
 static void ringbuf_map_free(struct bpf_map *map)
 {
 	struct bpf_ringbuf_map *rb_map;
-
-	/* at this point bpf_prog->aux->refcnt == 0 and this map->refcnt == 0,
-	 * so the programs (can be more than one that used this map) were
-	 * disconnected from events. Wait for outstanding critical sections in
-	 * these programs to complete
-	 */
-	synchronize_rcu();
 
 	rb_map = container_of(map, struct bpf_ringbuf_map, map);
 	bpf_ringbuf_free(rb_map->rb);
@@ -294,7 +266,9 @@ static __poll_t ringbuf_map_poll(struct bpf_map *map, struct file *filp,
 	return 0;
 }
 
+static int ringbuf_map_btf_id;
 const struct bpf_map_ops ringbuf_map_ops = {
+	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc = ringbuf_map_alloc,
 	.map_free = ringbuf_map_free,
 	.map_mmap = ringbuf_map_mmap,
@@ -303,6 +277,8 @@ const struct bpf_map_ops ringbuf_map_ops = {
 	.map_update_elem = ringbuf_map_update_elem,
 	.map_delete_elem = ringbuf_map_delete_elem,
 	.map_get_next_key = ringbuf_map_get_next_key,
+	.map_btf_name = "bpf_ringbuf_map",
+	.map_btf_id = &ringbuf_map_btf_id,
 };
 
 /* Given pointer to ring buffer record metadata and struct bpf_ringbuf itself,

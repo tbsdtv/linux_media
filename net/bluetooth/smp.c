@@ -753,9 +753,9 @@ static void smp_chan_destroy(struct l2cap_conn *conn)
 	complete = test_bit(SMP_FLAG_COMPLETE, &smp->flags);
 	mgmt_smp_complete(hcon, complete);
 
-	kzfree(smp->csrk);
-	kzfree(smp->slave_csrk);
-	kzfree(smp->link_key);
+	kfree_sensitive(smp->csrk);
+	kfree_sensitive(smp->slave_csrk);
+	kfree_sensitive(smp->link_key);
 
 	crypto_free_shash(smp->tfm_cmac);
 	crypto_free_kpp(smp->tfm_ecdh);
@@ -789,7 +789,7 @@ static void smp_chan_destroy(struct l2cap_conn *conn)
 	}
 
 	chan->data = NULL;
-	kzfree(smp);
+	kfree_sensitive(smp);
 	hci_conn_drop(hcon);
 }
 
@@ -1156,7 +1156,7 @@ static void sc_generate_link_key(struct smp_chan *smp)
 		const u8 salt[16] = { 0x31, 0x70, 0x6d, 0x74 };
 
 		if (smp_h7(smp->tfm_cmac, smp->tk, salt, smp->link_key)) {
-			kzfree(smp->link_key);
+			kfree_sensitive(smp->link_key);
 			smp->link_key = NULL;
 			return;
 		}
@@ -1165,14 +1165,14 @@ static void sc_generate_link_key(struct smp_chan *smp)
 		const u8 tmp1[4] = { 0x31, 0x70, 0x6d, 0x74 };
 
 		if (smp_h6(smp->tfm_cmac, smp->tk, tmp1, smp->link_key)) {
-			kzfree(smp->link_key);
+			kfree_sensitive(smp->link_key);
 			smp->link_key = NULL;
 			return;
 		}
 	}
 
 	if (smp_h6(smp->tfm_cmac, smp->link_key, lebr, smp->link_key)) {
-		kzfree(smp->link_key);
+		kfree_sensitive(smp->link_key);
 		smp->link_key = NULL;
 		return;
 	}
@@ -1387,7 +1387,7 @@ static struct smp_chan *smp_chan_create(struct l2cap_conn *conn)
 		goto zfree_smp;
 	}
 
-	smp->tfm_ecdh = crypto_alloc_kpp("ecdh", CRYPTO_ALG_INTERNAL, 0);
+	smp->tfm_ecdh = crypto_alloc_kpp("ecdh", 0, 0);
 	if (IS_ERR(smp->tfm_ecdh)) {
 		BT_ERR("Unable to create ECDH crypto context");
 		goto free_shash;
@@ -1407,7 +1407,7 @@ static struct smp_chan *smp_chan_create(struct l2cap_conn *conn)
 free_shash:
 	crypto_free_shash(smp->tfm_cmac);
 zfree_smp:
-	kzfree(smp);
+	kfree_sensitive(smp);
 	return NULL;
 }
 
@@ -1654,7 +1654,7 @@ int smp_user_confirm_reply(struct hci_conn *hcon, u16 mgmt_op, __le32 passkey)
 		memset(smp->tk, 0, sizeof(smp->tk));
 		BT_DBG("PassKey: %d", value);
 		put_unaligned_le32(value, smp->tk);
-		/* Fall Through */
+		fallthrough;
 	case MGMT_OP_USER_CONFIRM_REPLY:
 		set_bit(SMP_FLAG_TK_VALID, &smp->flags);
 		break;
@@ -3278,15 +3278,15 @@ static struct l2cap_chan *smp_add_cid(struct hci_dev *hdev, u16 cid)
 	tfm_cmac = crypto_alloc_shash("cmac(aes)", 0, 0);
 	if (IS_ERR(tfm_cmac)) {
 		BT_ERR("Unable to create CMAC crypto context");
-		kzfree(smp);
+		kfree_sensitive(smp);
 		return ERR_CAST(tfm_cmac);
 	}
 
-	tfm_ecdh = crypto_alloc_kpp("ecdh", CRYPTO_ALG_INTERNAL, 0);
+	tfm_ecdh = crypto_alloc_kpp("ecdh", 0, 0);
 	if (IS_ERR(tfm_ecdh)) {
 		BT_ERR("Unable to create ECDH crypto context");
 		crypto_free_shash(tfm_cmac);
-		kzfree(smp);
+		kfree_sensitive(smp);
 		return ERR_CAST(tfm_ecdh);
 	}
 
@@ -3300,7 +3300,7 @@ create_chan:
 		if (smp) {
 			crypto_free_shash(smp->tfm_cmac);
 			crypto_free_kpp(smp->tfm_ecdh);
-			kzfree(smp);
+			kfree_sensitive(smp);
 		}
 		return ERR_PTR(-ENOMEM);
 	}
@@ -3347,37 +3347,14 @@ static void smp_del_chan(struct l2cap_chan *chan)
 		chan->data = NULL;
 		crypto_free_shash(smp->tfm_cmac);
 		crypto_free_kpp(smp->tfm_ecdh);
-		kzfree(smp);
+		kfree_sensitive(smp);
 	}
 
 	l2cap_chan_put(chan);
 }
 
-static ssize_t force_bredr_smp_read(struct file *file,
-				    char __user *user_buf,
-				    size_t count, loff_t *ppos)
+int smp_force_bredr(struct hci_dev *hdev, bool enable)
 {
-	struct hci_dev *hdev = file->private_data;
-	char buf[3];
-
-	buf[0] = hci_dev_test_flag(hdev, HCI_FORCE_BREDR_SMP) ? 'Y': 'N';
-	buf[1] = '\n';
-	buf[2] = '\0';
-	return simple_read_from_buffer(user_buf, count, ppos, buf, 2);
-}
-
-static ssize_t force_bredr_smp_write(struct file *file,
-				     const char __user *user_buf,
-				     size_t count, loff_t *ppos)
-{
-	struct hci_dev *hdev = file->private_data;
-	bool enable;
-	int err;
-
-	err = kstrtobool_from_user(user_buf, count, &enable);
-	if (err)
-		return err;
-
 	if (enable == hci_dev_test_flag(hdev, HCI_FORCE_BREDR_SMP))
 		return -EALREADY;
 
@@ -3399,15 +3376,8 @@ static ssize_t force_bredr_smp_write(struct file *file,
 
 	hci_dev_change_flag(hdev, HCI_FORCE_BREDR_SMP);
 
-	return count;
+	return 0;
 }
-
-static const struct file_operations force_bredr_smp_fops = {
-	.open		= simple_open,
-	.read		= force_bredr_smp_read,
-	.write		= force_bredr_smp_write,
-	.llseek		= default_llseek,
-};
 
 int smp_register(struct hci_dev *hdev)
 {
@@ -3433,17 +3403,7 @@ int smp_register(struct hci_dev *hdev)
 
 	hdev->smp_data = chan;
 
-	/* If the controller does not support BR/EDR Secure Connections
-	 * feature, then the BR/EDR SMP channel shall not be present.
-	 *
-	 * To test this with Bluetooth 4.0 controllers, create a debugfs
-	 * switch that allows forcing BR/EDR SMP support and accepting
-	 * cross-transport pairing on non-AES encrypted connections.
-	 */
 	if (!lmp_sc_capable(hdev)) {
-		debugfs_create_file("force_bredr_smp", 0644, hdev->debugfs,
-				    hdev, &force_bredr_smp_fops);
-
 		/* Flag can be already set here (due to power toggle) */
 		if (!hci_dev_test_flag(hdev, HCI_FORCE_BREDR_SMP))
 			return 0;
@@ -3847,7 +3807,7 @@ int __init bt_selftest_smp(void)
 		return PTR_ERR(tfm_cmac);
 	}
 
-	tfm_ecdh = crypto_alloc_kpp("ecdh", CRYPTO_ALG_INTERNAL, 0);
+	tfm_ecdh = crypto_alloc_kpp("ecdh", 0, 0);
 	if (IS_ERR(tfm_ecdh)) {
 		BT_ERR("Unable to create ECDH crypto context");
 		crypto_free_shash(tfm_cmac);

@@ -386,6 +386,16 @@ static int lp_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
+static void lp_gpio_enable_input(void __iomem *reg)
+{
+	iowrite32(ioread32(reg) & ~GPINDIS_BIT, reg);
+}
+
+static void lp_gpio_disable_input(void __iomem *reg)
+{
+	iowrite32(ioread32(reg) | GPINDIS_BIT, reg);
+}
+
 static int lp_gpio_request_enable(struct pinctrl_dev *pctldev,
 				  struct pinctrl_gpio_range *range,
 				  unsigned int pin)
@@ -411,7 +421,7 @@ static int lp_gpio_request_enable(struct pinctrl_dev *pctldev,
 	}
 
 	/* Enable input sensing */
-	iowrite32(ioread32(conf2) & ~GPINDIS_BIT, conf2);
+	lp_gpio_enable_input(conf2);
 
 	raw_spin_unlock_irqrestore(&lg->lock, flags);
 
@@ -429,7 +439,7 @@ static void lp_gpio_disable_free(struct pinctrl_dev *pctldev,
 	raw_spin_lock_irqsave(&lg->lock, flags);
 
 	/* Disable input sensing */
-	iowrite32(ioread32(conf2) | GPINDIS_BIT, conf2);
+	lp_gpio_disable_input(conf2);
 
 	raw_spin_unlock_irqrestore(&lg->lock, flags);
 
@@ -486,7 +496,7 @@ static int lp_pin_config_get(struct pinctrl_dev *pctldev, unsigned int pin,
 	enum pin_config_param param = pinconf_to_config_param(*config);
 	unsigned long flags;
 	u32 value, pull;
-	u16 arg = 0;
+	u16 arg;
 
 	raw_spin_lock_irqsave(&lg->lock, flags);
 	value = ioread32(conf2);
@@ -496,8 +506,9 @@ static int lp_pin_config_get(struct pinctrl_dev *pctldev, unsigned int pin,
 
 	switch (param) {
 	case PIN_CONFIG_BIAS_DISABLE:
-		if (pull)
+		if (pull != GPIWP_NONE)
 			return -EINVAL;
+		arg = 0;
 		break;
 	case PIN_CONFIG_BIAS_PULL_DOWN:
 		if (pull != GPIWP_DOWN)
@@ -540,6 +551,7 @@ static int lp_pin_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 		switch (param) {
 		case PIN_CONFIG_BIAS_DISABLE:
 			value &= ~GPIWP_MASK;
+			value |= GPIWP_NONE;
 			break;
 		case PIN_CONFIG_BIAS_PULL_DOWN:
 			value &= ~GPIWP_MASK;
@@ -862,6 +874,7 @@ static int lp_gpio_probe(struct platform_device *pdev)
 	gc->direction_output = lp_gpio_direction_output;
 	gc->get = lp_gpio_get;
 	gc->set = lp_gpio_set;
+	gc->set_config = gpiochip_generic_config;
 	gc->get_direction = lp_gpio_get_direction;
 	gc->base = -1;
 	gc->ngpio = LP_NUM_GPIO;
@@ -919,16 +932,14 @@ static int lp_gpio_runtime_resume(struct device *dev)
 static int lp_gpio_resume(struct device *dev)
 {
 	struct intel_pinctrl *lg = dev_get_drvdata(dev);
-	void __iomem *reg;
+	struct gpio_chip *chip = &lg->chip;
+	const char *dummy;
 	int i;
 
 	/* on some hardware suspend clears input sensing, re-enable it here */
-	for (i = 0; i < lg->chip.ngpio; i++) {
-		if (gpiochip_is_requested(&lg->chip, i) != NULL) {
-			reg = lp_gpio_reg(&lg->chip, i, LP_CONFIG2);
-			iowrite32(ioread32(reg) & ~GPINDIS_BIT, reg);
-		}
-	}
+	for_each_requested_gpio(chip, i, dummy)
+		lp_gpio_enable_input(lp_gpio_reg(chip, i, LP_CONFIG2));
+
 	return 0;
 }
 
@@ -951,7 +962,7 @@ static struct platform_driver lp_gpio_driver = {
 	.driver         = {
 		.name   = "lp_gpio",
 		.pm	= &lp_gpio_pm_ops,
-		.acpi_match_table = ACPI_PTR(lynxpoint_gpio_acpi_match),
+		.acpi_match_table = lynxpoint_gpio_acpi_match,
 	},
 };
 
@@ -959,13 +970,12 @@ static int __init lp_gpio_init(void)
 {
 	return platform_driver_register(&lp_gpio_driver);
 }
+subsys_initcall(lp_gpio_init);
 
 static void __exit lp_gpio_exit(void)
 {
 	platform_driver_unregister(&lp_gpio_driver);
 }
-
-subsys_initcall(lp_gpio_init);
 module_exit(lp_gpio_exit);
 
 MODULE_AUTHOR("Mathias Nyman (Intel)");

@@ -12,6 +12,7 @@
 #include <linux/firmware.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
+#include <sound/intel-dsp-config.h>
 #include <sound/soc-acpi.h>
 #include <sound/soc-acpi-intel-match.h>
 #include <sound/sof.h>
@@ -35,7 +36,7 @@ MODULE_PARM_DESC(sof_acpi_debug, "SOF ACPI debug options (0x0 all off)");
 
 #define SOF_ACPI_DISABLE_PM_RUNTIME BIT(0)
 
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_BROADWELL)
+#if IS_ENABLED(CONFIG_ACPI) && IS_ENABLED(CONFIG_SND_SOC_SOF_BROADWELL)
 static const struct sof_dev_desc sof_acpi_broadwell_desc = {
 	.machines = snd_soc_acpi_intel_broadwell_machines,
 	.resindex_lpe_base = 0,
@@ -51,7 +52,7 @@ static const struct sof_dev_desc sof_acpi_broadwell_desc = {
 };
 #endif
 
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_BAYTRAIL)
+#if IS_ENABLED(CONFIG_ACPI) && IS_ENABLED(CONFIG_SND_SOC_SOF_BAYTRAIL)
 
 /* BYTCR uses different IRQ index */
 static const struct sof_dev_desc sof_acpi_baytrailcr_desc = {
@@ -106,6 +107,8 @@ static const struct dev_pm_ops sof_acpi_pm = {
 
 static void sof_acpi_probe_complete(struct device *dev)
 {
+	dev_dbg(dev, "Completing SOF ACPI probe");
+
 	if (sof_acpi_debug & SOF_ACPI_DISABLE_PM_RUNTIME)
 		return;
 
@@ -118,12 +121,24 @@ static void sof_acpi_probe_complete(struct device *dev)
 static int sof_acpi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	const struct acpi_device_id *id;
 	const struct sof_dev_desc *desc;
 	struct snd_sof_pdata *sof_pdata;
 	const struct snd_sof_dsp_ops *ops;
 	int ret;
 
-	dev_dbg(&pdev->dev, "ACPI DSP detected");
+	id = acpi_match_device(dev->driver->acpi_match_table, dev);
+	if (!id)
+		return -ENODEV;
+
+	if (IS_REACHABLE(CONFIG_SND_INTEL_DSP_CONFIG)) {
+		ret = snd_intel_acpi_dsp_driver_probe(dev, id->id);
+		if (ret != SND_INTEL_DSP_DRIVER_ANY && ret != SND_INTEL_DSP_DRIVER_SOF) {
+			dev_dbg(dev, "SOF ACPI driver not selected, aborting probe\n");
+			return -ENODEV;
+		}
+	}
+	dev_dbg(dev, "ACPI DSP detected");
 
 	sof_pdata = devm_kzalloc(dev, sizeof(*sof_pdata), GFP_KERNEL);
 	if (!sof_pdata)
@@ -133,7 +148,7 @@ static int sof_acpi_probe(struct platform_device *pdev)
 	if (!desc)
 		return -ENODEV;
 
-#if IS_ENABLED(CONFIG_SND_SOC_SOF_BAYTRAIL)
+#if IS_ENABLED(CONFIG_ACPI) && IS_ENABLED(CONFIG_SND_SOC_SOF_BAYTRAIL)
 	if (desc == &sof_acpi_baytrail_desc && soc_intel_is_byt_cr(pdev))
 		desc = &sof_acpi_baytrailcr_desc;
 #endif
@@ -191,6 +206,7 @@ static int sof_acpi_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_ACPI
 static const struct acpi_device_id sof_acpi_match[] = {
 #if IS_ENABLED(CONFIG_SND_SOC_SOF_BROADWELL)
 	{ "INT3438", (unsigned long)&sof_acpi_broadwell_desc },
@@ -202,6 +218,7 @@ static const struct acpi_device_id sof_acpi_match[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, sof_acpi_match);
+#endif
 
 /* acpi_driver definition */
 static struct platform_driver snd_sof_acpi_driver = {

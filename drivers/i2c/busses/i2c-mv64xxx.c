@@ -17,6 +17,7 @@
 #include <linux/interrupt.h>
 #include <linux/mv643xx_i2c.h>
 #include <linux/platform_device.h>
+#include <linux/pinctrl/consumer.h>
 #include <linux/reset.h>
 #include <linux/io.h>
 #include <linux/of.h>
@@ -147,6 +148,7 @@ struct mv64xxx_i2c_data {
 	bool			irq_clear_inverted;
 	/* Clk div is 2 to the power n, not 2 to the power n + 1 */
 	bool			clk_n_base_0;
+	struct i2c_bus_recovery_info	rinfo;
 };
 
 static struct mv64xxx_i2c_regs mv64xxx_i2c_regs_mv64xxx = {
@@ -251,7 +253,7 @@ mv64xxx_i2c_fsm(struct mv64xxx_i2c_data *drv_data, u32 status)
 				MV64XXX_I2C_STATE_WAITING_FOR_ADDR_2_ACK;
 			break;
 		}
-		/* FALLTHRU */
+		fallthrough;
 	case MV64XXX_I2C_STATUS_MAST_WR_ADDR_2_ACK: /* 0xd0 */
 	case MV64XXX_I2C_STATUS_MAST_WR_ACK: /* 0x28 */
 		if ((drv_data->bytes_left == 0)
@@ -282,14 +284,14 @@ mv64xxx_i2c_fsm(struct mv64xxx_i2c_data *drv_data, u32 status)
 				MV64XXX_I2C_STATE_WAITING_FOR_ADDR_2_ACK;
 			break;
 		}
-		/* FALLTHRU */
+		fallthrough;
 	case MV64XXX_I2C_STATUS_MAST_RD_ADDR_2_ACK: /* 0xe0 */
 		if (drv_data->bytes_left == 0) {
 			drv_data->action = MV64XXX_I2C_ACTION_SEND_STOP;
 			drv_data->state = MV64XXX_I2C_STATE_IDLE;
 			break;
 		}
-		/* FALLTHRU */
+		fallthrough;
 	case MV64XXX_I2C_STATUS_MAST_RD_DATA_ACK: /* 0x50 */
 		if (status != MV64XXX_I2C_STATUS_MAST_RD_DATA_ACK)
 			drv_data->action = MV64XXX_I2C_ACTION_CONTINUE;
@@ -325,7 +327,8 @@ mv64xxx_i2c_fsm(struct mv64xxx_i2c_data *drv_data, u32 status)
 			 drv_data->msg->flags);
 		drv_data->action = MV64XXX_I2C_ACTION_SEND_STOP;
 		mv64xxx_i2c_hw_init(drv_data);
-		drv_data->rc = -EIO;
+		i2c_recover_bus(&drv_data->adapter);
+		drv_data->rc = -EAGAIN;
 	}
 }
 
@@ -417,8 +420,7 @@ mv64xxx_i2c_do_action(struct mv64xxx_i2c_data *drv_data)
 			"mv64xxx_i2c_do_action: Invalid action: %d\n",
 			drv_data->action);
 		drv_data->rc = -EIO;
-
-		/* FALLTHRU */
+		fallthrough;
 	case MV64XXX_I2C_ACTION_SEND_STOP:
 		drv_data->cntl_bits &= ~MV64XXX_I2C_REG_CONTROL_INTEN;
 		writel(drv_data->cntl_bits | MV64XXX_I2C_REG_CONTROL_STOP,
@@ -497,11 +499,10 @@ static irqreturn_t
 mv64xxx_i2c_intr(int irq, void *dev_id)
 {
 	struct mv64xxx_i2c_data	*drv_data = dev_id;
-	unsigned long	flags;
 	u32		status;
 	irqreturn_t	rc = IRQ_NONE;
 
-	spin_lock_irqsave(&drv_data->lock, flags);
+	spin_lock(&drv_data->lock);
 
 	if (drv_data->offload_enabled)
 		rc = mv64xxx_i2c_intr_offload(drv_data);
@@ -518,7 +519,7 @@ mv64xxx_i2c_intr(int irq, void *dev_id)
 
 		rc = IRQ_HANDLED;
 	}
-	spin_unlock_irqrestore(&drv_data->lock, flags);
+	spin_unlock(&drv_data->lock);
 
 	return rc;
 }
@@ -563,6 +564,7 @@ mv64xxx_i2c_wait_for_completion(struct mv64xxx_i2c_data *drv_data)
 				"time_left: %d\n", drv_data->block,
 				(int)time_left);
 			mv64xxx_i2c_hw_init(drv_data);
+			i2c_recover_bus(&drv_data->adapter);
 		}
 	} else
 		spin_unlock_irqrestore(&drv_data->lock, flags);
@@ -872,6 +874,25 @@ mv64xxx_of_config(struct mv64xxx_i2c_data *drv_data,
 }
 #endif /* CONFIG_OF */
 
+static int mv64xxx_i2c_init_recovery_info(struct mv64xxx_i2c_data *drv_data,
+					  struct device *dev)
+{
+	struct i2c_bus_recovery_info *rinfo = &drv_data->rinfo;
+
+	rinfo->pinctrl = devm_pinctrl_get(dev);
+	if (IS_ERR(rinfo->pinctrl)) {
+		if (PTR_ERR(rinfo->pinctrl) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		dev_info(dev, "can't get pinctrl, bus recovery not supported\n");
+		return PTR_ERR(rinfo->pinctrl);
+	} else if (!rinfo->pinctrl) {
+		return -ENODEV;
+	}
+
+	drv_data->adapter.bus_recovery_info = rinfo;
+	return 0;
+}
+
 static int
 mv64xxx_i2c_probe(struct platform_device *pd)
 {
@@ -927,6 +948,10 @@ mv64xxx_i2c_probe(struct platform_device *pd)
 		rc = drv_data->irq;
 		goto exit_reset;
 	}
+
+	rc = mv64xxx_i2c_init_recovery_info(drv_data, &pd->dev);
+	if (rc == -EPROBE_DEFER)
+		goto exit_reset;
 
 	drv_data->adapter.dev.parent = &pd->dev;
 	drv_data->adapter.algo = &mv64xxx_i2c_algo;

@@ -1,66 +1,11 @@
-/******************************************************************************
- *
- * This file is provided under a dual BSD/GPLv2 license.  When using or
- * redistributing this file, you may do so under either license.
- *
- * GPL LICENSE SUMMARY
- *
- * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
- * Copyright(c) 2016 - 2017 Intel Deutschland GmbH
- * Copyright(c) 2018 - 2019 Intel Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * The full GNU General Public License is included in this distribution
- * in the file called COPYING.
- *
- * Contact Information:
- *  Intel Linux Wireless <linuxwifi@intel.com>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- *
- * BSD LICENSE
- *
- * Copyright(c) 2012 - 2014 Intel Corporation. All rights reserved.
- * Copyright(c) 2016 - 2017 Intel Deutschland GmbH
- * Copyright(c) 2018 - 2019 Intel Corporation
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *  * Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  * Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *  * Neither the name Intel Corporation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *****************************************************************************/
-
+/* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
+/*
+ * Copyright (C) 2012-2014, 2018-2020 Intel Corporation
+ * Copyright (C) 2016-2017 Intel Deutschland GmbH
+ */
 #ifndef __iwl_fw_api_tx_h__
 #define __iwl_fw_api_tx_h__
+#include <linux/ieee80211.h>
 
 /**
  * enum iwl_tx_flags - bitmasks for tx_flags in TX command
@@ -293,7 +238,7 @@ struct iwl_tx_cmd {
 	__le16 pm_frame_timeout;
 	__le16 reserved4;
 	u8 payload[0];
-	struct ieee80211_hdr hdr[0];
+	struct ieee80211_hdr hdr[];
 } __packed; /* TX_CMD_API_S_VER_6 */
 
 struct iwl_dram_sec_info {
@@ -319,7 +264,7 @@ struct iwl_tx_cmd_gen2 {
 	__le32 flags;
 	struct iwl_dram_sec_info dram_info;
 	__le32 rate_n_flags;
-	struct ieee80211_hdr hdr[0];
+	struct ieee80211_hdr hdr[];
 } __packed; /* TX_CMD_API_S_VER_7 */
 
 /**
@@ -342,7 +287,7 @@ struct iwl_tx_cmd_gen3 {
 	struct iwl_dram_sec_info dram_info;
 	__le32 rate_n_flags;
 	__le64 ttl;
-	struct ieee80211_hdr hdr[0];
+	struct ieee80211_hdr hdr[];
 } __packed; /* TX_CMD_API_S_VER_8 */
 
 /*
@@ -766,8 +711,8 @@ struct iwl_mvm_compressed_ba_notif {
 	__le32 tx_rate;
 	__le16 tfd_cnt;
 	__le16 ra_tid_cnt;
-	struct iwl_mvm_compressed_ba_tfd tfd[0];
 	struct iwl_mvm_compressed_ba_ratid ra_tid[0];
+	struct iwl_mvm_compressed_ba_tfd tfd[];
 } __packed; /* COMPRESSED_BA_RES_API_S_VER_4 */
 
 /**
@@ -784,7 +729,7 @@ struct iwl_mac_beacon_cmd_v6 {
 	__le32 template_id;
 	__le32 tim_idx;
 	__le32 tim_size;
-	struct ieee80211_hdr frame[0];
+	struct ieee80211_hdr frame[];
 } __packed; /* BEACON_TEMPLATE_CMD_API_S_VER_6 */
 
 /**
@@ -805,7 +750,7 @@ struct iwl_mac_beacon_cmd_v7 {
 	__le32 tim_size;
 	__le32 ecsa_offset;
 	__le32 csa_offset;
-	struct ieee80211_hdr frame[0];
+	struct ieee80211_hdr frame[];
 } __packed; /* BEACON_TEMPLATE_CMD_API_S_VER_7 */
 
 enum iwl_mac_beacon_flags {
@@ -840,7 +785,7 @@ struct iwl_mac_beacon_cmd {
 	__le32 tim_size;
 	__le32 ecsa_offset;
 	__le32 csa_offset;
-	struct ieee80211_hdr frame[0];
+	struct ieee80211_hdr frame[];
 } __packed; /* BEACON_TEMPLATE_CMD_API_S_VER_10 */
 
 struct iwl_beacon_notif {

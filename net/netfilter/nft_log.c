@@ -152,7 +152,7 @@ static int nft_log_init(const struct nft_ctx *ctx,
 		priv->prefix = kmalloc(nla_len(nla) + 1, GFP_KERNEL);
 		if (priv->prefix == NULL)
 			return -ENOMEM;
-		nla_strlcpy(priv->prefix, nla, nla_len(nla) + 1);
+		nla_strscpy(priv->prefix, nla, nla_len(nla) + 1);
 	} else {
 		priv->prefix = (char *)nft_log_null_prefix;
 	}
@@ -298,3 +298,4 @@ module_exit(nft_log_module_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
 MODULE_ALIAS_NFT_EXPR("log");
+MODULE_DESCRIPTION("Netfilter nf_tables log module");

@@ -129,7 +129,7 @@ static void nft_ct_get_eval(const struct nft_expr *expr,
 		return;
 	}
 #endif
-	case NFT_CT_BYTES: /* fallthrough */
+	case NFT_CT_BYTES:
 	case NFT_CT_PKTS: {
 		const struct nf_conn_acct *acct = nf_conn_acct_find(ct);
 		u64 count = 0;
@@ -177,8 +177,6 @@ static void nft_ct_get_eval(const struct nft_expr *expr,
 	}
 #endif
 	case NFT_CT_ID:
-		if (!nf_ct_is_confirmed(ct))
-			goto err;
 		*dest = nf_ct_get_id(ct);
 		return;
 	default:
@@ -990,7 +988,7 @@ static int nft_ct_helper_obj_init(const struct nft_ctx *ctx,
 	if (!priv->l4proto)
 		return -ENOENT;
 
-	nla_strlcpy(name, tb[NFTA_CT_HELPER_NAME], sizeof(name));
+	nla_strscpy(name, tb[NFTA_CT_HELPER_NAME], sizeof(name));
 
 	if (tb[NFTA_CT_HELPER_L3PROTO])
 		family = ntohs(nla_get_be16(tb[NFTA_CT_HELPER_L3PROTO]));
@@ -1013,8 +1011,8 @@ static int nft_ct_helper_obj_init(const struct nft_ctx *ctx,
 		help6 = nf_conntrack_helper_try_module_get(name, family,
 							   priv->l4proto);
 		break;
-	case NFPROTO_NETDEV: /* fallthrough */
-	case NFPROTO_BRIDGE: /* same */
+	case NFPROTO_NETDEV:
+	case NFPROTO_BRIDGE:
 	case NFPROTO_INET:
 		help4 = nf_conntrack_helper_try_module_get(name, NFPROTO_IPV4,
 							   priv->l4proto);
@@ -1345,3 +1343,4 @@ MODULE_ALIAS_NFT_EXPR("notrack");
 MODULE_ALIAS_NFT_OBJ(NFT_OBJECT_CT_HELPER);
 MODULE_ALIAS_NFT_OBJ(NFT_OBJECT_CT_TIMEOUT);
 MODULE_ALIAS_NFT_OBJ(NFT_OBJECT_CT_EXPECT);
+MODULE_DESCRIPTION("Netfilter nf_tables conntrack module");

@@ -44,10 +44,10 @@ config USB_XHCI_PCI
 	default y
 
 config USB_XHCI_PCI_RENESAS
-	tristate "Support for additional Renesas xHCI controller with firwmare"
+	tristate "Support for additional Renesas xHCI controller with firmware"
 	help
 	  Say 'Y' to enable the support for the Renesas xHCI controller with
-	  firwmare. Make sure you have the firwmare for the device and
+	  firmware. Make sure you have the firwmare for the device and
 	  installed on your system for this device to work.
 	  If unsure, say 'N'.
 
@@ -209,13 +209,6 @@ config XPS_USB_HCD_XILINX
 
 config USB_EHCI_FSL
 	tristate "Support for Freescale on-chip EHCI USB controller"
-	select USB_EHCI_ROOT_HUB_TT
-	help
-	  Variation of ARC USB block used in some Freescale chips.
-
-config USB_EHCI_MXC
-	tristate "Support for Freescale i.MX on-chip EHCI USB controller"
-	depends on ARCH_MXC || COMPILE_TEST
 	select USB_EHCI_ROOT_HUB_TT
 	help
 	  Variation of ARC USB block used in some Freescale chips.
@@ -740,16 +733,6 @@ config USB_RENESAS_USBHS_HCD
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called renesas-usbhs.
-
-config USB_IMX21_HCD
-	tristate "i.MX21 HCD support"
-	depends on ARM && ARCH_MXC
-	help
-	  This driver enables support for the on-chip USB host in the
-	  i.MX21 processor.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called "imx21-hcd".
 
 config USB_HCD_BCMA
 	tristate "BCMA usb host driver"

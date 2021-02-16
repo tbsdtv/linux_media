@@ -72,6 +72,15 @@ static void rdma_dim_init(struct ib_cq *cq)
 	INIT_WORK(&dim->work, ib_cq_rdma_dim_work);
 }
 
+static void rdma_dim_destroy(struct ib_cq *cq)
+{
+	if (!cq->dim)
+		return;
+
+	cancel_work_sync(&cq->dim->work);
+	kfree(cq->dim);
+}
+
 static int __poll_cq(struct ib_cq *cq, int num_entries, struct ib_wc *wc)
 {
 	int rc;
@@ -114,7 +123,7 @@ static int __ib_process_cq(struct ib_cq *cq, int budget, struct ib_wc *wcs,
 }
 
 /**
- * ib_process_direct_cq - process a CQ in caller context
+ * ib_process_cq_direct - process a CQ in caller context
  * @cq:		CQ to process
  * @budget:	number of CQEs to poll for
  *
@@ -188,24 +197,22 @@ static void ib_cq_completion_workqueue(struct ib_cq *cq, void *private)
 }
 
 /**
- * __ib_alloc_cq_user - allocate a completion queue
+ * __ib_alloc_cq - allocate a completion queue
  * @dev:		device to allocate the CQ for
  * @private:		driver private data, accessible from cq->cq_context
  * @nr_cqe:		number of CQEs to allocate
  * @comp_vector:	HCA completion vectors for this CQ
  * @poll_ctx:		context to poll the CQ from.
  * @caller:		module owner name.
- * @udata:		Valid user data or NULL for kernel object
  *
  * This is the proper interface to allocate a CQ for in-kernel users. A
  * CQ allocated with this interface will automatically be polled from the
  * specified context. The ULP must use wr->wr_cqe instead of wr->wr_id
  * to use this CQ abstraction.
  */
-struct ib_cq *__ib_alloc_cq_user(struct ib_device *dev, void *private,
-				 int nr_cqe, int comp_vector,
-				 enum ib_poll_context poll_ctx,
-				 const char *caller, struct ib_udata *udata)
+struct ib_cq *__ib_alloc_cq(struct ib_device *dev, void *private, int nr_cqe,
+			    int comp_vector, enum ib_poll_context poll_ctx,
+			    const char *caller)
 {
 	struct ib_cq_init_attr cq_attr = {
 		.cqe		= nr_cqe,
@@ -228,14 +235,12 @@ struct ib_cq *__ib_alloc_cq_user(struct ib_device *dev, void *private,
 	if (!cq->wc)
 		goto out_free_cq;
 
-	cq->res.type = RDMA_RESTRACK_CQ;
-	rdma_restrack_set_task(&cq->res, caller);
+	rdma_restrack_new(&cq->res, RDMA_RESTRACK_CQ);
+	rdma_restrack_set_name(&cq->res, caller);
 
 	ret = dev->ops.create_cq(cq, &cq_attr, NULL);
 	if (ret)
 		goto out_free_wc;
-
-	rdma_restrack_kadd(&cq->res);
 
 	rdma_dim_init(cq);
 
@@ -262,20 +267,22 @@ struct ib_cq *__ib_alloc_cq_user(struct ib_device *dev, void *private,
 		goto out_destroy_cq;
 	}
 
+	rdma_restrack_add(&cq->res);
 	trace_cq_alloc(cq, nr_cqe, comp_vector, poll_ctx);
 	return cq;
 
 out_destroy_cq:
-	rdma_restrack_del(&cq->res);
-	cq->device->ops.destroy_cq(cq, udata);
+	rdma_dim_destroy(cq);
+	cq->device->ops.destroy_cq(cq, NULL);
 out_free_wc:
+	rdma_restrack_put(&cq->res);
 	kfree(cq->wc);
 out_free_cq:
 	kfree(cq);
 	trace_cq_alloc_error(nr_cqe, comp_vector, poll_ctx, ret);
 	return ERR_PTR(ret);
 }
-EXPORT_SYMBOL(__ib_alloc_cq_user);
+EXPORT_SYMBOL(__ib_alloc_cq);
 
 /**
  * __ib_alloc_cq_any - allocate a completion queue
@@ -300,18 +307,19 @@ struct ib_cq *__ib_alloc_cq_any(struct ib_device *dev, void *private,
 			atomic_inc_return(&counter) %
 			min_t(int, dev->num_comp_vectors, num_online_cpus());
 
-	return __ib_alloc_cq_user(dev, private, nr_cqe, comp_vector, poll_ctx,
-				  caller, NULL);
+	return __ib_alloc_cq(dev, private, nr_cqe, comp_vector, poll_ctx,
+			     caller);
 }
 EXPORT_SYMBOL(__ib_alloc_cq_any);
 
 /**
- * ib_free_cq_user - free a completion queue
+ * ib_free_cq - free a completion queue
  * @cq:		completion queue to free.
- * @udata:	User data or NULL for kernel object
  */
-void ib_free_cq_user(struct ib_cq *cq, struct ib_udata *udata)
+void ib_free_cq(struct ib_cq *cq)
 {
+	int ret;
+
 	if (WARN_ON_ONCE(atomic_read(&cq->usecnt)))
 		return;
 	if (WARN_ON_ONCE(cq->cqe_used))
@@ -331,27 +339,17 @@ void ib_free_cq_user(struct ib_cq *cq, struct ib_udata *udata)
 		WARN_ON_ONCE(1);
 	}
 
+	rdma_dim_destroy(cq);
 	trace_cq_free(cq);
+	ret = cq->device->ops.destroy_cq(cq, NULL);
+	WARN_ONCE(ret, "Destroy of kernel CQ shouldn't fail");
 	rdma_restrack_del(&cq->res);
-	cq->device->ops.destroy_cq(cq, udata);
-	if (cq->dim)
-		cancel_work_sync(&cq->dim->work);
-	kfree(cq->dim);
 	kfree(cq->wc);
 	kfree(cq);
 }
-EXPORT_SYMBOL(ib_free_cq_user);
+EXPORT_SYMBOL(ib_free_cq);
 
-void ib_cq_pool_init(struct ib_device *dev)
-{
-	unsigned int i;
-
-	spin_lock_init(&dev->cq_pools_lock);
-	for (i = 0; i < ARRAY_SIZE(dev->cq_pools); i++)
-		INIT_LIST_HEAD(&dev->cq_pools[i]);
-}
-
-void ib_cq_pool_destroy(struct ib_device *dev)
+void ib_cq_pool_cleanup(struct ib_device *dev)
 {
 	struct ib_cq *cq, *n;
 	unsigned int i;
@@ -360,6 +358,7 @@ void ib_cq_pool_destroy(struct ib_device *dev)
 		list_for_each_entry_safe(cq, n, &dev->cq_pools[i],
 					 pool_entry) {
 			WARN_ON(cq->cqe_used);
+			list_del(&cq->pool_entry);
 			cq->shared = false;
 			ib_free_cq(cq);
 		}
@@ -371,7 +370,7 @@ static int ib_alloc_cqs(struct ib_device *dev, unsigned int nr_cqes,
 {
 	LIST_HEAD(tmp_list);
 	unsigned int nr_cqs, i;
-	struct ib_cq *cq;
+	struct ib_cq *cq, *n;
 	int ret;
 
 	if (poll_ctx > IB_POLL_LAST_POOL_TYPE) {
@@ -404,7 +403,7 @@ static int ib_alloc_cqs(struct ib_device *dev, unsigned int nr_cqes,
 	return 0;
 
 out_free_cqs:
-	list_for_each_entry(cq, &tmp_list, pool_entry) {
+	list_for_each_entry_safe(cq, n, &tmp_list, pool_entry) {
 		cq->shared = false;
 		ib_free_cq(cq);
 	}

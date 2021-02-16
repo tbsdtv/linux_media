@@ -168,7 +168,7 @@ static int master_cpu;
 
 static void test_lock(bool master, bool verbose)
 {
-	u64 uninitialized_var(wait_start);
+	u64 wait_start;
 
 	if (measure_lock_wait)
 		wait_start = local_clock();
@@ -400,7 +400,7 @@ static void test_lockup(bool master)
 	test_unlock(master, true);
 }
 
-DEFINE_PER_CPU(struct work_struct, test_works);
+static DEFINE_PER_CPU(struct work_struct, test_works);
 
 static void test_work_fn(struct work_struct *work)
 {
@@ -419,8 +419,8 @@ static bool test_kernel_ptr(unsigned long addr, int size)
 	/* should be at least readable kernel address */
 	if (access_ok(ptr, 1) ||
 	    access_ok(ptr + size - 1, 1) ||
-	    probe_kernel_address(ptr, buf) ||
-	    probe_kernel_address(ptr + size - 1, buf)) {
+	    get_kernel_nofault(buf, ptr) ||
+	    get_kernel_nofault(buf, ptr + size - 1)) {
 		pr_err("invalid kernel ptr: %#lx\n", addr);
 		return true;
 	}
@@ -437,7 +437,7 @@ static bool __maybe_unused test_magic(unsigned long addr, int offset,
 	if (!addr)
 		return false;
 
-	if (probe_kernel_address(ptr, magic) || magic != expected) {
+	if (get_kernel_nofault(magic, ptr) || magic != expected) {
 		pr_err("invalid magic at %#lx + %#x = %#x, expected %#x\n",
 		       addr, offset, magic, expected);
 		return true;
@@ -480,6 +480,21 @@ static int __init test_lockup_init(void)
 		return -EINVAL;
 
 #ifdef CONFIG_DEBUG_SPINLOCK
+#ifdef CONFIG_PREEMPT_RT
+	if (test_magic(lock_spinlock_ptr,
+		       offsetof(spinlock_t, lock.wait_lock.magic),
+		       SPINLOCK_MAGIC) ||
+	    test_magic(lock_rwlock_ptr,
+		       offsetof(rwlock_t, rtmutex.wait_lock.magic),
+		       SPINLOCK_MAGIC) ||
+	    test_magic(lock_mutex_ptr,
+		       offsetof(struct mutex, lock.wait_lock.magic),
+		       SPINLOCK_MAGIC) ||
+	    test_magic(lock_rwsem_ptr,
+		       offsetof(struct rw_semaphore, rtmutex.wait_lock.magic),
+		       SPINLOCK_MAGIC))
+		return -EINVAL;
+#else
 	if (test_magic(lock_spinlock_ptr,
 		       offsetof(spinlock_t, rlock.magic),
 		       SPINLOCK_MAGIC) ||
@@ -493,6 +508,7 @@ static int __init test_lockup_init(void)
 		       offsetof(struct rw_semaphore, wait_lock.magic),
 		       SPINLOCK_MAGIC))
 		return -EINVAL;
+#endif
 #endif
 
 	if ((wait_state != TASK_RUNNING ||
@@ -512,8 +528,8 @@ static int __init test_lockup_init(void)
 	if (test_file_path[0]) {
 		test_file = filp_open(test_file_path, O_RDONLY, 0);
 		if (IS_ERR(test_file)) {
-			pr_err("cannot find file_path\n");
-			return -EINVAL;
+			pr_err("failed to open %s: %ld\n", test_file_path, PTR_ERR(test_file));
+			return PTR_ERR(test_file);
 		}
 		test_inode = file_inode(test_file);
 	} else if (test_lock_inode ||

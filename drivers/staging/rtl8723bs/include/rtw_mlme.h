@@ -101,8 +101,7 @@ enum DriverInterface {
 	DRIVER_CFG80211 = 2
 };
 
-enum SCAN_RESULT_TYPE
-{
+enum SCAN_RESULT_TYPE {
 	SCAN_RESULT_P2P_ONLY = 0,		/* 	Will return all the P2P devices. */
 	SCAN_RESULT_ALL = 1,			/* 	Will return all the scanned device, include AP. */
 	SCAN_RESULT_WFD_TYPE = 2		/* 	Will just return the correct WFD device. */
@@ -214,7 +213,7 @@ struct cfg80211_wifidirect_info {
 };
 
 struct wifidirect_info {
-	struct adapter *			padapter;
+	struct adapter				*padapter;
 	_timer					find_phase_timer;
 	_timer					restore_p2p_state_timer;
 
@@ -463,8 +462,7 @@ struct mlme_priv {
 
 void rtw_mlme_reset_auto_scan_int(struct adapter *adapter);
 
-struct hostapd_priv
-{
+struct hostapd_priv {
 	struct adapter *padapter;
 };
 
@@ -561,15 +559,15 @@ static inline void set_scanned_network_val(struct mlme_priv *pmlmepriv, sint val
 
 extern u16 rtw_get_capability(struct wlan_bssid_ex *bss);
 extern void rtw_update_scanned_network(struct adapter *adapter, struct wlan_bssid_ex *target);
-extern void rtw_disconnect_hdl_under_linked(struct adapter * adapter, struct sta_info *psta, u8 free_assoc);
+extern void rtw_disconnect_hdl_under_linked(struct adapter *adapter, struct sta_info *psta, u8 free_assoc);
 extern void rtw_generate_random_ibss(u8 *pibss);
-extern struct wlan_network* rtw_find_network(struct __queue *scanned_queue, u8 *addr);
-extern struct wlan_network* rtw_get_oldest_wlan_network(struct __queue *scanned_queue);
+extern struct wlan_network *rtw_find_network(struct __queue *scanned_queue, u8 *addr);
+extern struct wlan_network *rtw_get_oldest_wlan_network(struct __queue *scanned_queue);
 struct wlan_network *_rtw_find_same_network(struct __queue *scanned_queue, struct wlan_network *network);
 
-extern void rtw_free_assoc_resources(struct adapter * adapter, int lock_scanned_queue);
-extern void rtw_indicate_disconnect(struct adapter * adapter);
-extern void rtw_indicate_connect(struct adapter * adapter);
+extern void rtw_free_assoc_resources(struct adapter *adapter, int lock_scanned_queue);
+extern void rtw_indicate_disconnect(struct adapter *adapter);
+extern void rtw_indicate_connect(struct adapter *adapter);
 void rtw_indicate_scan_done(struct adapter *padapter, bool aborted);
 void rtw_scan_abort(struct adapter *adapter);
 
@@ -602,7 +600,7 @@ extern void _rtw_free_network(struct mlme_priv *pmlmepriv, struct wlan_network *
 extern void _rtw_free_network_nolock(struct mlme_priv *pmlmepriv, struct wlan_network *pnetwork);
 
 
-extern struct wlan_network* _rtw_find_network(struct __queue *scanned_queue, u8 *addr);
+extern struct wlan_network *_rtw_find_network(struct __queue *scanned_queue, u8 *addr);
 
 extern sint rtw_if_up(struct adapter *padapter);
 

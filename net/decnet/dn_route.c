@@ -494,6 +494,8 @@ static int dn_return_long(struct sk_buff *skb)
 
 /**
  * dn_route_rx_packet - Try and find a route for an incoming packet
+ * @net: The applicable net namespace
+ * @sk: Socket packet transmitted on
  * @skb: The packet to find a route for
  *
  * Returns: result of input function if route is found, error code otherwise
@@ -670,7 +672,7 @@ int dn_route_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type
 	if (decnet_debug_level & 1)
 		printk(KERN_DEBUG
 			"dn_route_rcv: got 0x%02x from %s [%d %d %d]\n",
-			(int)flags, (dev) ? dev->name : "???", len, skb->len,
+			(int)flags, dev->name, len, skb->len,
 			padlen);
 
 	if (flags & DN_RT_PKT_CNTL) {
@@ -1033,7 +1035,7 @@ source_ok:
 			fld.saddr = dnet_select_source(dev_out, 0,
 						       RT_SCOPE_HOST);
 			if (!fld.daddr)
-				goto out;
+				goto done;
 		}
 		fld.flowidn_oif = LOOPBACK_IFINDEX;
 		res.type = RTN_LOCAL;

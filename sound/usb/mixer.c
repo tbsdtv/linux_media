@@ -581,8 +581,9 @@ static int check_matrix_bitmap(unsigned char *bmap,
  * if failed, give up and free the control instance.
  */
 
-int snd_usb_mixer_add_control(struct usb_mixer_elem_list *list,
-			      struct snd_kcontrol *kctl)
+int snd_usb_mixer_add_list(struct usb_mixer_elem_list *list,
+			   struct snd_kcontrol *kctl,
+			   bool is_std_info)
 {
 	struct usb_mixer_interface *mixer = list->mixer;
 	int err;
@@ -596,6 +597,7 @@ int snd_usb_mixer_add_control(struct usb_mixer_elem_list *list,
 		return err;
 	}
 	list->kctl = kctl;
+	list->is_std_info = is_std_info;
 	list->next_id_elem = mixer->id_elems[list->id];
 	mixer->id_elems[list->id] = list;
 	return 0;
@@ -1461,6 +1463,10 @@ static int mixer_ctl_connector_get(struct snd_kcontrol *kcontrol,
 	snd_usb_unlock_shutdown(chip);
 
 	if (ret < 0) {
+		if (strstr(kcontrol->id.name, "Speaker")) {
+			ucontrol->value.integer.value[0] = 1;
+			return 0;
+		}
 error:
 		usb_audio_err(chip,
 			"cannot get connectors status: req = %#x, wValue = %#x, wIndex = %#x, type = %d\n",
@@ -2365,7 +2371,7 @@ static int build_audio_procunit(struct mixer_build *state, int unitid,
 	int num_ins;
 	struct usb_mixer_elem_info *cval;
 	struct snd_kcontrol *kctl;
-	int i, err, nameid, type, len;
+	int i, err, nameid, type, len, val;
 	const struct procunit_info *info;
 	const struct procunit_value_info *valinfo;
 	const struct usbmix_name_map *map;
@@ -2466,6 +2472,12 @@ static int build_audio_procunit(struct mixer_build *state, int unitid,
 		default:
 			get_min_max(cval, valinfo->min_value);
 			break;
+		}
+
+		err = get_cur_ctl_value(cval, cval->control << 8, &val);
+		if (err < 0) {
+			usb_mixer_elem_info_free(cval);
+			return -EINVAL;
 		}
 
 		kctl = snd_ctl_new1(&mixer_procunit_ctl, cval);
@@ -3234,8 +3246,11 @@ void snd_usb_mixer_notify_id(struct usb_mixer_interface *mixer, int unitid)
 	unitid = delegate_notify(mixer, unitid, NULL, NULL);
 
 	for_each_mixer_elem(list, mixer, unitid) {
-		struct usb_mixer_elem_info *info =
-			mixer_elem_list_to_info(list);
+		struct usb_mixer_elem_info *info;
+
+		if (!list->is_std_info)
+			continue;
+		info = mixer_elem_list_to_info(list);
 		/* invalidate cache, so the value is read from the device */
 		info->cached = 0;
 		snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
@@ -3314,6 +3329,8 @@ static void snd_usb_mixer_interrupt_v2(struct usb_mixer_interface *mixer,
 		struct usb_mixer_elem_info *info;
 
 		if (!list->kctl)
+			continue;
+		if (!list->is_std_info)
 			continue;
 
 		info = mixer_elem_list_to_info(list);
@@ -3437,48 +3454,6 @@ static int snd_usb_mixer_status_create(struct usb_mixer_interface *mixer)
 	return 0;
 }
 
-static int keep_iface_ctl_get(struct snd_kcontrol *kcontrol,
-			      struct snd_ctl_elem_value *ucontrol)
-{
-	struct usb_mixer_interface *mixer = snd_kcontrol_chip(kcontrol);
-
-	ucontrol->value.integer.value[0] = mixer->chip->keep_iface;
-	return 0;
-}
-
-static int keep_iface_ctl_put(struct snd_kcontrol *kcontrol,
-			      struct snd_ctl_elem_value *ucontrol)
-{
-	struct usb_mixer_interface *mixer = snd_kcontrol_chip(kcontrol);
-	bool keep_iface = !!ucontrol->value.integer.value[0];
-
-	if (mixer->chip->keep_iface == keep_iface)
-		return 0;
-	mixer->chip->keep_iface = keep_iface;
-	return 1;
-}
-
-static const struct snd_kcontrol_new keep_iface_ctl = {
-	.iface = SNDRV_CTL_ELEM_IFACE_CARD,
-	.name = "Keep Interface",
-	.info = snd_ctl_boolean_mono_info,
-	.get = keep_iface_ctl_get,
-	.put = keep_iface_ctl_put,
-};
-
-static int create_keep_iface_ctl(struct usb_mixer_interface *mixer)
-{
-	struct snd_kcontrol *kctl = snd_ctl_new1(&keep_iface_ctl, mixer);
-
-	/* need only one control per card */
-	if (snd_ctl_find_id(mixer->chip->card, &kctl->id)) {
-		snd_ctl_free_one(kctl);
-		return 0;
-	}
-
-	return snd_ctl_add(mixer->chip->card, kctl);
-}
-
 int snd_usb_create_mixer(struct snd_usb_audio *chip, int ctrlif,
 			 int ignore_error)
 {
@@ -3528,10 +3503,6 @@ int snd_usb_create_mixer(struct snd_usb_audio *chip, int ctrlif,
 	}
 
 	err = snd_usb_mixer_status_create(mixer);
-	if (err < 0)
-		goto _error;
-
-	err = create_keep_iface_ctl(mixer);
 	if (err < 0)
 		goto _error;
 

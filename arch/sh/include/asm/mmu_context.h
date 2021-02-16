@@ -8,7 +8,6 @@
 #ifndef __ASM_SH_MMU_CONTEXT_H
 #define __ASM_SH_MMU_CONTEXT_H
 
-#ifdef __KERNEL__
 #include <cpu/mmu_context.h>
 #include <asm/tlbflush.h>
 #include <linux/uaccess.h>
@@ -85,6 +84,7 @@ static inline void get_mmu_context(struct mm_struct *mm, unsigned int cpu)
  * Initialize the context related info for a new mm_struct
  * instance.
  */
+#define init_new_context init_new_context
 static inline int init_new_context(struct task_struct *tsk,
 				   struct mm_struct *mm)
 {
@@ -121,9 +121,7 @@ static inline void switch_mm(struct mm_struct *prev,
 			activate_context(next, cpu);
 }
 
-#define activate_mm(prev, next)		switch_mm((prev),(next),NULL)
-#define deactivate_mm(tsk,mm)		do { } while (0)
-#define enter_lazy_tlb(mm,tsk)		do { } while (0)
+#include <asm-generic/mmu_context.h>
 
 #else
 
@@ -134,7 +132,7 @@ static inline void switch_mm(struct mm_struct *prev,
 #define set_TTB(pgd)			do { } while (0)
 #define get_TTB()			(0)
 
-#include <asm-generic/mmu_context.h>
+#include <asm-generic/nommu_context.h>
 
 #endif /* CONFIG_MMU */
 
@@ -177,5 +175,4 @@ static inline void disable_mmu(void)
 #define disable_mmu()	do { } while (0)
 #endif
 
-#endif /* __KERNEL__ */
 #endif /* __ASM_SH_MMU_CONTEXT_H */

@@ -263,11 +263,11 @@ struct afs_net {
 
 	/* Cell database */
 	struct rb_root		cells;
-	struct afs_cell __rcu	*ws_cell;
+	struct afs_cell		*ws_cell;
 	struct work_struct	cells_manager;
 	struct timer_list	cells_timer;
 	atomic_t		cells_outstanding;
-	seqlock_t		cells_lock;
+	struct rw_semaphore	cells_lock;
 	struct mutex		cells_alias_lock;
 
 	struct mutex		proc_cells_lock;
@@ -326,6 +326,7 @@ enum afs_cell_state {
 	AFS_CELL_DEACTIVATING,
 	AFS_CELL_INACTIVE,
 	AFS_CELL_FAILED,
+	AFS_CELL_REMOVED,
 };
 
 /*
@@ -363,7 +364,8 @@ struct afs_cell {
 #endif
 	time64_t		dns_expiry;	/* Time AFSDB/SRV record expires */
 	time64_t		last_inactive;	/* Time of last drop of usage count */
-	atomic_t		usage;
+	atomic_t		ref;		/* Struct refcount */
+	atomic_t		active;		/* Active usage counter */
 	unsigned long		flags;
 #define AFS_CELL_FL_NO_GC	0		/* The cell was added manually, don't auto-gc */
 #define AFS_CELL_FL_DO_LOOKUP	1		/* DNS lookup requested */
@@ -373,6 +375,7 @@ struct afs_cell {
 	enum dns_record_source	dns_source:8;	/* Latest source of data from lookup */
 	enum dns_lookup_status	dns_status:8;	/* Latest status of data from lookup */
 	unsigned int		dns_lookup_count; /* Counter of DNS lookups */
+	unsigned int		debug_id;
 
 	/* The volumes belonging to this cell */
 	struct rb_root		volumes;	/* Tree of volumes on this server */
@@ -388,7 +391,7 @@ struct afs_cell {
 	struct afs_vlserver_list __rcu *vl_servers;
 
 	u8			name_len;	/* Length of name */
-	char			name[64 + 1];	/* Cell name, case-flattened and NUL-padded */
+	char			*name;		/* Cell name, case-flattened and NUL-padded */
 };
 
 /*
@@ -401,22 +404,24 @@ struct afs_vlserver {
 #define AFS_VLSERVER_FL_PROBED	0		/* The VL server has been probed */
 #define AFS_VLSERVER_FL_PROBING	1		/* VL server is being probed */
 #define AFS_VLSERVER_FL_IS_YFS	2		/* Server is YFS not AFS */
+#define AFS_VLSERVER_FL_RESPONDING 3		/* VL server is responding */
 	rwlock_t		lock;		/* Lock on addresses */
 	atomic_t		usage;
+	unsigned int		rtt;		/* Server's current RTT in uS */
 
 	/* Probe state */
 	wait_queue_head_t	probe_wq;
 	atomic_t		probe_outstanding;
 	spinlock_t		probe_lock;
 	struct {
-		unsigned int	rtt;		/* RTT as ktime/64 */
+		unsigned int	rtt;		/* RTT in uS */
 		u32		abort_code;
 		short		error;
-		bool		have_result;
-		bool		responded:1;
-		bool		is_yfs:1;
-		bool		not_yfs:1;
-		bool		local_failure:1;
+		unsigned short	flags;
+#define AFS_VLSERVER_PROBE_RESPONDED		0x01 /* At least once response (may be abort) */
+#define AFS_VLSERVER_PROBE_IS_YFS		0x02 /* The peer appears to be YFS */
+#define AFS_VLSERVER_PROBE_NOT_YFS		0x04 /* The peer appears not to be YFS */
+#define AFS_VLSERVER_PROBE_LOCAL_FAILURE	0x08 /* A local failure prevented a probe */
 	} probe;
 
 	u16			port;
@@ -634,6 +639,7 @@ struct afs_vnode {
 #define AFS_VNODE_AUTOCELL	6		/* set if Vnode is an auto mount point */
 #define AFS_VNODE_PSEUDODIR	7 		/* set if Vnode is a pseudo directory */
 #define AFS_VNODE_NEW_CONTENT	8		/* Set if file has new content (create/trunc-0) */
+#define AFS_VNODE_SILLY_DELETED	9		/* Set if file has been silly-deleted */
 
 	struct list_head	wb_keys;	/* List of keys available for writeback */
 	struct list_head	pending_locks;	/* locks waiting to be granted */
@@ -744,8 +750,12 @@ struct afs_vnode_param {
 	afs_dataversion_t	dv_before;	/* Data version before the call */
 	unsigned int		cb_break_before; /* cb_break + cb_s_break before the call */
 	u8			dv_delta;	/* Expected change in data version */
-	bool			put_vnode;	/* T if we have a ref on the vnode */
-	bool			need_io_lock;	/* T if we need the I/O lock on this */
+	bool			put_vnode:1;	/* T if we have a ref on the vnode */
+	bool			need_io_lock:1;	/* T if we need the I/O lock on this */
+	bool			update_ctime:1;	/* Need to update the ctime */
+	bool			set_size:1;	/* Must update i_size */
+	bool			op_unlinked:1;	/* True if file was unlinked by op */
+	bool			speculative:1;	/* T if speculative status fetch (no vnode lock) */
 };
 
 /*
@@ -766,9 +776,9 @@ struct afs_operation {
 	struct dentry		*dentry;	/* Dentry to be altered */
 	struct dentry		*dentry_2;	/* Second dentry to be altered */
 	struct timespec64	mtime;		/* Modification time to record */
+	struct timespec64	ctime;		/* Change time to set */
 	short			nr_files;	/* Number of entries in file[], more_files */
 	short			error;
-	unsigned int		abort_code;
 	unsigned int		debug_id;
 
 	unsigned int		cb_v_break;	/* Volume break counter before op */
@@ -803,9 +813,11 @@ struct afs_operation {
 			pgoff_t		last;		/* last page in mapping to deal with */
 			unsigned	first_offset;	/* offset into mapping[first] */
 			unsigned	last_to;	/* amount of mapping[last] */
+			bool		laundering;	/* Laundering page, PG_writeback not set */
 		} store;
 		struct {
 			struct iattr	*attr;
+			loff_t		old_i_size;
 		} setattr;
 		struct afs_acl	*acl;
 		struct yfs_acl	*yacl;
@@ -837,6 +849,7 @@ struct afs_operation {
 #define AFS_OPERATION_LOCK_1		0x0200	/* Set if have io_lock on file[1] */
 #define AFS_OPERATION_TRIED_ALL		0x0400	/* Set if we've tried all the fileservers */
 #define AFS_OPERATION_RETRY_SERVER	0x0800	/* Set if we should retry the current server */
+#define AFS_OPERATION_DIR_CONFLICT	0x1000	/* Set if we detected a 3rd-party dir change */
 };
 
 /*
@@ -845,6 +858,62 @@ struct afs_operation {
 struct afs_vnode_cache_aux {
 	u64			data_version;
 } __packed;
+
+/*
+ * We use page->private to hold the amount of the page that we've written to,
+ * splitting the field into two parts.  However, we need to represent a range
+ * 0...PAGE_SIZE, so we reduce the resolution if the size of the page
+ * exceeds what we can encode.
+ */
+#ifdef CONFIG_64BIT
+#define __AFS_PAGE_PRIV_MASK	0x7fffffffUL
+#define __AFS_PAGE_PRIV_SHIFT	32
+#define __AFS_PAGE_PRIV_MMAPPED	0x80000000UL
+#else
+#define __AFS_PAGE_PRIV_MASK	0x7fffUL
+#define __AFS_PAGE_PRIV_SHIFT	16
+#define __AFS_PAGE_PRIV_MMAPPED	0x8000UL
+#endif
+
+static inline unsigned int afs_page_dirty_resolution(void)
+{
+	int shift = PAGE_SHIFT - (__AFS_PAGE_PRIV_SHIFT - 1);
+	return (shift > 0) ? shift : 0;
+}
+
+static inline size_t afs_page_dirty_from(unsigned long priv)
+{
+	unsigned long x = priv & __AFS_PAGE_PRIV_MASK;
+
+	/* The lower bound is inclusive */
+	return x << afs_page_dirty_resolution();
+}
+
+static inline size_t afs_page_dirty_to(unsigned long priv)
+{
+	unsigned long x = (priv >> __AFS_PAGE_PRIV_SHIFT) & __AFS_PAGE_PRIV_MASK;
+
+	/* The upper bound is immediately beyond the region */
+	return (x + 1) << afs_page_dirty_resolution();
+}
+
+static inline unsigned long afs_page_dirty(size_t from, size_t to)
+{
+	unsigned int res = afs_page_dirty_resolution();
+	from >>= res;
+	to = (to - 1) >> res;
+	return (to << __AFS_PAGE_PRIV_SHIFT) | from;
+}
+
+static inline unsigned long afs_page_dirty_mmapped(unsigned long priv)
+{
+	return priv | __AFS_PAGE_PRIV_MMAPPED;
+}
+
+static inline bool afs_is_page_dirty_mmapped(unsigned long priv)
+{
+	return priv & __AFS_PAGE_PRIV_MMAPPED;
+}
 
 #include <trace/events/afs.h>
 
@@ -909,11 +978,16 @@ static inline bool afs_cb_is_broken(unsigned int cb_break,
  * cell.c
  */
 extern int afs_cell_init(struct afs_net *, const char *);
-extern struct afs_cell *afs_lookup_cell_rcu(struct afs_net *, const char *, unsigned);
+extern struct afs_cell *afs_find_cell(struct afs_net *, const char *, unsigned,
+				      enum afs_cell_trace);
 extern struct afs_cell *afs_lookup_cell(struct afs_net *, const char *, unsigned,
 					const char *, bool);
-extern struct afs_cell *afs_get_cell(struct afs_cell *);
-extern void afs_put_cell(struct afs_net *, struct afs_cell *);
+extern struct afs_cell *afs_use_cell(struct afs_cell *, enum afs_cell_trace);
+extern void afs_unuse_cell(struct afs_net *, struct afs_cell *, enum afs_cell_trace);
+extern struct afs_cell *afs_get_cell(struct afs_cell *, enum afs_cell_trace);
+extern void afs_see_cell(struct afs_cell *, enum afs_cell_trace);
+extern void afs_put_cell(struct afs_cell *, enum afs_cell_trace);
+extern void afs_queue_cell(struct afs_cell *, enum afs_cell_trace);
 extern void afs_manage_cells(struct work_struct *);
 extern void afs_cells_timer(struct timer_list *);
 extern void __net_exit afs_cell_purge(struct afs_net *);
@@ -932,6 +1006,7 @@ extern const struct address_space_operations afs_dir_aops;
 extern const struct dentry_operations afs_fs_dentry_operations;
 
 extern void afs_d_release(struct dentry *);
+extern void afs_check_for_remote_deletion(struct afs_operation *);
 
 /*
  * dir_edit.c
@@ -1059,10 +1134,13 @@ extern int afs_wait_for_fs_probes(struct afs_server_list *, unsigned long);
 extern void afs_probe_fileserver(struct afs_net *, struct afs_server *);
 extern void afs_fs_probe_dispatcher(struct work_struct *);
 extern int afs_wait_for_one_fs_probe(struct afs_server *, bool);
+extern void afs_fs_probe_cleanup(struct afs_net *);
 
 /*
  * inode.c
  */
+extern const struct afs_operation_ops afs_fetch_status_operation;
+
 extern void afs_vnode_commit_status(struct afs_operation *, struct afs_vnode_param *);
 extern int afs_fetch_status(struct afs_vnode *, struct key *, bool, afs_access_t *);
 extern int afs_ilookup5_test_by_fid(struct inode *, void *);
@@ -1435,7 +1513,6 @@ extern ssize_t afs_listxattr(struct dentry *, char *, size_t);
 /*
  * yfsclient.c
  */
-extern void yfs_fs_fetch_file_status(struct afs_operation *);
 extern void yfs_fs_fetch_data(struct afs_operation *);
 extern void yfs_fs_create_file(struct afs_operation *);
 extern void yfs_fs_make_dir(struct afs_operation *);
@@ -1481,15 +1558,6 @@ static inline struct inode *AFS_VNODE_TO_I(struct afs_vnode *vnode)
 	return &vnode->vfs_inode;
 }
 
-static inline void afs_check_for_remote_deletion(struct afs_operation *op,
-						 struct afs_vnode *vnode)
-{
-	if (op->error == -ENOENT) {
-		set_bit(AFS_VNODE_DELETED, &vnode->flags);
-		afs_break_callback(vnode, afs_cb_break_for_deleted);
-	}
-}
-
 /*
  * Note that a dentry got changed.  We need to set d_fsdata to the data version
  * number derived from the result of the operation.  It doesn't matter if
@@ -1502,6 +1570,18 @@ static inline void afs_update_dentry_version(struct afs_operation *op,
 	if (!op->error)
 		dentry->d_fsdata =
 			(void *)(unsigned long)dir_vp->scb.status.data_version;
+}
+
+/*
+ * Check for a conflicting operation on a directory that we just unlinked from.
+ * If someone managed to sneak a link or an unlink in on the file we just
+ * unlinked, we won't be able to trust nlink on an AFS file (but not YFS).
+ */
+static inline void afs_check_dir_conflict(struct afs_operation *op,
+					  struct afs_vnode_param *dvp)
+{
+	if (dvp->dv_before + dvp->dv_delta != dvp->scb.status.data_version)
+		op->flags |= AFS_OPERATION_DIR_CONFLICT;
 }
 
 static inline int afs_io_error(struct afs_call *call, enum afs_io_error where)

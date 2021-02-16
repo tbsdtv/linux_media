@@ -90,8 +90,6 @@ EXPORT_SYMBOL_GPL(boot_cpuid);
  */
 int dcache_bsize;
 int icache_bsize;
-int ucache_bsize;
-
 
 unsigned long klimit = (unsigned long) _end;
 
@@ -311,6 +309,7 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 				min = pvr & 0xFF;
 				break;
 			case 0x004e: /* POWER9 bits 12-15 give chip type */
+			case 0x0080: /* POWER10 bit 12 gives SMT8/4 */
 				maj = (pvr >> 8) & 0x0F;
 				min = pvr & 0xFF;
 				break;
@@ -801,8 +800,6 @@ static __init void print_system_info(void)
 
 	pr_info("dcache_bsize      = 0x%x\n", dcache_bsize);
 	pr_info("icache_bsize      = 0x%x\n", icache_bsize);
-	if (ucache_bsize != 0)
-		pr_info("ucache_bsize      = 0x%x\n", ucache_bsize);
 
 	pr_info("cpu_features      = 0x%016lx\n", cur_cpu_spec->cpu_features);
 	pr_info("  possible        = 0x%016lx\n",
@@ -918,8 +915,6 @@ void __init setup_arch(char **cmdline_p)
 
 	/* On BookE, setup per-core TLB data structures. */
 	setup_tlb_core_data();
-
-	smp_release_cpus();
 #endif
 
 	/* Print various info about the machine that has been gathered so far. */
@@ -927,6 +922,9 @@ void __init setup_arch(char **cmdline_p)
 
 	/* Reserve large chunks of memory for use by CMA for KVM. */
 	kvm_cma_reserve();
+
+	/*  Reserve large chunks of memory for us by CMA for hugetlb */
+	gigantic_hugetlb_cma_reserve();
 
 	klp_init_thread_info(&init_task);
 
@@ -939,6 +937,8 @@ void __init setup_arch(char **cmdline_p)
 	irqstack_early_init();
 	exc_lvl_early_init();
 	emergency_stack_init();
+
+	smp_release_cpus();
 
 	initmem_init();
 

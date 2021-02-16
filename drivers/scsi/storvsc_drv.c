@@ -399,6 +399,7 @@ static int storvsc_timeout = 180;
 static struct scsi_transport_template *fc_transport_template;
 #endif
 
+static struct scsi_host_template scsi_driver;
 static void storvsc_on_channel_callback(void *context);
 
 #define STORVSC_MAX_LUNS_PER_TARGET			255
@@ -462,6 +463,11 @@ struct storvsc_device {
 	 * Mask of CPUs bound to subchannels.
 	 */
 	struct cpumask alloced_cpus;
+	/*
+	 * Serializes modifications of stor_chns[] from storvsc_do_io()
+	 * and storvsc_change_target_cpu().
+	 */
+	spinlock_t lock;
 	/* Used for vsc/vsp channel reset process */
 	struct storvsc_cmd_request init_request;
 	struct storvsc_cmd_request reset_request;
@@ -639,7 +645,7 @@ static void storvsc_change_target_cpu(struct vmbus_channel *channel, u32 old,
 		return;
 
 	/* See storvsc_do_io() -> get_og_chn(). */
-	spin_lock_irqsave(&device->channel->lock, flags);
+	spin_lock_irqsave(&stor_device->lock, flags);
 
 	/*
 	 * Determines if the storvsc device has other channels assigned to
@@ -676,7 +682,7 @@ old_is_alloced:
 	WRITE_ONCE(stor_device->stor_chns[new], channel);
 	cpumask_set_cpu(new, &stor_device->alloced_cpus);
 
-	spin_unlock_irqrestore(&device->channel->lock, flags);
+	spin_unlock_irqrestore(&stor_device->lock, flags);
 }
 
 static void handle_sc_creation(struct vmbus_channel *new_sc)
@@ -692,6 +698,12 @@ static void handle_sc_creation(struct vmbus_channel *new_sc)
 		return;
 
 	memset(&props, 0, sizeof(struct vmstorage_channel_properties));
+
+	/*
+	 * The size of vmbus_requestor is an upper bound on the number of requests
+	 * that can be in-progress at any one time across all channels.
+	 */
+	new_sc->rqstor_size = scsi_driver.can_queue;
 
 	ret = vmbus_open(new_sc,
 			 storvsc_ringbuffer_size,
@@ -1033,7 +1045,7 @@ static void storvsc_handle_error(struct vmscsi_request *vm_srb,
 			do_work = true;
 			process_err_fn = storvsc_device_scan;
 			/*
-			 * Retry the I/O that trigerred this.
+			 * Retry the I/O that triggered this.
 			 */
 			set_host_byte(scmnd, DID_REQUEUE);
 		}
@@ -1100,6 +1112,10 @@ static void storvsc_command_completion(struct storvsc_cmd_request *cmd_request,
 			data_transfer_length = 0;
 	}
 
+	/* Validate data_transfer_length (from Hyper-V) */
+	if (data_transfer_length > cmd_request->payload->range.len)
+		data_transfer_length = cmd_request->payload->range.len;
+
 	scsi_set_resid(scmnd,
 		cmd_request->payload->range.len - data_transfer_length);
 
@@ -1140,6 +1156,11 @@ static void storvsc_on_io_completion(struct storvsc_device *stor_device,
 	/* Copy over the status...etc */
 	stor_pkt->vm_srb.scsi_status = vstor_packet->vm_srb.scsi_status;
 	stor_pkt->vm_srb.srb_status = vstor_packet->vm_srb.srb_status;
+
+	/* Validate sense_info_length (from Hyper-V) */
+	if (vstor_packet->vm_srb.sense_info_length > sense_buffer_size)
+		vstor_packet->vm_srb.sense_info_length = sense_buffer_size;
+
 	stor_pkt->vm_srb.sense_info_length =
 	vstor_packet->vm_srb.sense_info_length;
 
@@ -1228,9 +1249,17 @@ static void storvsc_on_channel_callback(void *context)
 	foreach_vmbus_pkt(desc, channel) {
 		void *packet = hv_pkt_data(desc);
 		struct storvsc_cmd_request *request;
+		u64 cmd_rqst;
 
-		request = (struct storvsc_cmd_request *)
-			((unsigned long)desc->trans_id);
+		cmd_rqst = vmbus_request_addr(&channel->requestor,
+					      desc->trans_id);
+		if (cmd_rqst == VMBUS_RQST_ERROR) {
+			dev_err(&device->device,
+				"Incorrect transaction id\n");
+			continue;
+		}
+
+		request = (struct storvsc_cmd_request *)(unsigned long)cmd_rqst;
 
 		if (request == &stor_device->init_request ||
 		    request == &stor_device->reset_request) {
@@ -1250,6 +1279,12 @@ static int storvsc_connect_to_vsp(struct hv_device *device, u32 ring_size,
 	int ret;
 
 	memset(&props, 0, sizeof(struct vmstorage_channel_properties));
+
+	/*
+	 * The size of vmbus_requestor is an upper bound on the number of requests
+	 * that can be in-progress at any one time across all channels.
+	 */
+	device->channel->rqstor_size = scsi_driver.can_queue;
 
 	ret = vmbus_open(device->channel,
 			 ring_size,
@@ -1433,14 +1468,14 @@ static int storvsc_do_io(struct hv_device *device,
 			}
 		}
 	} else {
-		spin_lock_irqsave(&device->channel->lock, flags);
+		spin_lock_irqsave(&stor_device->lock, flags);
 		outgoing_channel = stor_device->stor_chns[q_num];
 		if (outgoing_channel != NULL) {
-			spin_unlock_irqrestore(&device->channel->lock, flags);
+			spin_unlock_irqrestore(&stor_device->lock, flags);
 			goto found_channel;
 		}
 		outgoing_channel = get_og_chn(stor_device, q_num);
-		spin_unlock_irqrestore(&device->channel->lock, flags);
+		spin_unlock_irqrestore(&stor_device->lock, flags);
 	}
 
 found_channel:
@@ -1558,13 +1593,13 @@ static int storvsc_host_reset_handler(struct scsi_cmnd *scmnd)
 	struct vstor_packet *vstor_packet;
 	int ret, t;
 
-
 	stor_device = get_out_stor_device(device);
 	if (!stor_device)
 		return FAILED;
 
 	request = &stor_device->reset_request;
 	vstor_packet = &request->vstor_packet;
+	memset(vstor_packet, 0, sizeof(struct vstor_packet));
 
 	init_completion(&request->wait_event);
 
@@ -1668,6 +1703,7 @@ static int storvsc_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *scmnd)
 	/* Setup the cmd request */
 	cmd_request->cmd = scmnd;
 
+	memset(&cmd_request->vstor_packet, 0, sizeof(struct vstor_packet));
 	vm_srb = &cmd_request->vstor_packet.vm_srb;
 	vm_srb->win8_extension.time_out_value = 60;
 
@@ -1723,23 +1759,65 @@ static int storvsc_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *scmnd)
 	payload_sz = sizeof(cmd_request->mpb);
 
 	if (sg_count) {
-		if (sg_count > MAX_PAGE_BUFFER_COUNT) {
+		unsigned int hvpgoff = 0;
+		unsigned long offset_in_hvpg = sgl->offset & ~HV_HYP_PAGE_MASK;
+		unsigned int hvpg_count = HVPFN_UP(offset_in_hvpg + length);
+		u64 hvpfn;
 
-			payload_sz = (sg_count * sizeof(u64) +
+		if (hvpg_count > MAX_PAGE_BUFFER_COUNT) {
+
+			payload_sz = (hvpg_count * sizeof(u64) +
 				      sizeof(struct vmbus_packet_mpb_array));
 			payload = kzalloc(payload_sz, GFP_ATOMIC);
 			if (!payload)
 				return SCSI_MLQUEUE_DEVICE_BUSY;
 		}
 
+		/*
+		 * sgl is a list of PAGEs, and payload->range.pfn_array
+		 * expects the page number in the unit of HV_HYP_PAGE_SIZE (the
+		 * page size that Hyper-V uses, so here we need to divide PAGEs
+		 * into HV_HYP_PAGE in case that PAGE_SIZE > HV_HYP_PAGE_SIZE.
+		 * Besides, payload->range.offset should be the offset in one
+		 * HV_HYP_PAGE.
+		 */
 		payload->range.len = length;
-		payload->range.offset = sgl[0].offset;
+		payload->range.offset = offset_in_hvpg;
+		hvpgoff = sgl->offset >> HV_HYP_PAGE_SHIFT;
 
 		cur_sgl = sgl;
-		for (i = 0; i < sg_count; i++) {
-			payload->range.pfn_array[i] =
-				page_to_pfn(sg_page((cur_sgl)));
-			cur_sgl = sg_next(cur_sgl);
+		for (i = 0; i < hvpg_count; i++) {
+			/*
+			 * 'i' is the index of hv pages in the payload and
+			 * 'hvpgoff' is the offset (in hv pages) of the first
+			 * hv page in the the first page. The relationship
+			 * between the sum of 'i' and 'hvpgoff' and the offset
+			 * (in hv pages) in a payload page ('hvpgoff_in_page')
+			 * is as follow:
+			 *
+			 * |------------------ PAGE -------------------|
+			 * |   NR_HV_HYP_PAGES_IN_PAGE hvpgs in total  |
+			 * |hvpg|hvpg| ...              |hvpg|... |hvpg|
+			 * ^         ^                                 ^                 ^
+			 * +-hvpgoff-+                                 +-hvpgoff_in_page-+
+			 *           ^                                                   |
+			 *           +--------------------- i ---------------------------+
+			 */
+			unsigned int hvpgoff_in_page =
+				(i + hvpgoff) % NR_HV_HYP_PAGES_IN_PAGE;
+
+			/*
+			 * Two cases that we need to fetch a page:
+			 * 1) i == 0, the first step or
+			 * 2) hvpgoff_in_page == 0, when we reach the boundary
+			 *    of a page.
+			 */
+			if (hvpgoff_in_page == 0 || i == 0) {
+				hvpfn = page_to_hvpfn(sg_page(cur_sgl));
+				cur_sgl = sg_next(cur_sgl);
+			}
+
+			payload->range.pfn_array[i] = hvpfn + hvpgoff_in_page;
 		}
 	}
 
@@ -1881,6 +1959,7 @@ static int storvsc_probe(struct hv_device *device,
 	init_waitqueue_head(&stor_device->waiting_to_drain);
 	stor_device->device = device;
 	stor_device->host = host;
+	spin_lock_init(&stor_device->lock);
 	hv_set_drvdata(device, stor_device);
 
 	stor_device->port_number = host->host_no;
@@ -1935,8 +2014,10 @@ static int storvsc_probe(struct hv_device *device,
 			alloc_ordered_workqueue("storvsc_error_wq_%d",
 						WQ_MEM_RECLAIM,
 						host->host_no);
-	if (!host_dev->handle_error_wq)
+	if (!host_dev->handle_error_wq) {
+		ret = -ENOMEM;
 		goto err_out2;
+	}
 	INIT_WORK(&host_dev->host_scan_work, storvsc_host_scan);
 	/* Register the HBA and start the scsi bus scan */
 	ret = scsi_add_host(host, &device->device);

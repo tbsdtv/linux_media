@@ -98,9 +98,15 @@ enum crc_selection {
 	INTERSECT_WINDOW_NOT_A_NOT_B,
 };
 
+enum otg_out_mux_dest {
+	OUT_MUX_DIO = 0,
+};
+
 enum h_timing_div_mode {
 	H_TIMING_NO_DIV,
 	H_TIMING_DIV_BY2,
+	H_TIMING_RESERVED,
+	H_TIMING_DIV_BY4,
 };
 
 struct crc_params {
@@ -265,7 +271,7 @@ struct timing_generator_funcs {
 			struct dc_crtc_timing *hw_crtc_timing);
 
 	void (*set_vtg_params)(struct timing_generator *optc,
-			const struct dc_crtc_timing *dc_crtc_timing);
+			const struct dc_crtc_timing *dc_crtc_timing, bool program_fp2);
 
 	void (*set_dsc_config)(struct timing_generator *optc,
 			       enum optc_dsc_mode dsc_mode,
@@ -278,6 +284,13 @@ struct timing_generator_funcs {
 	void (*set_gsl_source_select)(struct timing_generator *optc,
 			int group_idx,
 			uint32_t gsl_ready_signal);
+	void (*set_out_mux)(struct timing_generator *tg, enum otg_out_mux_dest dest);
+	void (*set_vrr_m_const)(struct timing_generator *optc,
+			double vtotal_avg);
+	void (*set_drr_trigger_window)(struct timing_generator *optc,
+			uint32_t window_start, uint32_t window_end);
+	void (*set_vtotal_change_limit)(struct timing_generator *optc,
+			uint32_t limit);
 };
 
 #endif

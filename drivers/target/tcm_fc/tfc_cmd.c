@@ -19,7 +19,6 @@
 #include <asm/unaligned.h>
 #include <scsi/scsi_tcq.h>
 #include <scsi/libfc.h>
-#include <scsi/fc_encode.h>
 
 #include <target/target_core_base.h>
 #include <target/target_core_fabric.h>
@@ -537,7 +536,7 @@ static void ft_send_work(struct work_struct *work)
 	case FCP_PTA_ACA:
 		task_attr = TCM_ACA_TAG;
 		break;
-	case FCP_PTA_SIMPLE: /* Fallthrough */
+	case FCP_PTA_SIMPLE:
 	default:
 		task_attr = TCM_SIMPLE_TAG;
 	}
@@ -551,7 +550,7 @@ static void ft_send_work(struct work_struct *work)
 	if (target_submit_cmd(&cmd->se_cmd, cmd->sess->se_sess, fcp->fc_cdb,
 			      &cmd->ft_sense_buffer[0], scsilun_to_int(&fcp->fc_lun),
 			      ntohl(fcp->fc_dl), task_attr, data_dir,
-			      TARGET_SCF_ACK_KREF | TARGET_SCF_USE_CPUID))
+			      TARGET_SCF_ACK_KREF))
 		goto err;
 
 	pr_debug("r_ctl %x target_submit_cmd %p\n", fh->fh_r_ctl, cmd);

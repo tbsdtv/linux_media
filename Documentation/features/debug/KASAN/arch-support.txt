@@ -8,7 +8,7 @@
     -----------------------
     |       alpha: | TODO |
     |         arc: | TODO |
-    |         arm: | TODO |
+    |         arm: |  ok  |
     |       arm64: |  ok  |
     |         c6x: | TODO |
     |        csky: | TODO |
@@ -28,7 +28,6 @@
     |          sh: | TODO |
     |       sparc: | TODO |
     |          um: | TODO |
-    |   unicore32: | TODO |
     |         x86: |  ok  |
     |      xtensa: |  ok  |
     -----------------------

@@ -434,13 +434,13 @@ static vm_fault_t shm_fault(struct vm_fault *vmf)
 	return sfd->vm_ops->fault(vmf);
 }
 
-static int shm_split(struct vm_area_struct *vma, unsigned long addr)
+static int shm_may_split(struct vm_area_struct *vma, unsigned long addr)
 {
 	struct file *file = vma->vm_file;
 	struct shm_file_data *sfd = shm_file_data(file);
 
-	if (sfd->vm_ops->split)
-		return sfd->vm_ops->split(vma, addr);
+	if (sfd->vm_ops->may_split)
+		return sfd->vm_ops->may_split(vma, addr);
 
 	return 0;
 }
@@ -582,7 +582,7 @@ static const struct vm_operations_struct shm_vm_ops = {
 	.open	= shm_open,	/* callback for a new vm-area open */
 	.close	= shm_close,	/* callback for when the vm-area is released */
 	.fault	= shm_fault,
-	.split	= shm_split,
+	.may_split = shm_may_split,
 	.pagesize = shm_pagesize,
 #if defined(CONFIG_NUMA)
 	.set_policy = shm_set_policy,
@@ -711,8 +711,7 @@ no_file:
 /*
  * Called with shm_ids.rwsem and ipcp locked.
  */
-static inline int shm_more_checks(struct kern_ipc_perm *ipcp,
-				struct ipc_params *params)
+static int shm_more_checks(struct kern_ipc_perm *ipcp, struct ipc_params *params)
 {
 	struct shmid_kernel *shp;
 
@@ -1180,7 +1179,7 @@ static long ksys_shmctl(int shmid, int cmd, struct shmid_ds __user *buf, int ver
 	case IPC_SET:
 		if (copy_shmid_from_user(&sem64, buf, version))
 			return -EFAULT;
-		/* fallthru */
+		fallthrough;
 	case IPC_RMID:
 		return shmctl_down(ns, shmid, cmd, &sem64);
 	case SHM_LOCK:
@@ -1375,13 +1374,12 @@ static long compat_ksys_shmctl(int shmid, int cmd, void __user *uptr, int versio
 	case IPC_SET:
 		if (copy_compat_shmid_from_user(&sem64, uptr, version))
 			return -EFAULT;
-		/* fallthru */
+		fallthrough;
 	case IPC_RMID:
 		return shmctl_down(ns, shmid, cmd, &sem64);
 	case SHM_LOCK:
 	case SHM_UNLOCK:
 		return shmctl_do_lock(ns, shmid, cmd);
-		break;
 	default:
 		return -EINVAL;
 	}
@@ -1558,7 +1556,7 @@ long do_shmat(int shmid, char __user *shmaddr, int shmflg,
 			goto invalid;
 	}
 
-	addr = do_mmap_pgoff(file, addr, size, prot, flags, 0, &populate, NULL);
+	addr = do_mmap(file, addr, size, prot, flags, 0, &populate, NULL);
 	*raddr = addr;
 	err = 0;
 	if (IS_ERR_VALUE(addr))

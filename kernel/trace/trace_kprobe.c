@@ -25,11 +25,12 @@
 
 /* Kprobe early definition from command line */
 static char kprobe_boot_events_buf[COMMAND_LINE_SIZE] __initdata;
-static bool kprobe_boot_events_enabled __initdata;
 
 static int __init set_kprobe_boot_events(char *str)
 {
 	strlcpy(kprobe_boot_events_buf, str, COMMAND_LINE_SIZE);
+	disable_tracing_selftest("running kprobe events");
+
 	return 0;
 }
 __setup("kprobe_event=", set_kprobe_boot_events);
@@ -106,9 +107,10 @@ static nokprobe_inline bool trace_kprobe_has_gone(struct trace_kprobe *tk)
 static nokprobe_inline bool trace_kprobe_within_module(struct trace_kprobe *tk,
 						 struct module *mod)
 {
-	int len = strlen(mod->name);
+	int len = strlen(module_name(mod));
 	const char *name = trace_kprobe_symbol(tk);
-	return strncmp(mod->name, name, len) == 0 && name[len] == ':';
+
+	return strncmp(module_name(mod), name, len) == 0 && name[len] == ':';
 }
 
 static nokprobe_inline bool trace_kprobe_module_exist(struct trace_kprobe *tk)
@@ -432,7 +434,7 @@ static int disable_trace_kprobe(struct trace_event_call *call,
 	return 0;
 }
 
-#if defined(CONFIG_KPROBES_ON_FTRACE) && \
+#if defined(CONFIG_DYNAMIC_FTRACE) && \
 	!defined(CONFIG_KPROBE_EVENTS_ON_NOTRACE)
 static bool __within_notrace_func(unsigned long addr)
 {
@@ -688,7 +690,7 @@ static int trace_kprobe_module_callback(struct notifier_block *nb,
 			if (ret)
 				pr_warn("Failed to re-register probe %s on %s: %d\n",
 					trace_probe_name(&tk->tp),
-					mod->name, ret);
+					module_name(mod), ret);
 		}
 	}
 	mutex_unlock(&event_mutex);
@@ -717,6 +719,9 @@ static int trace_kprobe_create(int argc, const char *argv[])
 	 *      p[:[GRP/]EVENT] [MOD:]KSYM[+OFFS]|KADDR [FETCHARGS]
 	 *  - Add kretprobe:
 	 *      r[MAXACTIVE][:[GRP/]EVENT] [MOD:]KSYM[+0] [FETCHARGS]
+	 *    Or
+	 *      p:[GRP/]EVENT] [MOD:]KSYM[+0]%return [FETCHARGS]
+	 *
 	 * Fetch args:
 	 *  $retval	: fetch return value
 	 *  $stack	: fetch stack address
@@ -746,7 +751,6 @@ static int trace_kprobe_create(int argc, const char *argv[])
 	switch (argv[0][0]) {
 	case 'r':
 		is_return = true;
-		flags |= TPARG_FL_RETURN;
 		break;
 	case 'p':
 		break;
@@ -804,12 +808,26 @@ static int trace_kprobe_create(int argc, const char *argv[])
 		symbol = kstrdup(argv[1], GFP_KERNEL);
 		if (!symbol)
 			return -ENOMEM;
+
+		tmp = strchr(symbol, '%');
+		if (tmp) {
+			if (!strcmp(tmp, "%return")) {
+				*tmp = '\0';
+				is_return = true;
+			} else {
+				trace_probe_log_err(tmp - symbol, BAD_ADDR_SUFFIX);
+				goto parse_error;
+			}
+		}
+
 		/* TODO: support .init module functions */
 		ret = traceprobe_split_symbol_offset(symbol, &offset);
 		if (ret || offset < 0 || offset > UINT_MAX) {
 			trace_probe_log_err(0, BAD_PROBE_ADDR);
 			goto parse_error;
 		}
+		if (is_return)
+			flags |= TPARG_FL_RETURN;
 		if (kprobe_on_func_entry(NULL, symbol, offset))
 			flags |= TPARG_FL_FENTRY;
 		if (offset && is_return && !(flags & TPARG_FL_FENTRY)) {
@@ -1222,7 +1240,7 @@ fetch_store_strlen(unsigned long addr)
 #endif
 
 	do {
-		ret = probe_kernel_read(&c, (u8 *)addr + len, 1);
+		ret = copy_from_kernel_nofault(&c, (u8 *)addr + len, 1);
 		len++;
 	} while (c && ret == 0 && len < MAX_STRING_SIZE);
 
@@ -1290,7 +1308,7 @@ probe_mem_read_user(void *dest, void *src, size_t size)
 {
 	const void __user *uaddr =  (__force const void __user *)src;
 
-	return probe_user_read(dest, uaddr, size);
+	return copy_from_user_nofault(dest, uaddr, size);
 }
 
 static nokprobe_inline int
@@ -1300,7 +1318,7 @@ probe_mem_read(void *dest, void *src, size_t size)
 	if ((unsigned long)src < TASK_SIZE)
 		return probe_mem_read_user(dest, src, size);
 #endif
-	return probe_kernel_read(dest, src, size);
+	return copy_from_kernel_nofault(dest, src, size);
 }
 
 /* Note that we don't verify it, since the code does not come from user space */
@@ -1714,7 +1732,8 @@ NOKPROBE_SYMBOL(kprobe_dispatcher);
 static int
 kretprobe_dispatcher(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	struct trace_kprobe *tk = container_of(ri->rp, struct trace_kprobe, rp);
+	struct kretprobe *rp = get_kretprobe(ri);
+	struct trace_kprobe *tk = container_of(rp, struct trace_kprobe, rp);
 
 	raw_cpu_inc(*tk->nhit);
 
@@ -1870,8 +1889,6 @@ static __init void setup_boot_kprobe_events(void)
 		ret = trace_run_command(cmd, create_or_delete_trace_kprobe);
 		if (ret)
 			pr_warn("Failed to add event(%d): %s\n", ret, cmd);
-		else
-			kprobe_boot_events_enabled = true;
 
 		cmd = p;
 	}
@@ -1880,8 +1897,8 @@ static __init void setup_boot_kprobe_events(void)
 }
 
 /*
- * Register dynevent at subsys_initcall. This allows kernel to setup kprobe
- * events in fs_initcall without tracefs.
+ * Register dynevent at core_initcall. This allows kernel to setup kprobe
+ * events in postcore_initcall without tracefs.
  */
 static __init int init_kprobe_trace_early(void)
 {
@@ -1896,19 +1913,19 @@ static __init int init_kprobe_trace_early(void)
 
 	return 0;
 }
-subsys_initcall(init_kprobe_trace_early);
+core_initcall(init_kprobe_trace_early);
 
 /* Make a tracefs interface for controlling probe points */
 static __init int init_kprobe_trace(void)
 {
-	struct dentry *d_tracer;
+	int ret;
 	struct dentry *entry;
 
-	d_tracer = tracing_init_dentry();
-	if (IS_ERR(d_tracer))
+	ret = tracing_init_dentry();
+	if (ret)
 		return 0;
 
-	entry = tracefs_create_file("kprobe_events", 0644, d_tracer,
+	entry = tracefs_create_file("kprobe_events", 0644, NULL,
 				    NULL, &kprobe_events_ops);
 
 	/* Event list interface */
@@ -1916,7 +1933,7 @@ static __init int init_kprobe_trace(void)
 		pr_warn("Could not create tracefs 'kprobe_events' entry\n");
 
 	/* Profile interface */
-	entry = tracefs_create_file("kprobe_profile", 0444, d_tracer,
+	entry = tracefs_create_file("kprobe_profile", 0444, NULL,
 				    NULL, &kprobe_profile_ops);
 
 	if (!entry)
@@ -1956,10 +1973,8 @@ static __init int kprobe_trace_self_tests_init(void)
 	if (tracing_is_disabled())
 		return -ENODEV;
 
-	if (kprobe_boot_events_enabled) {
-		pr_info("Skipping kprobe tests due to kprobe_event on cmdline\n");
+	if (tracing_selftest_disabled)
 		return 0;
-	}
 
 	target = kprobe_trace_selftest_target;
 

@@ -124,6 +124,9 @@ static int process_rdma(struct rtrs_srv *sess,
 	struct rnbd_srv_sess_dev *sess_dev;
 	u32 dev_id;
 	int err;
+	struct rnbd_dev_blk_io *io;
+	struct bio *bio;
+	short prio;
 
 	priv = kmalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -142,17 +145,29 @@ static int process_rdma(struct rtrs_srv *sess,
 	priv->sess_dev = sess_dev;
 	priv->id = id;
 
-	err = rnbd_dev_submit_io(sess_dev->rnbd_dev, le64_to_cpu(msg->sector),
-				  data, datalen, le32_to_cpu(msg->bi_size),
-				  le32_to_cpu(msg->rw),
-				  srv_sess->ver < RNBD_PROTO_VER_MAJOR ||
-				  usrlen < sizeof(*msg) ?
-				  0 : le16_to_cpu(msg->prio), priv);
-	if (unlikely(err)) {
-		rnbd_srv_err(sess_dev, "Submitting I/O to device failed, err: %d\n",
-			      err);
+	/* Generate bio with pages pointing to the rdma buffer */
+	bio = rnbd_bio_map_kern(data, sess_dev->rnbd_dev->ibd_bio_set, datalen, GFP_KERNEL);
+	if (IS_ERR(bio)) {
+		err = PTR_ERR(bio);
+		rnbd_srv_err(sess_dev, "Failed to generate bio, err: %d\n", err);
 		goto sess_dev_put;
 	}
+
+	io = container_of(bio, struct rnbd_dev_blk_io, bio);
+	io->dev = sess_dev->rnbd_dev;
+	io->priv = priv;
+
+	bio->bi_end_io = rnbd_dev_bi_end_io;
+	bio->bi_private = io;
+	bio->bi_opf = rnbd_to_bio_flags(le32_to_cpu(msg->rw));
+	bio->bi_iter.bi_sector = le64_to_cpu(msg->sector);
+	bio->bi_iter.bi_size = le32_to_cpu(msg->bi_size);
+	prio = srv_sess->ver < RNBD_PROTO_VER_MAJOR ||
+	       usrlen < sizeof(*msg) ? 0 : le16_to_cpu(msg->prio);
+	bio_set_prio(bio, prio);
+	bio_set_dev(bio, sess_dev->rnbd_dev->bdev);
+
+	submit_bio(bio);
 
 	return 0;
 
@@ -197,12 +212,20 @@ static void rnbd_put_srv_dev(struct rnbd_srv_dev *dev)
 	kref_put(&dev->kref, destroy_device_cb);
 }
 
-void rnbd_destroy_sess_dev(struct rnbd_srv_sess_dev *sess_dev)
+void rnbd_destroy_sess_dev(struct rnbd_srv_sess_dev *sess_dev, bool keep_id)
 {
 	DECLARE_COMPLETION_ONSTACK(dc);
 
-	xa_erase(&sess_dev->sess->index_idr, sess_dev->device_id);
+	if (keep_id)
+		/* free the resources for the id but don't  */
+		/* allow to re-use the id itself because it */
+		/* is still used by the client              */
+		xa_cmpxchg(&sess_dev->sess->index_idr, sess_dev->device_id,
+			   sess_dev, NULL, 0);
+	else
+		xa_erase(&sess_dev->sess->index_idr, sess_dev->device_id);
 	synchronize_rcu();
+
 	sess_dev->destroy_comp = &dc;
 	rnbd_put_sess_dev(sess_dev);
 	wait_for_completion(&dc); /* wait for inflights to drop to zero */
@@ -311,6 +334,16 @@ static int rnbd_srv_link_ev(struct rtrs_srv *rtrs,
 			ev, srv_sess->sessname);
 		return -EINVAL;
 	}
+}
+
+void rnbd_srv_sess_dev_force_close(struct rnbd_srv_sess_dev *sess_dev)
+{
+	struct rnbd_srv_session	*sess = sess_dev->sess;
+
+	sess_dev->keep_id = true;
+	mutex_lock(&sess->lock);
+	rnbd_srv_destroy_dev_session_sysfs(sess_dev);
+	mutex_unlock(&sess->lock);
 }
 
 static int process_msg_close(struct rtrs_srv *rtrs,
@@ -519,6 +552,7 @@ static void rnbd_srv_fill_msg_open_rsp(struct rnbd_msg_open_rsp *rsp,
 					struct rnbd_srv_sess_dev *sess_dev)
 {
 	struct rnbd_dev *rnbd_dev = sess_dev->rnbd_dev;
+	struct request_queue *q = bdev_get_queue(rnbd_dev->bdev);
 
 	rsp->hdr.type = cpu_to_le16(RNBD_MSG_OPEN_RSP);
 	rsp->device_id =
@@ -543,8 +577,12 @@ static void rnbd_srv_fill_msg_open_rsp(struct rnbd_msg_open_rsp *rsp,
 		cpu_to_le32(rnbd_dev_get_discard_alignment(rnbd_dev));
 	rsp->secure_discard =
 		cpu_to_le16(rnbd_dev_get_secure_discard(rnbd_dev));
-	rsp->rotational =
-		!blk_queue_nonrot(bdev_get_queue(rnbd_dev->bdev));
+	rsp->rotational = !blk_queue_nonrot(q);
+	rsp->cache_policy = 0;
+	if (test_bit(QUEUE_FLAG_WC, &q->queue_flags))
+		rsp->cache_policy |= RNBD_WRITEBACK;
+	if (blk_queue_fua(q))
+		rsp->cache_policy |= RNBD_FUA;
 }
 
 static struct rnbd_srv_sess_dev *

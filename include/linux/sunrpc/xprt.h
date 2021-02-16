@@ -101,6 +101,7 @@ struct rpc_rqst {
 							 * used in the softirq.
 							 */
 	unsigned long		rq_majortimeo;	/* major timeout alarm */
+	unsigned long		rq_minortimeo;	/* minor timeout alarm */
 	unsigned long		rq_timeout;	/* Current timeout value */
 	ktime_t			rq_rtt;		/* round-trip time */
 	unsigned int		rq_retries;	/* # of retries */
@@ -329,6 +330,7 @@ struct xprt_class {
 	struct rpc_xprt *	(*setup)(struct xprt_create *);
 	struct module		*owner;
 	char			name[32];
+	const char *		netid[];
 };
 
 /*
@@ -383,7 +385,7 @@ xprt_disable_swap(struct rpc_xprt *xprt)
  */
 int			xprt_register_transport(struct xprt_class *type);
 int			xprt_unregister_transport(struct xprt_class *type);
-int			xprt_load_transport(const char *);
+int			xprt_find_transport_ident(const char *);
 void			xprt_wait_for_reply_request_def(struct rpc_task *task);
 void			xprt_wait_for_reply_request_rtt(struct rpc_task *task);
 void			xprt_wake_pending_tasks(struct rpc_xprt *xprt, int status);

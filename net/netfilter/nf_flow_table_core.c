@@ -243,6 +243,8 @@ int flow_offload_add(struct nf_flowtable *flow_table, struct flow_offload *flow)
 		return err;
 	}
 
+	nf_ct_offload_timeout(flow->ct);
+
 	if (nf_flowtable_hw_offload(flow_table)) {
 		__set_bit(NF_FLOW_HW, &flow->flags);
 		nf_flow_offload_add(flow_table, flow);
@@ -387,59 +389,13 @@ static void nf_flow_offload_work_gc(struct work_struct *work)
 	queue_delayed_work(system_power_efficient_wq, &flow_table->gc_work, HZ);
 }
 
-int nf_flow_table_offload_add_cb(struct nf_flowtable *flow_table,
-				 flow_setup_cb_t *cb, void *cb_priv)
-{
-	struct flow_block *block = &flow_table->flow_block;
-	struct flow_block_cb *block_cb;
-	int err = 0;
-
-	down_write(&flow_table->flow_block_lock);
-	block_cb = flow_block_cb_lookup(block, cb, cb_priv);
-	if (block_cb) {
-		err = -EEXIST;
-		goto unlock;
-	}
-
-	block_cb = flow_block_cb_alloc(cb, cb_priv, cb_priv, NULL);
-	if (IS_ERR(block_cb)) {
-		err = PTR_ERR(block_cb);
-		goto unlock;
-	}
-
-	list_add_tail(&block_cb->list, &block->cb_list);
-
-unlock:
-	up_write(&flow_table->flow_block_lock);
-	return err;
-}
-EXPORT_SYMBOL_GPL(nf_flow_table_offload_add_cb);
-
-void nf_flow_table_offload_del_cb(struct nf_flowtable *flow_table,
-				  flow_setup_cb_t *cb, void *cb_priv)
-{
-	struct flow_block *block = &flow_table->flow_block;
-	struct flow_block_cb *block_cb;
-
-	down_write(&flow_table->flow_block_lock);
-	block_cb = flow_block_cb_lookup(block, cb, cb_priv);
-	if (block_cb) {
-		list_del(&block_cb->list);
-		flow_block_cb_free(block_cb);
-	} else {
-		WARN_ON(true);
-	}
-	up_write(&flow_table->flow_block_lock);
-}
-EXPORT_SYMBOL_GPL(nf_flow_table_offload_del_cb);
 
 static int nf_flow_nat_port_tcp(struct sk_buff *skb, unsigned int thoff,
 				__be16 port, __be16 new_port)
 {
 	struct tcphdr *tcph;
 
-	if (!pskb_may_pull(skb, thoff + sizeof(*tcph)) ||
-	    skb_try_make_writable(skb, thoff + sizeof(*tcph)))
+	if (skb_try_make_writable(skb, thoff + sizeof(*tcph)))
 		return -1;
 
 	tcph = (void *)(skb_network_header(skb) + thoff);
@@ -453,8 +409,7 @@ static int nf_flow_nat_port_udp(struct sk_buff *skb, unsigned int thoff,
 {
 	struct udphdr *udph;
 
-	if (!pskb_may_pull(skb, thoff + sizeof(*udph)) ||
-	    skb_try_make_writable(skb, thoff + sizeof(*udph)))
+	if (skb_try_make_writable(skb, thoff + sizeof(*udph)))
 		return -1;
 
 	udph = (void *)(skb_network_header(skb) + thoff);
@@ -492,8 +447,7 @@ int nf_flow_snat_port(const struct flow_offload *flow,
 	struct flow_ports *hdr;
 	__be16 port, new_port;
 
-	if (!pskb_may_pull(skb, thoff + sizeof(*hdr)) ||
-	    skb_try_make_writable(skb, thoff + sizeof(*hdr)))
+	if (skb_try_make_writable(skb, thoff + sizeof(*hdr)))
 		return -1;
 
 	hdr = (void *)(skb_network_header(skb) + thoff);
@@ -524,8 +478,7 @@ int nf_flow_dnat_port(const struct flow_offload *flow,
 	struct flow_ports *hdr;
 	__be16 port, new_port;
 
-	if (!pskb_may_pull(skb, thoff + sizeof(*hdr)) ||
-	    skb_try_make_writable(skb, thoff + sizeof(*hdr)))
+	if (skb_try_make_writable(skb, thoff + sizeof(*hdr)))
 		return -1;
 
 	hdr = (void *)(skb_network_header(skb) + thoff);
@@ -639,3 +592,4 @@ module_exit(nf_flow_table_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pablo Neira Ayuso <pablo@netfilter.org>");
+MODULE_DESCRIPTION("Netfilter flow table module");

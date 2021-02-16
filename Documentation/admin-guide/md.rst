@@ -221,7 +221,7 @@ All md devices contain:
 
   layout
      The ``layout`` for the array for the particular level.  This is
-     simply a number that is interpretted differently by different
+     simply a number that is interpreted differently by different
      levels.  It can be written while assembling an array.
 
   array_size
@@ -425,6 +425,10 @@ All md devices contain:
 
      The accepted values when writing to this file are ``ppl`` and ``resync``,
      used to enable and disable PPL.
+
+  uuid
+     This indicates the UUID of the array in the following format:
+     xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 
 As component devices are added to an md array, they appear in the ``md``

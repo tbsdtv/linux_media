@@ -186,17 +186,6 @@ static void dsa_master_get_strings(struct net_device *dev, uint32_t stringset,
 	}
 }
 
-static int dsa_master_get_phys_port_name(struct net_device *dev,
-					 char *name, size_t len)
-{
-	struct dsa_port *cpu_dp = dev->dsa_ptr;
-
-	if (snprintf(name, len, "p%d", cpu_dp->index) >= len)
-		return -EINVAL;
-
-	return 0;
-}
-
 static int dsa_master_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
 	struct dsa_port *cpu_dp = dev->dsa_ptr;
@@ -220,11 +209,15 @@ static int dsa_master_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		break;
 	}
 
-	if (cpu_dp->orig_ndo_ops && cpu_dp->orig_ndo_ops->ndo_do_ioctl)
-		err = cpu_dp->orig_ndo_ops->ndo_do_ioctl(dev, ifr, cmd);
+	if (dev->netdev_ops->ndo_do_ioctl)
+		err = dev->netdev_ops->ndo_do_ioctl(dev, ifr, cmd);
 
 	return err;
 }
+
+static const struct dsa_netdevice_ops dsa_netdev_ops = {
+	.ndo_do_ioctl = dsa_master_ioctl,
+};
 
 static int dsa_master_ethtool_setup(struct net_device *dev)
 {
@@ -260,38 +253,22 @@ static void dsa_master_ethtool_teardown(struct net_device *dev)
 	cpu_dp->orig_ethtool_ops = NULL;
 }
 
-static int dsa_master_ndo_setup(struct net_device *dev)
+static void dsa_netdev_ops_set(struct net_device *dev,
+			       const struct dsa_netdevice_ops *ops)
 {
-	struct dsa_port *cpu_dp = dev->dsa_ptr;
-	struct dsa_switch *ds = cpu_dp->ds;
-	struct net_device_ops *ops;
-
-	if (dev->netdev_ops->ndo_get_phys_port_name)
-		return 0;
-
-	ops = devm_kzalloc(ds->dev, sizeof(*ops), GFP_KERNEL);
-	if (!ops)
-		return -ENOMEM;
-
-	cpu_dp->orig_ndo_ops = dev->netdev_ops;
-	if (cpu_dp->orig_ndo_ops)
-		memcpy(ops, cpu_dp->orig_ndo_ops, sizeof(*ops));
-
-	ops->ndo_get_phys_port_name = dsa_master_get_phys_port_name;
-	ops->ndo_do_ioctl = dsa_master_ioctl;
-
-	dev->netdev_ops  = ops;
-
-	return 0;
+	dev->dsa_ptr->netdev_ops = ops;
 }
 
-static void dsa_master_ndo_teardown(struct net_device *dev)
+static void dsa_master_set_promiscuity(struct net_device *dev, int inc)
 {
-	struct dsa_port *cpu_dp = dev->dsa_ptr;
+	const struct dsa_device_ops *ops = dev->dsa_ptr->tag_ops;
 
-	if (cpu_dp->orig_ndo_ops)
-		dev->netdev_ops = cpu_dp->orig_ndo_ops;
-	cpu_dp->orig_ndo_ops = NULL;
+	if (!ops->promisc_on_master)
+		return;
+
+	rtnl_lock();
+	dev_set_promiscuity(dev, inc);
+	rtnl_unlock();
 }
 
 static ssize_t tagging_show(struct device *d, struct device_attribute *attr,
@@ -331,14 +308,25 @@ static struct lock_class_key dsa_master_addr_list_lock_key;
 
 int dsa_master_setup(struct net_device *dev, struct dsa_port *cpu_dp)
 {
+	int mtu = ETH_DATA_LEN + cpu_dp->tag_ops->overhead;
+	struct dsa_switch *ds = cpu_dp->ds;
+	struct device_link *consumer_link;
 	int ret;
 
+	/* The DSA master must use SET_NETDEV_DEV for this to work. */
+	consumer_link = device_link_add(ds->dev, dev->dev.parent,
+					DL_FLAG_AUTOREMOVE_CONSUMER);
+	if (!consumer_link)
+		netdev_err(dev,
+			   "Failed to create a device link to DSA switch %s\n",
+			   dev_name(ds->dev));
+
 	rtnl_lock();
-	ret = dev_set_mtu(dev, ETH_DATA_LEN + cpu_dp->tag_ops->overhead);
+	ret = dev_set_mtu(dev, mtu);
 	rtnl_unlock();
 	if (ret)
-		netdev_warn(dev, "error %d setting MTU to include DSA overhead\n",
-			    ret);
+		netdev_warn(dev, "error %d setting MTU to %d to include DSA overhead\n",
+			    ret, mtu);
 
 	/* If we use a tagging format that doesn't have an ethertype
 	 * field, make sure that all packets from this point on get
@@ -349,13 +337,14 @@ int dsa_master_setup(struct net_device *dev, struct dsa_port *cpu_dp)
 	dev->dsa_ptr = cpu_dp;
 	lockdep_set_class(&dev->addr_list_lock,
 			  &dsa_master_addr_list_lock_key);
+
+	dsa_master_set_promiscuity(dev, 1);
+
 	ret = dsa_master_ethtool_setup(dev);
 	if (ret)
-		return ret;
+		goto out_err_reset_promisc;
 
-	ret = dsa_master_ndo_setup(dev);
-	if (ret)
-		goto out_err_ethtool_teardown;
+	dsa_netdev_ops_set(dev, &dsa_netdev_ops);
 
 	ret = sysfs_create_group(&dev->dev.kobj, &dsa_group);
 	if (ret)
@@ -364,18 +353,20 @@ int dsa_master_setup(struct net_device *dev, struct dsa_port *cpu_dp)
 	return ret;
 
 out_err_ndo_teardown:
-	dsa_master_ndo_teardown(dev);
-out_err_ethtool_teardown:
+	dsa_netdev_ops_set(dev, NULL);
 	dsa_master_ethtool_teardown(dev);
+out_err_reset_promisc:
+	dsa_master_set_promiscuity(dev, -1);
 	return ret;
 }
 
 void dsa_master_teardown(struct net_device *dev)
 {
 	sysfs_remove_group(&dev->dev.kobj, &dsa_group);
-	dsa_master_ndo_teardown(dev);
+	dsa_netdev_ops_set(dev, NULL);
 	dsa_master_ethtool_teardown(dev);
 	dsa_master_reset_mtu(dev);
+	dsa_master_set_promiscuity(dev, -1);
 
 	dev->dsa_ptr = NULL;
 

@@ -52,8 +52,10 @@
 /**
  * amdgpu_ib_get - request an IB (Indirect Buffer)
  *
- * @ring: ring index the IB is associated with
+ * @adev: amdgpu_device pointer
+ * @vm: amdgpu_vm pointer
  * @size: requested IB size
+ * @pool_type: IB pool type (delayed, immediate, direct)
  * @ib: IB object returned
  *
  * Request an IB (all asics).  IBs are allocated using the
@@ -101,9 +103,10 @@ void amdgpu_ib_free(struct amdgpu_device *adev, struct amdgpu_ib *ib,
 /**
  * amdgpu_ib_schedule - schedule an IB (Indirect Buffer) on the ring
  *
- * @adev: amdgpu_device pointer
+ * @ring: ring index the IB is associated with
  * @num_ibs: number of IBs to schedule
  * @ibs: IB objects to schedule
+ * @job: job to schedule
  * @f: fence created during this submission
  *
  * Schedule an IB on the associated ring (all asics).
@@ -178,7 +181,7 @@ int amdgpu_ib_schedule(struct amdgpu_ring *ring, unsigned num_ibs,
 
 	need_ctx_switch = ring->current_ctx != fence_ctx;
 	if (ring->funcs->emit_pipeline_sync && job &&
-	    ((tmp = amdgpu_sync_get_fence(&job->sched_sync, NULL)) ||
+	    ((tmp = amdgpu_sync_get_fence(&job->sched_sync)) ||
 	     (amdgpu_sriov_vf(adev) && need_ctx_switch) ||
 	     amdgpu_vm_need_pipeline_sync(ring, job))) {
 		need_pipe_sync = true;
@@ -445,7 +448,7 @@ static int amdgpu_debugfs_sa_info(struct seq_file *m, void *data)
 {
 	struct drm_info_node *node = (struct drm_info_node *) m->private;
 	struct drm_device *dev = node->minor->dev;
-	struct amdgpu_device *adev = dev->dev_private;
+	struct amdgpu_device *adev = drm_to_adev(dev);
 
 	seq_printf(m, "--------------------- DELAYED --------------------- \n");
 	amdgpu_sa_bo_dump_debug_info(&adev->ib_pools[AMDGPU_IB_POOL_DELAYED],
@@ -468,7 +471,8 @@ static const struct drm_info_list amdgpu_debugfs_sa_list[] = {
 int amdgpu_debugfs_sa_init(struct amdgpu_device *adev)
 {
 #if defined(CONFIG_DEBUG_FS)
-	return amdgpu_debugfs_add_files(adev, amdgpu_debugfs_sa_list, 1);
+	return amdgpu_debugfs_add_files(adev, amdgpu_debugfs_sa_list,
+					ARRAY_SIZE(amdgpu_debugfs_sa_list));
 #else
 	return 0;
 #endif

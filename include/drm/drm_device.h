@@ -27,7 +27,7 @@ struct pci_controller;
 
 
 /**
- * enum drm_switch_power - power state of drm device
+ * enum switch_power_state - power state of drm device
  */
 
 enum switch_power_state {
@@ -83,7 +83,11 @@ struct drm_device {
 	} managed;
 
 	/** @driver: DRM driver managing the device */
+#ifdef CONFIG_DRM_LEGACY
 	struct drm_driver *driver;
+#else
+	const struct drm_driver *driver;
+#endif
 
 	/**
 	 * @dev_private:
@@ -92,7 +96,7 @@ struct drm_device {
 	 * NULL.
 	 *
 	 * Instead of using this pointer it is recommended that drivers use
-	 * drm_dev_init() and embed struct &drm_device in their larger
+	 * devm_drm_dev_alloc() and embed struct &drm_device in their larger
 	 * per-device structure.
 	 */
 	void *dev_private;
@@ -146,6 +150,9 @@ struct drm_device {
 	 * @struct_mutex:
 	 *
 	 * Lock for others (not &drm_minor.master and &drm_file.is_master)
+	 *
+	 * WARNING:
+	 * Only drivers annotated with DRIVER_LEGACY should be using this.
 	 */
 	struct mutex struct_mutex;
 

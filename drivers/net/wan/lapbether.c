@@ -55,6 +55,9 @@ struct lapbethdev {
 
 static LIST_HEAD(lapbeth_devices);
 
+static void lapbeth_connected(struct net_device *dev, int reason);
+static void lapbeth_disconnected(struct net_device *dev, int reason);
+
 /* ------------------------------------------------------------------------ */
 
 /*
@@ -128,10 +131,12 @@ static int lapbeth_data_indication(struct net_device *dev, struct sk_buff *skb)
 {
 	unsigned char *ptr;
 
-	skb_push(skb, 1);
-
-	if (skb_cow(skb, 1))
+	if (skb_cow(skb, 1)) {
+		kfree_skb(skb);
 		return NET_RX_DROP;
+	}
+
+	skb_push(skb, 1);
 
 	ptr  = skb->data;
 	*ptr = X25_IFACE_DATA;
@@ -155,17 +160,29 @@ static netdev_tx_t lapbeth_xmit(struct sk_buff *skb,
 	if (!netif_running(dev))
 		goto drop;
 
+	/* There should be a pseudo header of 1 byte added by upper layers.
+	 * Check to make sure it is there before reading it.
+	 */
+	if (skb->len < 1)
+		goto drop;
+
 	switch (skb->data[0]) {
 	case X25_IFACE_DATA:
 		break;
 	case X25_IFACE_CONNECT:
-		if ((err = lapb_connect_request(dev)) != LAPB_OK)
+		err = lapb_connect_request(dev);
+		if (err == LAPB_CONNECTED)
+			lapbeth_connected(dev, LAPB_OK);
+		else if (err != LAPB_OK)
 			pr_err("lapb_connect_request error: %d\n", err);
 		goto drop;
 	case X25_IFACE_DISCONNECT:
-		if ((err = lapb_disconnect_request(dev)) != LAPB_OK)
+		err = lapb_disconnect_request(dev);
+		if (err == LAPB_NOTCONNECTED)
+			lapbeth_disconnected(dev, LAPB_OK);
+		else if (err != LAPB_OK)
 			pr_err("lapb_disconnect_request err: %d\n", err);
-		/* Fall thru */
+		fallthrough;
 	default:
 		goto drop;
 	}
@@ -190,8 +207,6 @@ static void lapbeth_data_transmit(struct net_device *ndev, struct sk_buff *skb)
 	struct net_device *dev;
 	int size = skb->len;
 
-	skb->protocol = htons(ETH_P_X25);
-
 	ptr = skb_push(skb, 2);
 
 	*ptr++ = size % 256;
@@ -201,6 +216,10 @@ static void lapbeth_data_transmit(struct net_device *ndev, struct sk_buff *skb)
 	ndev->stats.tx_bytes += size;
 
 	skb->dev = dev = lapbeth->ethdev;
+
+	skb->protocol = htons(ETH_P_DEC);
+
+	skb_reset_network_header(skb);
 
 	dev_hard_header(skb, dev, ETH_P_DEC, bcast_addr, NULL, 0);
 
@@ -303,7 +322,7 @@ static void lapbeth_setup(struct net_device *dev)
 	dev->netdev_ops	     = &lapbeth_netdev_ops;
 	dev->needs_free_netdev = true;
 	dev->type            = ARPHRD_X25;
-	dev->hard_header_len = 3;
+	dev->hard_header_len = 0;
 	dev->mtu             = 1000;
 	dev->addr_len        = 0;
 }
@@ -323,6 +342,16 @@ static int lapbeth_new_device(struct net_device *dev)
 			    lapbeth_setup);
 	if (!ndev)
 		goto out;
+
+	/* When transmitting data:
+	 * first this driver removes a pseudo header of 1 byte,
+	 * then the lapb module prepends an LAPB header of at most 3 bytes,
+	 * then this driver prepends a length field of 2 bytes,
+	 * then the underlying Ethernet device prepends its own header.
+	 */
+	ndev->needed_headroom = -1 + 3 + 2 + dev->hard_header_len
+					   + dev->needed_headroom;
+	ndev->needed_tailroom = dev->needed_tailroom;
 
 	lapbeth = netdev_priv(ndev);
 	lapbeth->axdev = ndev;

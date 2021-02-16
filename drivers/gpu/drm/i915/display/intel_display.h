@@ -28,6 +28,7 @@
 #include <drm/drm_util.h>
 
 enum link_m_n_set;
+enum drm_scaling_filter;
 struct dpll;
 struct drm_connector;
 struct drm_device;
@@ -187,6 +188,13 @@ enum plane_id {
 	for ((__p) = PLANE_PRIMARY; (__p) < I915_MAX_PLANES; (__p)++) \
 		for_each_if((__crtc)->plane_ids_mask & BIT(__p))
 
+#define for_each_dbuf_slice_in_mask(__slice, __mask) \
+	for ((__slice) = DBUF_S1; (__slice) < I915_MAX_DBUF_SLICES; (__slice)++) \
+		for_each_if((BIT(__slice)) & (__mask))
+
+#define for_each_dbuf_slice(__slice) \
+	for_each_dbuf_slice_in_mask(__slice, BIT(I915_MAX_DBUF_SLICES) - 1)
+
 enum port {
 	PORT_NONE = -1,
 
@@ -199,6 +207,14 @@ enum port {
 	PORT_G,
 	PORT_H,
 	PORT_I,
+
+	/* tgl+ */
+	PORT_TC1 = PORT_D,
+	PORT_TC2,
+	PORT_TC3,
+	PORT_TC4,
+	PORT_TC5,
+	PORT_TC6,
 
 	I915_MAX_PORTS
 };
@@ -236,14 +252,14 @@ static inline const char *port_identifier(enum port port)
 }
 
 enum tc_port {
-	PORT_TC_NONE = -1,
+	TC_PORT_NONE = -1,
 
-	PORT_TC1 = 0,
-	PORT_TC2,
-	PORT_TC3,
-	PORT_TC4,
-	PORT_TC5,
-	PORT_TC6,
+	TC_PORT_1 = 0,
+	TC_PORT_2,
+	TC_PORT_3,
+	TC_PORT_4,
+	TC_PORT_5,
+	TC_PORT_6,
 
 	I915_MAX_TC_PORTS
 };
@@ -265,8 +281,6 @@ enum dpio_phy {
 	DPIO_PHY2,
 };
 
-#define I915_NUM_PHYS_VLV 2
-
 enum aux_ch {
 	AUX_CH_A,
 	AUX_CH_B,
@@ -275,6 +289,16 @@ enum aux_ch {
 	AUX_CH_E, /* ICL+ */
 	AUX_CH_F,
 	AUX_CH_G,
+	AUX_CH_H,
+	AUX_CH_I,
+
+	/* tgl+ */
+	AUX_CH_USBC1 = AUX_CH_D,
+	AUX_CH_USBC2,
+	AUX_CH_USBC3,
+	AUX_CH_USBC4,
+	AUX_CH_USBC5,
+	AUX_CH_USBC6,
 };
 
 #define aux_ch_name(a) ((a) + 'A')
@@ -489,7 +513,8 @@ u32 intel_plane_fb_max_stride(struct drm_i915_private *dev_priv,
 bool intel_plane_can_remap(const struct intel_plane_state *plane_state);
 enum drm_mode_status
 intel_mode_valid_max_plane_size(struct drm_i915_private *dev_priv,
-				const struct drm_display_mode *mode);
+				const struct drm_display_mode *mode,
+				bool bigjoiner);
 enum phy intel_port_to_phy(struct drm_i915_private *i915, enum port port);
 bool is_trans_port_sync_mode(const struct intel_crtc_state *state);
 
@@ -535,7 +560,7 @@ void intel_crtc_vblank_off(const struct intel_crtc_state *crtc_state);
 
 int ilk_get_lanes_required(int target_clock, int link_bw, int bpp);
 void vlv_wait_port_ready(struct drm_i915_private *dev_priv,
-			 struct intel_digital_port *dport,
+			 struct intel_digital_port *dig_port,
 			 unsigned int expected_mask);
 int intel_get_load_detect_pipe(struct drm_connector *connector,
 			       struct intel_load_detect_pipe *old,
@@ -566,8 +591,8 @@ void vlv_force_pll_off(struct drm_i915_private *dev_priv, enum pipe pipe);
 int lpt_get_iclkip(struct drm_i915_private *dev_priv);
 bool intel_fuzzy_clock_check(int clock1, int clock2);
 
-void intel_prepare_reset(struct drm_i915_private *dev_priv);
-void intel_finish_reset(struct drm_i915_private *dev_priv);
+void intel_display_prepare_reset(struct drm_i915_private *dev_priv);
+void intel_display_finish_reset(struct drm_i915_private *dev_priv);
 void intel_dp_get_m_n(struct intel_crtc *crtc,
 		      struct intel_crtc_state *pipe_config);
 void intel_dp_set_m_n(const struct intel_crtc_state *crtc_state,
@@ -585,13 +610,14 @@ enum intel_display_power_domain
 intel_aux_power_domain(struct intel_digital_port *dig_port);
 enum intel_display_power_domain
 intel_legacy_aux_to_power_domain(enum aux_ch aux_ch);
-void intel_mode_from_pipe_config(struct drm_display_mode *mode,
-				 struct intel_crtc_state *pipe_config);
 void intel_crtc_arm_fifo_underrun(struct intel_crtc *crtc,
 				  struct intel_crtc_state *crtc_state);
 
 u16 skl_scaler_calc_phase(int sub, int scale, bool chroma_center);
 void skl_scaler_disable(const struct intel_crtc_state *old_crtc_state);
+u32 skl_scaler_get_filter_select(enum drm_scaling_filter filter, int set);
+void skl_scaler_setup_filter(struct drm_i915_private *dev_priv, enum pipe pipe,
+			     int id, int set, enum drm_scaling_filter filter);
 void ilk_pfit_disable(const struct intel_crtc_state *old_crtc_state);
 u32 glk_plane_color_ctl(const struct intel_crtc_state *crtc_state,
 			const struct intel_plane_state *plane_state);
@@ -608,6 +634,7 @@ unsigned int i9xx_plane_max_stride(struct intel_plane *plane,
 				   u32 pixel_format, u64 modifier,
 				   unsigned int rotation);
 int bdw_get_pipemisc_bpp(struct intel_crtc *crtc);
+unsigned int intel_plane_fence_y_offset(const struct intel_plane_state *plane_state);
 
 struct intel_display_error_state *
 intel_display_capture_error_state(struct drm_i915_private *dev_priv);
@@ -621,9 +648,11 @@ intel_format_info_is_yuv_semiplanar(const struct drm_format_info *info,
 /* modesetting */
 void intel_modeset_init_hw(struct drm_i915_private *i915);
 int intel_modeset_init_noirq(struct drm_i915_private *i915);
+int intel_modeset_init_nogem(struct drm_i915_private *i915);
 int intel_modeset_init(struct drm_i915_private *i915);
 void intel_modeset_driver_remove(struct drm_i915_private *i915);
 void intel_modeset_driver_remove_noirq(struct drm_i915_private *i915);
+void intel_modeset_driver_remove_nogem(struct drm_i915_private *i915);
 void intel_display_resume(struct drm_device *dev);
 void intel_init_pch_refclk(struct drm_i915_private *dev_priv);
 

@@ -408,7 +408,7 @@ static void nf_nat_l4proto_unique_tuple(struct nf_conntrack_tuple *tuple,
 	static const unsigned int max_attempts = 128;
 
 	switch (tuple->dst.protonum) {
-	case IPPROTO_ICMP: /* fallthrough */
+	case IPPROTO_ICMP:
 	case IPPROTO_ICMPV6:
 		/* id is same for either direction... */
 		keyptr = &tuple->src.u.icmp.id;
@@ -442,11 +442,11 @@ static void nf_nat_l4proto_unique_tuple(struct nf_conntrack_tuple *tuple,
 		}
 		goto find_free_id;
 #endif
-	case IPPROTO_UDP:	/* fallthrough */
-	case IPPROTO_UDPLITE:	/* fallthrough */
-	case IPPROTO_TCP:	/* fallthrough */
-	case IPPROTO_SCTP:	/* fallthrough */
-	case IPPROTO_DCCP:	/* fallthrough */
+	case IPPROTO_UDP:
+	case IPPROTO_UDPLITE:
+	case IPPROTO_TCP:
+	case IPPROTO_SCTP:
+	case IPPROTO_DCCP:
 		if (maniptype == NF_NAT_MANIP_SRC)
 			keyptr = &tuple->src.u.all;
 		else
@@ -1174,6 +1174,7 @@ static int __init nf_nat_init(void)
 	ret = register_pernet_subsys(&nat_net_ops);
 	if (ret < 0) {
 		nf_ct_extend_unregister(&nat_extend);
+		kvfree(nf_nat_bysource);
 		return ret;
 	}
 

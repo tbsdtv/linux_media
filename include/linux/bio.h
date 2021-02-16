@@ -8,8 +8,6 @@
 #include <linux/highmem.h>
 #include <linux/mempool.h>
 #include <linux/ioprio.h>
-
-#ifdef CONFIG_BLOCK
 /* struct bio, bio_vec and BIO_* flags are defined in blk_types.h */
 #include <linux/blk_types.h>
 
@@ -150,11 +148,24 @@ static inline void bio_advance_iter(const struct bio *bio,
 		/* TODO: It is reasonable to complete bio with error here. */
 }
 
+/* @bytes should be less or equal to bvec[i->bi_idx].bv_len */
+static inline void bio_advance_iter_single(const struct bio *bio,
+					   struct bvec_iter *iter,
+					   unsigned int bytes)
+{
+	iter->bi_sector += bytes >> 9;
+
+	if (bio_no_advance_iter(bio))
+		iter->bi_size -= bytes;
+	else
+		bvec_iter_advance_single(bio->bi_io_vec, iter, bytes);
+}
+
 #define __bio_for_each_segment(bvl, bio, iter, start)			\
 	for (iter = (start);						\
 	     (iter).bi_size &&						\
 		((bvl = bio_iter_iovec((bio), (iter))), 1);		\
-	     bio_advance_iter((bio), &(iter), (bvl).bv_len))
+	     bio_advance_iter_single((bio), &(iter), (bvl).bv_len))
 
 #define bio_for_each_segment(bvl, bio, iter)				\
 	__bio_for_each_segment(bvl, bio, iter, (bio)->bi_iter)
@@ -163,7 +174,7 @@ static inline void bio_advance_iter(const struct bio *bio,
 	for (iter = (start);						\
 	     (iter).bi_size &&						\
 		((bvl = mp_bvec_iter_bvec((bio)->bi_io_vec, (iter))), 1); \
-	     bio_advance_iter((bio), &(iter), (bvl).bv_len))
+	     bio_advance_iter_single((bio), &(iter), (bvl).bv_len))
 
 /* iterate over multi-page bvec */
 #define bio_for_each_bvec(bvl, bio, iter)			\
@@ -491,21 +502,12 @@ do {						\
 #define bio_dev(bio) \
 	disk_devt((bio)->bi_disk)
 
-#if defined(CONFIG_MEMCG) && defined(CONFIG_BLK_CGROUP)
-void bio_associate_blkg_from_page(struct bio *bio, struct page *page);
-#else
-static inline void bio_associate_blkg_from_page(struct bio *bio,
-						struct page *page) { }
-#endif
-
 #ifdef CONFIG_BLK_CGROUP
-void bio_disassociate_blkg(struct bio *bio);
 void bio_associate_blkg(struct bio *bio);
 void bio_associate_blkg_from_css(struct bio *bio,
 				 struct cgroup_subsys_state *css);
 void bio_clone_blkg_association(struct bio *dst, struct bio *src);
 #else	/* CONFIG_BLK_CGROUP */
-static inline void bio_disassociate_blkg(struct bio *bio) { }
 static inline void bio_associate_blkg(struct bio *bio) { }
 static inline void bio_associate_blkg_from_css(struct bio *bio,
 					       struct cgroup_subsys_state *css)
@@ -722,12 +724,6 @@ static inline bool bioset_initialized(struct bio_set *bs)
 	return bs->bio_slab != NULL;
 }
 
-/*
- * a small number of entries is fine, not going to be performance critical.
- * basically we just need to survive
- */
-#define BIO_SPLIT_ENTRIES 2
-
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 
 #define bip_for_each_vec(bvl, bip, iter)				\
@@ -824,5 +820,4 @@ static inline void bio_set_polled(struct bio *bio, struct kiocb *kiocb)
 		bio->bi_opf |= REQ_NOWAIT;
 }
 
-#endif /* CONFIG_BLOCK */
 #endif /* __LINUX_BIO_H */

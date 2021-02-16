@@ -227,7 +227,7 @@ struct xt_table {
 	unsigned int valid_hooks;
 
 	/* Man behind the curtain... */
-	struct xt_table_info *private;
+	struct xt_table_info __rcu *private;
 
 	/* Set this to THIS_MODULE if you are a module, otherwise NULL */
 	struct module *me;
@@ -301,8 +301,8 @@ int xt_target_to_user(const struct xt_entry_target *t,
 int xt_data_to_user(void __user *dst, const void *src,
 		    int usersize, int size, int aligned_size);
 
-void *xt_copy_counters_from_user(const void __user *user, unsigned int len,
-				 struct xt_counters_info *info, bool compat);
+void *xt_copy_counters(sockptr_t arg, unsigned int len,
+		       struct xt_counters_info *info);
 struct xt_counters *xt_counters_alloc(unsigned int counters);
 
 struct xt_table *xt_register_table(struct net *net,
@@ -447,6 +447,9 @@ xt_get_per_cpu_counter(struct xt_counters *cnt, unsigned int cpu)
 }
 
 struct nf_hook_ops *xt_hook_ops_alloc(const struct xt_table *, nf_hookfn *);
+
+struct xt_table_info
+*xt_table_get_private_protected(const struct xt_table *table);
 
 #ifdef CONFIG_COMPAT
 #include <net/compat.h>

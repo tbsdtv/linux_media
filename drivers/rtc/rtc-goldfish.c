@@ -73,6 +73,7 @@ static int goldfish_rtc_set_alarm(struct device *dev,
 		rtc_alarm64 = rtc_tm_to_time64(&alrm->time) * NSEC_PER_SEC;
 		writel((rtc_alarm64 >> 32), base + TIMER_ALARM_HIGH);
 		writel(rtc_alarm64, base + TIMER_ALARM_LOW);
+		writel(1, base + TIMER_IRQ_ENABLED);
 	} else {
 		/*
 		 * if this function was called with enabled=0
@@ -193,7 +194,7 @@ static int goldfish_rtc_probe(struct platform_device *pdev)
 	if (err)
 		return err;
 
-	return rtc_register_device(rtcdrv->rtc);
+	return devm_rtc_register_device(rtcdrv->rtc);
 }
 
 static const struct of_device_id goldfish_rtc_of_match[] = {

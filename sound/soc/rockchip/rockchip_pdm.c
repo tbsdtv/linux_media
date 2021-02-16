@@ -229,13 +229,13 @@ static int rockchip_pdm_hw_params(struct snd_pcm_substream *substream,
 	switch (params_channels(params)) {
 	case 8:
 		val |= PDM_PATH3_EN;
-		/* fallthrough */
+		fallthrough;
 	case 6:
 		val |= PDM_PATH2_EN;
-		/* fallthrough */
+		fallthrough;
 	case 4:
 		val |= PDM_PATH1_EN;
-		/* fallthrough */
+		fallthrough;
 	case 2:
 		val |= PDM_PATH0_EN;
 		break;
@@ -460,7 +460,7 @@ static const struct regmap_config rockchip_pdm_regmap_config = {
 	.cache_type = REGCACHE_FLAT,
 };
 
-static const struct of_device_id rockchip_pdm_match[] = {
+static const struct of_device_id rockchip_pdm_match[] __maybe_unused = {
 	{ .compatible = "rockchip,pdm",
 	  .data = (void *)RK_PDM_RK3229 },
 	{ .compatible = "rockchip,px30-pdm",
@@ -590,8 +590,10 @@ static int rockchip_pdm_resume(struct device *dev)
 	int ret;
 
 	ret = pm_runtime_get_sync(dev);
-	if (ret < 0)
+	if (ret < 0) {
+		pm_runtime_put(dev);
 		return ret;
+	}
 
 	ret = regcache_sync(pdm->regmap);
 

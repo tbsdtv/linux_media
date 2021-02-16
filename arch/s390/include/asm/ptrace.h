@@ -87,6 +87,7 @@ struct pt_regs
 	unsigned int int_parm;
 	unsigned long int_parm_long;
 	unsigned long flags;
+	unsigned long cr1;
 };
 
 /*
@@ -182,6 +183,11 @@ unsigned long regs_get_kernel_stack_nth(struct pt_regs *regs, unsigned int n);
 static inline unsigned long kernel_stack_pointer(struct pt_regs *regs)
 {
 	return regs->gprs[15];
+}
+
+static inline void regs_set_return_value(struct pt_regs *regs, unsigned long rc)
+{
+	regs->gprs[2] = rc;
 }
 
 #endif /* __ASSEMBLY__ */

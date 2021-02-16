@@ -38,7 +38,7 @@ static void segv_handler(int n, siginfo_t *info, void *ctxt_v)
 
 int bad_access(char *p, bool write)
 {
-	char x;
+	char x = 0;
 
 	fault_code = 0;
 	fault_addr = 0;
@@ -62,34 +62,6 @@ int bad_access(char *p, bool write)
 	FAIL_IF(fault_code != SEGV_MAPERR && fault_code != SEGV_BNDERR);
 
 	return 0;
-}
-
-static int using_hash_mmu(bool *using_hash)
-{
-	char line[128];
-	FILE *f;
-	int rc;
-
-	f = fopen("/proc/cpuinfo", "r");
-	FAIL_IF(!f);
-
-	rc = 0;
-	while (fgets(line, sizeof(line), f) != NULL) {
-		if (strcmp(line, "MMU		: Hash\n") == 0) {
-			*using_hash = true;
-			goto out;
-		}
-
-		if (strcmp(line, "MMU		: Radix\n") == 0) {
-			*using_hash = false;
-			goto out;
-		}
-	}
-
-	rc = -1;
-out:
-	fclose(f);
-	return rc;
 }
 
 static int test(void)
@@ -167,5 +139,6 @@ static int test(void)
 
 int main(void)
 {
+	test_harness_set_timeout(300);
 	return test_harness(test, "bad_accesses");
 }

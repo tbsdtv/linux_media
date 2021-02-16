@@ -309,7 +309,7 @@ static int ttc_rate_change_clocksource_cb(struct notifier_block *nb,
 		/* restore original register value */
 		writel_relaxed(ttccs->scale_clk_ctrl_reg_old,
 			       ttccs->ttc.base_addr + TTC_CLK_CNTRL_OFFSET);
-		/* fall through */
+		fallthrough;
 	default:
 		return NOTIFY_DONE;
 	}
@@ -392,7 +392,7 @@ static int ttc_rate_change_clockevent_cb(struct notifier_block *nb,
 
 		clockevents_update_freq(&ttcce->ce, ndata->new_rate / PRESCALE);
 
-		/* fall through */
+		fallthrough;
 	case PRE_RATE_CHANGE:
 	case ABORT_RATE_CHANGE:
 	default:
@@ -413,10 +413,8 @@ static int __init ttc_setup_clockevent(struct clk *clk,
 	ttcce->ttc.clk = clk;
 
 	err = clk_prepare_enable(ttcce->ttc.clk);
-	if (err) {
-		kfree(ttcce);
-		return err;
-	}
+	if (err)
+		goto out_kfree;
 
 	ttcce->ttc.clk_rate_change_nb.notifier_call =
 		ttc_rate_change_clockevent_cb;
@@ -426,7 +424,7 @@ static int __init ttc_setup_clockevent(struct clk *clk,
 				    &ttcce->ttc.clk_rate_change_nb);
 	if (err) {
 		pr_warn("Unable to register clock notifier.\n");
-		return err;
+		goto out_kfree;
 	}
 
 	ttcce->ttc.freq = clk_get_rate(ttcce->ttc.clk);
@@ -455,15 +453,17 @@ static int __init ttc_setup_clockevent(struct clk *clk,
 
 	err = request_irq(irq, ttc_clock_event_interrupt,
 			  IRQF_TIMER, ttcce->ce.name, ttcce);
-	if (err) {
-		kfree(ttcce);
-		return err;
-	}
+	if (err)
+		goto out_kfree;
 
 	clockevents_config_and_register(&ttcce->ce,
 			ttcce->ttc.freq / PRESCALE, 1, 0xfffe);
 
 	return 0;
+
+out_kfree:
+	kfree(ttcce);
+	return err;
 }
 
 static int __init ttc_timer_probe(struct platform_device *pdev)

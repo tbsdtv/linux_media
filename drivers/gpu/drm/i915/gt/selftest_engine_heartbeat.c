@@ -10,6 +10,7 @@
 
 #include "intel_gt_requests.h"
 #include "i915_selftest.h"
+#include "selftest_engine_heartbeat.h"
 
 static int timeline_sync(struct intel_timeline *tl)
 {
@@ -46,7 +47,10 @@ static int pulse_active(struct i915_active *active)
 
 static void pulse_free(struct kref *kref)
 {
-	kfree(container_of(kref, struct pulse, kref));
+	struct pulse *p = container_of(kref, typeof(*p), kref);
+
+	i915_active_fini(&p->active);
+	kfree(p);
 }
 
 static void pulse_put(struct pulse *p)
@@ -142,24 +146,6 @@ out:
 	return err;
 }
 
-static void engine_heartbeat_disable(struct intel_engine_cs *engine,
-				     unsigned long *saved)
-{
-	*saved = engine->props.heartbeat_interval_ms;
-	engine->props.heartbeat_interval_ms = 0;
-
-	intel_engine_pm_get(engine);
-	intel_engine_park_heartbeat(engine);
-}
-
-static void engine_heartbeat_enable(struct intel_engine_cs *engine,
-				    unsigned long saved)
-{
-	intel_engine_pm_put(engine);
-
-	engine->props.heartbeat_interval_ms = saved;
-}
-
 static int live_idle_flush(void *arg)
 {
 	struct intel_gt *gt = arg;
@@ -170,11 +156,9 @@ static int live_idle_flush(void *arg)
 	/* Check that we can flush the idle barriers */
 
 	for_each_engine(engine, gt, id) {
-		unsigned long heartbeat;
-
-		engine_heartbeat_disable(engine, &heartbeat);
+		st_engine_heartbeat_disable(engine);
 		err = __live_idle_pulse(engine, intel_engine_flush_barriers);
-		engine_heartbeat_enable(engine, heartbeat);
+		st_engine_heartbeat_enable(engine);
 		if (err)
 			break;
 	}
@@ -192,11 +176,9 @@ static int live_idle_pulse(void *arg)
 	/* Check that heartbeat pulses flush the idle barriers */
 
 	for_each_engine(engine, gt, id) {
-		unsigned long heartbeat;
-
-		engine_heartbeat_disable(engine, &heartbeat);
+		st_engine_heartbeat_disable(engine);
 		err = __live_idle_pulse(engine, intel_engine_pulse);
-		engine_heartbeat_enable(engine, heartbeat);
+		st_engine_heartbeat_enable(engine);
 		if (err && err != -ENODEV)
 			break;
 
@@ -233,16 +215,17 @@ static int __live_heartbeat_fast(struct intel_engine_cs *engine)
 		goto err_pm;
 
 	for (i = 0; i < ARRAY_SIZE(times); i++) {
-		/* Manufacture a tick */
 		do {
-			while (READ_ONCE(engine->heartbeat.systole))
-				flush_delayed_work(&engine->heartbeat.work);
+			/* Manufacture a tick */
+			intel_engine_park_heartbeat(engine);
+			GEM_BUG_ON(engine->heartbeat.systole);
+			engine->serial++; /*  pretend we are not idle! */
+			intel_engine_unpark_heartbeat(engine);
 
-			engine->serial++; /* quick, pretend we are not idle! */
 			flush_delayed_work(&engine->heartbeat.work);
 			if (!delayed_work_pending(&engine->heartbeat.work)) {
-				pr_err("%s: heartbeat did not start\n",
-				       engine->name);
+				pr_err("%s: heartbeat %d did not start\n",
+				       engine->name, i);
 				err = -EINVAL;
 				goto err_pm;
 			}
@@ -386,11 +369,27 @@ int intel_heartbeat_live_selftests(struct drm_i915_private *i915)
 	if (intel_gt_is_wedged(&i915->gt))
 		return 0;
 
-	saved_hangcheck = i915_modparams.enable_hangcheck;
-	i915_modparams.enable_hangcheck = INT_MAX;
+	saved_hangcheck = i915->params.enable_hangcheck;
+	i915->params.enable_hangcheck = INT_MAX;
 
 	err = intel_gt_live_subtests(tests, &i915->gt);
 
-	i915_modparams.enable_hangcheck = saved_hangcheck;
+	i915->params.enable_hangcheck = saved_hangcheck;
 	return err;
+}
+
+void st_engine_heartbeat_disable(struct intel_engine_cs *engine)
+{
+	engine->props.heartbeat_interval_ms = 0;
+
+	intel_engine_pm_get(engine);
+	intel_engine_park_heartbeat(engine);
+}
+
+void st_engine_heartbeat_enable(struct intel_engine_cs *engine)
+{
+	intel_engine_pm_put(engine);
+
+	engine->props.heartbeat_interval_ms =
+		engine->defaults.heartbeat_interval_ms;
 }

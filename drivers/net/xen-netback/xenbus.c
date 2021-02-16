@@ -393,6 +393,24 @@ static void set_backend_state(struct backend_info *be,
 	}
 }
 
+static void read_xenbus_frontend_xdp(struct backend_info *be,
+				      struct xenbus_device *dev)
+{
+	struct xenvif *vif = be->vif;
+	u16 headroom;
+	int err;
+
+	err = xenbus_scanf(XBT_NIL, dev->otherend,
+			   "xdp-headroom", "%hu", &headroom);
+	if (err != 1) {
+		vif->xdp_headroom = 0;
+		return;
+	}
+	if (headroom > XEN_NETIF_MAX_XDP_HEADROOM)
+		headroom = XEN_NETIF_MAX_XDP_HEADROOM;
+	vif->xdp_headroom = headroom;
+}
+
 /**
  * Callback received when the frontend's state changes.
  */
@@ -417,6 +435,11 @@ static void frontend_changed(struct xenbus_device *dev,
 		set_backend_state(be, XenbusStateConnected);
 		break;
 
+	case XenbusStateReconfiguring:
+		read_xenbus_frontend_xdp(be, dev);
+		xenbus_switch_state(dev, XenbusStateReconfigured);
+		break;
+
 	case XenbusStateClosing:
 		set_backend_state(be, XenbusStateClosing);
 		break;
@@ -425,7 +448,7 @@ static void frontend_changed(struct xenbus_device *dev,
 		set_backend_state(be, XenbusStateClosed);
 		if (xenbus_dev_is_online(dev))
 			break;
-		/* fall through - if not online */
+		fallthrough;	/* if not online */
 	case XenbusStateUnknown:
 		set_backend_state(be, XenbusStateClosed);
 		device_unregister(&dev->dev);
@@ -534,12 +557,14 @@ static int xen_register_credit_watch(struct xenbus_device *dev,
 		return -ENOMEM;
 	snprintf(node, maxlen, "%s/rate", dev->nodename);
 	vif->credit_watch.node = node;
+	vif->credit_watch.will_handle = NULL;
 	vif->credit_watch.callback = xen_net_rate_changed;
 	err = register_xenbus_watch(&vif->credit_watch);
 	if (err) {
 		pr_err("Failed to set watcher %s\n", vif->credit_watch.node);
 		kfree(node);
 		vif->credit_watch.node = NULL;
+		vif->credit_watch.will_handle = NULL;
 		vif->credit_watch.callback = NULL;
 	}
 	return err;
@@ -586,6 +611,7 @@ static int xen_register_mcast_ctrl_watch(struct xenbus_device *dev,
 	snprintf(node, maxlen, "%s/request-multicast-control",
 		 dev->otherend);
 	vif->mcast_ctrl_watch.node = node;
+	vif->mcast_ctrl_watch.will_handle = NULL;
 	vif->mcast_ctrl_watch.callback = xen_mcast_ctrl_changed;
 	err = register_xenbus_watch(&vif->mcast_ctrl_watch);
 	if (err) {
@@ -593,6 +619,7 @@ static int xen_register_mcast_ctrl_watch(struct xenbus_device *dev,
 		       vif->mcast_ctrl_watch.node);
 		kfree(node);
 		vif->mcast_ctrl_watch.node = NULL;
+		vif->mcast_ctrl_watch.will_handle = NULL;
 		vif->mcast_ctrl_watch.callback = NULL;
 	}
 	return err;
@@ -797,7 +824,7 @@ static void connect(struct backend_info *be)
 	xenvif_carrier_on(be->vif);
 
 	unregister_hotplug_status_watch(be);
-	err = xenbus_watch_pathfmt(dev, &be->hotplug_status_watch,
+	err = xenbus_watch_pathfmt(dev, &be->hotplug_status_watch, NULL,
 				   hotplug_status_changed,
 				   "%s/%s", dev->nodename, "hotplug-status");
 	if (!err)
@@ -947,6 +974,8 @@ static int read_xenbus_vif_flags(struct backend_info *be)
 	vif->ipv6_csum = !!xenbus_read_unsigned(dev->otherend,
 						"feature-ipv6-csum-offload", 0);
 
+	read_xenbus_frontend_xdp(be, dev);
+
 	return 0;
 }
 
@@ -1033,6 +1062,15 @@ static int netback_probe(struct xenbus_device *dev,
 				    "feature-rx-copy", "%d", 1);
 		if (err) {
 			message = "writing feature-rx-copy";
+			goto abort_transaction;
+		}
+
+		/* we can adjust a headroom for netfront XDP processing */
+		err = xenbus_printf(xbt, dev->nodename,
+				    "feature-xdp-headroom", "%d",
+				    provides_xdp_headroom);
+		if (err) {
+			message = "writing feature-xdp-headroom";
 			goto abort_transaction;
 		}
 

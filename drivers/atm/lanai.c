@@ -765,8 +765,7 @@ static void lanai_shutdown_tx_vci(struct lanai_dev *lanai,
 	struct sk_buff *skb;
 	unsigned long flags, timeout;
 	int read, write, lastread = -1;
-	APRINTK(!in_interrupt(),
-	    "lanai_shutdown_tx_vci called w/o process context!\n");
+
 	if (lvcc->vbase == NULL)	/* We were never bound to a VCI */
 		return;
 	/* 15.2.1 - wait for queue to drain */
@@ -2019,7 +2018,7 @@ static int lanai_normalize_ci(struct lanai_dev *lanai,
 	switch (*vpip) {
 		case ATM_VPI_ANY:
 			*vpip = 0;
-			/* FALLTHROUGH */
+			fallthrough;
 		case 0:
 			break;
 		default:
@@ -2537,8 +2536,6 @@ static const struct atmdev_ops ops = {
 	.dev_close	= lanai_dev_close,
 	.open		= lanai_open,
 	.close		= lanai_close,
-	.getsockopt	= NULL,
-	.setsockopt	= NULL,
 	.send		= lanai_send,
 	.phy_put	= NULL,
 	.phy_get	= NULL,

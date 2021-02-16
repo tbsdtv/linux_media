@@ -80,7 +80,7 @@ struct a6xx_state_memobj {
 	unsigned long long data[];
 };
 
-void *state_kcalloc(struct a6xx_gpu_state *a6xx_state, int nr, size_t objsize)
+static void *state_kcalloc(struct a6xx_gpu_state *a6xx_state, int nr, size_t objsize)
 {
 	struct a6xx_state_memobj *obj =
 		kzalloc((nr * objsize) + sizeof(*obj), GFP_KERNEL);
@@ -92,7 +92,7 @@ void *state_kcalloc(struct a6xx_gpu_state *a6xx_state, int nr, size_t objsize)
 	return &obj->data;
 }
 
-void *state_kmemdup(struct a6xx_gpu_state *a6xx_state, void *src,
+static void *state_kmemdup(struct a6xx_gpu_state *a6xx_state, void *src,
 		size_t size)
 {
 	void *dst = state_kcalloc(a6xx_state, 1, size);
@@ -736,7 +736,8 @@ static void a6xx_get_ahb_gpu_registers(struct msm_gpu *gpu,
 static void _a6xx_get_gmu_registers(struct msm_gpu *gpu,
 		struct a6xx_gpu_state *a6xx_state,
 		const struct a6xx_registers *regs,
-		struct a6xx_gpu_state_obj *obj)
+		struct a6xx_gpu_state_obj *obj,
+		bool rscc)
 {
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
 	struct a6xx_gpu *a6xx_gpu = to_a6xx_gpu(adreno_gpu);
@@ -755,9 +756,17 @@ static void _a6xx_get_gmu_registers(struct msm_gpu *gpu,
 		u32 count = RANGE(regs->registers, i);
 		int j;
 
-		for (j = 0; j < count; j++)
-			obj->data[index++] = gmu_read(gmu,
-				regs->registers[i] + j);
+		for (j = 0; j < count; j++) {
+			u32 offset = regs->registers[i] + j;
+			u32 val;
+
+			if (rscc)
+				val = gmu_read_rscc(gmu, offset);
+			else
+				val = gmu_read(gmu, offset);
+
+			obj->data[index++] = val;
+		}
 	}
 }
 
@@ -777,7 +786,9 @@ static void a6xx_get_gmu_registers(struct msm_gpu *gpu,
 
 	/* Get the CX GMU registers from AHB */
 	_a6xx_get_gmu_registers(gpu, a6xx_state, &a6xx_gmu_reglist[0],
-		&a6xx_state->gmu_registers[0]);
+		&a6xx_state->gmu_registers[0], false);
+	_a6xx_get_gmu_registers(gpu, a6xx_state, &a6xx_gmu_reglist[1],
+		&a6xx_state->gmu_registers[1], true);
 
 	if (!a6xx_gmu_gx_is_on(&a6xx_gpu->gmu))
 		return;
@@ -785,8 +796,8 @@ static void a6xx_get_gmu_registers(struct msm_gpu *gpu,
 	/* Set the fence to ALLOW mode so we can access the registers */
 	gpu_write(gpu, REG_A6XX_GMU_AO_AHB_FENCE_CTRL, 0);
 
-	_a6xx_get_gmu_registers(gpu, a6xx_state, &a6xx_gmu_reglist[1],
-		&a6xx_state->gmu_registers[1]);
+	_a6xx_get_gmu_registers(gpu, a6xx_state, &a6xx_gmu_reglist[2],
+		&a6xx_state->gmu_registers[2], false);
 }
 
 #define A6XX_GBIF_REGLIST_SIZE   1
@@ -864,7 +875,7 @@ static void a6xx_get_indexed_registers(struct msm_gpu *gpu,
 	int i;
 
 	a6xx_state->indexed_regs = state_kcalloc(a6xx_state, count,
-		sizeof(a6xx_state->indexed_regs));
+		sizeof(*a6xx_state->indexed_regs));
 	if (!a6xx_state->indexed_regs)
 		return;
 
@@ -927,12 +938,13 @@ struct msm_gpu_state *a6xx_gpu_state_get(struct msm_gpu *gpu)
 		msm_gem_kernel_put(dumper.bo, gpu->aspace, true);
 	}
 
-	a6xx_get_debugbus(gpu, a6xx_state);
+	if (snapshot_debugbus)
+		a6xx_get_debugbus(gpu, a6xx_state);
 
 	return  &a6xx_state->base;
 }
 
-void a6xx_gpu_state_destroy(struct kref *kref)
+static void a6xx_gpu_state_destroy(struct kref *kref)
 {
 	struct a6xx_state_memobj *obj, *tmp;
 	struct msm_gpu_state *state = container_of(kref,

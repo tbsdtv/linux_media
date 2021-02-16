@@ -80,8 +80,8 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 	return 0;
 }
 
-int copy_thread_tls(unsigned long clone_flags, unsigned long new_stackp,
-		    unsigned long arg, struct task_struct *p, unsigned long tls)
+int copy_thread(unsigned long clone_flags, unsigned long new_stackp,
+		unsigned long arg, struct task_struct *p, unsigned long tls)
 {
 	struct fake_frame
 	{
@@ -94,7 +94,6 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long new_stackp,
 	/* Save access registers to new thread structure. */
 	save_access_regs(&p->thread.acrs[0]);
 	/* start new process with ar4 pointing to the correct address space */
-	p->thread.mm_segment = get_fs();
 	/* Don't copy debug registers */
 	memset(&p->thread.per_user, 0, sizeof(p->thread.per_user));
 	memset(&p->thread.per_event, 0, sizeof(p->thread.per_event));
@@ -160,24 +159,6 @@ asmlinkage void execve_tail(void)
 	asm volatile("sfpc %0" : : "d" (0));
 }
 
-/*
- * fill in the FPU structure for a core dump.
- */
-int dump_fpu (struct pt_regs * regs, s390_fp_regs *fpregs)
-{
-	save_fpu_regs();
-	fpregs->fpc = current->thread.fpu.fpc;
-	fpregs->pad = 0;
-	if (MACHINE_HAS_VX)
-		convert_vx_to_fp((freg_t *)&fpregs->fprs,
-				 current->thread.fpu.vxrs);
-	else
-		memcpy(&fpregs->fprs, current->thread.fpu.fprs,
-		       sizeof(fpregs->fprs));
-	return 1;
-}
-EXPORT_SYMBOL(dump_fpu);
-
 unsigned long get_wchan(struct task_struct *p)
 {
 	struct unwind_state state;
@@ -225,17 +206,4 @@ unsigned long arch_randomize_brk(struct mm_struct *mm)
 
 	ret = PAGE_ALIGN(mm->brk + brk_rnd());
 	return (ret > mm->brk) ? ret : mm->brk;
-}
-
-void set_fs_fixup(void)
-{
-	struct pt_regs *regs = current_pt_regs();
-	static bool warned;
-
-	set_fs(USER_DS);
-	if (warned)
-		return;
-	WARN(1, "Unbalanced set_fs - int code: 0x%x\n", regs->int_code);
-	show_registers(regs);
-	warned = true;
 }

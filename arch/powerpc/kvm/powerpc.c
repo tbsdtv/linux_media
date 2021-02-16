@@ -403,7 +403,10 @@ int kvmppc_ld(struct kvm_vcpu *vcpu, ulong *eaddr, int size, void *ptr,
 		return EMULATE_DONE;
 	}
 
-	if (kvm_read_guest(vcpu->kvm, pte.raddr, ptr, size))
+	vcpu->srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
+	rc = kvm_read_guest(vcpu->kvm, pte.raddr, ptr, size);
+	srcu_read_unlock(&vcpu->kvm->srcu, vcpu->srcu_idx);
+	if (rc)
 		return EMULATE_DO_MMIO;
 
 	return EMULATE_DONE;
@@ -1084,7 +1087,7 @@ static inline u64 sp_to_dp(u32 fprs)
 
 	preempt_disable();
 	enable_kernel_fp();
-	asm ("lfs%U1%X1 0,%1; stfd%U0%X0 0,%0" : "=m" (fprd) : "m" (fprs)
+	asm ("lfs%U1%X1 0,%1; stfd%U0%X0 0,%0" : "=m"UPD_CONSTR (fprd) : "m"UPD_CONSTR (fprs)
 	     : "fr0");
 	preempt_enable();
 	return fprd;
@@ -1096,7 +1099,7 @@ static inline u32 dp_to_sp(u64 fprd)
 
 	preempt_disable();
 	enable_kernel_fp();
-	asm ("lfd%U1%X1 0,%1; stfs%U0%X0 0,%0" : "=m" (fprs) : "m" (fprd)
+	asm ("lfd%U1%X1 0,%1; stfs%U0%X0 0,%0" : "=m"UPD_CONSTR (fprs) : "m"UPD_CONSTR (fprd)
 	     : "fr0");
 	preempt_enable();
 	return fprs;
@@ -1110,7 +1113,7 @@ static inline u32 dp_to_sp(u64 fprd)
 static void kvmppc_complete_mmio_load(struct kvm_vcpu *vcpu)
 {
 	struct kvm_run *run = vcpu->run;
-	u64 uninitialized_var(gpr);
+	u64 gpr;
 
 	if (run->mmio.len > sizeof(gpr)) {
 		printk(KERN_ERR "bad MMIO length: %d\n", run->mmio.len);

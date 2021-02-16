@@ -46,9 +46,11 @@ struct sec_req {
 
 	struct sec_cipher_req c_req;
 	struct sec_aead_req aead_req;
+	struct list_head backlog_head;
 
 	int err_type;
 	int req_id;
+	int flag;
 
 	/* Status of the SEC request */
 	bool fake_busy;
@@ -104,9 +106,9 @@ struct sec_qp_ctx {
 	struct sec_alg_res res[QM_Q_DEPTH];
 	struct sec_ctx *ctx;
 	struct mutex req_lock;
+	struct list_head backlog;
 	struct hisi_acc_sgl_pool *c_in_pool;
 	struct hisi_acc_sgl_pool *c_out_pool;
-	atomic_t pending_reqs;
 };
 
 enum sec_alg_type {
@@ -161,6 +163,7 @@ struct sec_dfx {
 	atomic64_t send_cnt;
 	atomic64_t recv_cnt;
 	atomic64_t send_busy_cnt;
+	atomic64_t recv_busy_cnt;
 	atomic64_t err_bd_cnt;
 	atomic64_t invalid_req_cnt;
 	atomic64_t done_flag_cnt;
@@ -176,7 +179,6 @@ struct sec_dev {
 	struct sec_debug debug;
 	u32 ctx_q_num;
 	bool iommu_used;
-	unsigned long status;
 };
 
 void sec_destroy_qps(struct hisi_qp **qps, int qp_num);

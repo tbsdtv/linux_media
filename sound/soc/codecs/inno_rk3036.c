@@ -48,11 +48,9 @@ static int rk3036_codec_antipop_get(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
-	int val, ret, regval;
+	int val, regval;
 
-	ret = snd_soc_component_read(component, INNO_R09, &regval);
-	if (ret)
-		return ret;
+	regval = snd_soc_component_read(component, INNO_R09);
 	val = ((regval >> INNO_R09_HPL_ANITPOP_SHIFT) &
 	       INNO_R09_HP_ANTIPOP_MSK) == INNO_R09_HP_ANTIPOP_ON;
 	ucontrol->value.integer.value[0] = val;
@@ -469,7 +467,7 @@ static int rk3036_codec_platform_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id rk3036_codec_of_match[] = {
+static const struct of_device_id rk3036_codec_of_match[] __maybe_unused = {
 	{ .compatible = "rockchip,rk3036-codec", },
 	{}
 };

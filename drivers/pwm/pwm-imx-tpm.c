@@ -124,7 +124,7 @@ static int pwm_imx_tpm_round_state(struct pwm_chip *chip,
 		real_state->duty_cycle = state->duty_cycle;
 
 	tmp = (u64)p->mod * real_state->duty_cycle;
-	p->val = DIV_ROUND_CLOSEST_ULL(tmp, real_state->period);
+	p->val = DIV64_U64_ROUND_CLOSEST(tmp, real_state->period);
 
 	real_state->polarity = state->polarity;
 	real_state->enabled = state->enabled;
@@ -350,13 +350,9 @@ static int pwm_imx_tpm_probe(struct platform_device *pdev)
 		return PTR_ERR(tpm->base);
 
 	tpm->clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(tpm->clk)) {
-		ret = PTR_ERR(tpm->clk);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&pdev->dev,
-				"failed to get PWM clock: %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(tpm->clk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(tpm->clk),
+				     "failed to get PWM clock\n");
 
 	ret = clk_prepare_enable(tpm->clk);
 	if (ret) {

@@ -758,6 +758,9 @@ static void create_le_conn_complete(struct hci_dev *hdev, u8 status, u16 opcode)
 
 	conn = hci_lookup_le_connect(hdev);
 
+	if (hdev->adv_instance_cnt)
+		hci_req_resume_adv_instances(hdev);
+
 	if (!status) {
 		hci_connect_le_scan_cleanup(conn);
 		goto done;
@@ -789,11 +792,8 @@ static void set_ext_conn_params(struct hci_conn *conn,
 
 	memset(p, 0, sizeof(*p));
 
-	/* Set window to be the same value as the interval to
-	 * enable continuous scanning.
-	 */
-	p->scan_interval = cpu_to_le16(hdev->le_scan_interval);
-	p->scan_window = p->scan_interval;
+	p->scan_interval = cpu_to_le16(hdev->le_scan_int_connect);
+	p->scan_window = cpu_to_le16(hdev->le_scan_window_connect);
 	p->conn_interval_min = cpu_to_le16(conn->le_conn_min_interval);
 	p->conn_interval_max = cpu_to_le16(conn->le_conn_max_interval);
 	p->conn_latency = cpu_to_le16(conn->le_conn_latency);
@@ -875,11 +875,8 @@ static void hci_req_add_le_create_conn(struct hci_request *req,
 
 		memset(&cp, 0, sizeof(cp));
 
-		/* Set window to be the same value as the interval to enable
-		 * continuous scanning.
-		 */
-		cp.scan_interval = cpu_to_le16(hdev->le_scan_interval);
-		cp.scan_window = cp.scan_interval;
+		cp.scan_interval = cpu_to_le16(hdev->le_scan_int_connect);
+		cp.scan_window = cpu_to_le16(hdev->le_scan_window_connect);
 
 		bacpy(&cp.peer_addr, &conn->dst);
 		cp.peer_addr_type = conn->dst_type;
@@ -937,7 +934,7 @@ static void hci_req_directed_advertising(struct hci_request *req,
 		 * So it is required to remove adv set for handle 0x00. since we use
 		 * instance 0 for directed adv.
 		 */
-		hci_req_add(req, HCI_OP_LE_REMOVE_ADV_SET, sizeof(cp.handle), &cp.handle);
+		__hci_req_remove_ext_adv_instance(req, cp.handle);
 
 		hci_req_add(req, HCI_OP_LE_SET_EXT_ADV_PARAMS, sizeof(cp), &cp);
 
@@ -1009,6 +1006,11 @@ struct hci_conn *hci_connect_le(struct hci_dev *hdev, bdaddr_t *dst,
 	struct hci_request req;
 	int err;
 
+	/* This ensures that during disable le_scan address resolution
+	 * will not be disabled if it is followed by le_create_conn
+	 */
+	bool rpa_le_conn = true;
+
 	/* Let's make sure that le is enabled.*/
 	if (!hci_dev_test_flag(hdev, HCI_LE_ENABLED)) {
 		if (lmp_le_capable(hdev))
@@ -1068,10 +1070,11 @@ struct hci_conn *hci_connect_le(struct hci_dev *hdev, bdaddr_t *dst,
 	 * connections most controllers will refuse to connect if
 	 * advertising is enabled, and for slave role connections we
 	 * anyway have to disable it in order to start directed
-	 * advertising.
+	 * advertising. Any registered advertisements will be
+	 * re-enabled after the connection attempt is finished.
 	 */
 	if (hci_dev_test_flag(hdev, HCI_LE_ADV))
-		 __hci_req_disable_advertising(&req);
+		__hci_req_pause_adv_instances(&req);
 
 	/* If requested to connect as slave use directed advertising */
 	if (conn->role == HCI_ROLE_SLAVE) {
@@ -1109,7 +1112,7 @@ struct hci_conn *hci_connect_le(struct hci_dev *hdev, bdaddr_t *dst,
 	 * state.
 	 */
 	if (hci_dev_test_flag(hdev, HCI_LE_SCAN)) {
-		hci_req_add_le_scan_disable(&req);
+		hci_req_add_le_scan_disable(&req, rpa_le_conn);
 		hci_dev_set_flag(hdev, HCI_LE_SCAN_INTERRUPTED);
 	}
 
@@ -1119,6 +1122,10 @@ create_conn:
 	err = hci_req_run(&req, create_le_conn_complete);
 	if (err) {
 		hci_conn_del(conn);
+
+		if (hdev->adv_instance_cnt)
+			hci_req_resume_adv_instances(hdev);
+
 		return ERR_PTR(err);
 	}
 
@@ -1180,7 +1187,8 @@ static int hci_explicit_conn_params_set(struct hci_dev *hdev,
 /* This function requires the caller holds hdev->lock */
 struct hci_conn *hci_connect_le_scan(struct hci_dev *hdev, bdaddr_t *dst,
 				     u8 dst_type, u8 sec_level,
-				     u16 conn_timeout)
+				     u16 conn_timeout,
+				     enum conn_reasons conn_reason)
 {
 	struct hci_conn *conn;
 
@@ -1225,6 +1233,7 @@ struct hci_conn *hci_connect_le_scan(struct hci_dev *hdev, bdaddr_t *dst,
 	conn->sec_level = BT_SECURITY_LOW;
 	conn->pending_sec_level = sec_level;
 	conn->conn_timeout = conn_timeout;
+	conn->conn_reason = conn_reason;
 
 	hci_update_background_scan(hdev);
 
@@ -1234,7 +1243,8 @@ done:
 }
 
 struct hci_conn *hci_connect_acl(struct hci_dev *hdev, bdaddr_t *dst,
-				 u8 sec_level, u8 auth_type)
+				 u8 sec_level, u8 auth_type,
+				 enum conn_reasons conn_reason)
 {
 	struct hci_conn *acl;
 
@@ -1254,6 +1264,7 @@ struct hci_conn *hci_connect_acl(struct hci_dev *hdev, bdaddr_t *dst,
 
 	hci_conn_hold(acl);
 
+	acl->conn_reason = conn_reason;
 	if (acl->state == BT_OPEN || acl->state == BT_CLOSED) {
 		acl->sec_level = BT_SECURITY_LOW;
 		acl->pending_sec_level = sec_level;
@@ -1270,7 +1281,8 @@ struct hci_conn *hci_connect_sco(struct hci_dev *hdev, int type, bdaddr_t *dst,
 	struct hci_conn *acl;
 	struct hci_conn *sco;
 
-	acl = hci_connect_acl(hdev, dst, BT_SECURITY_LOW, HCI_AT_NO_BONDING);
+	acl = hci_connect_acl(hdev, dst, BT_SECURITY_LOW, HCI_AT_NO_BONDING,
+			      CONN_REASON_SCO_CONNECT);
 	if (IS_ERR(acl))
 		return acl;
 
@@ -1323,6 +1335,23 @@ int hci_conn_check_link_mode(struct hci_conn *conn)
 			return 0;
 	}
 
+	 /* AES encryption is required for Level 4:
+	  *
+	  * BLUETOOTH CORE SPECIFICATION Version 5.2 | Vol 3, Part C
+	  * page 1319:
+	  *
+	  * 128-bit equivalent strength for link and encryption keys
+	  * required using FIPS approved algorithms (E0 not allowed,
+	  * SAFER+ not allowed, and P-192 not allowed; encryption key
+	  * not shortened)
+	  */
+	if (conn->sec_level == BT_SECURITY_FIPS &&
+	    !test_bit(HCI_CONN_AES_CCM, &conn->flags)) {
+		bt_dev_err(conn->hdev,
+			   "Invalid security: Missing AES-CCM usage");
+		return 0;
+	}
+
 	if (hci_conn_ssp_enabled(conn) &&
 	    !test_bit(HCI_CONN_ENCRYPT, &conn->flags))
 		return 0;
@@ -1367,7 +1396,7 @@ static int hci_conn_auth(struct hci_conn *conn, __u8 sec_level, __u8 auth_type)
 	return 0;
 }
 
-/* Encrypt the the link */
+/* Encrypt the link */
 static void hci_conn_encrypt(struct hci_conn *conn)
 {
 	BT_DBG("hcon %p", conn);

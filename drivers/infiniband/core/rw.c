@@ -285,8 +285,11 @@ static void rdma_rw_unmap_sg(struct ib_device *dev, struct scatterlist *sg,
 static int rdma_rw_map_sg(struct ib_device *dev, struct scatterlist *sg,
 			  u32 sg_cnt, enum dma_data_direction dir)
 {
-	if (is_pci_p2pdma_page(sg_page(sg)))
+	if (is_pci_p2pdma_page(sg_page(sg))) {
+		if (WARN_ON_ONCE(ib_uses_virt_dma(dev)))
+			return 0;
 		return pci_p2pdma_map_sg(dev->dma_device, sg, sg_cnt, dir);
+	}
 	return ib_dma_map_sg(dev, sg, sg_cnt, dir);
 }
 
@@ -510,7 +513,6 @@ struct ib_send_wr *rdma_rw_ctx_wrs(struct rdma_rw_ctx *ctx, struct ib_qp *qp,
 	switch (ctx->type) {
 	case RDMA_RW_SIG_MR:
 	case RDMA_RW_MR:
-		/* fallthrough */
 		for (i = 0; i < ctx->nr_ops; i++) {
 			rdma_rw_update_lkey(&ctx->reg[i],
 				ctx->reg[i].wr.wr.opcode !=

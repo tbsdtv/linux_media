@@ -847,6 +847,23 @@ struct nvsp_message {
 
 #define NETVSC_XDP_HDRM 256
 
+#define NETVSC_MIN_OUT_MSG_SIZE (sizeof(struct vmpacket_descriptor) + \
+				 sizeof(struct nvsp_message))
+#define NETVSC_MIN_IN_MSG_SIZE sizeof(struct vmpacket_descriptor)
+
+/* Estimated requestor size:
+ * out_ring_size/min_out_msg_size + in_ring_size/min_in_msg_size
+ */
+static inline u32 netvsc_rqstor_size(unsigned long ringbytes)
+{
+	return ringbytes / NETVSC_MIN_OUT_MSG_SIZE +
+		ringbytes / NETVSC_MIN_IN_MSG_SIZE;
+}
+
+#define NETVSC_XFER_HEADER_SIZE(rng_cnt) \
+		(offsetof(struct vmtransfer_page_packet_header, ranges) + \
+		(rng_cnt) * sizeof(struct vmtransfer_page_range))
+
 struct multi_send_data {
 	struct sk_buff *skb; /* skb containing the pkt */
 	struct hv_netvsc_packet *pkt; /* netvsc pkt pending */
@@ -897,6 +914,7 @@ struct netvsc_ethtool_stats {
 	unsigned long rx_no_memory;
 	unsigned long stop_queue;
 	unsigned long wake_queue;
+	unsigned long vlan_error;
 };
 
 struct netvsc_ethtool_pcpu_stats {
@@ -972,6 +990,9 @@ struct net_device_context {
 	u32 vf_alloc;
 	/* Serial number of the VF to team with */
 	u32 vf_serial;
+
+	/* Is the current data path through the VF NIC? */
+	bool  data_path_is_vf;
 
 	/* Used to temporarily save the config info across hibernation */
 	struct netvsc_device_info *saved_netvsc_dev_info;

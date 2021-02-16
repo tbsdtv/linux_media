@@ -25,7 +25,7 @@ properties:
   compatible:
     items:
       - enum:
-        - xlnx,mipi-csi2-rx-subsystem-5.0
+          - xlnx,mipi-csi2-rx-subsystem-5.0
 
   reg:
     maxItems: 1
@@ -65,13 +65,12 @@ properties:
       0x2d - RAW14
       0x2e - RAW16
       0x2f - RAW20
-    allOf:
-      - $ref: /schemas/types.yaml#/definitions/uint32
-      - anyOf:
-        - minimum: 0x1e
-        - maximum: 0x24
-        - minimum: 0x28
-        - maximum: 0x2f
+    $ref: /schemas/types.yaml#/definitions/uint32
+    oneOf:
+      - minimum: 0x1e
+        maximum: 0x24
+      - minimum: 0x28
+        maximum: 0x2f
 
   xlnx,vfb:
     type: boolean
@@ -98,24 +97,21 @@ properties:
     maxItems: 1
 
   ports:
-    type: object
+    $ref: /schemas/graph.yaml#/properties/ports
 
     properties:
       port@0:
-        type: object
+        $ref: /schemas/graph.yaml#/$defs/port-base
         description: |
           Input / sink port node, single endpoint describing the
           CSI-2 transmitter.
 
         properties:
-          reg:
-            const: 0
-
           endpoint:
-            type: object
+            $ref: /schemas/media/video-interfaces.yaml#
+            unevaluatedProperties: false
 
             properties:
-
               data-lanes:
                 description: |
                   This is required only in the sink port 0 endpoint which
@@ -131,40 +127,16 @@ properties:
                   - const: 3
                   - const: 4
 
-              remote-endpoint: true
-
             required:
               - data-lanes
-              - remote-endpoint
 
-            additionalProperties: false
-
-        additionalProperties: false
+        unevaluatedProperties: false
 
       port@1:
-        type: object
+        $ref: /schemas/graph.yaml#/properties/port
         description: |
           Output / source port node, endpoint describing modules
           connected the CSI-2 receiver.
-
-        properties:
-
-          reg:
-            const: 1
-
-          endpoint:
-            type: object
-
-            properties:
-
-              remote-endpoint: true
-
-            required:
-              - remote-endpoint
-
-            additionalProperties: false
-
-        additionalProperties: false
 
 required:
   - compatible

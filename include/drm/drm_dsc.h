@@ -273,7 +273,8 @@ struct drm_dsc_config {
 };
 
 /**
- * struct picture_parameter_set - Represents 128 bytes of Picture Parameter Set
+ * struct drm_dsc_picture_parameter_set - Represents 128 bytes of
+ * 	Picture Parameter Set
  *
  * The VESA DSC standard defines picture parameter set (PPS) which display
  * stream compression encoders must communicate to decoders.
@@ -588,7 +589,7 @@ struct drm_dsc_picture_parameter_set {
  * This structure represents the DSC PPS infoframe required to send the Picture
  * Parameter Set metadata required before enabling VESA Display Stream
  * Compression. This is based on the DP Secondary Data Packet structure and
- * comprises of SDP Header as defined &struct struct dp_sdp_header in drm_dp_helper.h
+ * comprises of SDP Header as defined &struct dp_sdp_header in drm_dp_helper.h
  * and PPS payload defined in &struct drm_dsc_picture_parameter_set.
  *
  * @pps_header: Header for PPS as per DP SDP header format of type

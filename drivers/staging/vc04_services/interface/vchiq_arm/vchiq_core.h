@@ -10,10 +10,26 @@
 #include <linux/kref.h>
 #include <linux/rcupdate.h>
 #include <linux/wait.h>
+#include <linux/raspberrypi/vchiq.h>
 
 #include "vchiq_cfg.h"
 
-#include "vchiq.h"
+
+/* Do this so that we can test-build the code on non-rpi systems */
+#if IS_ENABLED(CONFIG_RASPBERRYPI_FIRMWARE)
+
+#else
+
+#ifndef dsb
+#define dsb(a)
+#endif
+
+#endif	/* IS_ENABLED(CONFIG_RASPBERRYPI_FIRMWARE) */
+
+#define VCHIQ_SERVICE_HANDLE_INVALID 0
+
+#define VCHIQ_SLOT_SIZE     4096
+#define VCHIQ_MAX_MSG_SIZE  (VCHIQ_SLOT_SIZE - sizeof(struct vchiq_header))
 
 /* Run time control of log level, based on KERN_XXX level. */
 #define VCHIQ_LOG_DEFAULT  4
@@ -215,7 +231,7 @@ struct vchiq_bulk {
 	short mode;
 	short dir;
 	void *userdata;
-	void *data;
+	dma_addr_t data;
 	int size;
 	void *remote_data;
 	int remote_size;
@@ -227,8 +243,7 @@ struct vchiq_bulk_queue {
 	int remote_insert; /* Where to insert the next remote bulk (master) */
 	int process;       /* Bulk to transfer next */
 	int remote_notify; /* Bulk to notify the remote client of next (mstr) */
-	int remove;        /* Bulk to notify the local client of, and remove,
-			   ** next */
+	int remove;        /* Bulk to notify the local client of, and remove, next */
 	struct vchiq_bulk bulks[VCHIQ_NUM_SERVICE_BULKS];
 };
 
@@ -297,9 +312,16 @@ struct vchiq_service {
 		uint64_t bulk_tx_bytes;
 		uint64_t bulk_rx_bytes;
 	} stats;
+
+	int msg_queue_read;
+	int msg_queue_write;
+	struct completion msg_queue_pop;
+	struct completion msg_queue_push;
+	struct vchiq_header *msg_queue[VCHIQ_MAX_SLOTS];
 };
 
-/* The quota information is outside struct vchiq_service so that it can
+/*
+ * The quota information is outside struct vchiq_service so that it can
  * be statically allocated, since for accounting reasons a service's slot
  * usage is carried over between users of the same port number.
  */
@@ -324,13 +346,17 @@ struct vchiq_shared_state {
 	/* The slot allocated to synchronous messages from the owner. */
 	int slot_sync;
 
-	/* Signalling this event indicates that owner's slot handler thread
-	** should run. */
+	/*
+	 * Signalling this event indicates that owner's slot handler thread
+	 * should run.
+	 */
 	struct remote_event trigger;
 
-	/* Indicates the byte position within the stream where the next message
-	** will be written. The least significant bits are an index into the
-	** slot. The next bits are the index of the slot in slot_queue. */
+	/*
+	 * Indicates the byte position within the stream where the next message
+	 * will be written. The least significant bits are an index into the
+	 * slot. The next bits are the index of the slot in slot_queue.
+	 */
 	int tx_pos;
 
 	/* This event should be signalled when a slot is recycled. */
@@ -342,8 +368,10 @@ struct vchiq_shared_state {
 	/* This event should be signalled when a synchronous message is sent. */
 	struct remote_event sync_trigger;
 
-	/* This event should be signalled when a synchronous message has been
-	** released. */
+	/*
+	 * This event should be signalled when a synchronous message has been
+	 * released.
+	 */
 	struct remote_event sync_release;
 
 	/* A circular buffer of slot indexes. */
@@ -420,14 +448,18 @@ struct vchiq_state {
 
 	struct mutex bulk_transfer_mutex;
 
-	/* Indicates the byte position within the stream from where the next
-	** message will be read. The least significant bits are an index into
-	** the slot.The next bits are the index of the slot in
-	** remote->slot_queue. */
+	/*
+	 * Indicates the byte position within the stream from where the next
+	 * message will be read. The least significant bits are an index into
+	 * the slot.The next bits are the index of the slot in
+	 * remote->slot_queue.
+	 */
 	int rx_pos;
 
-	/* A cached copy of local->tx_pos. Only write to local->tx_pos, and read
-		from remote->tx_pos. */
+	/*
+	 * A cached copy of local->tx_pos. Only write to local->tx_pos, and read
+	 * from remote->tx_pos.
+	 */
 	int local_tx_pos;
 
 	/* The slot_queue index of the slot to become available next. */
@@ -480,6 +512,19 @@ struct bulk_waiter {
 	int actual;
 };
 
+struct vchiq_config {
+	unsigned int max_msg_size;
+	unsigned int bulk_threshold;	/* The message size above which it
+					 * is better to use a bulk transfer
+					 * (<= max_msg_size)
+					 */
+	unsigned int max_outstanding_bulks;
+	unsigned int max_services;
+	short version;      /* The version of VCHIQ */
+	short version_min;  /* The minimum compatible version of VCHIQ */
+};
+
+
 extern spinlock_t bulk_waiter_spinlock;
 
 extern int vchiq_core_log_level;
@@ -500,9 +545,9 @@ vchiq_init_state(struct vchiq_state *state, struct vchiq_slot_zero *slot_zero);
 extern enum vchiq_status
 vchiq_connect_internal(struct vchiq_state *state, struct vchiq_instance *instance);
 
-extern struct vchiq_service *
+struct vchiq_service *
 vchiq_add_service_internal(struct vchiq_state *state,
-			   const struct vchiq_service_params *params,
+			   const struct vchiq_service_params_kernel *params,
 			   int srvstate, struct vchiq_instance *instance,
 			   vchiq_userdata_term userdata_term);
 
@@ -525,8 +570,8 @@ extern void
 remote_event_pollall(struct vchiq_state *state);
 
 extern enum vchiq_status
-vchiq_bulk_transfer(unsigned int handle, void *offset, int size,
-		    void *userdata, enum vchiq_bulk_mode mode,
+vchiq_bulk_transfer(unsigned int handle, void *offset, void __user *uoffset,
+		    int size, void *userdata, enum vchiq_bulk_mode mode,
 		    enum vchiq_bulk_dir dir);
 
 extern int
@@ -594,12 +639,14 @@ vchiq_queue_message(unsigned int handle,
 		    void *context,
 		    size_t size);
 
-/* The following functions are called from vchiq_core, and external
-** implementations must be provided. */
+/*
+ * The following functions are called from vchiq_core, and external
+ * implementations must be provided.
+ */
 
 extern enum vchiq_status
-vchiq_prepare_bulk_data(struct vchiq_bulk *bulk, void *offset, int size,
-			int dir);
+vchiq_prepare_bulk_data(struct vchiq_bulk *bulk, void *offset,
+			void __user *uoffset, int size, int dir);
 
 extern void
 vchiq_complete_bulk(struct vchiq_bulk *bulk);
@@ -658,5 +705,15 @@ vchiq_set_conn_state(struct vchiq_state *state, enum vchiq_connstate newstate);
 extern void
 vchiq_log_dump_mem(const char *label, uint32_t addr, const void *voidMem,
 	size_t numBytes);
+
+extern enum vchiq_status vchiq_remove_service(unsigned int service);
+
+extern int vchiq_get_client_id(unsigned int service);
+
+extern void vchiq_get_config(struct vchiq_config *config);
+
+extern enum vchiq_status
+vchiq_set_service_option(unsigned int service, enum vchiq_service_option option,
+			 int value);
 
 #endif

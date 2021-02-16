@@ -35,6 +35,7 @@
 struct drm_i915_private;
 struct intel_runtime_pm;
 struct intel_uncore;
+struct intel_gt;
 
 struct intel_uncore_mmio_debug {
 	spinlock_t lock; /** lock is also taken in irq contexts. */
@@ -45,7 +46,7 @@ struct intel_uncore_mmio_debug {
 
 enum forcewake_domain_id {
 	FW_DOMAIN_ID_RENDER = 0,
-	FW_DOMAIN_ID_BLITTER,
+	FW_DOMAIN_ID_GT,        /* also includes blitter engine */
 	FW_DOMAIN_ID_MEDIA,
 	FW_DOMAIN_ID_MEDIA_VDBOX0,
 	FW_DOMAIN_ID_MEDIA_VDBOX1,
@@ -59,7 +60,7 @@ enum forcewake_domain_id {
 
 enum forcewake_domains {
 	FORCEWAKE_RENDER	= BIT(FW_DOMAIN_ID_RENDER),
-	FORCEWAKE_BLITTER	= BIT(FW_DOMAIN_ID_BLITTER),
+	FORCEWAKE_GT		= BIT(FW_DOMAIN_ID_GT),
 	FORCEWAKE_MEDIA		= BIT(FW_DOMAIN_ID_MEDIA),
 	FORCEWAKE_MEDIA_VDBOX0	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX0),
 	FORCEWAKE_MEDIA_VDBOX1	= BIT(FW_DOMAIN_ID_MEDIA_VDBOX1),
@@ -186,7 +187,8 @@ intel_uncore_mmio_debug_init_early(struct intel_uncore_mmio_debug *mmio_debug);
 void intel_uncore_init_early(struct intel_uncore *uncore,
 			     struct drm_i915_private *i915);
 int intel_uncore_init_mmio(struct intel_uncore *uncore);
-void intel_uncore_prune_mmio_domains(struct intel_uncore *uncore);
+void intel_uncore_prune_engine_fw_domains(struct intel_uncore *uncore,
+					  struct intel_gt *gt);
 bool intel_uncore_unclaimed_mmio(struct intel_uncore *uncore);
 bool intel_uncore_arm_unclaimed_mmio_detection(struct intel_uncore *uncore);
 void intel_uncore_fini_mmio(struct intel_uncore *uncore);

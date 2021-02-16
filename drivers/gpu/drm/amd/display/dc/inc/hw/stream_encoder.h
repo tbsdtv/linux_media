@@ -104,6 +104,8 @@ struct stream_encoder {
 	struct dc_bios *bp;
 	enum engine_id id;
 	uint32_t stream_enc_inst;
+	struct vpg *vpg;
+	struct afmt *afmt;
 };
 
 struct enc_state {
@@ -139,7 +141,7 @@ struct stream_encoder_funcs {
 		struct stream_encoder *enc,
 		struct dc_crtc_timing *crtc_timing);
 
-	void (*set_mst_bandwidth)(
+	void (*set_throttled_vcp_size)(
 		struct stream_encoder *enc,
 		struct fixed31_32 avg_time_slots_per_mtp);
 

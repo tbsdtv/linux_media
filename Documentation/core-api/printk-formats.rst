@@ -317,7 +317,7 @@ colon-separators. Leading zeros are always used.
 
 The additional ``c`` specifier can be used with the ``I`` specifier to
 print a compressed IPv6 address as described by
-http://tools.ietf.org/html/rfc5952
+https://tools.ietf.org/html/rfc5952
 
 Passed by reference.
 
@@ -341,7 +341,7 @@ The additional ``p``, ``f``, and ``s`` specifiers are used to specify port
 flowinfo a ``/`` and scope a ``%``, each followed by the actual value.
 
 In case of an IPv6 address the compressed IPv6 address as described by
-http://tools.ietf.org/html/rfc5952 is being used if the additional
+https://tools.ietf.org/html/rfc5952 is being used if the additional
 specifier ``c`` is given. The IPv6 address is surrounded by ``[``, ``]`` in
 case of additional specifiers ``p``, ``f`` or ``s`` as suggested by
 https://tools.ietf.org/html/draft-ietf-6man-text-addr-representation-07
@@ -494,9 +494,11 @@ Time and date
 	%pt[RT]t		HH:MM:SS
 	%pt[RT][dt][r]
 
-For printing date and time as represented by
+For printing date and time as represented by::
+
 	R  struct rtc_time structure
 	T  time64_t type
+
 in human readable format.
 
 By default year will be incremented by 1900 and month by 1.
@@ -529,7 +531,9 @@ For printing bitmap and its derivatives such as cpumask and nodemask,
 %*pb outputs the bitmap with field width as the number of bits and %*pbl
 output the bitmap as range list with field width as the number of bits.
 
-Passed by reference.
+The field width is passed by value, the bitmap is passed by reference.
+Helper macros cpumask_pr_args() and nodemask_pr_args() are available to ease
+printing cpumask and nodemask.
 
 Flags bitfields such as page flags, gfp_flags
 ---------------------------------------------

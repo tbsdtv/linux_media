@@ -838,6 +838,19 @@ static void eeprom_write(struct dvb_frontend *fe,struct eeprom_info *eepinf)
 	return ;
 }
 
+static int read_temp(struct dvb_frontend *fe, s16 *temp)
+{
+	struct mxl *state = fe->demodulator_priv;
+	int status;
+	u32 regData = 0;
+
+	mutex_lock(&state->base->status_lock);
+	status = read_register(state, HYDRA_TEMPARATURE, &regData);
+	mutex_unlock(&state->base->status_lock);
+	*temp=status ? 0: regData;
+	return 0;
+}
+
 static struct dvb_frontend_ops mxl_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2, SYS_DSS },
 	.info = {
@@ -870,8 +883,9 @@ static struct dvb_frontend_ops mxl_ops = {
 
 	.spi_read			= spi_read,
 	.spi_write			= spi_write,
-	.eeprom_read			= eeprom_read,
-	.eeprom_write			= eeprom_write,
+	.eeprom_read		= eeprom_read,
+	.eeprom_write		= eeprom_write,
+	.read_temp			= read_temp,
 };
 
 static struct mxl_base *match_base(struct i2c_adapter *i2c, u8 adr)

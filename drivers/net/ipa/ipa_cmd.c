@@ -38,9 +38,9 @@
 
 /* Some commands can wait until indicated pipeline stages are clear */
 enum pipeline_clear_options {
-	pipeline_clear_hps	= 0,
-	pipeline_clear_src_grp	= 1,
-	pipeline_clear_full	= 2,
+	pipeline_clear_hps		= 0x0,
+	pipeline_clear_src_grp		= 0x1,
+	pipeline_clear_full		= 0x2,
 };
 
 /* IPA_CMD_IP_V{4,6}_{FILTER,ROUTING}_INIT */
@@ -584,6 +584,21 @@ void ipa_cmd_tag_process_add(struct gsi_trans *trans)
 u32 ipa_cmd_tag_process_count(void)
 {
 	return 4;
+}
+
+void ipa_cmd_tag_process(struct ipa *ipa)
+{
+	u32 count = ipa_cmd_tag_process_count();
+	struct gsi_trans *trans;
+
+	trans = ipa_cmd_trans_alloc(ipa, count);
+	if (trans) {
+		ipa_cmd_tag_process_add(trans);
+		gsi_trans_commit_wait(trans);
+	} else {
+		dev_err(&ipa->pdev->dev,
+			"error allocating %u entry tag transaction\n", count);
+	}
 }
 
 static struct ipa_cmd_info *

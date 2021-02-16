@@ -336,6 +336,8 @@ void hubp2_program_size(
 	 */
 	use_pitch_c = format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN
 		&& format < SURFACE_PIXEL_FORMAT_SUBSAMPLE_END;
+	use_pitch_c = use_pitch_c
+		|| (format == SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA);
 	if (use_pitch_c) {
 		ASSERT(plane_size->chroma_pitch != 0);
 		/* Chroma pitch zero can cause system hang! */
@@ -360,6 +362,8 @@ void hubp2_program_size(
 			PITCH, pitch, META_PITCH, meta_pitch);
 
 	use_pitch_c = format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN;
+	use_pitch_c = use_pitch_c
+		|| (format == SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA);
 	if (use_pitch_c)
 		REG_UPDATE_2(DCSURF_SURFACE_PITCH_C,
 			PITCH_C, pitch_c, META_PITCH_C, meta_pitch_c);
@@ -504,6 +508,16 @@ void hubp2_program_pixel_format(
 	case SURFACE_PIXEL_FORMAT_GRPH_BGR101111_FLOAT:
 		REG_UPDATE(DCSURF_SURFACE_CONFIG,
 				SURFACE_PIXEL_FORMAT, 119);
+		break;
+	case SURFACE_PIXEL_FORMAT_GRPH_RGBE:
+		REG_UPDATE_2(DCSURF_SURFACE_CONFIG,
+				SURFACE_PIXEL_FORMAT, 116,
+				ALPHA_PLANE_EN, 0);
+		break;
+	case SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA:
+		REG_UPDATE_2(DCSURF_SURFACE_CONFIG,
+				SURFACE_PIXEL_FORMAT, 116,
+				ALPHA_PLANE_EN, 1);
 		break;
 	default:
 		BREAK_TO_DEBUGGER();
@@ -887,6 +901,9 @@ bool hubp2_is_flip_pending(struct hubp *hubp)
 	uint32_t flip_pending = 0;
 	struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
 	struct dc_plane_address earliest_inuse_address;
+
+	if (hubp && hubp->power_gated)
+		return false;
 
 	REG_GET(DCSURF_FLIP_CONTROL,
 			SURFACE_FLIP_PENDING, &flip_pending);
@@ -1578,6 +1595,8 @@ static struct hubp_funcs dcn20_hubp_funcs = {
 	.hubp_set_flip_control_surface_gsl = hubp2_set_flip_control_surface_gsl,
 	.hubp_init = hubp1_init,
 	.validate_dml_output = hubp2_validate_dml_output,
+	.hubp_in_blank = hubp1_in_blank,
+	.hubp_soft_reset = hubp1_soft_reset,
 };
 
 

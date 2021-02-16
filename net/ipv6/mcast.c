@@ -548,7 +548,7 @@ done:
 }
 
 int ip6_mc_msfget(struct sock *sk, struct group_filter *gsf,
-	struct sockaddr_storage *p)
+		  struct sockaddr_storage __user *p)
 {
 	int err, i, count, copycount;
 	const struct in6_addr *group;
@@ -2615,6 +2615,7 @@ void ipv6_mc_destroy_dev(struct inet6_dev *idev)
 		idev->mc_list = i->next;
 
 		write_unlock_bh(&idev->lock);
+		ip6_mc_clear_src(i);
 		ma_put(i);
 		write_lock_bh(&idev->lock);
 	}

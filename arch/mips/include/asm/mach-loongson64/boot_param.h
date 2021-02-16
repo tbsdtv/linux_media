@@ -194,7 +194,8 @@ struct boot_params {
 
 enum loongson_bridge_type {
 	LS7A = 1,
-	RS780E = 2
+	RS780E = 2,
+	VIRTUAL = 3
 };
 
 struct loongson_system_configuration {
@@ -227,8 +228,13 @@ struct loongson_system_configuration {
 extern struct efi_memory_map_loongson *loongson_memmap;
 extern struct loongson_system_configuration loongson_sysconf;
 
+extern struct board_devices *eboard;
+extern struct interface_info *einter;
+extern struct loongson_special_attribute *especial;
+
 extern u32 node_id_offset;
 extern void ls7a_early_config(void);
 extern void rs780e_early_config(void);
+extern void virtual_early_config(void);
 
 #endif

@@ -7,7 +7,6 @@
 #include <crypto/aead.h>
 #include <crypto/authenc.h>
 #include <crypto/des.h>
-#include <crypto/sha.h>
 #include <crypto/internal/aead.h>
 #include <crypto/scatterwalk.h>
 #include <crypto/gcm.h>
@@ -45,9 +44,9 @@ static int nitrox_aes_gcm_setkey(struct crypto_aead *aead, const u8 *key,
 
 	/* fill crypto context */
 	fctx = nctx->u.fctx;
-	flags.f = be64_to_cpu(fctx->flags.f);
+	flags.fu = be64_to_cpu(fctx->flags.f);
 	flags.w0.aes_keylen = aes_keylen;
-	fctx->flags.f = cpu_to_be64(flags.f);
+	fctx->flags.f = cpu_to_be64(flags.fu);
 
 	/* copy enc key to context */
 	memset(&fctx->crypto, 0, sizeof(fctx->crypto));
@@ -63,9 +62,9 @@ static int nitrox_aead_setauthsize(struct crypto_aead *aead,
 	struct flexi_crypto_context *fctx = nctx->u.fctx;
 	union fc_ctx_flags flags;
 
-	flags.f = be64_to_cpu(fctx->flags.f);
+	flags.fu = be64_to_cpu(fctx->flags.f);
 	flags.w0.mac_len = authsize;
-	fctx->flags.f = cpu_to_be64(flags.f);
+	fctx->flags.f = cpu_to_be64(flags.fu);
 
 	aead->authsize = authsize;
 
@@ -319,7 +318,7 @@ static int nitrox_gcm_common_init(struct crypto_aead *aead)
 	flags->w0.iv_source = IV_FROM_DPTR;
 	/* ask microcode to calculate ipad/opad */
 	flags->w0.auth_input_type = 1;
-	flags->f = be64_to_cpu(flags->f);
+	flags->f = cpu_to_be64(flags->fu);
 
 	return 0;
 }
@@ -522,7 +521,7 @@ static struct aead_alg nitrox_aeads[] = { {
 		.cra_name = "gcm(aes)",
 		.cra_driver_name = "n5_aes_gcm",
 		.cra_priority = PRIO,
-		.cra_flags = CRYPTO_ALG_ASYNC,
+		.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_ALLOCATES_MEMORY,
 		.cra_blocksize = 1,
 		.cra_ctxsize = sizeof(struct nitrox_crypto_ctx),
 		.cra_alignmask = 0,
@@ -541,7 +540,7 @@ static struct aead_alg nitrox_aeads[] = { {
 		.cra_name = "rfc4106(gcm(aes))",
 		.cra_driver_name = "n5_rfc4106",
 		.cra_priority = PRIO,
-		.cra_flags = CRYPTO_ALG_ASYNC,
+		.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_ALLOCATES_MEMORY,
 		.cra_blocksize = 1,
 		.cra_ctxsize = sizeof(struct nitrox_crypto_ctx),
 		.cra_alignmask = 0,

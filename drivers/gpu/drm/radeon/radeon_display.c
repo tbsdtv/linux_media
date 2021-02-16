@@ -44,10 +44,7 @@
 
 #include "atom.h"
 #include "radeon.h"
-
-u32 radeon_get_vblank_counter_kms(struct drm_crtc *crtc);
-int radeon_enable_vblank_kms(struct drm_crtc *crtc);
-void radeon_disable_vblank_kms(struct drm_crtc *crtc);
+#include "radeon_kms.h"
 
 static void avivo_crtc_load_lut(struct drm_crtc *crtc)
 {
@@ -260,7 +257,7 @@ static void radeon_crtc_destroy(struct drm_crtc *crtc)
 /**
  * radeon_unpin_work_func - unpin old buffer object
  *
- * @__work - kernel work item
+ * @__work: kernel work item
  *
  * Unpin the old frame buffer object outside of the interrupt handler
  */
@@ -273,15 +270,12 @@ static void radeon_unpin_work_func(struct work_struct *__work)
 	/* unpin of the old buffer */
 	r = radeon_bo_reserve(work->old_rbo, false);
 	if (likely(r == 0)) {
-		r = radeon_bo_unpin(work->old_rbo);
-		if (unlikely(r != 0)) {
-			DRM_ERROR("failed to unpin buffer after flip\n");
-		}
+		radeon_bo_unpin(work->old_rbo);
 		radeon_bo_unreserve(work->old_rbo);
 	} else
 		DRM_ERROR("failed to reserve buffer after flip\n");
 
-	drm_gem_object_put_unlocked(&work->old_rbo->tbo.base);
+	drm_gem_object_put(&work->old_rbo->tbo.base);
 	kfree(work);
 }
 
@@ -405,7 +399,7 @@ void radeon_crtc_handle_flip(struct radeon_device *rdev, int crtc_id)
 /**
  * radeon_flip_work_func - page flip framebuffer
  *
- * @work - kernel work item
+ * @__work: kernel work item
  *
  * Wait for the buffer object to become idle and do the actual page flip
  */
@@ -607,13 +601,11 @@ pflip_cleanup:
 		DRM_ERROR("failed to reserve new rbo in error path\n");
 		goto cleanup;
 	}
-	if (unlikely(radeon_bo_unpin(new_rbo) != 0)) {
-		DRM_ERROR("failed to unpin new rbo in error path\n");
-	}
+	radeon_bo_unpin(new_rbo);
 	radeon_bo_unreserve(new_rbo);
 
 cleanup:
-	drm_gem_object_put_unlocked(&work->old_rbo->tbo.base);
+	drm_gem_object_put(&work->old_rbo->tbo.base);
 	dma_fence_put(work->fence);
 	kfree(work);
 	return r;
@@ -635,8 +627,10 @@ radeon_crtc_set_config(struct drm_mode_set *set,
 	dev = set->crtc->dev;
 
 	ret = pm_runtime_get_sync(dev->dev);
-	if (ret < 0)
+	if (ret < 0) {
+		pm_runtime_put_autosuspend(dev->dev);
 		return ret;
+	}
 
 	ret = drm_crtc_helper_set_config(set, ctx);
 
@@ -944,11 +938,12 @@ static void avivo_get_fb_ref_div(unsigned nom, unsigned den, unsigned post_div,
  * radeon_compute_pll_avivo - compute PLL paramaters
  *
  * @pll: information about the PLL
+ * @freq: target frequency
  * @dot_clock_p: resulting pixel clock
- * fb_div_p: resulting feedback divider
- * frac_fb_div_p: fractional part of the feedback divider
- * ref_div_p: resulting reference divider
- * post_div_p: resulting reference divider
+ * @fb_div_p: resulting feedback divider
+ * @frac_fb_div_p: fractional part of the feedback divider
+ * @ref_div_p: resulting reference divider
+ * @post_div_p: resulting reference divider
  *
  * Try to calculate the PLL parameters to generate the given frequency:
  * dot_clock = (ref_freq * feedback_div) / (ref_div * post_div)
@@ -1098,11 +1093,9 @@ void radeon_compute_pll_avivo(struct radeon_pll *pll,
 /* pre-avivo */
 static inline uint32_t radeon_div(uint64_t n, uint32_t d)
 {
-	uint64_t mod;
-
 	n += d / 2;
 
-	mod = do_div(n, d);
+	do_div(n, d);
 	return n;
 }
 
@@ -1337,14 +1330,14 @@ radeon_user_framebuffer_create(struct drm_device *dev,
 
 	fb = kzalloc(sizeof(*fb), GFP_KERNEL);
 	if (fb == NULL) {
-		drm_gem_object_put_unlocked(obj);
+		drm_gem_object_put(obj);
 		return ERR_PTR(-ENOMEM);
 	}
 
 	ret = radeon_framebuffer_init(dev, fb, mode_cmd, obj);
 	if (ret) {
 		kfree(fb);
-		drm_gem_object_put_unlocked(obj);
+		drm_gem_object_put(obj);
 		return ERR_PTR(ret);
 	}
 

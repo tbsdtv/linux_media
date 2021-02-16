@@ -2,6 +2,7 @@
 #include "debug.h"
 #include "evlist.h"
 #include "evsel.h"
+#include "evsel_config.h"
 #include "parse-events.h"
 #include <errno.h>
 #include <limits.h>
@@ -13,6 +14,7 @@
 #include "util/perf_api_probe.h"
 #include "record.h"
 #include "../perf-sys.h"
+#include "topdown.h"
 
 /*
  * evsel__config_leader_sampling() uses special rules for leader sampling.
@@ -23,7 +25,7 @@ static struct evsel *evsel__read_sampler(struct evsel *evsel, struct evlist *evl
 {
 	struct evsel *leader = evsel->leader;
 
-	if (evsel__is_aux_event(leader)) {
+	if (evsel__is_aux_event(leader) || arch_topdown_sample_read(leader)) {
 		evlist__for_each_entry(evlist, evsel) {
 			if (evsel->leader == leader && evsel != evsel->leader)
 				return evsel;
@@ -33,11 +35,24 @@ static struct evsel *evsel__read_sampler(struct evsel *evsel, struct evlist *evl
 	return leader;
 }
 
+static u64 evsel__config_term_mask(struct evsel *evsel)
+{
+	struct evsel_config_term *term;
+	struct list_head *config_terms = &evsel->config_terms;
+	u64 term_types = 0;
+
+	list_for_each_entry(term, config_terms, list) {
+		term_types |= 1 << term->type;
+	}
+	return term_types;
+}
+
 static void evsel__config_leader_sampling(struct evsel *evsel, struct evlist *evlist)
 {
 	struct perf_event_attr *attr = &evsel->core.attr;
 	struct evsel *leader = evsel->leader;
 	struct evsel *read_sampler;
+	u64 term_types, freq_mask;
 
 	if (!leader->sample_read)
 		return;
@@ -47,16 +62,20 @@ static void evsel__config_leader_sampling(struct evsel *evsel, struct evlist *ev
 	if (evsel == read_sampler)
 		return;
 
+	term_types = evsel__config_term_mask(evsel);
 	/*
-	 * Disable sampling for all group members other than the leader in
-	 * case the leader 'leads' the sampling, except when the leader is an
-	 * AUX area event, in which case the 2nd event in the group is the one
-	 * that 'leads' the sampling.
+	 * Disable sampling for all group members except those with explicit
+	 * config terms or the leader. In the case of an AUX area event, the 2nd
+	 * event in the group is the one that 'leads' the sampling.
 	 */
-	attr->freq           = 0;
-	attr->sample_freq    = 0;
-	attr->sample_period  = 0;
-	attr->write_backward = 0;
+	freq_mask = (1 << EVSEL__CONFIG_TERM_FREQ) | (1 << EVSEL__CONFIG_TERM_PERIOD);
+	if ((term_types & freq_mask) == 0) {
+		attr->freq           = 0;
+		attr->sample_freq    = 0;
+		attr->sample_period  = 0;
+	}
+	if ((term_types & (1 << EVSEL__CONFIG_TERM_OVERWRITE)) == 0)
+		attr->write_backward = 0;
 
 	/*
 	 * We don't get a sample for slave events, we make them when delivering
@@ -70,8 +89,7 @@ static void evsel__config_leader_sampling(struct evsel *evsel, struct evlist *ev
 			    leader->core.attr.sample_type;
 }
 
-void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
-			 struct callchain_param *callchain)
+void evlist__config(struct evlist *evlist, struct record_opts *opts, struct callchain_param *callchain)
 {
 	struct evsel *evsel;
 	bool use_sample_identifier = false;
@@ -83,7 +101,7 @@ void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
 	 * since some might depend on this info.
 	 */
 	if (opts->group)
-		perf_evlist__set_leader(evlist);
+		evlist__set_leader(evlist);
 
 	if (evlist->core.cpus->map[0] < 0)
 		opts->no_inherit = true;
@@ -125,7 +143,7 @@ void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
 			evsel__set_sample_id(evsel, use_sample_identifier);
 	}
 
-	perf_evlist__set_id_pos(evlist);
+	evlist__set_id_pos(evlist);
 }
 
 static int get_max_rate(unsigned int *rate)
@@ -198,7 +216,7 @@ int record_opts__config(struct record_opts *opts)
 	return record_opts__config_freq(opts);
 }
 
-bool perf_evlist__can_select_event(struct evlist *evlist, const char *str)
+bool evlist__can_select_event(struct evlist *evlist, const char *str)
 {
 	struct evlist *temp_evlist;
 	struct evsel *evsel;

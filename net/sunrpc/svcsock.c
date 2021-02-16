@@ -44,6 +44,7 @@
 #include <net/tcp.h>
 #include <net/tcp_states.h>
 #include <linux/uaccess.h>
+#include <linux/highmem.h>
 #include <asm/ioctls.h>
 
 #include <linux/sunrpc/types.h>
@@ -180,8 +181,8 @@ static void svc_set_cmsg_data(struct svc_rqst *rqstp, struct cmsghdr *cmh)
 	}
 }
 
-static int svc_sock_read_payload(struct svc_rqst *rqstp, unsigned int offset,
-				 unsigned int length)
+static int svc_sock_result_payload(struct svc_rqst *rqstp, unsigned int offset,
+				   unsigned int length)
 {
 	return 0;
 }
@@ -227,7 +228,7 @@ static int svc_one_sock_name(struct svc_sock *svsk, char *buf, int remaining)
 static void svc_flush_bvec(const struct bio_vec *bvec, size_t size, size_t seek)
 {
 	struct bvec_iter bi = {
-		.bi_size	= size,
+		.bi_size	= size + seek,
 	};
 	struct bio_vec bv;
 
@@ -563,7 +564,7 @@ static int svc_udp_sendto(struct svc_rqst *rqstp)
 		.msg_control	= cmh,
 		.msg_controllen	= sizeof(buffer),
 	};
-	unsigned int uninitialized_var(sent);
+	unsigned int sent;
 	int err;
 
 	svc_udp_release_rqst(rqstp);
@@ -634,7 +635,7 @@ static const struct svc_xprt_ops svc_udp_ops = {
 	.xpo_create = svc_udp_create,
 	.xpo_recvfrom = svc_udp_recvfrom,
 	.xpo_sendto = svc_udp_sendto,
-	.xpo_read_payload = svc_sock_read_payload,
+	.xpo_result_payload = svc_sock_result_payload,
 	.xpo_release_rqst = svc_udp_release_rqst,
 	.xpo_detach = svc_sock_detach,
 	.xpo_free = svc_sock_free,
@@ -1061,6 +1062,90 @@ err_noclose:
 	return 0;	/* record not complete */
 }
 
+static int svc_tcp_send_kvec(struct socket *sock, const struct kvec *vec,
+			      int flags)
+{
+	return kernel_sendpage(sock, virt_to_page(vec->iov_base),
+			       offset_in_page(vec->iov_base),
+			       vec->iov_len, flags);
+}
+
+/*
+ * kernel_sendpage() is used exclusively to reduce the number of
+ * copy operations in this path. Therefore the caller must ensure
+ * that the pages backing @xdr are unchanging.
+ *
+ * In addition, the logic assumes that * .bv_len is never larger
+ * than PAGE_SIZE.
+ */
+static int svc_tcp_sendmsg(struct socket *sock, struct msghdr *msg,
+			   struct xdr_buf *xdr, rpc_fraghdr marker,
+			   unsigned int *sentp)
+{
+	const struct kvec *head = xdr->head;
+	const struct kvec *tail = xdr->tail;
+	struct kvec rm = {
+		.iov_base	= &marker,
+		.iov_len	= sizeof(marker),
+	};
+	int flags, ret;
+
+	*sentp = 0;
+	xdr_alloc_bvec(xdr, GFP_KERNEL);
+
+	msg->msg_flags = MSG_MORE;
+	ret = kernel_sendmsg(sock, msg, &rm, 1, rm.iov_len);
+	if (ret < 0)
+		return ret;
+	*sentp += ret;
+	if (ret != rm.iov_len)
+		return -EAGAIN;
+
+	flags = head->iov_len < xdr->len ? MSG_MORE | MSG_SENDPAGE_NOTLAST : 0;
+	ret = svc_tcp_send_kvec(sock, head, flags);
+	if (ret < 0)
+		return ret;
+	*sentp += ret;
+	if (ret != head->iov_len)
+		goto out;
+
+	if (xdr->page_len) {
+		unsigned int offset, len, remaining;
+		struct bio_vec *bvec;
+
+		bvec = xdr->bvec;
+		offset = xdr->page_base;
+		remaining = xdr->page_len;
+		flags = MSG_MORE | MSG_SENDPAGE_NOTLAST;
+		while (remaining > 0) {
+			if (remaining <= PAGE_SIZE && tail->iov_len == 0)
+				flags = 0;
+			len = min(remaining, bvec->bv_len);
+			ret = kernel_sendpage(sock, bvec->bv_page,
+					      bvec->bv_offset + offset,
+					      len, flags);
+			if (ret < 0)
+				return ret;
+			*sentp += ret;
+			if (ret != len)
+				goto out;
+			remaining -= len;
+			offset = 0;
+			bvec++;
+		}
+	}
+
+	if (tail->iov_len) {
+		ret = svc_tcp_send_kvec(sock, tail, 0);
+		if (ret < 0)
+			return ret;
+		*sentp += ret;
+	}
+
+out:
+	return 0;
+}
+
 /**
  * svc_tcp_sendto - Send out a reply on a TCP socket
  * @rqstp: completed svc_rqst
@@ -1080,7 +1165,7 @@ static int svc_tcp_sendto(struct svc_rqst *rqstp)
 	struct msghdr msg = {
 		.msg_flags	= 0,
 	};
-	unsigned int uninitialized_var(sent);
+	unsigned int sent;
 	int err;
 
 	svc_tcp_release_rqst(rqstp);
@@ -1088,7 +1173,7 @@ static int svc_tcp_sendto(struct svc_rqst *rqstp)
 	mutex_lock(&xprt->xpt_mutex);
 	if (svc_xprt_is_dead(xprt))
 		goto out_notconn;
-	err = xprt_sock_sendmsg(svsk->sk_sock, &msg, xdr, 0, marker, &sent);
+	err = svc_tcp_sendmsg(svsk->sk_sock, &msg, xdr, marker, &sent);
 	xdr_free_bvec(xdr);
 	trace_svcsock_tcp_send(xprt, err < 0 ? err : sent);
 	if (err < 0 || sent != (xdr->len + sizeof(marker)))
@@ -1122,7 +1207,7 @@ static const struct svc_xprt_ops svc_tcp_ops = {
 	.xpo_create = svc_tcp_create,
 	.xpo_recvfrom = svc_tcp_recvfrom,
 	.xpo_sendto = svc_tcp_sendto,
-	.xpo_read_payload = svc_sock_read_payload,
+	.xpo_result_payload = svc_sock_result_payload,
 	.xpo_release_rqst = svc_tcp_release_rqst,
 	.xpo_detach = svc_tcp_sock_detach,
 	.xpo_free = svc_sock_free,

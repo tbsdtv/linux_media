@@ -174,12 +174,6 @@ static void __flush_iotlb_walk(unsigned long iova, size_t size,
 	__flush_iotlb_range(iova, size, granule, false, cookie);
 }
 
-static void __flush_iotlb_leaf(unsigned long iova, size_t size,
-			       size_t granule, void *cookie)
-{
-	__flush_iotlb_range(iova, size, granule, true, cookie);
-}
-
 static void __flush_iotlb_page(struct iommu_iotlb_gather *gather,
 			       unsigned long iova, size_t granule, void *cookie)
 {
@@ -189,7 +183,6 @@ static void __flush_iotlb_page(struct iommu_iotlb_gather *gather,
 static const struct iommu_flush_ops msm_iommu_flush_ops = {
 	.tlb_flush_all = __flush_iotlb,
 	.tlb_flush_walk = __flush_iotlb_walk,
-	.tlb_flush_leaf = __flush_iotlb_leaf,
 	.tlb_add_page = __flush_iotlb_page,
 };
 
@@ -491,7 +484,7 @@ static int msm_iommu_map(struct iommu_domain *domain, unsigned long iova,
 	int ret;
 
 	spin_lock_irqsave(&priv->pgtlock, flags);
-	ret = priv->iop->map(priv->iop, iova, pa, len, prot);
+	ret = priv->iop->map(priv->iop, iova, pa, len, prot, GFP_ATOMIC);
 	spin_unlock_irqrestore(&priv->pgtlock, flags);
 
 	return ret;
@@ -593,14 +586,14 @@ static void insert_iommu_master(struct device *dev,
 				struct msm_iommu_dev **iommu,
 				struct of_phandle_args *spec)
 {
-	struct msm_iommu_ctx_dev *master = dev->archdata.iommu;
+	struct msm_iommu_ctx_dev *master = dev_iommu_priv_get(dev);
 	int sid;
 
 	if (list_empty(&(*iommu)->ctx_list)) {
 		master = kzalloc(sizeof(*master), GFP_ATOMIC);
 		master->of_node = dev->of_node;
 		list_add(&master->list, &(*iommu)->ctx_list);
-		dev->archdata.iommu = master;
+		dev_iommu_priv_set(dev, master);
 	}
 
 	for (sid = 0; sid < master->num_mids; sid++)

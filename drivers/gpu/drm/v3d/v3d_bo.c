@@ -78,7 +78,7 @@ struct drm_gem_object *v3d_create_object(struct drm_device *dev, size_t size)
 	obj = &bo->base.base;
 
 	obj->funcs = &v3d_gem_funcs;
-
+	bo->base.map_wc = true;
 	INIT_LIST_HEAD(&bo->unref_head);
 
 	return &bo->base.base;
@@ -185,7 +185,7 @@ int v3d_create_bo_ioctl(struct drm_device *dev, void *data,
 	args->offset = bo->node.start << PAGE_SHIFT;
 
 	ret = drm_gem_handle_create(file_priv, &bo->base.base, &args->handle);
-	drm_gem_object_put_unlocked(&bo->base.base);
+	drm_gem_object_put(&bo->base.base);
 
 	return ret;
 }
@@ -208,7 +208,7 @@ int v3d_mmap_bo_ioctl(struct drm_device *dev, void *data,
 	}
 
 	args->offset = drm_vma_node_offset_addr(&gem_obj->vma_node);
-	drm_gem_object_put_unlocked(gem_obj);
+	drm_gem_object_put(gem_obj);
 
 	return 0;
 }
@@ -229,6 +229,6 @@ int v3d_get_bo_offset_ioctl(struct drm_device *dev, void *data,
 
 	args->offset = bo->node.start << PAGE_SHIFT;
 
-	drm_gem_object_put_unlocked(gem_obj);
+	drm_gem_object_put(gem_obj);
 	return 0;
 }

@@ -751,7 +751,6 @@ static int mtv23x_init(struct dvb_frontend *fe)
 	struct i2c_client*client = fe->demodulator_priv;
 	struct mtv23x_dev*dev = i2c_get_clientdata(client);
 	int ret,i,temp,read0,read1 ;
-	enum E_RTV_BANDWIDTH_TYPE bandwidth = RTV_BW_MODE_6MHZ;
 	u8 rev_num;
 	u8 ALDO_OUT = 6,DLDO_OUT = 1;
 	
@@ -896,8 +895,7 @@ static int rtvRF_LockCheck(struct mtv23x_dev*dev,u8 bCheckBlock)
 				break;
 			else
 				printk("[rtvRF_LockCheck]VCheck(%d)\n", i);
-
-				msleep(1);
+			msleep(1);
 		}
 
 		if (i == 10) {
@@ -914,7 +912,7 @@ static int rtvRF_LockCheck(struct mtv23x_dev*dev,u8 bCheckBlock)
 				break;
 			else
 				printk("[rtvRF_LockCheck]SCheck(%d)\n", i);
-				msleep(1);
+			msleep(1);
 		}
 
 		if (i == 10) {
@@ -1188,7 +1186,7 @@ static int rtvRF_ConfigureClkCKSYN(struct mtv23x_dev*dev,enum E_RTV_BANDWIDTH_TY
 	return 0;
 }
 
-static rtvRF_ConfigureIIRFilter(struct mtv23x_dev*dev,enum E_RTV_BANDWIDTH_TYPE eBwType)
+static int rtvRF_ConfigureIIRFilter(struct mtv23x_dev*dev,enum E_RTV_BANDWIDTH_TYPE eBwType)
 {
 	int temp;
 	u8 WR95 = 0;

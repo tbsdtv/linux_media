@@ -48,6 +48,7 @@ struct resource_caps {
 	int num_ddc;
 	int num_vmid;
 	int num_dsc;
+	int num_mpc_3dlut;
 };
 
 struct resource_straps {

@@ -795,7 +795,6 @@ static int vdec_vp9_init(struct mtk_vcodec_ctx *ctx)
 	inst->ctx = ctx;
 
 	inst->vpu.id = IPI_VDEC_VP9;
-	inst->vpu.dev = ctx->dev->vpu_plat_dev;
 	inst->vpu.ctx = ctx;
 
 	if (vpu_dec_init(&inst->vpu)) {
@@ -891,7 +890,8 @@ static int vdec_vp9_decode(void *h_vdec, struct mtk_vcodec_mem *bs,
 			memset(inst->seg_id_buf.va, 0, inst->seg_id_buf.size);
 
 			if (vsi->show_frame & BIT(2)) {
-				if (vpu_dec_start(&inst->vpu, NULL, 0)) {
+				ret = vpu_dec_start(&inst->vpu, NULL, 0);
+				if (ret) {
 					mtk_vcodec_err(inst, "vpu trig decoder failed");
 					goto DECODE_ERROR;
 				}
@@ -960,7 +960,7 @@ static int vdec_vp9_decode(void *h_vdec, struct mtk_vcodec_mem *bs,
 			goto DECODE_ERROR;
 		}
 
-		if (vp9_decode_end_proc(inst) != true) {
+		if (!vp9_decode_end_proc(inst)) {
 			mtk_vcodec_err(inst, "vp9_decode_end_proc");
 			ret = -EINVAL;
 			goto DECODE_ERROR;

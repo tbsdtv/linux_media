@@ -1087,7 +1087,7 @@ static int nand_update_bbt(struct nand_chip *this, loff_t offs)
 }
 
 /**
- * mark_bbt_regions - [GENERIC] mark the bad block table regions
+ * mark_bbt_region - [GENERIC] mark the bad block table regions
  * @this: the NAND device
  * @td: bad block table descriptor
  *
@@ -1226,7 +1226,7 @@ static int nand_scan_bbt(struct nand_chip *this, struct nand_bbt_descr *bd)
 		return -ENOMEM;
 
 	/*
-	 * If no primary table decriptor is given, scan the device to build a
+	 * If no primary table descriptor is given, scan the device to build a
 	 * memory based bad block table.
 	 */
 	if (!td) {

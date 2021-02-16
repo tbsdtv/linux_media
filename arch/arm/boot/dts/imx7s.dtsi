@@ -47,6 +47,8 @@
 		spi1 = &ecspi2;
 		spi2 = &ecspi3;
 		spi3 = &ecspi4;
+		usb0 = &usbotg1;
+		usb1 = &usbh;
 	};
 
 	cpus {
@@ -145,16 +147,6 @@
 				};
 			};
 		};
-	};
-
-	tempmon: tempmon {
-		compatible = "fsl,imx7d-tempmon";
-		interrupt-parent = <&gpc>;
-		interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
-		fsl,tempmon = <&anatop>;
-		nvmem-cells = <&tempmon_calib>,	<&fuse_grade>;
-		nvmem-cell-names = "calib", "temp_grade";
-		clocks = <&clks IMX7D_PLL_SYS_MAIN_CLK>;
 	};
 
 	timer {
@@ -536,7 +528,7 @@
 				};
 			};
 
-			ocotp: ocotp-ctrl@30350000 {
+			ocotp: efuse@30350000 {
 				#address-cells = <1>;
 				#size-cells = <1>;
 				compatible = "fsl,imx7d-ocotp", "syscon";
@@ -585,6 +577,16 @@
 					anatop-min-voltage = <1100000>;
 					anatop-max-voltage = <1300000>;
 					anatop-enable-bit = <0>;
+				};
+
+				tempmon: tempmon {
+					compatible = "fsl,imx7d-tempmon";
+					interrupt-parent = <&gpc>;
+					interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
+					fsl,tempmon = <&anatop>;
+					nvmem-cells = <&tempmon_calib>,	<&fuse_grade>;
+					nvmem-cell-names = "calib", "temp_grade";
+					clocks = <&clks IMX7D_PLL_SYS_MAIN_CLK>;
 				};
 			};
 
@@ -971,7 +973,7 @@
 				clocks = <&clks IMX7D_CLK_DUMMY>,
 					<&clks IMX7D_CAN1_ROOT_CLK>;
 				clock-names = "ipg", "per";
-				fsl,stop-mode = <&gpr 0x10 1 0x10 17>;
+				fsl,stop-mode = <&gpr 0x10 1>;
 				status = "disabled";
 			};
 
@@ -982,7 +984,7 @@
 				clocks = <&clks IMX7D_CLK_DUMMY>,
 					<&clks IMX7D_CAN2_ROOT_CLK>;
 				clock-names = "ipg", "per";
-				fsl,stop-mode = <&gpr 0x10 2 0x10 18>;
+				fsl,stop-mode = <&gpr 0x10 2>;
 				status = "disabled";
 			};
 
@@ -1126,7 +1128,7 @@
 				reg = <0x30b30200 0x200>;
 			};
 
-			usdhc1: usdhc@30b40000 {
+			usdhc1: mmc@30b40000 {
 				compatible = "fsl,imx7d-usdhc", "fsl,imx6sl-usdhc";
 				reg = <0x30b40000 0x10000>;
 				interrupts = <GIC_SPI 22 IRQ_TYPE_LEVEL_HIGH>;
@@ -1138,7 +1140,7 @@
 				status = "disabled";
 			};
 
-			usdhc2: usdhc@30b50000 {
+			usdhc2: mmc@30b50000 {
 				compatible = "fsl,imx7d-usdhc", "fsl,imx6sl-usdhc";
 				reg = <0x30b50000 0x10000>;
 				interrupts = <GIC_SPI 23 IRQ_TYPE_LEVEL_HIGH>;
@@ -1150,7 +1152,7 @@
 				status = "disabled";
 			};
 
-			usdhc3: usdhc@30b60000 {
+			usdhc3: mmc@30b60000 {
 				compatible = "fsl,imx7d-usdhc", "fsl,imx6sl-usdhc";
 				reg = <0x30b60000 0x10000>;
 				interrupts = <GIC_SPI 24 IRQ_TYPE_LEVEL_HIGH>;
@@ -1159,6 +1161,19 @@
 					<&clks IMX7D_USDHC3_ROOT_CLK>;
 				clock-names = "ipg", "ahb", "per";
 				bus-width = <4>;
+				status = "disabled";
+			};
+
+			qspi: spi@30bb0000 {
+				compatible = "fsl,imx7d-qspi";
+				reg = <0x30bb0000 0x10000>, <0x60000000 0x10000000>;
+				reg-names = "QuadSPI", "QuadSPI-memory";
+				#address-cells = <1>;
+				#size-cells = <0>;
+				interrupts = <GIC_SPI 107 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&clks IMX7D_QSPI_ROOT_CLK>,
+					<&clks IMX7D_QSPI_ROOT_CLK>;
+				clock-names = "qspi_en", "qspi";
 				status = "disabled";
 			};
 
@@ -1208,7 +1223,7 @@
 			clocks = <&clks IMX7D_NAND_USDHC_BUS_RAWNAND_CLK>;
 		};
 
-		gpmi: gpmi-nand@33002000{
+		gpmi: nand-controller@33002000{
 			compatible = "fsl,imx7d-gpmi-nand";
 			#address-cells = <1>;
 			#size-cells = <1>;

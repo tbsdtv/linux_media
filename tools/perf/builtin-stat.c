@@ -56,7 +56,7 @@
 #include "util/cpumap.h"
 #include "util/thread_map.h"
 #include "util/counts.h"
-#include "util/group.h"
+#include "util/topdown.h"
 #include "util/session.h"
 #include "util/tool.h"
 #include "util/string2.h"
@@ -128,6 +128,15 @@ static const char * topdown_attrs[] = {
 	NULL,
 };
 
+static const char *topdown_metric_attrs[] = {
+	"slots",
+	"topdown-retiring",
+	"topdown-bad-spec",
+	"topdown-fe-bound",
+	"topdown-be-bound",
+	NULL,
+};
+
 static const char *smi_cost_attrs = {
 	"{"
 	"msr/aperf/,"
@@ -188,6 +197,8 @@ static struct perf_stat_config stat_config = {
 	.metric_only_len	= METRIC_ONLY_LEN,
 	.walltime_nsecs_stats	= &walltime_nsecs_stats,
 	.big_num		= true,
+	.ctl_fd			= -1,
+	.ctl_fd_ack		= -1
 };
 
 static bool cpus_map_matched(struct evsel *a, struct evsel *b)
@@ -259,7 +270,7 @@ static void perf_stat__reset_stats(void)
 {
 	int i;
 
-	perf_evlist__reset_stats(evsel_list);
+	evlist__reset_stats(evsel_list);
 	perf_stat__reset_shadow_stats();
 
 	for (i = 0; i < stat_config.stats_num; i++)
@@ -402,7 +413,7 @@ static void read_counters(struct timespec *rs)
 {
 	struct evsel *counter;
 
-	if (!stat_config.summary && (read_affinity_counters(rs) < 0))
+	if (!stat_config.stop_read_counter && (read_affinity_counters(rs) < 0))
 		return;
 
 	evlist__for_each_entry(evsel_list, counter) {
@@ -475,18 +486,38 @@ static void process_interval(void)
 	print_counters(&rs, 0, NULL);
 }
 
+static bool handle_interval(unsigned int interval, int *times)
+{
+	if (interval) {
+		process_interval();
+		if (interval_count && !(--(*times)))
+			return true;
+	}
+	return false;
+}
+
 static void enable_counters(void)
 {
-	if (stat_config.initial_delay)
+	if (stat_config.initial_delay < 0) {
+		pr_info(EVLIST_DISABLED_MSG);
+		return;
+	}
+
+	if (stat_config.initial_delay > 0) {
+		pr_info(EVLIST_DISABLED_MSG);
 		usleep(stat_config.initial_delay * USEC_PER_MSEC);
+	}
 
 	/*
 	 * We need to enable counters only if:
 	 * - we don't have tracee (attaching to task or cpu)
 	 * - we have initial delay configured
 	 */
-	if (!target__none(&target) || stat_config.initial_delay)
+	if (!target__none(&target) || stat_config.initial_delay) {
 		evlist__enable(evsel_list);
+		if (stat_config.initial_delay > 0)
+			pr_info(EVLIST_ENABLED_MSG);
+	}
 }
 
 static void disable_counters(void)
@@ -503,7 +534,7 @@ static void disable_counters(void)
 static volatile int workload_exec_errno;
 
 /*
- * perf_evlist__prepare_workload will send a SIGUSR1
+ * evlist__prepare_workload will send a SIGUSR1
  * if the fork fails, since we asked by setting its
  * want_signal to true.
  */
@@ -538,6 +569,87 @@ static bool is_target_alive(struct target *_target,
 	}
 
 	return false;
+}
+
+static void process_evlist(struct evlist *evlist, unsigned int interval)
+{
+	enum evlist_ctl_cmd cmd = EVLIST_CTL_CMD_UNSUPPORTED;
+
+	if (evlist__ctlfd_process(evlist, &cmd) > 0) {
+		switch (cmd) {
+		case EVLIST_CTL_CMD_ENABLE:
+			pr_info(EVLIST_ENABLED_MSG);
+			if (interval)
+				process_interval();
+			break;
+		case EVLIST_CTL_CMD_DISABLE:
+			if (interval)
+				process_interval();
+			pr_info(EVLIST_DISABLED_MSG);
+			break;
+		case EVLIST_CTL_CMD_SNAPSHOT:
+		case EVLIST_CTL_CMD_ACK:
+		case EVLIST_CTL_CMD_UNSUPPORTED:
+		default:
+			break;
+		}
+	}
+}
+
+static void compute_tts(struct timespec *time_start, struct timespec *time_stop,
+			int *time_to_sleep)
+{
+	int tts = *time_to_sleep;
+	struct timespec time_diff;
+
+	diff_timespec(&time_diff, time_stop, time_start);
+
+	tts -= time_diff.tv_sec * MSEC_PER_SEC +
+	       time_diff.tv_nsec / NSEC_PER_MSEC;
+
+	if (tts < 0)
+		tts = 0;
+
+	*time_to_sleep = tts;
+}
+
+static int dispatch_events(bool forks, int timeout, int interval, int *times)
+{
+	int child_exited = 0, status = 0;
+	int time_to_sleep, sleep_time;
+	struct timespec time_start, time_stop;
+
+	if (interval)
+		sleep_time = interval;
+	else if (timeout)
+		sleep_time = timeout;
+	else
+		sleep_time = 1000;
+
+	time_to_sleep = sleep_time;
+
+	while (!done) {
+		if (forks)
+			child_exited = waitpid(child_pid, &status, WNOHANG);
+		else
+			child_exited = !is_target_alive(&target, evsel_list->core.threads) ? 1 : 0;
+
+		if (child_exited)
+			break;
+
+		clock_gettime(CLOCK_MONOTONIC, &time_start);
+		if (!(evlist__poll(evsel_list, time_to_sleep) > 0)) { /* poll timeout or EINTR */
+			if (timeout || handle_interval(interval, times))
+				break;
+			time_to_sleep = sleep_time;
+		} else { /* fd revent */
+			process_evlist(evsel_list, interval);
+			clock_gettime(CLOCK_MONOTONIC, &time_stop);
+			compute_tts(&time_start, &time_stop, &time_to_sleep);
+		}
+	}
+
+	return status;
 }
 
 enum counter_recovery {
@@ -603,7 +715,6 @@ static int __run_perf_stat(int argc, const char **argv, int run_idx)
 	char msg[BUFSIZ];
 	unsigned long long t0, t1;
 	struct evsel *counter;
-	struct timespec ts;
 	size_t l;
 	int status = 0;
 	const bool forks = (argc > 0);
@@ -612,20 +723,8 @@ static int __run_perf_stat(int argc, const char **argv, int run_idx)
 	int i, cpu;
 	bool second_pass = false;
 
-	if (interval) {
-		ts.tv_sec  = interval / USEC_PER_MSEC;
-		ts.tv_nsec = (interval % USEC_PER_MSEC) * NSEC_PER_MSEC;
-	} else if (timeout) {
-		ts.tv_sec  = timeout / USEC_PER_MSEC;
-		ts.tv_nsec = (timeout % USEC_PER_MSEC) * NSEC_PER_MSEC;
-	} else {
-		ts.tv_sec  = 1;
-		ts.tv_nsec = 0;
-	}
-
 	if (forks) {
-		if (perf_evlist__prepare_workload(evsel_list, &target, argv, is_pipe,
-						  workload_exec_failed_signal) < 0) {
+		if (evlist__prepare_workload(evsel_list, &target, argv, is_pipe, workload_exec_failed_signal) < 0) {
 			perror("failed to prepare workload");
 			return -1;
 		}
@@ -633,7 +732,7 @@ static int __run_perf_stat(int argc, const char **argv, int run_idx)
 	}
 
 	if (group)
-		perf_evlist__set_leader(evsel_list);
+		evlist__set_leader(evsel_list);
 
 	if (affinity__setup(&affinity) < 0)
 		return -1;
@@ -660,7 +759,7 @@ try_again:
 				if ((errno == EINVAL || errno == EBADF) &&
 				    counter->leader != counter &&
 				    counter->weak_group) {
-					perf_evlist__reset_weak_group(evsel_list, counter, false);
+					evlist__reset_weak_group(evsel_list, counter, false);
 					assert(counter->reset_group);
 					second_pass = true;
 					continue;
@@ -743,7 +842,7 @@ try_again_reset:
 			return -1;
 	}
 
-	if (perf_evlist__apply_filters(evsel_list, &counter)) {
+	if (evlist__apply_filters(evsel_list, &counter)) {
 		pr_err("failed to set filter \"%s\" on event %s with %d (%s)\n",
 			counter->filter, evsel__name(counter), errno,
 			str_error_r(errno, msg, sizeof(msg)));
@@ -776,19 +875,11 @@ try_again_reset:
 	clock_gettime(CLOCK_MONOTONIC, &ref_time);
 
 	if (forks) {
-		perf_evlist__start_workload(evsel_list);
+		evlist__start_workload(evsel_list);
 		enable_counters();
 
-		if (interval || timeout) {
-			while (!waitpid(child_pid, &status, WNOHANG)) {
-				nanosleep(&ts, NULL);
-				if (timeout)
-					break;
-				process_interval();
-				if (interval_count && !(--times))
-					break;
-			}
-		}
+		if (interval || timeout || evlist__ctlfd_initialized(evsel_list))
+			status = dispatch_events(forks, timeout, interval, &times);
 		if (child_pid != -1) {
 			if (timeout)
 				kill(child_pid, SIGTERM);
@@ -805,18 +896,7 @@ try_again_reset:
 			psignal(WTERMSIG(status), argv[0]);
 	} else {
 		enable_counters();
-		while (!done) {
-			nanosleep(&ts, NULL);
-			if (!is_target_alive(&target, evsel_list->core.threads))
-				break;
-			if (timeout)
-				break;
-			if (interval) {
-				process_interval();
-				if (interval_count && !(--times))
-					break;
-			}
-		}
+		status = dispatch_events(forks, timeout, interval, &times);
 	}
 
 	disable_counters();
@@ -826,17 +906,17 @@ try_again_reset:
 	if (stat_config.walltime_run_table)
 		stat_config.walltime_run[run_idx] = t1 - t0;
 
-	if (interval) {
+	if (interval && stat_config.summary) {
 		stat_config.interval = 0;
-		stat_config.summary = true;
+		stat_config.stop_read_counter = true;
 		init_stats(&walltime_nsecs_stats);
 		update_stats(&walltime_nsecs_stats, t1 - t0);
 
 		if (stat_config.aggr_mode == AGGR_GLOBAL)
-			perf_evlist__save_aggr_prev_raw_counts(evsel_list);
+			evlist__save_aggr_prev_raw_counts(evsel_list);
 
-		perf_evlist__copy_prev_raw_counts(evsel_list);
-		perf_evlist__reset_prev_raw_counts(evsel_list);
+		evlist__copy_prev_raw_counts(evsel_list);
+		evlist__reset_prev_raw_counts(evsel_list);
 		runtime_stat_reset(&stat_config);
 		perf_stat__reset_shadow_per_stat(&rt_stat);
 	} else
@@ -891,9 +971,10 @@ static void print_counters(struct timespec *ts, int argc, const char **argv)
 	/* Do not print anything if we record to the pipe. */
 	if (STAT_RECORD && perf_stat.data.is_pipe)
 		return;
+	if (stat_config.quiet)
+		return;
 
-	perf_evlist__print_counters(evsel_list, &stat_config, &target,
-				    ts, argc, argv);
+	evlist__print_counters(evsel_list, &stat_config, &target, ts, argc, argv);
 }
 
 static volatile int signr = -1;
@@ -970,6 +1051,26 @@ static int parse_metric_groups(const struct option *opt,
 					 &stat_config.metric_events);
 }
 
+static int parse_control_option(const struct option *opt,
+				const char *str,
+				int unset __maybe_unused)
+{
+	struct perf_stat_config *config = opt->value;
+
+	return evlist__parse_control(str, &config->ctl_fd, &config->ctl_fd_ack, &config->ctl_fd_close);
+}
+
+static int parse_stat_cgroups(const struct option *opt,
+			      const char *str, int unset)
+{
+	if (stat_config.cgroup_list) {
+		pr_err("--cgroup and --for-each-cgroup cannot be used together\n");
+		return -1;
+	}
+
+	return parse_cgroups(opt, str, unset);
+}
+
 static struct option stat_options[] = {
 	OPT_BOOLEAN('T', "transaction", &transaction_run,
 		    "hardware transaction statistics"),
@@ -1013,7 +1114,9 @@ static struct option stat_options[] = {
 	OPT_STRING('x', "field-separator", &stat_config.csv_sep, "separator",
 		   "print counts with custom separator"),
 	OPT_CALLBACK('G', "cgroup", &evsel_list, "name",
-		     "monitor event in cgroup name only", parse_cgroups),
+		     "monitor event in cgroup name only", parse_stat_cgroups),
+	OPT_STRING(0, "for-each-cgroup", &stat_config.cgroup_list, "name",
+		    "expand events for each cgroup"),
 	OPT_STRING('o', "output", &output_name, "file", "output file name"),
 	OPT_BOOLEAN(0, "append", &append_file, "append to the output file"),
 	OPT_INTEGER(0, "log-fd", &output_fd,
@@ -1041,8 +1144,8 @@ static struct option stat_options[] = {
 		     "aggregate counts per thread", AGGR_THREAD),
 	OPT_SET_UINT(0, "per-node", &stat_config.aggr_mode,
 		     "aggregate counts per numa node", AGGR_NODE),
-	OPT_UINTEGER('D', "delay", &stat_config.initial_delay,
-		     "ms to wait before starting measurement after program start"),
+	OPT_INTEGER('D', "delay", &stat_config.initial_delay,
+		    "ms to wait before starting measurement after program start (-1: start with events disabled)"),
 	OPT_CALLBACK_NOOPT(0, "metric-only", &stat_config.metric_only, NULL,
 			"Only print computed metrics. No raw values", enable_metric_only),
 	OPT_BOOLEAN(0, "metric-no-group", &stat_config.metric_no_group,
@@ -1066,73 +1169,84 @@ static struct option stat_options[] = {
 		    "Use with 'percore' event qualifier to show the event "
 		    "counts of one hardware thread by sum up total hardware "
 		    "threads of same physical core"),
+	OPT_BOOLEAN(0, "summary", &stat_config.summary,
+		       "print summary for interval mode"),
+	OPT_BOOLEAN(0, "quiet", &stat_config.quiet,
+			"don't print output (useful with record)"),
 #ifdef HAVE_LIBPFM
 	OPT_CALLBACK(0, "pfm-events", &evsel_list, "event",
 		"libpfm4 event selector. use 'perf list' to list available events",
 		parse_libpfm_events_option),
 #endif
+	OPT_CALLBACK(0, "control", &stat_config, "fd:ctl-fd[,ack-fd] or fifo:ctl-fifo[,ack-fifo]",
+		     "Listen on ctl-fd descriptor for command to control measurement ('enable': enable events, 'disable': disable events).\n"
+		     "\t\t\t  Optionally send control command completion ('ack\\n') to ack-fd descriptor.\n"
+		     "\t\t\t  Alternatively, ctl-fifo / ack-fifo will be opened and used as ctl-fd / ack-fd.",
+		      parse_control_option),
 	OPT_END()
 };
 
-static int perf_stat__get_socket(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_socket(struct perf_stat_config *config __maybe_unused,
 				 struct perf_cpu_map *map, int cpu)
 {
 	return cpu_map__get_socket(map, cpu, NULL);
 }
 
-static int perf_stat__get_die(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_die(struct perf_stat_config *config __maybe_unused,
 			      struct perf_cpu_map *map, int cpu)
 {
 	return cpu_map__get_die(map, cpu, NULL);
 }
 
-static int perf_stat__get_core(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_core(struct perf_stat_config *config __maybe_unused,
 			       struct perf_cpu_map *map, int cpu)
 {
 	return cpu_map__get_core(map, cpu, NULL);
 }
 
-static int perf_stat__get_node(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_node(struct perf_stat_config *config __maybe_unused,
 			       struct perf_cpu_map *map, int cpu)
 {
 	return cpu_map__get_node(map, cpu, NULL);
 }
 
-static int perf_stat__get_aggr(struct perf_stat_config *config,
+static struct aggr_cpu_id perf_stat__get_aggr(struct perf_stat_config *config,
 			       aggr_get_id_t get_id, struct perf_cpu_map *map, int idx)
 {
 	int cpu;
+	struct aggr_cpu_id id = cpu_map__empty_aggr_cpu_id();
 
 	if (idx >= map->nr)
-		return -1;
+		return id;
 
 	cpu = map->map[idx];
 
-	if (config->cpus_aggr_map->map[cpu] == -1)
+	if (cpu_map__aggr_cpu_id_is_empty(config->cpus_aggr_map->map[cpu]))
 		config->cpus_aggr_map->map[cpu] = get_id(config, map, idx);
 
-	return config->cpus_aggr_map->map[cpu];
+	id = config->cpus_aggr_map->map[cpu];
+	return id;
 }
 
-static int perf_stat__get_socket_cached(struct perf_stat_config *config,
+static struct aggr_cpu_id perf_stat__get_socket_cached(struct perf_stat_config *config,
 					struct perf_cpu_map *map, int idx)
 {
 	return perf_stat__get_aggr(config, perf_stat__get_socket, map, idx);
 }
 
-static int perf_stat__get_die_cached(struct perf_stat_config *config,
+static struct aggr_cpu_id perf_stat__get_die_cached(struct perf_stat_config *config,
 					struct perf_cpu_map *map, int idx)
 {
 	return perf_stat__get_aggr(config, perf_stat__get_die, map, idx);
 }
 
-static int perf_stat__get_core_cached(struct perf_stat_config *config,
+static struct aggr_cpu_id perf_stat__get_core_cached(struct perf_stat_config *config,
 				      struct perf_cpu_map *map, int idx)
 {
 	return perf_stat__get_aggr(config, perf_stat__get_core, map, idx);
 }
 
-static int perf_stat__get_node_cached(struct perf_stat_config *config,
+static struct aggr_cpu_id perf_stat__get_node_cached(struct perf_stat_config *config,
 				      struct perf_cpu_map *map, int idx)
 {
 	return perf_stat__get_aggr(config, perf_stat__get_node, map, idx);
@@ -1206,14 +1320,29 @@ static int perf_stat_init_aggr_mode(void)
 	 * the aggregation translate cpumap.
 	 */
 	nr = perf_cpu_map__max(evsel_list->core.cpus);
-	stat_config.cpus_aggr_map = perf_cpu_map__empty_new(nr + 1);
+	stat_config.cpus_aggr_map = cpu_aggr_map__empty_new(nr + 1);
 	return stat_config.cpus_aggr_map ? 0 : -ENOMEM;
+}
+
+static void cpu_aggr_map__delete(struct cpu_aggr_map *map)
+{
+	if (map) {
+		WARN_ONCE(refcount_read(&map->refcnt) != 0,
+			  "cpu_aggr_map refcnt unbalanced\n");
+		free(map);
+	}
+}
+
+static void cpu_aggr_map__put(struct cpu_aggr_map *map)
+{
+	if (map && refcount_dec_and_test(&map->refcnt))
+		cpu_aggr_map__delete(map);
 }
 
 static void perf_stat__exit_aggr_mode(void)
 {
-	perf_cpu_map__put(stat_config.aggr_map);
-	perf_cpu_map__put(stat_config.cpus_aggr_map);
+	cpu_aggr_map__put(stat_config.aggr_map);
+	cpu_aggr_map__put(stat_config.cpus_aggr_map);
 	stat_config.aggr_map = NULL;
 	stat_config.cpus_aggr_map = NULL;
 }
@@ -1233,117 +1362,108 @@ static inline int perf_env__get_cpu(struct perf_env *env, struct perf_cpu_map *m
 	return cpu;
 }
 
-static int perf_env__get_socket(struct perf_cpu_map *map, int idx, void *data)
+static struct aggr_cpu_id perf_env__get_socket(struct perf_cpu_map *map, int idx, void *data)
 {
 	struct perf_env *env = data;
 	int cpu = perf_env__get_cpu(env, map, idx);
+	struct aggr_cpu_id id = cpu_map__empty_aggr_cpu_id();
 
-	return cpu == -1 ? -1 : env->cpu[cpu].socket_id;
+	if (cpu != -1)
+		id.socket = env->cpu[cpu].socket_id;
+
+	return id;
 }
 
-static int perf_env__get_die(struct perf_cpu_map *map, int idx, void *data)
+static struct aggr_cpu_id perf_env__get_die(struct perf_cpu_map *map, int idx, void *data)
 {
 	struct perf_env *env = data;
-	int die_id = -1, cpu = perf_env__get_cpu(env, map, idx);
+	struct aggr_cpu_id id = cpu_map__empty_aggr_cpu_id();
+	int cpu = perf_env__get_cpu(env, map, idx);
 
 	if (cpu != -1) {
 		/*
-		 * Encode socket in bit range 15:8
-		 * die_id is relative to socket,
-		 * we need a global id. So we combine
-		 * socket + die id
+		 * die_id is relative to socket, so start
+		 * with the socket ID and then add die to
+		 * make a unique ID.
 		 */
-		if (WARN_ONCE(env->cpu[cpu].socket_id >> 8, "The socket id number is too big.\n"))
-			return -1;
-
-		if (WARN_ONCE(env->cpu[cpu].die_id >> 8, "The die id number is too big.\n"))
-			return -1;
-
-		die_id = (env->cpu[cpu].socket_id << 8) | (env->cpu[cpu].die_id & 0xff);
+		id.socket = env->cpu[cpu].socket_id;
+		id.die = env->cpu[cpu].die_id;
 	}
 
-	return die_id;
+	return id;
 }
 
-static int perf_env__get_core(struct perf_cpu_map *map, int idx, void *data)
+static struct aggr_cpu_id perf_env__get_core(struct perf_cpu_map *map, int idx, void *data)
 {
 	struct perf_env *env = data;
-	int core = -1, cpu = perf_env__get_cpu(env, map, idx);
+	struct aggr_cpu_id id = cpu_map__empty_aggr_cpu_id();
+	int cpu = perf_env__get_cpu(env, map, idx);
 
 	if (cpu != -1) {
 		/*
-		 * Encode socket in bit range 31:24
-		 * encode die id in bit range 23:16
 		 * core_id is relative to socket and die,
-		 * we need a global id. So we combine
-		 * socket + die id + core id
+		 * we need a global id. So we set
+		 * socket, die id and core id
 		 */
-		if (WARN_ONCE(env->cpu[cpu].socket_id >> 8, "The socket id number is too big.\n"))
-			return -1;
-
-		if (WARN_ONCE(env->cpu[cpu].die_id >> 8, "The die id number is too big.\n"))
-			return -1;
-
-		if (WARN_ONCE(env->cpu[cpu].core_id >> 16, "The core id number is too big.\n"))
-			return -1;
-
-		core = (env->cpu[cpu].socket_id << 24) |
-		       (env->cpu[cpu].die_id << 16) |
-		       (env->cpu[cpu].core_id & 0xffff);
+		id.socket = env->cpu[cpu].socket_id;
+		id.die = env->cpu[cpu].die_id;
+		id.core = env->cpu[cpu].core_id;
 	}
 
-	return core;
+	return id;
 }
 
-static int perf_env__get_node(struct perf_cpu_map *map, int idx, void *data)
+static struct aggr_cpu_id perf_env__get_node(struct perf_cpu_map *map, int idx, void *data)
 {
 	int cpu = perf_env__get_cpu(data, map, idx);
+	struct aggr_cpu_id id = cpu_map__empty_aggr_cpu_id();
 
-	return perf_env__numa_node(data, cpu);
+	id.node = perf_env__numa_node(data, cpu);
+	return id;
 }
 
 static int perf_env__build_socket_map(struct perf_env *env, struct perf_cpu_map *cpus,
-				      struct perf_cpu_map **sockp)
+				      struct cpu_aggr_map **sockp)
 {
 	return cpu_map__build_map(cpus, sockp, perf_env__get_socket, env);
 }
 
 static int perf_env__build_die_map(struct perf_env *env, struct perf_cpu_map *cpus,
-				   struct perf_cpu_map **diep)
+				   struct cpu_aggr_map **diep)
 {
 	return cpu_map__build_map(cpus, diep, perf_env__get_die, env);
 }
 
 static int perf_env__build_core_map(struct perf_env *env, struct perf_cpu_map *cpus,
-				    struct perf_cpu_map **corep)
+				    struct cpu_aggr_map **corep)
 {
 	return cpu_map__build_map(cpus, corep, perf_env__get_core, env);
 }
 
 static int perf_env__build_node_map(struct perf_env *env, struct perf_cpu_map *cpus,
-				    struct perf_cpu_map **nodep)
+				    struct cpu_aggr_map **nodep)
 {
 	return cpu_map__build_map(cpus, nodep, perf_env__get_node, env);
 }
 
-static int perf_stat__get_socket_file(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_socket_file(struct perf_stat_config *config __maybe_unused,
 				      struct perf_cpu_map *map, int idx)
 {
 	return perf_env__get_socket(map, idx, &perf_stat.session->header.env);
 }
-static int perf_stat__get_die_file(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_die_file(struct perf_stat_config *config __maybe_unused,
 				   struct perf_cpu_map *map, int idx)
 {
 	return perf_env__get_die(map, idx, &perf_stat.session->header.env);
 }
 
-static int perf_stat__get_core_file(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_core_file(struct perf_stat_config *config __maybe_unused,
 				    struct perf_cpu_map *map, int idx)
 {
 	return perf_env__get_core(map, idx, &perf_stat.session->header.env);
 }
 
-static int perf_stat__get_node_file(struct perf_stat_config *config __maybe_unused,
+static struct aggr_cpu_id perf_stat__get_node_file(struct perf_stat_config *config __maybe_unused,
 				    struct perf_cpu_map *map, int idx)
 {
 	return perf_env__get_node(map, idx, &perf_stat.session->header.env);
@@ -1391,55 +1511,6 @@ static int perf_stat_init_aggr_mode_file(struct perf_stat *st)
 	}
 
 	return 0;
-}
-
-static int topdown_filter_events(const char **attr, char **str, bool use_group)
-{
-	int off = 0;
-	int i;
-	int len = 0;
-	char *s;
-
-	for (i = 0; attr[i]; i++) {
-		if (pmu_have_event("cpu", attr[i])) {
-			len += strlen(attr[i]) + 1;
-			attr[i - off] = attr[i];
-		} else
-			off++;
-	}
-	attr[i - off] = NULL;
-
-	*str = malloc(len + 1 + 2);
-	if (!*str)
-		return -1;
-	s = *str;
-	if (i - off == 0) {
-		*s = 0;
-		return 0;
-	}
-	if (use_group)
-		*s++ = '{';
-	for (i = 0; attr[i]; i++) {
-		strcpy(s, attr[i]);
-		s += strlen(s);
-		*s++ = ',';
-	}
-	if (use_group) {
-		s[-1] = '}';
-		*s = 0;
-	} else
-		s[-1] = 0;
-	return 0;
-}
-
-__weak bool arch_topdown_check_group(bool *warn)
-{
-	*warn = false;
-	return false;
-}
-
-__weak void arch_topdown_group_warn(void)
-{
 }
 
 /*
@@ -1638,6 +1709,24 @@ static int add_default_attributes(void)
 		char *str = NULL;
 		bool warn = false;
 
+		if (!force_metric_only)
+			stat_config.metric_only = true;
+
+		if (topdown_filter_events(topdown_metric_attrs, &str, 1) < 0) {
+			pr_err("Out of memory\n");
+			return -1;
+		}
+		if (topdown_metric_attrs[0] && str) {
+			if (!stat_config.interval && !stat_config.metric_only) {
+				fprintf(stat_config.output,
+					"Topdown accuracy may decrease when measuring long periods.\n"
+					"Please print the result regularly, e.g. -I1000\n");
+			}
+			goto setup_metrics;
+		}
+
+		zfree(&str);
+
 		if (stat_config.aggr_mode != AGGR_GLOBAL &&
 		    stat_config.aggr_mode != AGGR_CORE) {
 			pr_err("top down event configuration requires --per-core mode\n");
@@ -1649,8 +1738,6 @@ static int add_default_attributes(void)
 			return -1;
 		}
 
-		if (!force_metric_only)
-			stat_config.metric_only = true;
 		if (topdown_filter_events(topdown_attrs, &str,
 				arch_topdown_check_group(&warn)) < 0) {
 			pr_err("Out of memory\n");
@@ -1659,6 +1746,7 @@ static int add_default_attributes(void)
 		if (topdown_attrs[0] && str) {
 			if (warn)
 				arch_topdown_group_warn();
+setup_metrics:
 			err = parse_events(evsel_list, str, &errinfo);
 			if (err) {
 				fprintf(stderr,
@@ -1679,19 +1767,17 @@ static int add_default_attributes(void)
 		if (target__has_cpu(&target))
 			default_attrs0[0].config = PERF_COUNT_SW_CPU_CLOCK;
 
-		if (perf_evlist__add_default_attrs(evsel_list, default_attrs0) < 0)
+		if (evlist__add_default_attrs(evsel_list, default_attrs0) < 0)
 			return -1;
 		if (pmu_have_event("cpu", "stalled-cycles-frontend")) {
-			if (perf_evlist__add_default_attrs(evsel_list,
-						frontend_attrs) < 0)
+			if (evlist__add_default_attrs(evsel_list, frontend_attrs) < 0)
 				return -1;
 		}
 		if (pmu_have_event("cpu", "stalled-cycles-backend")) {
-			if (perf_evlist__add_default_attrs(evsel_list,
-						backend_attrs) < 0)
+			if (evlist__add_default_attrs(evsel_list, backend_attrs) < 0)
 				return -1;
 		}
-		if (perf_evlist__add_default_attrs(evsel_list, default_attrs1) < 0)
+		if (evlist__add_default_attrs(evsel_list, default_attrs1) < 0)
 			return -1;
 	}
 
@@ -1701,21 +1787,21 @@ static int add_default_attributes(void)
 		return 0;
 
 	/* Append detailed run extra attributes: */
-	if (perf_evlist__add_default_attrs(evsel_list, detailed_attrs) < 0)
+	if (evlist__add_default_attrs(evsel_list, detailed_attrs) < 0)
 		return -1;
 
 	if (detailed_run < 2)
 		return 0;
 
 	/* Append very detailed run extra attributes: */
-	if (perf_evlist__add_default_attrs(evsel_list, very_detailed_attrs) < 0)
+	if (evlist__add_default_attrs(evsel_list, very_detailed_attrs) < 0)
 		return -1;
 
 	if (detailed_run < 3)
 		return 0;
 
 	/* Append very, very detailed run extra attributes: */
-	return perf_evlist__add_default_attrs(evsel_list, very_very_detailed_attrs);
+	return evlist__add_default_attrs(evsel_list, very_very_detailed_attrs);
 }
 
 static const char * const stat_record_usage[] = {
@@ -1828,7 +1914,7 @@ static int set_maps(struct perf_stat *st)
 
 	perf_evlist__set_maps(&evsel_list->core, st->cpus, st->threads);
 
-	if (perf_evlist__alloc_stats(evsel_list, true))
+	if (evlist__alloc_stats(evsel_list, true))
 		return -ENOMEM;
 
 	st->maps_allocated = true;
@@ -1961,8 +2047,10 @@ static void setup_system_wide(int forks)
 		struct evsel *counter;
 
 		evlist__for_each_entry(evsel_list, counter) {
-			if (!counter->core.system_wide)
+			if (!counter->core.system_wide &&
+			    strcmp(counter->name, "duration_time")) {
 				return;
+			}
 		}
 
 		if (evsel_list->core.nr_entries)
@@ -2054,7 +2142,7 @@ int cmd_stat(int argc, const char **argv)
 		goto out;
 	}
 
-	if (!output) {
+	if (!output && !stat_config.quiet) {
 		struct timespec tm;
 		mode = append_file ? "a" : "w";
 
@@ -2148,12 +2236,28 @@ int cmd_stat(int argc, const char **argv)
 	if (add_default_attributes())
 		goto out;
 
+	if (stat_config.cgroup_list) {
+		if (nr_cgroups > 0) {
+			pr_err("--cgroup and --for-each-cgroup cannot be used together\n");
+			parse_options_usage(stat_usage, stat_options, "G", 1);
+			parse_options_usage(NULL, stat_options, "for-each-cgroup", 0);
+			goto out;
+		}
+
+		if (evlist__expand_cgroup(evsel_list, stat_config.cgroup_list,
+					  &stat_config.metric_events, true) < 0) {
+			parse_options_usage(stat_usage, stat_options,
+					    "for-each-cgroup", 0);
+			goto out;
+		}
+	}
+
 	target__validate(&target);
 
 	if ((stat_config.aggr_mode == AGGR_THREAD) && (target.system_wide))
 		target.per_thread = true;
 
-	if (perf_evlist__create_maps(evsel_list, &target) < 0) {
+	if (evlist__create_maps(evsel_list, &target) < 0) {
 		if (target__has_task(&target)) {
 			pr_err("Problems finding threads of monitor\n");
 			parse_options_usage(stat_usage, stat_options, "p", 1);
@@ -2212,7 +2316,7 @@ int cmd_stat(int argc, const char **argv)
 		goto out;
 	}
 
-	if (perf_evlist__alloc_stats(evsel_list, interval))
+	if (evlist__alloc_stats(evsel_list, interval))
 		goto out;
 
 	if (perf_stat_init_aggr_mode())
@@ -2242,6 +2346,9 @@ int cmd_stat(int argc, const char **argv)
 	signal(SIGALRM, skip_signal);
 	signal(SIGABRT, skip_signal);
 
+	if (evlist__initialize_ctlfd(evsel_list, stat_config.ctl_fd, stat_config.ctl_fd_ack))
+		goto out;
+
 	status = 0;
 	for (run_idx = 0; forever || run_idx < stat_config.run_count; run_idx++) {
 		if (stat_config.run_count != 1 && verbose > 0)
@@ -2249,7 +2356,7 @@ int cmd_stat(int argc, const char **argv)
 				run_idx + 1);
 
 		if (run_idx != 0)
-			perf_evlist__reset_prev_raw_counts(evsel_list);
+			evlist__reset_prev_raw_counts(evsel_list);
 
 		status = run_perf_stat(argc, argv, run_idx);
 		if (forever && status != -1 && !interval) {
@@ -2260,6 +2367,8 @@ int cmd_stat(int argc, const char **argv)
 
 	if (!forever && status != -1 && (!interval || stat_config.summary))
 		print_counters(NULL, argc, argv);
+
+	evlist__finalize_ctlfd(evsel_list);
 
 	if (STAT_RECORD) {
 		/*
@@ -2298,7 +2407,7 @@ int cmd_stat(int argc, const char **argv)
 	}
 
 	perf_stat__exit_aggr_mode();
-	perf_evlist__free_stats(evsel_list);
+	evlist__free_stats(evsel_list);
 out:
 	zfree(&stat_config.walltime_run);
 
@@ -2307,7 +2416,9 @@ out:
 
 	evlist__delete(evsel_list);
 
+	metricgroup__rblist_exit(&stat_config.metric_events);
 	runtime_stat_delete(&stat_config);
+	evlist__close_control(stat_config.ctl_fd, stat_config.ctl_fd_ack, &stat_config.ctl_fd_close);
 
 	return status;
 }

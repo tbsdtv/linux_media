@@ -76,18 +76,32 @@
 	type REFCLK_CLOCK_EN;\
 	type REFCLK_SRC_SEL;
 
+#define DCCG3_REG_FIELD_LIST(type) \
+	type PHYASYMCLK_FORCE_EN;\
+	type PHYASYMCLK_FORCE_SRC_SEL;\
+	type PHYBSYMCLK_FORCE_EN;\
+	type PHYBSYMCLK_FORCE_SRC_SEL;\
+	type PHYCSYMCLK_FORCE_EN;\
+	type PHYCSYMCLK_FORCE_SRC_SEL;
+
 struct dccg_shift {
 	DCCG_REG_FIELD_LIST(uint8_t)
+	DCCG3_REG_FIELD_LIST(uint8_t)
 };
 
 struct dccg_mask {
 	DCCG_REG_FIELD_LIST(uint32_t)
+	DCCG3_REG_FIELD_LIST(uint32_t)
 };
 
 struct dccg_registers {
 	uint32_t DPPCLK_DTO_CTRL;
 	uint32_t DPPCLK_DTO_PARAM[6];
 	uint32_t REFCLK_CNTL;
+	uint32_t HDMICHARCLK_CLOCK_CNTL[6];
+	uint32_t PHYASYMCLK_CLOCK_CNTL;
+	uint32_t PHYBSYMCLK_CLOCK_CNTL;
+	uint32_t PHYCSYMCLK_CLOCK_CNTL;
 };
 
 struct dcn_dccg {

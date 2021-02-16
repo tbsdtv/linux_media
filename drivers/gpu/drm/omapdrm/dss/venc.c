@@ -361,8 +361,11 @@ static int venc_runtime_get(struct venc_device *venc)
 	DSSDBG("venc_runtime_get\n");
 
 	r = pm_runtime_get_sync(&venc->pdev->dev);
-	WARN_ON(r < 0);
-	return r < 0 ? r : 0;
+	if (WARN_ON(r < 0)) {
+		pm_runtime_put_noidle(&venc->pdev->dev);
+		return r;
+	}
+	return 0;
 }
 
 static void venc_runtime_put(struct venc_device *venc)
@@ -548,6 +551,7 @@ static int venc_bridge_attach(struct drm_bridge *bridge,
 
 static enum drm_mode_status
 venc_bridge_mode_valid(struct drm_bridge *bridge,
+		       const struct drm_display_info *info,
 		       const struct drm_display_mode *mode)
 {
 	switch (venc_get_videomode(mode)) {
@@ -596,7 +600,7 @@ static void venc_bridge_mode_set(struct drm_bridge *bridge,
 	switch (venc_mode) {
 	default:
 		WARN_ON_ONCE(1);
-		/* Fall-through */
+		fallthrough;
 	case VENC_MODE_PAL:
 		venc->config = &venc_config_pal_trm;
 		break;
@@ -780,7 +784,7 @@ static int venc_probe_of(struct venc_device *venc)
 		venc->type = OMAP_DSS_VENC_TYPE_SVIDEO;
 		break;
 	default:
-		dev_err(&venc->pdev->dev, "bad channel propert '%d'\n",
+		dev_err(&venc->pdev->dev, "bad channel property '%d'\n",
 			channels);
 		r = -EINVAL;
 		goto err;
@@ -902,6 +906,7 @@ static int venc_runtime_resume(struct device *dev)
 static const struct dev_pm_ops venc_pm_ops = {
 	.runtime_suspend = venc_runtime_suspend,
 	.runtime_resume = venc_runtime_resume,
+	SET_LATE_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 };
 
 static const struct of_device_id venc_of_match[] = {

@@ -123,13 +123,14 @@ static int ath79_gpio_irq_set_type(struct irq_data *data,
 	switch (flow_type) {
 	case IRQ_TYPE_EDGE_RISING:
 		polarity |= mask;
+		fallthrough;
 	case IRQ_TYPE_EDGE_FALLING:
 	case IRQ_TYPE_EDGE_BOTH:
 		break;
 
 	case IRQ_TYPE_LEVEL_HIGH:
 		polarity |= mask;
-		/* fall through */
+		fallthrough;
 	case IRQ_TYPE_LEVEL_LOW:
 		type |= mask;
 		break;

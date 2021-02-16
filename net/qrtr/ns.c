@@ -199,16 +199,29 @@ static int announce_servers(struct sockaddr_qrtr *sq)
 	if (!node)
 		return 0;
 
+	rcu_read_lock();
 	/* Announce the list of servers registered in this node */
 	radix_tree_for_each_slot(slot, &node->servers, &iter, 0) {
 		srv = radix_tree_deref_slot(slot);
+		if (!srv)
+			continue;
+		if (radix_tree_deref_retry(srv)) {
+			slot = radix_tree_iter_retry(&iter);
+			continue;
+		}
+		slot = radix_tree_iter_resume(slot, &iter);
+		rcu_read_unlock();
 
 		ret = service_announce_new(sq, srv);
 		if (ret < 0) {
 			pr_err("failed to announce new service\n");
 			return ret;
 		}
+
+		rcu_read_lock();
 	}
+
+	rcu_read_unlock();
 
 	return 0;
 }
@@ -344,11 +357,22 @@ static int ctrl_cmd_bye(struct sockaddr_qrtr *from)
 	if (!node)
 		return 0;
 
+	rcu_read_lock();
 	/* Advertise removal of this client to all servers of remote node */
 	radix_tree_for_each_slot(slot, &node->servers, &iter, 0) {
 		srv = radix_tree_deref_slot(slot);
+		if (!srv)
+			continue;
+		if (radix_tree_deref_retry(srv)) {
+			slot = radix_tree_iter_retry(&iter);
+			continue;
+		}
+		slot = radix_tree_iter_resume(slot, &iter);
+		rcu_read_unlock();
 		server_del(node, srv->port);
+		rcu_read_lock();
 	}
+	rcu_read_unlock();
 
 	/* Advertise the removal of this client to all local servers */
 	local_node = node_get(qrtr_ns.local_node);
@@ -359,8 +383,17 @@ static int ctrl_cmd_bye(struct sockaddr_qrtr *from)
 	pkt.cmd = cpu_to_le32(QRTR_TYPE_BYE);
 	pkt.client.node = cpu_to_le32(from->sq_node);
 
+	rcu_read_lock();
 	radix_tree_for_each_slot(slot, &local_node->servers, &iter, 0) {
 		srv = radix_tree_deref_slot(slot);
+		if (!srv)
+			continue;
+		if (radix_tree_deref_retry(srv)) {
+			slot = radix_tree_iter_retry(&iter);
+			continue;
+		}
+		slot = radix_tree_iter_resume(slot, &iter);
+		rcu_read_unlock();
 
 		sq.sq_family = AF_QIPCRTR;
 		sq.sq_node = srv->node;
@@ -374,7 +407,10 @@ static int ctrl_cmd_bye(struct sockaddr_qrtr *from)
 			pr_err("failed to send bye cmd\n");
 			return ret;
 		}
+		rcu_read_lock();
 	}
+
+	rcu_read_unlock();
 
 	return 0;
 }
@@ -434,8 +470,17 @@ static int ctrl_cmd_del_client(struct sockaddr_qrtr *from,
 	pkt.client.node = cpu_to_le32(node_id);
 	pkt.client.port = cpu_to_le32(port);
 
+	rcu_read_lock();
 	radix_tree_for_each_slot(slot, &local_node->servers, &iter, 0) {
 		srv = radix_tree_deref_slot(slot);
+		if (!srv)
+			continue;
+		if (radix_tree_deref_retry(srv)) {
+			slot = radix_tree_iter_retry(&iter);
+			continue;
+		}
+		slot = radix_tree_iter_resume(slot, &iter);
+		rcu_read_unlock();
 
 		sq.sq_family = AF_QIPCRTR;
 		sq.sq_node = srv->node;
@@ -449,7 +494,10 @@ static int ctrl_cmd_del_client(struct sockaddr_qrtr *from,
 			pr_err("failed to send del client cmd\n");
 			return ret;
 		}
+		rcu_read_lock();
 	}
+
+	rcu_read_unlock();
 
 	return 0;
 }
@@ -468,10 +516,6 @@ static int ctrl_cmd_new_server(struct sockaddr_qrtr *from,
 		node_id = from->sq_node;
 		port = from->sq_port;
 	}
-
-	/* Don't accept spoofed messages */
-	if (from->sq_node != node_id)
-		return -EINVAL;
 
 	srv = server_add(service, instance, node_id, port);
 	if (!srv)
@@ -510,10 +554,6 @@ static int ctrl_cmd_del_server(struct sockaddr_qrtr *from,
 		node_id = from->sq_node;
 		port = from->sq_port;
 	}
-
-	/* Don't accept spoofed messages */
-	if (from->sq_node != node_id)
-		return -EINVAL;
 
 	/* Local servers may only unregister themselves */
 	if (from->sq_node == qrtr_ns.local_node && from->sq_port != port)
@@ -554,20 +594,40 @@ static int ctrl_cmd_new_lookup(struct sockaddr_qrtr *from,
 	filter.service = service;
 	filter.instance = instance;
 
+	rcu_read_lock();
 	radix_tree_for_each_slot(node_slot, &nodes, &node_iter, 0) {
 		node = radix_tree_deref_slot(node_slot);
+		if (!node)
+			continue;
+		if (radix_tree_deref_retry(node)) {
+			node_slot = radix_tree_iter_retry(&node_iter);
+			continue;
+		}
+		node_slot = radix_tree_iter_resume(node_slot, &node_iter);
 
 		radix_tree_for_each_slot(srv_slot, &node->servers,
 					 &srv_iter, 0) {
 			struct qrtr_server *srv;
 
 			srv = radix_tree_deref_slot(srv_slot);
+			if (!srv)
+				continue;
+			if (radix_tree_deref_retry(srv)) {
+				srv_slot = radix_tree_iter_retry(&srv_iter);
+				continue;
+			}
+
 			if (!server_match(srv, &filter))
 				continue;
 
+			srv_slot = radix_tree_iter_resume(srv_slot, &srv_iter);
+
+			rcu_read_unlock();
 			lookup_notify(from, srv, true);
+			rcu_read_lock();
 		}
 	}
+	rcu_read_unlock();
 
 	/* Empty notification, to indicate end of listing */
 	lookup_notify(from, NULL, true);
@@ -695,7 +755,7 @@ static void qrtr_ns_data_ready(struct sock *sk)
 	queue_work(qrtr_ns.workqueue, &qrtr_ns.work);
 }
 
-void qrtr_ns_init(void)
+int qrtr_ns_init(void)
 {
 	struct sockaddr_qrtr sq;
 	int ret;
@@ -706,7 +766,7 @@ void qrtr_ns_init(void)
 	ret = sock_create_kern(&init_net, AF_QIPCRTR, SOCK_DGRAM,
 			       PF_QIPCRTR, &qrtr_ns.sock);
 	if (ret < 0)
-		return;
+		return ret;
 
 	ret = kernel_getsockname(qrtr_ns.sock, (struct sockaddr *)&sq);
 	if (ret < 0) {
@@ -737,12 +797,13 @@ void qrtr_ns_init(void)
 	if (ret < 0)
 		goto err_wq;
 
-	return;
+	return 0;
 
 err_wq:
 	destroy_workqueue(qrtr_ns.workqueue);
 err_sock:
 	sock_release(qrtr_ns.sock);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(qrtr_ns_init);
 

@@ -40,7 +40,7 @@ static int drm_sun4i_gem_dumb_create(struct drm_file *file_priv,
 
 DEFINE_DRM_GEM_CMA_FOPS(sun4i_drv_fops);
 
-static struct drm_driver sun4i_drv_driver = {
+static const struct drm_driver sun4i_drv_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 
 	/* Generic Operations */
@@ -52,8 +52,7 @@ static struct drm_driver sun4i_drv_driver = {
 	.minor			= 0,
 
 	/* GEM Operations */
-	DRM_GEM_CMA_VMAP_DRIVER_OPS,
-	.dumb_create		= drm_sun4i_gem_dumb_create,
+	DRM_GEM_CMA_DRIVER_OPS_VMAP_WITH_DUMB_CREATE(drm_sun4i_gem_dumb_create),
 };
 
 static int sun4i_drv_bind(struct device *dev)

@@ -304,8 +304,8 @@ static int switchdev_port_obj_add_defer(struct net_device *dev,
  *	switchdev_port_obj_add - Add port object
  *
  *	@dev: port device
- *	@id: object ID
  *	@obj: object to add
+ *	@extack: netlink extended ack
  *
  *	Use a 2-phase prepare-commit transaction model to ensure
  *	system is not left in a partially updated state due to
@@ -357,7 +357,6 @@ static int switchdev_port_obj_del_defer(struct net_device *dev,
  *	switchdev_port_obj_del - Delete port object
  *
  *	@dev: port device
- *	@id: object ID
  *	@obj: object to delete
  *
  *	rtnl_lock must be held and must not be in atomic section,
@@ -405,7 +404,7 @@ EXPORT_SYMBOL_GPL(unregister_switchdev_notifier);
  *	@val: value passed unmodified to notifier function
  *	@dev: port device
  *	@info: notifier information data
- *
+ *	@extack: netlink extended ack
  *	Call all network notifier blocks.
  */
 int call_switchdev_notifiers(unsigned long val, struct net_device *dev,
@@ -461,10 +460,11 @@ static int __switchdev_handle_port_obj_add(struct net_device *dev,
 	extack = switchdev_notifier_info_to_extack(&port_obj_info->info);
 
 	if (check_cb(dev)) {
-		/* This flag is only checked if the return value is success. */
-		port_obj_info->handled = true;
-		return add_cb(dev, port_obj_info->obj, port_obj_info->trans,
-			      extack);
+		err = add_cb(dev, port_obj_info->obj, port_obj_info->trans,
+			     extack);
+		if (err != -EOPNOTSUPP)
+			port_obj_info->handled = true;
+		return err;
 	}
 
 	/* Switch ports might be stacked under e.g. a LAG. Ignore the
@@ -516,9 +516,10 @@ static int __switchdev_handle_port_obj_del(struct net_device *dev,
 	int err = -EOPNOTSUPP;
 
 	if (check_cb(dev)) {
-		/* This flag is only checked if the return value is success. */
-		port_obj_info->handled = true;
-		return del_cb(dev, port_obj_info->obj);
+		err = del_cb(dev, port_obj_info->obj);
+		if (err != -EOPNOTSUPP)
+			port_obj_info->handled = true;
+		return err;
 	}
 
 	/* Switch ports might be stacked under e.g. a LAG. Ignore the
@@ -569,9 +570,10 @@ static int __switchdev_handle_port_attr_set(struct net_device *dev,
 	int err = -EOPNOTSUPP;
 
 	if (check_cb(dev)) {
-		port_attr_info->handled = true;
-		return set_cb(dev, port_attr_info->attr,
-			      port_attr_info->trans);
+		err = set_cb(dev, port_attr_info->attr, port_attr_info->trans);
+		if (err != -EOPNOTSUPP)
+			port_attr_info->handled = true;
+		return err;
 	}
 
 	/* Switch ports might be stacked under e.g. a LAG. Ignore the

@@ -13,22 +13,6 @@ struct ipa;
 struct ipa_interrupt;
 
 /**
- * enum ipa_irq_id - IPA interrupt type
- * @IPA_IRQ_UC_0:	Microcontroller event interrupt
- * @IPA_IRQ_UC_1:	Microcontroller response interrupt
- * @IPA_IRQ_TX_SUSPEND:	Data ready interrupt
- *
- * The data ready interrupt is signaled if data has arrived that is destined
- * for an AP RX endpoint whose underlying GSI channel is suspended/stopped.
- */
-enum ipa_irq_id {
-	IPA_IRQ_UC_0		= 2,
-	IPA_IRQ_UC_1		= 3,
-	IPA_IRQ_TX_SUSPEND	= 14,
-	IPA_IRQ_COUNT,		/* Number of interrupt types (not an index) */
-};
-
-/**
  * typedef ipa_irq_handler_t - IPA interrupt handler function type
  * @ipa:	IPA pointer
  * @irq_id:	interrupt type
@@ -104,7 +88,7 @@ void ipa_interrupt_simulate_suspend(struct ipa_interrupt *interrupt);
  * ipa_interrupt_setup() - Set up the IPA interrupt framework
  * @ipa:	IPA pointer
  *
- * @Return:	Pointer to IPA SMP2P info, or a pointer-coded error
+ * Return:	Pointer to IPA SMP2P info, or a pointer-coded error
  */
 struct ipa_interrupt *ipa_interrupt_setup(struct ipa *ipa);
 

@@ -286,6 +286,8 @@ static struct block_entry *add_block_entry(struct btrfs_fs_info *fs_info,
 			exist_re = insert_root_entry(&exist->roots, re);
 			if (exist_re)
 				kfree(re);
+		} else {
+			kfree(re);
 		}
 		kfree(be);
 		return exist;
@@ -509,7 +511,7 @@ static int process_leaf(struct btrfs_root *root,
 		switch (key.type) {
 		case BTRFS_EXTENT_ITEM_KEY:
 			*num_bytes = key.offset;
-			/* fall through */
+			fallthrough;
 		case BTRFS_METADATA_ITEM_KEY:
 			*bytenr = key.objectid;
 			ret = process_extent_item(fs_info, path, &key, i,
@@ -549,34 +551,19 @@ static int process_leaf(struct btrfs_root *root,
 static int walk_down_tree(struct btrfs_root *root, struct btrfs_path *path,
 			  int level, u64 *bytenr, u64 *num_bytes)
 {
-	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct extent_buffer *eb;
-	u64 block_bytenr, gen;
 	int ret = 0;
 
 	while (level >= 0) {
 		if (level) {
-			struct btrfs_key first_key;
-
-			block_bytenr = btrfs_node_blockptr(path->nodes[level],
-							   path->slots[level]);
-			gen = btrfs_node_ptr_generation(path->nodes[level],
-							path->slots[level]);
-			btrfs_node_key_to_cpu(path->nodes[level], &first_key,
-					      path->slots[level]);
-			eb = read_tree_block(fs_info, block_bytenr, gen,
-					     level - 1, &first_key);
+			eb = btrfs_read_node_slot(path->nodes[level],
+						  path->slots[level]);
 			if (IS_ERR(eb))
 				return PTR_ERR(eb);
-			if (!extent_buffer_uptodate(eb)) {
-				free_extent_buffer(eb);
-				return -EIO;
-			}
 			btrfs_tree_read_lock(eb);
-			btrfs_set_lock_blocking_read(eb);
 			path->nodes[level-1] = eb;
 			path->slots[level-1] = 0;
-			path->locks[level-1] = BTRFS_READ_LOCK_BLOCKING;
+			path->locks[level-1] = BTRFS_READ_LOCK;
 		} else {
 			ret = process_leaf(root, path, bytenr, num_bytes);
 			if (ret)
@@ -797,8 +784,7 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 		if (!be) {
 			btrfs_err(fs_info,
 "trying to do action %d to bytenr %llu num_bytes %llu but there is no existing entry!",
-				  action, (unsigned long long)bytenr,
-				  (unsigned long long)num_bytes);
+				  action, bytenr, num_bytes);
 			dump_ref_action(fs_info, ra);
 			kfree(ref);
 			kfree(ra);
@@ -858,6 +844,7 @@ int btrfs_ref_tree_mod(struct btrfs_fs_info *fs_info,
 "dropping a ref for a root that doesn't have a ref on the block");
 			dump_block_entry(fs_info, be);
 			dump_ref_action(fs_info, ra);
+			kfree(ref);
 			kfree(ra);
 			goto out_unlock;
 		}
@@ -998,11 +985,10 @@ int btrfs_build_ref_tree(struct btrfs_fs_info *fs_info)
 		return -ENOMEM;
 
 	eb = btrfs_read_lock_root_node(fs_info->extent_root);
-	btrfs_set_lock_blocking_read(eb);
 	level = btrfs_header_level(eb);
 	path->nodes[level] = eb;
 	path->slots[level] = 0;
-	path->locks[level] = BTRFS_READ_LOCK_BLOCKING;
+	path->locks[level] = BTRFS_READ_LOCK;
 
 	while (1) {
 		/*

@@ -53,7 +53,7 @@ static ssize_t size_show(struct device *dev, struct device_attribute *attr,
 	if (pdev->p2pdma->pool)
 		size = gen_pool_size(pdev->p2pdma->pool);
 
-	return snprintf(buf, PAGE_SIZE, "%zd\n", size);
+	return scnprintf(buf, PAGE_SIZE, "%zd\n", size);
 }
 static DEVICE_ATTR_RO(size);
 
@@ -66,7 +66,7 @@ static ssize_t available_show(struct device *dev, struct device_attribute *attr,
 	if (pdev->p2pdma->pool)
 		avail = gen_pool_avail(pdev->p2pdma->pool);
 
-	return snprintf(buf, PAGE_SIZE, "%zd\n", avail);
+	return scnprintf(buf, PAGE_SIZE, "%zd\n", avail);
 }
 static DEVICE_ATTR_RO(available);
 
@@ -75,8 +75,8 @@ static ssize_t published_show(struct device *dev, struct device_attribute *attr,
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
 
-	return snprintf(buf, PAGE_SIZE, "%d\n",
-			pdev->p2pdma->p2pmem_published);
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 pdev->p2pdma->p2pmem_published);
 }
 static DEVICE_ATTR_RO(published);
 
@@ -185,9 +185,9 @@ int pci_p2pdma_add_resource(struct pci_dev *pdev, int bar, size_t size,
 		return -ENOMEM;
 
 	pgmap = &p2p_pgmap->pgmap;
-	pgmap->res.start = pci_resource_start(pdev, bar) + offset;
-	pgmap->res.end = pgmap->res.start + size - 1;
-	pgmap->res.flags = pci_resource_flags(pdev, bar);
+	pgmap->range.start = pci_resource_start(pdev, bar) + offset;
+	pgmap->range.end = pgmap->range.start + size - 1;
+	pgmap->nr_range = 1;
 	pgmap->type = MEMORY_DEVICE_PCI_P2PDMA;
 
 	p2p_pgmap->provider = pdev;
@@ -202,13 +202,13 @@ int pci_p2pdma_add_resource(struct pci_dev *pdev, int bar, size_t size,
 
 	error = gen_pool_add_owner(pdev->p2pdma->pool, (unsigned long)addr,
 			pci_bus_address(pdev, bar) + offset,
-			resource_size(&pgmap->res), dev_to_node(&pdev->dev),
+			range_len(&pgmap->range), dev_to_node(&pdev->dev),
 			pgmap->ref);
 	if (error)
 		goto pages_free;
 
-	pci_info(pdev, "added peer-to-peer DMA memory %pR\n",
-		 &pgmap->res);
+	pci_info(pdev, "added peer-to-peer DMA memory %#llx-%#llx\n",
+		 pgmap->range.start, pgmap->range.end);
 
 	return 0;
 
@@ -253,7 +253,7 @@ static int pci_bridge_has_acs_redir(struct pci_dev *pdev)
 	int pos;
 	u16 ctrl;
 
-	pos = pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_ACS);
+	pos = pdev->acs_cap;
 	if (!pos)
 		return 0;
 
@@ -273,6 +273,19 @@ static void seq_buf_print_bus_devfn(struct seq_buf *buf, struct pci_dev *pdev)
 	seq_buf_printf(buf, "%s;", pci_name(pdev));
 }
 
+static bool cpu_supports_p2pdma(void)
+{
+#ifdef CONFIG_X86
+	struct cpuinfo_x86 *c = &cpu_data(0);
+
+	/* Any AMD CPU whose family ID is Zen or newer supports p2pdma */
+	if (c->x86_vendor == X86_VENDOR_AMD && c->x86 >= 0x17)
+		return true;
+#endif
+
+	return false;
+}
+
 static const struct pci_p2pdma_whitelist_entry {
 	unsigned short vendor;
 	unsigned short device;
@@ -280,11 +293,6 @@ static const struct pci_p2pdma_whitelist_entry {
 		REQ_SAME_HOST_BRIDGE	= 1 << 0,
 	} flags;
 } pci_p2pdma_whitelist[] = {
-	/* AMD ZEN */
-	{PCI_VENDOR_ID_AMD,	0x1450,	0},
-	{PCI_VENDOR_ID_AMD,	0x15d0,	0},
-	{PCI_VENDOR_ID_AMD,	0x1630,	0},
-
 	/* Intel Xeon E5/Core i7 */
 	{PCI_VENDOR_ID_INTEL,	0x3c00, REQ_SAME_HOST_BRIDGE},
 	{PCI_VENDOR_ID_INTEL,	0x3c01, REQ_SAME_HOST_BRIDGE},
@@ -473,7 +481,8 @@ upstream_bridge_distance(struct pci_dev *provider, struct pci_dev *client,
 					      acs_redirects, acs_list);
 
 	if (map_type == PCI_P2PDMA_MAP_THRU_HOST_BRIDGE) {
-		if (!host_bridge_whitelist(provider, client))
+		if (!cpu_supports_p2pdma() &&
+		    !host_bridge_whitelist(provider, client))
 			map_type = PCI_P2PDMA_MAP_NOT_SUPPORTED;
 	}
 
@@ -547,14 +556,6 @@ int pci_p2pdma_distance_many(struct pci_dev *provider, struct device **clients,
 		return -1;
 
 	for (i = 0; i < num_clients; i++) {
-		if (IS_ENABLED(CONFIG_DMA_VIRT_OPS) &&
-		    clients[i]->dma_ops == &dma_virt_ops) {
-			if (verbose)
-				dev_warn(clients[i],
-					 "cannot be used for peer-to-peer DMA because the driver makes use of dma_virt_ops\n");
-			return -1;
-		}
-
 		pci_client = find_parent_pci_dev(clients[i]);
 		if (!pci_client) {
 			if (verbose)
@@ -599,7 +600,7 @@ bool pci_has_p2pmem(struct pci_dev *pdev)
 EXPORT_SYMBOL_GPL(pci_has_p2pmem);
 
 /**
- * pci_p2pmem_find - find a peer-to-peer DMA memory device compatible with
+ * pci_p2pmem_find_many - find a peer-to-peer DMA memory device compatible with
  *	the specified list of clients and shortest distance (as determined
  *	by pci_p2pmem_dma())
  * @clients: array of devices to check (NULL-terminated)
@@ -664,7 +665,7 @@ struct pci_dev *pci_p2pmem_find_many(struct device **clients, int num_clients)
 EXPORT_SYMBOL_GPL(pci_p2pmem_find_many);
 
 /**
- * pci_alloc_p2p_mem - allocate peer-to-peer DMA memory
+ * pci_alloc_p2pmem - allocate peer-to-peer DMA memory
  * @pdev: the device to allocate memory from
  * @size: number of bytes to allocate
  *
@@ -717,7 +718,7 @@ void pci_free_p2pmem(struct pci_dev *pdev, void *addr, size_t size)
 EXPORT_SYMBOL_GPL(pci_free_p2pmem);
 
 /**
- * pci_virt_to_bus - return the PCI bus address for a given virtual
+ * pci_p2pmem_virt_to_bus - return the PCI bus address for a given virtual
  *	address obtained with pci_alloc_p2pmem()
  * @pdev: the device the memory was allocated from
  * @addr: address of the memory that was allocated
@@ -752,7 +753,7 @@ struct scatterlist *pci_p2pmem_alloc_sgl(struct pci_dev *pdev,
 	struct scatterlist *sg;
 	void *addr;
 
-	sg = kzalloc(sizeof(*sg), GFP_KERNEL);
+	sg = kmalloc(sizeof(*sg), GFP_KERNEL);
 	if (!sg)
 		return NULL;
 
@@ -824,23 +825,10 @@ static int __pci_p2pdma_map_sg(struct pci_p2pdma_pagemap *p2p_pgmap,
 		struct device *dev, struct scatterlist *sg, int nents)
 {
 	struct scatterlist *s;
-	phys_addr_t paddr;
 	int i;
 
-	/*
-	 * p2pdma mappings are not compatible with devices that use
-	 * dma_virt_ops. If the upper layers do the right thing
-	 * this should never happen because it will be prevented
-	 * by the check in pci_p2pdma_distance_many()
-	 */
-	if (WARN_ON_ONCE(IS_ENABLED(CONFIG_DMA_VIRT_OPS) &&
-			 dev->dma_ops == &dma_virt_ops))
-		return 0;
-
 	for_each_sg(sg, s, nents, i) {
-		paddr = sg_phys(s);
-
-		s->dma_address = paddr - p2p_pgmap->bus_offset;
+		s->dma_address = sg_phys(s) - p2p_pgmap->bus_offset;
 		sg_dma_len(s) = s->length;
 	}
 
@@ -848,7 +836,7 @@ static int __pci_p2pdma_map_sg(struct pci_p2pdma_pagemap *p2p_pgmap,
 }
 
 /**
- * pci_p2pdma_map_sg - map a PCI peer-to-peer scatterlist for DMA
+ * pci_p2pdma_map_sg_attrs - map a PCI peer-to-peer scatterlist for DMA
  * @dev: device doing the DMA request
  * @sg: scatter list to map
  * @nents: elements in the scatterlist
@@ -885,7 +873,7 @@ int pci_p2pdma_map_sg_attrs(struct device *dev, struct scatterlist *sg,
 EXPORT_SYMBOL_GPL(pci_p2pdma_map_sg_attrs);
 
 /**
- * pci_p2pdma_unmap_sg - unmap a PCI peer-to-peer scatterlist that was
+ * pci_p2pdma_unmap_sg_attrs - unmap a PCI peer-to-peer scatterlist that was
  *	mapped with pci_p2pdma_map_sg()
  * @dev: device doing the DMA request
  * @sg: scatter list to map

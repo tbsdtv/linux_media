@@ -480,7 +480,9 @@ static int si2168_set_frontend(struct dvb_frontend *fe)
 		goto err;
 
 	cmd_init(&cmd, "\x14\x00\x08\x10\xd7\x05", 6, 4);
-	cmd.args[5] |= dev->ts_clock_inv ? 0x00 : 0x10;
+	//cmd.args[5] |= dev->ts_clock_inv ? 0x00 : 0x10;
+	cmd.args[4] = dev->ts_clock_inv ? 0xd7 : 0xcf;
+	cmd.args[5] = dev->ts_clock_inv ? 0x05 : 0x33;
 	ret = si2168_cmd_execute(client, &cmd);
 	if (ret)
 		goto err;

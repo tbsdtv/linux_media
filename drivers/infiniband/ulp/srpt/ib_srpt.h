@@ -256,6 +256,7 @@ enum rdma_ch_state {
  * @rdma_cm:	   See below.
  * @rdma_cm.cm_id: RDMA CM ID associated with the channel.
  * @cq:            IB completion queue for this channel.
+ * @cq_size:	   Number of CQEs in @cq.
  * @zw_cqe:	   Zero-length write CQE.
  * @rcu:           RCU head.
  * @kref:	   kref for this channel.
@@ -300,6 +301,7 @@ struct srpt_rdma_ch {
 		} rdma_cm;
 	};
 	struct ib_cq		*cq;
+	u32			cq_size;
 	struct ib_cqe		zw_cqe;
 	struct rcu_head		rcu;
 	struct kref		kref;
@@ -345,7 +347,7 @@ struct srpt_nexus {
 };
 
 /**
- * struct srpt_port_attib - attributes for SRPT port
+ * struct srpt_port_attrib - attributes for SRPT port
  * @srp_max_rdma_size: Maximum size of SRP RDMA transfers for new connections.
  * @srp_max_rsp_size: Maximum size of SRP response messages in bytes.
  * @srp_sq_size: Shared receive queue (SRQ) size.

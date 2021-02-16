@@ -26,7 +26,10 @@
 #include "../dmub_srv.h"
 #include "dmub_dcn20.h"
 #include "dmub_dcn21.h"
-#include "dmub_fw_meta.h"
+#include "dmub_cmd.h"
+#include "dmub_dcn30.h"
+#include "dmub_dcn301.h"
+#include "dmub_dcn302.h"
 #include "os_types.h"
 /*
  * Note: the DMUB service is standalone. No additional headers should be
@@ -47,10 +50,10 @@
 #define DMUB_MAILBOX_SIZE (DMUB_RB_SIZE)
 
 /* Default state size if meta is absent. */
-#define DMUB_FW_STATE_SIZE (1024)
+#define DMUB_FW_STATE_SIZE (64 * 1024)
 
 /* Default tracebuffer size if meta is absent. */
-#define DMUB_TRACE_BUFFER_SIZE (1024)
+#define DMUB_TRACE_BUFFER_SIZE (64 * 1024)
 
 /* Default scratch mem size. */
 #define DMUB_SCRATCH_MEM_SIZE (256)
@@ -62,6 +65,7 @@
 #define DMUB_CW0_BASE (0x60000000)
 #define DMUB_CW1_BASE (0x61000000)
 #define DMUB_CW3_BASE (0x63000000)
+#define DMUB_CW4_BASE (0x64000000)
 #define DMUB_CW5_BASE (0x65000000)
 #define DMUB_CW6_BASE (0x66000000)
 
@@ -98,12 +102,12 @@ dmub_get_fw_meta_info(const struct dmub_srv_region_params *params)
 	uint32_t blob_size = 0;
 	uint32_t meta_offset = 0;
 
-	if (params->fw_bss_data) {
+	if (params->fw_bss_data && params->bss_data_size) {
 		/* Legacy metadata region. */
 		blob = params->fw_bss_data;
 		blob_size = params->bss_data_size;
 		meta_offset = DMUB_FW_META_OFFSET;
-	} else if (params->fw_inst_const) {
+	} else if (params->fw_inst_const && params->inst_const_size) {
 		/* Combined metadata region. */
 		blob = params->fw_inst_const;
 		blob_size = params->inst_const_size;
@@ -132,6 +136,9 @@ static bool dmub_srv_hw_setup(struct dmub_srv *dmub, enum dmub_asic asic)
 	switch (asic) {
 	case DMUB_ASIC_DCN20:
 	case DMUB_ASIC_DCN21:
+	case DMUB_ASIC_DCN30:
+	case DMUB_ASIC_DCN301:
+	case DMUB_ASIC_DCN302:
 		dmub->regs = &dmub_srv_dcn20_regs;
 
 		funcs->reset = dmub_dcn20_reset;
@@ -146,12 +153,32 @@ static bool dmub_srv_hw_setup(struct dmub_srv *dmub, enum dmub_asic asic)
 		funcs->set_gpint = dmub_dcn20_set_gpint;
 		funcs->is_gpint_acked = dmub_dcn20_is_gpint_acked;
 		funcs->get_gpint_response = dmub_dcn20_get_gpint_response;
+		funcs->get_fw_status = dmub_dcn20_get_fw_boot_status;
+		funcs->enable_dmub_boot_options = dmub_dcn20_enable_dmub_boot_options;
+		funcs->skip_dmub_panel_power_sequence = dmub_dcn20_skip_dmub_panel_power_sequence;
 
 		if (asic == DMUB_ASIC_DCN21) {
 			dmub->regs = &dmub_srv_dcn21_regs;
 
-			funcs->is_auto_load_done = dmub_dcn21_is_auto_load_done;
 			funcs->is_phy_init = dmub_dcn21_is_phy_init;
+		}
+		if (asic == DMUB_ASIC_DCN30) {
+			dmub->regs = &dmub_srv_dcn30_regs;
+
+			funcs->backdoor_load = dmub_dcn30_backdoor_load;
+			funcs->setup_windows = dmub_dcn30_setup_windows;
+		}
+		if (asic == DMUB_ASIC_DCN301) {
+			dmub->regs = &dmub_srv_dcn301_regs;
+
+			funcs->backdoor_load = dmub_dcn30_backdoor_load;
+			funcs->setup_windows = dmub_dcn30_setup_windows;
+		}
+		if (asic == DMUB_ASIC_DCN302) {
+			dmub->regs = &dmub_srv_dcn302_regs;
+
+			funcs->backdoor_load = dmub_dcn30_backdoor_load;
+			funcs->setup_windows = dmub_dcn30_setup_windows;
 		}
 		break;
 
@@ -172,6 +199,7 @@ enum dmub_status dmub_srv_create(struct dmub_srv *dmub,
 	dmub->funcs = params->funcs;
 	dmub->user_ctx = params->user_ctx;
 	dmub->asic = params->asic;
+	dmub->fw_version = params->fw_version;
 	dmub->is_virtual = params->is_virtual;
 
 	/* Setup asic dependent hardware funcs. */
@@ -182,13 +210,13 @@ enum dmub_status dmub_srv_create(struct dmub_srv *dmub,
 
 	/* Override (some) hardware funcs based on user params. */
 	if (params->hw_funcs) {
-		if (params->hw_funcs->get_inbox1_rptr)
-			dmub->hw_funcs.get_inbox1_rptr =
-				params->hw_funcs->get_inbox1_rptr;
+		if (params->hw_funcs->emul_get_inbox1_rptr)
+			dmub->hw_funcs.emul_get_inbox1_rptr =
+				params->hw_funcs->emul_get_inbox1_rptr;
 
-		if (params->hw_funcs->set_inbox1_wptr)
-			dmub->hw_funcs.set_inbox1_wptr =
-				params->hw_funcs->set_inbox1_wptr;
+		if (params->hw_funcs->emul_set_inbox1_wptr)
+			dmub->hw_funcs.emul_set_inbox1_wptr =
+				params->hw_funcs->emul_set_inbox1_wptr;
 
 		if (params->hw_funcs->is_supported)
 			dmub->hw_funcs.is_supported =
@@ -266,6 +294,16 @@ dmub_srv_calc_region_info(struct dmub_srv *dmub,
 	if (fw_info) {
 		fw_state_size = fw_info->fw_region_size;
 		trace_buffer_size = fw_info->trace_buffer_size;
+
+		/**
+		 * If DM didn't fill in a version, then fill it in based on
+		 * the firmware meta now that we have it.
+		 *
+		 * TODO: Make it easier for driver to extract this out to
+		 * pass during creation.
+		 */
+		if (dmub->fw_version == 0)
+			dmub->fw_version = fw_info->fw_version;
 	}
 
 	trace_buff->base = dmub_align(mail->top, 256);
@@ -377,15 +415,16 @@ enum dmub_status dmub_srv_hw_init(struct dmub_srv *dmub,
 		cw1.region.base = DMUB_CW1_BASE;
 		cw1.region.top = cw1.region.base + stack_fb->size - 1;
 
-		/**
-		 * Read back all the instruction memory so we don't hang the
-		 * DMCUB when backdoor loading if the write from x86 hasn't been
-		 * flushed yet. This only occurs in backdoor loading.
-		 */
-		dmub_flush_buffer_mem(inst_fb);
+		if (params->load_inst_const && dmub->hw_funcs.backdoor_load) {
+		    /**
+		     * Read back all the instruction memory so we don't hang the
+		     * DMCUB when backdoor loading if the write from x86 hasn't been
+		     * flushed yet. This only occurs in backdoor loading.
+		     */
+		    dmub_flush_buffer_mem(inst_fb);
+		    dmub->hw_funcs.backdoor_load(dmub, &cw0, &cw1);
+		}
 
-		if (params->load_inst_const && dmub->hw_funcs.backdoor_load)
-			dmub->hw_funcs.backdoor_load(dmub, &cw0, &cw1);
 	}
 
 	if (dmub->hw_funcs.reset)
@@ -402,7 +441,7 @@ enum dmub_status dmub_srv_hw_init(struct dmub_srv *dmub,
 		cw3.region.top = cw3.region.base + bios_fb->size;
 
 		cw4.offset.quad_part = mail_fb->gpu_addr;
-		cw4.region.base = cw3.region.top + 1;
+		cw4.region.base = DMUB_CW4_BASE;
 		cw4.region.top = cw4.region.base + mail_fb->size;
 
 		inbox1.base = cw4.region.base;
@@ -485,7 +524,7 @@ enum dmub_status dmub_srv_cmd_execute(struct dmub_srv *dmub)
 	 */
 	dmub_rb_flush_pending(&dmub->inbox1_rb);
 
-	dmub->hw_funcs.set_inbox1_wptr(dmub, dmub->inbox1_rb.wrpt);
+		dmub->hw_funcs.set_inbox1_wptr(dmub, dmub->inbox1_rb.wrpt);
 	return DMUB_STATUS_OK;
 }
 
@@ -497,11 +536,10 @@ enum dmub_status dmub_srv_wait_for_auto_load(struct dmub_srv *dmub,
 	if (!dmub->hw_init)
 		return DMUB_STATUS_INVALID;
 
-	if (!dmub->hw_funcs.is_auto_load_done)
-		return DMUB_STATUS_OK;
-
 	for (i = 0; i <= timeout_us; i += 100) {
-		if (dmub->hw_funcs.is_auto_load_done(dmub))
+		union dmub_fw_boot_status status = dmub->hw_funcs.get_fw_status(dmub);
+
+		if (status.bits.dal_fw && status.bits.mailbox_rdy)
 			return DMUB_STATUS_OK;
 
 		udelay(100);
@@ -540,7 +578,7 @@ enum dmub_status dmub_srv_wait_for_idle(struct dmub_srv *dmub,
 		return DMUB_STATUS_INVALID;
 
 	for (i = 0; i <= timeout_us; ++i) {
-		dmub->inbox1_rb.rptr = dmub->hw_funcs.get_inbox1_rptr(dmub);
+			dmub->inbox1_rb.rptr = dmub->hw_funcs.get_inbox1_rptr(dmub);
 		if (dmub_rb_empty(&dmub->inbox1_rb))
 			return DMUB_STATUS_OK;
 
@@ -595,4 +633,47 @@ enum dmub_status dmub_srv_get_gpint_response(struct dmub_srv *dmub,
 	*response = dmub->hw_funcs.get_gpint_response(dmub);
 
 	return DMUB_STATUS_OK;
+}
+
+enum dmub_status dmub_srv_get_fw_boot_status(struct dmub_srv *dmub,
+					     union dmub_fw_boot_status *status)
+{
+	status->all = 0;
+
+	if (!dmub->sw_init)
+		return DMUB_STATUS_INVALID;
+
+	if (dmub->hw_funcs.get_fw_status)
+		*status = dmub->hw_funcs.get_fw_status(dmub);
+
+	return DMUB_STATUS_OK;
+}
+
+enum dmub_status dmub_srv_cmd_with_reply_data(struct dmub_srv *dmub,
+					      union dmub_rb_cmd *cmd)
+{
+	enum dmub_status status = DMUB_STATUS_OK;
+
+	// Queue command
+	status = dmub_srv_cmd_queue(dmub, cmd);
+
+	if (status != DMUB_STATUS_OK)
+		return status;
+
+	// Execute command
+	status = dmub_srv_cmd_execute(dmub);
+
+	if (status != DMUB_STATUS_OK)
+		return status;
+
+	// Wait for DMUB to process command
+	status = dmub_srv_wait_for_idle(dmub, 100000);
+
+	if (status != DMUB_STATUS_OK)
+		return status;
+
+	// Copy data back from ring buffer into command
+	dmub_rb_get_return_data(&dmub->inbox1_rb, cmd);
+
+	return status;
 }

@@ -298,7 +298,7 @@ static int intel_dsi_compute_config(struct intel_encoder *encoder,
 
 	if (IS_GEN9_LP(dev_priv)) {
 		/* Enable Frame time stamp based scanline reporting */
-		adjusted_mode->private_flags |=
+		pipe_config->mode_flags |=
 			I915_MODE_FLAG_GET_SCANLINE_FROM_TIMESTAMP;
 
 		/* Dual link goes to DSI transcoder A. */
@@ -812,10 +812,20 @@ static void intel_dsi_pre_enable(struct intel_atomic_state *state,
 		intel_dsi_prepare(encoder, pipe_config);
 
 	intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_POWER_ON);
-	intel_dsi_msleep(intel_dsi, intel_dsi->panel_on_delay);
 
-	/* Deassert reset */
-	intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_DEASSERT_RESET);
+	/*
+	 * Give the panel time to power-on and then deassert its reset.
+	 * Depending on the VBT MIPI sequences version the deassert-seq
+	 * may contain the necessary delay, intel_dsi_msleep() will skip
+	 * the delay in that case. If there is no deassert-seq, then an
+	 * unconditional msleep is used to give the panel time to power-on.
+	 */
+	if (dev_priv->vbt.dsi.sequence[MIPI_SEQ_DEASSERT_RESET]) {
+		intel_dsi_msleep(intel_dsi, intel_dsi->panel_on_delay);
+		intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_DEASSERT_RESET);
+	} else {
+		msleep(intel_dsi->panel_on_delay);
+	}
 
 	if (IS_GEMINILAKE(dev_priv)) {
 		glk_cold_boot = glk_dsi_enable_io(encoder);
@@ -985,6 +995,13 @@ static void intel_dsi_post_disable(struct intel_atomic_state *state,
 	intel_dsi_msleep(intel_dsi, intel_dsi->panel_pwr_cycle_delay);
 }
 
+static void intel_dsi_shutdown(struct intel_encoder *encoder)
+{
+	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
+
+	intel_dsi_msleep(intel_dsi, intel_dsi->panel_pwr_cycle_delay);
+}
+
 static bool intel_dsi_get_hw_state(struct intel_encoder *encoder,
 				   enum pipe *pipe)
 {
@@ -1097,8 +1114,8 @@ static void bxt_dsi_get_pipe_config(struct intel_encoder *encoder,
 	pipe_config->pipe_bpp = bdw_get_pipemisc_bpp(crtc);
 
 	/* Enable Frame time stamo based scanline reporting */
-	adjusted_mode->private_flags |=
-			I915_MODE_FLAG_GET_SCANLINE_FROM_TIMESTAMP;
+	pipe_config->mode_flags |=
+		I915_MODE_FLAG_GET_SCANLINE_FROM_TIMESTAMP;
 
 	/* In terms of pixels */
 	adjusted_mode->crtc_hdisplay =
@@ -1585,6 +1602,7 @@ static const struct drm_connector_helper_funcs intel_dsi_connector_helper_funcs 
 };
 
 static const struct drm_connector_funcs intel_dsi_connector_funcs = {
+	.detect = intel_panel_detect,
 	.late_register = intel_connector_register,
 	.early_unregister = intel_connector_unregister,
 	.destroy = intel_connector_destroy,
@@ -1842,6 +1860,7 @@ void vlv_dsi_init(struct drm_i915_private *dev_priv)
 	intel_encoder->get_hw_state = intel_dsi_get_hw_state;
 	intel_encoder->get_config = intel_dsi_get_config;
 	intel_encoder->update_pipe = intel_panel_update_backlight;
+	intel_encoder->shutdown = intel_dsi_shutdown;
 
 	intel_connector->get_hw_state = intel_connector_get_hw_state;
 

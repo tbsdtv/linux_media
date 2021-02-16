@@ -268,16 +268,19 @@ placeholder:
 	slot_name = make_slot_name(name);
 	if (!slot_name) {
 		err = -ENOMEM;
+		kfree(slot);
 		goto err;
 	}
 
-	err = kobject_init_and_add(&slot->kobj, &pci_slot_ktype, NULL,
-				   "%s", slot_name);
-	if (err)
-		goto err;
-
 	INIT_LIST_HEAD(&slot->list);
 	list_add(&slot->list, &parent->slots);
+
+	err = kobject_init_and_add(&slot->kobj, &pci_slot_ktype, NULL,
+				   "%s", slot_name);
+	if (err) {
+		kobject_put(&slot->kobj);
+		goto err;
+	}
 
 	down_read(&pci_bus_sem);
 	list_for_each_entry(dev, &parent->devices, bus_list)
@@ -293,7 +296,6 @@ out:
 	mutex_unlock(&pci_slot_mutex);
 	return slot;
 err:
-	kfree(slot);
 	slot = ERR_PTR(err);
 	goto out;
 }
@@ -321,7 +323,7 @@ EXPORT_SYMBOL_GPL(pci_destroy_slot);
 #if defined(CONFIG_HOTPLUG_PCI) || defined(CONFIG_HOTPLUG_PCI_MODULE)
 #include <linux/pci_hotplug.h>
 /**
- * pci_hp_create_link - create symbolic link to the hotplug driver module.
+ * pci_hp_create_module_link - create symbolic link to hotplug driver module
  * @pci_slot: struct pci_slot
  *
  * Helper function for pci_hotplug_core.c to create symbolic link to
@@ -347,7 +349,8 @@ void pci_hp_create_module_link(struct pci_slot *pci_slot)
 EXPORT_SYMBOL_GPL(pci_hp_create_module_link);
 
 /**
- * pci_hp_remove_link - remove symbolic link to the hotplug driver module.
+ * pci_hp_remove_module_link - remove symbolic link to the hotplug driver
+ * 	module.
  * @pci_slot: struct pci_slot
  *
  * Helper function for pci_hotplug_core.c to remove symbolic link to

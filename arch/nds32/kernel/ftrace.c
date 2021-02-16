@@ -10,7 +10,7 @@ extern void (*ftrace_trace_function)(unsigned long, unsigned long,
 extern void ftrace_graph_caller(void);
 
 noinline void __naked ftrace_stub(unsigned long ip, unsigned long parent_ip,
-				  struct ftrace_ops *op, struct pt_regs *regs)
+				  struct ftrace_ops *op, struct ftrace_regs *fregs)
 {
 	__asm__ ("");  /* avoid to optimize as pure function */
 }
@@ -38,7 +38,7 @@ EXPORT_SYMBOL(_mcount);
 #else /* CONFIG_DYNAMIC_FTRACE */
 
 noinline void __naked ftrace_stub(unsigned long ip, unsigned long parent_ip,
-				  struct ftrace_ops *op, struct pt_regs *regs)
+				  struct ftrace_ops *op, struct ftrace_regs *fregs)
 {
 	__asm__ ("");  /* avoid to optimize as pure function */
 }
@@ -131,13 +131,14 @@ static int __ftrace_modify_code(unsigned long pc, unsigned long *old_insn,
 	unsigned long orig_insn[3];
 
 	if (validate) {
-		if (probe_kernel_read(orig_insn, (void *)pc, MCOUNT_INSN_SIZE))
+		if (copy_from_kernel_nofault(orig_insn, (void *)pc,
+				MCOUNT_INSN_SIZE))
 			return -EFAULT;
 		if (memcmp(orig_insn, old_insn, MCOUNT_INSN_SIZE))
 			return -EINVAL;
 	}
 
-	if (probe_kernel_write((void *)pc, new_insn, MCOUNT_INSN_SIZE))
+	if (copy_to_kernel_nofault((void *)pc, new_insn, MCOUNT_INSN_SIZE))
 		return -EPERM;
 
 	return 0;

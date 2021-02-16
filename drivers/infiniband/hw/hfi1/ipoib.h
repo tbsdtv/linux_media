@@ -67,6 +67,9 @@ struct hfi1_ipoib_circ_buf {
  * @sde: sdma engine
  * @tx_list: tx request list
  * @sent_txreqs: count of txreqs posted to sdma
+ * @stops: count of stops of queue
+ * @ring_full: ring has been filled
+ * @no_desc: descriptor shortage seen
  * @flow: tracks when list needs to be flushed for a flow change
  * @q_idx: ipoib Tx queue index
  * @pkts_sent: indicator packets have been sent from this queue
@@ -80,6 +83,9 @@ struct hfi1_ipoib_txq {
 	struct sdma_engine *sde;
 	struct list_head tx_list;
 	u64 sent_txreqs;
+	atomic_t stops;
+	atomic_t ring_full;
+	atomic_t no_desc;
 	union hfi1_ipoib_flow flow;
 	u8 q_idx;
 	bool pkts_sent;
@@ -104,7 +110,6 @@ struct hfi1_ipoib_dev_priv {
 
 	const struct net_device_ops *netdev_ops;
 	struct rvt_qp *qp;
-	struct pcpu_sw_netstats __percpu *netstats;
 };
 
 /* hfi1 ipoib rdma netdev's private data structure */
@@ -118,32 +123,6 @@ static inline struct hfi1_ipoib_dev_priv *
 hfi1_ipoib_priv(const struct net_device *dev)
 {
 	return &((struct hfi1_ipoib_rdma_netdev *)netdev_priv(dev))->dev_priv;
-}
-
-static inline void
-hfi1_ipoib_update_rx_netstats(struct hfi1_ipoib_dev_priv *priv,
-			      u64 packets,
-			      u64 bytes)
-{
-	struct pcpu_sw_netstats *netstats = this_cpu_ptr(priv->netstats);
-
-	u64_stats_update_begin(&netstats->syncp);
-	netstats->rx_packets += packets;
-	netstats->rx_bytes += bytes;
-	u64_stats_update_end(&netstats->syncp);
-}
-
-static inline void
-hfi1_ipoib_update_tx_netstats(struct hfi1_ipoib_dev_priv *priv,
-			      u64 packets,
-			      u64 bytes)
-{
-	struct pcpu_sw_netstats *netstats = this_cpu_ptr(priv->netstats);
-
-	u64_stats_update_begin(&netstats->syncp);
-	netstats->tx_packets += packets;
-	netstats->tx_bytes += bytes;
-	u64_stats_update_end(&netstats->syncp);
 }
 
 int hfi1_ipoib_send_dma(struct net_device *dev,

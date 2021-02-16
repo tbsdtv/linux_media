@@ -10,6 +10,7 @@
  * Copyright (C) 2018-2020 Intel Corporation
  */
 
+#include <linux/ethtool.h>
 #include <linux/netdevice.h>
 #include <linux/debugfs.h>
 #include <linux/list.h>
@@ -96,6 +97,16 @@ struct wiphy;
  * @IEEE80211_CHAN_NO_10MHZ: 10 MHz bandwidth is not permitted
  *	on this channel.
  * @IEEE80211_CHAN_NO_HE: HE operation is not permitted on this channel.
+ * @IEEE80211_CHAN_1MHZ: 1 MHz bandwidth is permitted
+ *	on this channel.
+ * @IEEE80211_CHAN_2MHZ: 2 MHz bandwidth is permitted
+ *	on this channel.
+ * @IEEE80211_CHAN_4MHZ: 4 MHz bandwidth is permitted
+ *	on this channel.
+ * @IEEE80211_CHAN_8MHZ: 8 MHz bandwidth is permitted
+ *	on this channel.
+ * @IEEE80211_CHAN_16MHZ: 16 MHz bandwidth is permitted
+ *	on this channel.
  *
  */
 enum ieee80211_channel_flags {
@@ -113,6 +124,11 @@ enum ieee80211_channel_flags {
 	IEEE80211_CHAN_NO_20MHZ		= 1<<11,
 	IEEE80211_CHAN_NO_10MHZ		= 1<<12,
 	IEEE80211_CHAN_NO_HE		= 1<<13,
+	IEEE80211_CHAN_1MHZ		= 1<<14,
+	IEEE80211_CHAN_2MHZ		= 1<<15,
+	IEEE80211_CHAN_4MHZ		= 1<<16,
+	IEEE80211_CHAN_8MHZ		= 1<<17,
+	IEEE80211_CHAN_16MHZ		= 1<<18,
 };
 
 #define IEEE80211_CHAN_NO_HT40 \
@@ -254,38 +270,35 @@ struct ieee80211_rate {
  * struct ieee80211_he_obss_pd - AP settings for spatial reuse
  *
  * @enable: is the feature enabled.
+ * @sr_ctrl: The SR Control field of SRP element.
+ * @non_srg_max_offset: non-SRG maximum tx power offset
  * @min_offset: minimal tx power offset an associated station shall use
  * @max_offset: maximum tx power offset an associated station shall use
+ * @bss_color_bitmap: bitmap that indicates the BSS color values used by
+ *	members of the SRG
+ * @partial_bssid_bitmap: bitmap that indicates the partial BSSID values
+ *	used by members of the SRG
  */
 struct ieee80211_he_obss_pd {
 	bool enable;
+	u8 sr_ctrl;
+	u8 non_srg_max_offset;
 	u8 min_offset;
 	u8 max_offset;
+	u8 bss_color_bitmap[8];
+	u8 partial_bssid_bitmap[8];
 };
 
 /**
  * struct cfg80211_he_bss_color - AP settings for BSS coloring
  *
  * @color: the current color.
- * @disabled: is the feature disabled.
+ * @enabled: HE BSS color is used
  * @partial: define the AID equation.
  */
 struct cfg80211_he_bss_color {
 	u8 color;
-	bool disabled;
-	bool partial;
-};
-
-/**
- * struct ieee80211_he_bss_color - AP settings for BSS coloring
- *
- * @color: the current color.
- * @disabled: is the feature disabled.
- * @partial: define the AID equation.
- */
-struct ieee80211_he_bss_color {
-	u8 color;
-	bool disabled;
+	bool enabled;
 	bool partial;
 };
 
@@ -418,12 +431,28 @@ struct ieee80211_edmg {
 };
 
 /**
+ * struct ieee80211_sta_s1g_cap - STA's S1G capabilities
+ *
+ * This structure describes most essential parameters needed
+ * to describe 802.11ah S1G capabilities for a STA.
+ *
+ * @s1g_supported: is STA an S1G STA
+ * @cap: S1G capabilities information
+ * @nss_mcs: Supported NSS MCS set
+ */
+struct ieee80211_sta_s1g_cap {
+	bool s1g;
+	u8 cap[10]; /* use S1G_CAPAB_ */
+	u8 nss_mcs[5];
+};
+
+/**
  * struct ieee80211_supported_band - frequency band definition
  *
  * This structure describes a frequency band a wiphy
  * is able to operate in.
  *
- * @channels: Array of channels the hardware can operate in
+ * @channels: Array of channels the hardware can operate with
  *	in this band.
  * @band: the band this structure represents
  * @n_channels: Number of channels in @channels
@@ -433,7 +462,9 @@ struct ieee80211_edmg {
  * @n_bitrates: Number of bitrates in @bitrates
  * @ht_cap: HT capabilities in this band
  * @vht_cap: VHT capabilities in this band
+ * @s1g_cap: S1G capabilities in this band
  * @edmg_cap: EDMG capabilities in this band
+ * @s1g_cap: S1G capabilities in this band (S1B band only, of course)
  * @n_iftype_data: number of iftype data entries
  * @iftype_data: interface type data entries.  Note that the bits in
  *	@types_mask inside this structure cannot overlap (i.e. only
@@ -448,6 +479,7 @@ struct ieee80211_supported_band {
 	int n_bitrates;
 	struct ieee80211_sta_ht_cap ht_cap;
 	struct ieee80211_sta_vht_cap vht_cap;
+	struct ieee80211_sta_s1g_cap s1g_cap;
 	struct ieee80211_edmg edmg_cap;
 	u16 n_iftype_data;
 	const struct ieee80211_sband_iftype_data *iftype_data;
@@ -661,7 +693,10 @@ struct cfg80211_bitrate_mask {
 		u32 legacy;
 		u8 ht_mcs[IEEE80211_HT_MCS_MASK_LEN];
 		u16 vht_mcs[NL80211_VHT_NSS_MAX];
+		u16 he_mcs[NL80211_HE_NSS_MAX];
 		enum nl80211_txrate_gi gi;
+		enum nl80211_he_gi he_gi;
+		enum nl80211_he_ltf he_ltf;
 	} control[NUM_NL80211_BANDS];
 };
 
@@ -961,6 +996,21 @@ struct survey_info {
  * @sae_pwd: password for SAE authentication (for devices supporting SAE
  *	offload)
  * @sae_pwd_len: length of SAE password (for devices supporting SAE offload)
+ * @sae_pwe: The mechanisms allowed for SAE PWE derivation:
+ *
+ *	NL80211_SAE_PWE_UNSPECIFIED
+ *	  Not-specified, used to indicate userspace did not specify any
+ *	  preference. The driver should follow its internal policy in
+ *	  such a scenario.
+ *
+ *	NL80211_SAE_PWE_HUNT_AND_PECK
+ *	  Allow hunting-and-pecking loop only
+ *
+ *	NL80211_SAE_PWE_HASH_TO_ELEMENT
+ *	  Allow hash-to-element only
+ *
+ *	NL80211_SAE_PWE_BOTH
+ *	  Allow either hunting-and-pecking loop or hash-to-element
  */
 struct cfg80211_crypto_settings {
 	u32 wpa_versions;
@@ -979,6 +1029,7 @@ struct cfg80211_crypto_settings {
 	const u8 *psk;
 	const u8 *sae_pwd;
 	u8 sae_pwd_len;
+	enum nl80211_sae_pwe_mechanism sae_pwe;
 };
 
 /**
@@ -1048,6 +1099,39 @@ struct cfg80211_acl_data {
 };
 
 /**
+ * struct cfg80211_fils_discovery - FILS discovery parameters from
+ * IEEE Std 802.11ai-2016, Annex C.3 MIB detail.
+ *
+ * @min_interval: Minimum packet interval in TUs (0 - 10000)
+ * @max_interval: Maximum packet interval in TUs (0 - 10000)
+ * @tmpl_len: Template length
+ * @tmpl: Template data for FILS discovery frame including the action
+ *	frame headers.
+ */
+struct cfg80211_fils_discovery {
+	u32 min_interval;
+	u32 max_interval;
+	size_t tmpl_len;
+	const u8 *tmpl;
+};
+
+/**
+ * struct cfg80211_unsol_bcast_probe_resp - Unsolicited broadcast probe
+ *	response parameters in 6GHz.
+ *
+ * @interval: Packet interval in TUs. Maximum allowed is 20 TU, as mentioned
+ *	in IEEE P802.11ax/D6.0 26.17.2.3.2 - AP behavior for fast passive
+ *	scanning
+ * @tmpl_len: Template length
+ * @tmpl: Template data for probe response
+ */
+struct cfg80211_unsol_bcast_probe_resp {
+	u32 interval;
+	size_t tmpl_len;
+	const u8 *tmpl;
+};
+
+/**
  * enum cfg80211_ap_settings_flags - AP settings flags
  *
  * Used by cfg80211_ap_settings
@@ -1090,10 +1174,13 @@ enum cfg80211_ap_settings_flags {
  * @vht_required: stations must support VHT
  * @twt_responder: Enable Target Wait Time
  * @he_required: stations must support HE
+ * @sae_h2e_required: stations must support direct H2E technique in SAE
  * @flags: flags, as defined in enum cfg80211_ap_settings_flags
  * @he_obss_pd: OBSS Packet Detection settings
  * @he_bss_color: BSS Color settings
  * @he_oper: HE operation IE (or %NULL if HE isn't enabled)
+ * @fils_discovery: FILS discovery transmission parameters
+ * @unsol_bcast_probe_resp: Unsolicited broadcast probe response parameters
  */
 struct cfg80211_ap_settings {
 	struct cfg80211_chan_def chandef;
@@ -1119,11 +1206,13 @@ struct cfg80211_ap_settings {
 	const struct ieee80211_vht_cap *vht_cap;
 	const struct ieee80211_he_cap_elem *he_cap;
 	const struct ieee80211_he_operation *he_oper;
-	bool ht_required, vht_required, he_required;
+	bool ht_required, vht_required, he_required, sae_h2e_required;
 	bool twt_responder;
 	u32 flags;
 	struct ieee80211_he_obss_pd he_obss_pd;
 	struct cfg80211_he_bss_color he_bss_color;
+	struct cfg80211_fils_discovery fils_discovery;
+	struct cfg80211_unsol_bcast_probe_resp unsol_bcast_probe_resp;
 };
 
 /**
@@ -1360,7 +1449,7 @@ int cfg80211_check_station_change(struct wiphy *wiphy,
 				  enum cfg80211_station_type statype);
 
 /**
- * enum station_info_rate_flags - bitrate info flags
+ * enum rate_info_flags - bitrate info flags
  *
  * Used by the driver to indicate the specific rate transmission
  * type for 802.11n transmissions.
@@ -1433,7 +1522,7 @@ struct rate_info {
 };
 
 /**
- * enum station_info_rate_flags - bitrate info flags
+ * enum bss_param_flags - bitrate info flags
  *
  * Used by the driver to indicate the specific rate transmission
  * type for 802.11n transmissions.
@@ -1581,6 +1670,7 @@ struct cfg80211_tid_stats {
  *	an FCS error. This counter should be incremented only when TA of the
  *	received packet with an FCS error matches the peer MAC address.
  * @airtime_link_metric: mesh airtime link metric.
+ * @connected_to_as: true if mesh STA has a path to authentication server
  */
 struct station_info {
 	u64 filled;
@@ -1638,6 +1728,56 @@ struct station_info {
 	u32 fcs_err_count;
 
 	u32 airtime_link_metric;
+
+	u8 connected_to_as;
+};
+
+/**
+ * struct cfg80211_sar_sub_specs - sub specs limit
+ * @power: power limitation in 0.25dbm
+ * @freq_range_index: index the power limitation applies to
+ */
+struct cfg80211_sar_sub_specs {
+	s32 power;
+	u32 freq_range_index;
+};
+
+/**
+ * struct cfg80211_sar_specs - sar limit specs
+ * @type: it's set with power in 0.25dbm or other types
+ * @num_sub_specs: number of sar sub specs
+ * @sub_specs: memory to hold the sar sub specs
+ */
+struct cfg80211_sar_specs {
+	enum nl80211_sar_type type;
+	u32 num_sub_specs;
+	struct cfg80211_sar_sub_specs sub_specs[];
+};
+
+
+/**
+ * struct cfg80211_sar_freq_ranges - sar frequency ranges
+ * @start_freq:  start range edge frequency
+ * @end_freq:    end range edge frequency
+ */
+struct cfg80211_sar_freq_ranges {
+	u32 start_freq;
+	u32 end_freq;
+};
+
+/**
+ * struct cfg80211_sar_capa - sar limit capability
+ * @type: it's set via power in 0.25dbm or other types
+ * @num_freq_ranges: number of frequency ranges
+ * @freq_ranges: memory to hold the freq ranges.
+ *
+ * Note: WLAN driver may append new ranges or split an existing
+ * range to small ones and then append them.
+ */
+struct cfg80211_sar_capa {
+	enum nl80211_sar_type type;
+	u32 num_freq_ranges;
+	const struct cfg80211_sar_freq_ranges *freq_ranges;
 };
 
 #if IS_ENABLED(CONFIG_CFG80211)
@@ -1764,6 +1904,7 @@ struct mpath_info {
  *	(or NULL for no change)
  * @basic_rates_len: number of basic rates
  * @ap_isolate: do not forward packets between connected stations
+ *	(0 = no, 1 = yes, -1 = do not change)
  * @ht_opmode: HT Operation mode
  *	(u16 = opmode, -1 = do not change)
  * @p2p_ctwindow: P2P CT Window (-1 = no change)
@@ -1853,6 +1994,11 @@ struct bss_parameters {
  *      connected to a mesh gate in mesh formation info.  If false, the
  *      value in mesh formation is determined by the presence of root paths
  *      in the mesh path table
+ * @dot11MeshNolearn: Try to avoid multi-hop path discovery (e.g. PREQ/PREP
+ *      for HWMP) if the destination is a direct neighbor. Note that this might
+ *      not be the optimal decision as a multi-hop route might be better. So
+ *      if using this setting you will likely also want to disable
+ *      dot11MeshForwarding and use another mesh routing protocol on top.
  */
 struct mesh_config {
 	u16 dot11MeshRetryTimeout;
@@ -1873,6 +2019,7 @@ struct mesh_config {
 	u16 dot11MeshHWMPnetDiameterTraversalTime;
 	u8 dot11MeshHWMPRootMode;
 	bool dot11MeshConnectedToMeshGate;
+	bool dot11MeshConnectedToAuthServer;
 	u16 dot11MeshHWMPRannInterval;
 	bool dot11MeshGateAnnouncementProtocol;
 	bool dot11MeshForwarding;
@@ -1884,6 +2031,7 @@ struct mesh_config {
 	enum nl80211_mesh_power_mode power_mode;
 	u16 dot11MeshAwakeWindowDuration;
 	u32 plink_timeout;
+	bool dot11MeshNolearn;
 };
 
 /**
@@ -2012,6 +2160,27 @@ struct cfg80211_scan_info {
 };
 
 /**
+ * struct cfg80211_scan_6ghz_params - relevant for 6 GHz only
+ *
+ * @short_bssid: short ssid to scan for
+ * @bssid: bssid to scan for
+ * @channel_idx: idx of the channel in the channel array in the scan request
+ *	 which the above info relvant to
+ * @unsolicited_probe: the AP transmits unsolicited probe response every 20 TU
+ * @short_ssid_valid: short_ssid is valid and can be used
+ * @psc_no_listen: when set, and the channel is a PSC channel, no need to wait
+ *       20 TUs before starting to send probe requests.
+ */
+struct cfg80211_scan_6ghz_params {
+	u32 short_ssid;
+	u32 channel_idx;
+	u8 bssid[ETH_ALEN];
+	bool unsolicited_probe;
+	bool short_ssid_valid;
+	bool psc_no_listen;
+};
+
+/**
  * struct cfg80211_scan_request - scan request description
  *
  * @ssids: SSIDs to scan for (active scan only)
@@ -2038,6 +2207,10 @@ struct cfg80211_scan_info {
  * @mac_addr_mask: MAC address mask used with randomisation, bits that
  *	are 0 in the mask should be randomised, bits that are 1 should
  *	be taken from the @mac_addr
+ * @scan_6ghz: relevant for split scan request only,
+ *	true if this is the second scan request
+ * @n_6ghz_params: number of 6 GHz params
+ * @scan_6ghz_params: 6 GHz params
  * @bssid: BSSID to scan for (most commonly, the wildcard BSSID)
  */
 struct cfg80211_scan_request {
@@ -2065,6 +2238,9 @@ struct cfg80211_scan_request {
 	struct cfg80211_scan_info info;
 	bool notified;
 	bool no_cck;
+	bool scan_6ghz;
+	u32 n_6ghz_params;
+	struct cfg80211_scan_6ghz_params *scan_6ghz_params;
 
 	/* keep last */
 	struct ieee80211_channel *channels[];
@@ -2444,6 +2620,8 @@ enum cfg80211_assoc_req_flags {
  * @fils_nonces: FILS nonces (part of AAD) for protecting (Re)Association
  *	Request/Response frame or %NULL if FILS is not used. This field starts
  *	with 16 octets of STA Nonce followed by 16 octets of AP Nonce.
+ * @s1g_capa: S1G capability override
+ * @s1g_capa_mask: S1G capability override mask
  */
 struct cfg80211_assoc_request {
 	struct cfg80211_bss *bss;
@@ -2458,6 +2636,7 @@ struct cfg80211_assoc_request {
 	const u8 *fils_kek;
 	size_t fils_kek_len;
 	const u8 *fils_nonces;
+	struct ieee80211_s1g_cap s1g_capa, s1g_capa_mask;
 };
 
 /**
@@ -3610,8 +3789,6 @@ struct mgmt_frame_regs {
  * @get_tx_power: store the current TX power into the dbm variable;
  *	return 0 if successful
  *
- * @set_wds_peer: set the WDS peer for a WDS interface
- *
  * @rfkill_poll: polls the hw rfkill line, use cfg80211 reporting
  *	functions to adjust rfkill hw state
  *
@@ -3795,6 +3972,8 @@ struct mgmt_frame_regs {
  *	This callback may sleep.
  * @reset_tid_config: Reset TID specific configuration for the peer, for the
  *	given TIDs. This callback may sleep.
+ *
+ * @set_sar_specs: Update the SAR (TX power) settings.
  */
 struct cfg80211_ops {
 	int	(*suspend)(struct wiphy *wiphy, struct cfg80211_wowlan *wow);
@@ -3931,9 +4110,6 @@ struct cfg80211_ops {
 				enum nl80211_tx_power_setting type, int mbm);
 	int	(*get_tx_power)(struct wiphy *wiphy, struct wireless_dev *wdev,
 				int *dbm);
-
-	int	(*set_wds_peer)(struct wiphy *wiphy, struct net_device *dev,
-				const u8 *addr);
 
 	void	(*rfkill_poll)(struct wiphy *wiphy);
 
@@ -4123,6 +4299,8 @@ struct cfg80211_ops {
 				  struct cfg80211_tid_config *tid_conf);
 	int	(*reset_tid_config)(struct wiphy *wiphy, struct net_device *dev,
 				    const u8 *peer, u8 tids);
+	int	(*set_sar_specs)(struct wiphy *wiphy,
+				 struct cfg80211_sar_specs *sar);
 };
 
 /*
@@ -4133,6 +4311,8 @@ struct cfg80211_ops {
 /**
  * enum wiphy_flags - wiphy capability flags
  *
+ * @WIPHY_FLAG_SPLIT_SCAN_6GHZ: if set to true, the scan request will be split
+ *	 into two, first for legacy bands and second for UHB.
  * @WIPHY_FLAG_NETNS_OK: if not set, do not allow changing the netns of this
  *	wiphy at all
  * @WIPHY_FLAG_PS_ON_BY_DEFAULT: if set to true, powersave will be enabled
@@ -4176,7 +4356,7 @@ struct cfg80211_ops {
 enum wiphy_flags {
 	WIPHY_FLAG_SUPPORTS_EXT_KEK_KCK		= BIT(0),
 	/* use hole at 1 */
-	/* use hole at 2 */
+	WIPHY_FLAG_SPLIT_SCAN_6GHZ		= BIT(2),
 	WIPHY_FLAG_NETNS_OK			= BIT(3),
 	WIPHY_FLAG_PS_ON_BY_DEFAULT		= BIT(4),
 	WIPHY_FLAG_4ADDR_AP			= BIT(5),
@@ -4751,6 +4931,7 @@ struct wiphy_iftype_akm_suites {
  * @max_data_retry_count: maximum supported per TID retry count for
  *	configuration through the %NL80211_TID_CONFIG_ATTR_RETRY_SHORT and
  *	%NL80211_TID_CONFIG_ATTR_RETRY_LONG attributes
+ * @sar_capa: SAR control capabilities
  */
 struct wiphy {
 	/* assign these fields before you register the wiphy */
@@ -4888,6 +5069,8 @@ struct wiphy {
 	} tid_config_support;
 
 	u8 max_data_retry_count;
+
+	const struct cfg80211_sar_capa *sar_capa;
 
 	char priv[] __aligned(NETDEV_ALIGN);
 };
@@ -5249,6 +5432,16 @@ ieee80211_channel_to_khz(const struct ieee80211_channel *chan)
 }
 
 /**
+ * ieee80211_s1g_channel_width - get allowed channel width from @chan
+ *
+ * Only allowed for band NL80211_BAND_S1GHZ
+ * @chan: channel
+ * Return: The allowed channel width for this center_freq
+ */
+enum nl80211_chan_width
+ieee80211_s1g_channel_width(const struct ieee80211_channel *chan);
+
+/**
  * ieee80211_channel_to_freq_khz - convert channel number to frequency
  * @chan: channel number
  * @band: band, necessary due to channel number overlap
@@ -5510,7 +5703,7 @@ static inline int ieee80211_data_to_8023(struct sk_buff *skb, const u8 *addr,
  *
  * @skb: The input A-MSDU frame without any headers.
  * @list: The output list of 802.3 frames. It must be allocated and
- *	initialized by by the caller.
+ *	initialized by the caller.
  * @addr: The device MAC address.
  * @iftype: The device interface type.
  * @extra_headroom: The hardware extra headroom for SKBs in the @list.
@@ -6268,13 +6461,15 @@ void cfg80211_abandon_assoc(struct net_device *dev, struct cfg80211_bss *bss);
  * @dev: network device
  * @buf: 802.11 frame (header + body)
  * @len: length of the frame data
+ * @reconnect: immediate reconnect is desired (include the nl80211 attribute)
  *
  * This function is called whenever deauthentication has been processed in
  * station mode. This includes both received deauthentication frames and
  * locally generated ones. This function may sleep. The caller must hold the
  * corresponding wdev's mutex.
  */
-void cfg80211_tx_mlme_mgmt(struct net_device *dev, const u8 *buf, size_t len);
+void cfg80211_tx_mlme_mgmt(struct net_device *dev, const u8 *buf, size_t len,
+			   bool reconnect);
 
 /**
  * cfg80211_rx_unprot_mlme_mgmt - notification of unprotected mlme mgmt frame
@@ -6329,7 +6524,8 @@ void cfg80211_ibss_joined(struct net_device *dev, const u8 *bssid,
 			  struct ieee80211_channel *channel, gfp_t gfp);
 
 /**
- * cfg80211_notify_new_candidate - notify cfg80211 of a new mesh peer candidate
+ * cfg80211_notify_new_peer_candidate - notify cfg80211 of a new mesh peer
+ * 					candidate
  *
  * @dev: network device
  * @macaddr: the MAC address of the new candidate
@@ -7380,6 +7576,7 @@ void cfg80211_ch_switch_notify(struct net_device *dev,
  * @dev: the device on which the channel switch started
  * @chandef: the future channel definition
  * @count: the number of TBTTs until the channel switch happens
+ * @quiet: whether or not immediate quiet was requested by the AP
  *
  * Inform the userspace about the channel switch that has just
  * started, so that it can take appropriate actions (eg. starting
@@ -7387,7 +7584,7 @@ void cfg80211_ch_switch_notify(struct net_device *dev,
  */
 void cfg80211_ch_switch_started_notify(struct net_device *dev,
 				       struct cfg80211_chan_def *chandef,
-				       u8 count);
+				       u8 count, bool quiet);
 
 /**
  * ieee80211_operating_class_to_band - convert operating class to band
@@ -7468,7 +7665,7 @@ u32 cfg80211_calculate_bitrate(struct rate_info *rate);
 void cfg80211_unregister_wdev(struct wireless_dev *wdev);
 
 /**
- * struct cfg80211_ft_event - FT Information Elements
+ * struct cfg80211_ft_event_params - FT Information Elements
  * @ies: FT IEs
  * @ies_len: length of the FT IE in bytes
  * @target_ap: target AP's MAC address
@@ -7881,5 +8078,11 @@ bool cfg80211_iftype_allowed(struct wiphy *wiphy, enum nl80211_iftype iftype,
 void cfg80211_update_owe_info_event(struct net_device *netdev,
 				    struct cfg80211_update_owe_info *owe_info,
 				    gfp_t gfp);
+
+/**
+ * cfg80211_bss_flush - resets all the scan entries
+ * @wiphy: the wiphy
+ */
+void cfg80211_bss_flush(struct wiphy *wiphy);
 
 #endif /* __NET_CFG80211_H */

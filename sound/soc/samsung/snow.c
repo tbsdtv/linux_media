@@ -30,7 +30,7 @@ static int snow_card_hw_params(struct snd_pcm_substream *substream,
 	static const unsigned int pll_rate[] = {
 		73728000U, 67737602U, 49152000U, 45158401U, 32768001U
 	};
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
 	struct snow_priv *priv = snd_soc_card_get_drvdata(rtd->card);
 	int bfs, psr, rfs, bitwidth;
 	unsigned long int rclk;
@@ -189,7 +189,7 @@ static int snow_probe(struct platform_device *pdev)
 			return PTR_ERR(priv->clk_i2s_bus);
 		}
 	} else {
-		link->codecs->dai_name = "HiFi",
+		link->codecs->dai_name = "HiFi";
 
 		link->cpus->of_node = of_parse_phandle(dev->of_node,
 						"samsung,i2s-controller", 0);

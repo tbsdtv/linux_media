@@ -9,7 +9,7 @@
 #include <linux/phy.h>
 
 /**
- * genphy_c45_setup_forced - configures a forced speed
+ * genphy_c45_pma_setup_forced - configures a forced speed
  * @phydev: target phy_device struct
  */
 int genphy_c45_pma_setup_forced(struct phy_device *phydev)
@@ -219,7 +219,7 @@ int genphy_c45_read_link(struct phy_device *phydev)
 	int val, devad;
 	bool link = true;
 
-	if (phydev->c45_ids.devices_in_package & MDIO_DEVS_AN) {
+	if (phydev->c45_ids.mmds_present & MDIO_DEVS_AN) {
 		val = phy_read_mmd(phydev, MDIO_MMD_AN, MDIO_CTRL1);
 		if (val < 0)
 			return val;
@@ -409,7 +409,7 @@ int genphy_c45_pma_read_abilities(struct phy_device *phydev)
 	int val;
 
 	linkmode_clear_bit(ETHTOOL_LINK_MODE_Autoneg_BIT, phydev->supported);
-	if (phydev->c45_ids.devices_in_package & MDIO_DEVS_AN) {
+	if (phydev->c45_ids.mmds_present & MDIO_DEVS_AN) {
 		val = phy_read_mmd(phydev, MDIO_MMD_AN, MDIO_STAT1);
 		if (val < 0)
 			return val;

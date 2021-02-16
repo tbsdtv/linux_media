@@ -15,7 +15,6 @@
 #include <linux/init.h>
 #include <linux/msi.h>
 #include <linux/of.h>
-#include <linux/of_pci.h>
 #include <linux/pci.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
@@ -30,8 +29,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/pci_hotplug.h>
 #include <linux/vmalloc.h>
-#include <linux/pci-ats.h>
-#include <asm/setup.h>
 #include <asm/dma.h>
 #include <linux/aer.h>
 #include "pci.h"
@@ -49,7 +46,7 @@ EXPORT_SYMBOL(isa_dma_bridge_buggy);
 int pci_pci_problems;
 EXPORT_SYMBOL(pci_pci_problems);
 
-unsigned int pci_pm_d3_delay;
+unsigned int pci_pm_d3hot_delay;
 
 static void pci_pme_list_scan(struct work_struct *work);
 
@@ -66,10 +63,10 @@ struct pci_pme_device {
 
 static void pci_dev_d3_sleep(struct pci_dev *dev)
 {
-	unsigned int delay = dev->d3_delay;
+	unsigned int delay = dev->d3hot_delay;
 
-	if (delay < pci_pm_d3_delay)
-		delay = pci_pm_d3_delay;
+	if (delay < pci_pm_d3hot_delay)
+		delay = pci_pm_d3hot_delay;
 
 	if (delay)
 		msleep(delay);
@@ -101,7 +98,19 @@ unsigned long pci_hotplug_mmio_pref_size = DEFAULT_HOTPLUG_MMIO_PREF_SIZE;
 #define DEFAULT_HOTPLUG_BUS_SIZE	1
 unsigned long pci_hotplug_bus_size = DEFAULT_HOTPLUG_BUS_SIZE;
 
+
+/* PCIe MPS/MRRS strategy; can be overridden by kernel command-line param */
+#ifdef CONFIG_PCIE_BUS_TUNE_OFF
+enum pcie_bus_config_types pcie_bus_config = PCIE_BUS_TUNE_OFF;
+#elif defined CONFIG_PCIE_BUS_SAFE
+enum pcie_bus_config_types pcie_bus_config = PCIE_BUS_SAFE;
+#elif defined CONFIG_PCIE_BUS_PERFORMANCE
+enum pcie_bus_config_types pcie_bus_config = PCIE_BUS_PERFORMANCE;
+#elif defined CONFIG_PCIE_BUS_PEER2PEER
+enum pcie_bus_config_types pcie_bus_config = PCIE_BUS_PEER2PEER;
+#else
 enum pcie_bus_config_types pcie_bus_config = PCIE_BUS_DEFAULT;
+#endif
 
 /*
  * The default CLS is used if arch didn't set CLS explicitly and not
@@ -390,8 +399,8 @@ found:
 	return 1;
 }
 
-static int __pci_find_next_cap_ttl(struct pci_bus *bus, unsigned int devfn,
-				   u8 pos, int cap, int *ttl)
+static u8 __pci_find_next_cap_ttl(struct pci_bus *bus, unsigned int devfn,
+				  u8 pos, int cap, int *ttl)
 {
 	u8 id;
 	u16 ent;
@@ -414,22 +423,22 @@ static int __pci_find_next_cap_ttl(struct pci_bus *bus, unsigned int devfn,
 	return 0;
 }
 
-static int __pci_find_next_cap(struct pci_bus *bus, unsigned int devfn,
-			       u8 pos, int cap)
+static u8 __pci_find_next_cap(struct pci_bus *bus, unsigned int devfn,
+			      u8 pos, int cap)
 {
 	int ttl = PCI_FIND_CAP_TTL;
 
 	return __pci_find_next_cap_ttl(bus, devfn, pos, cap, &ttl);
 }
 
-int pci_find_next_capability(struct pci_dev *dev, u8 pos, int cap)
+u8 pci_find_next_capability(struct pci_dev *dev, u8 pos, int cap)
 {
 	return __pci_find_next_cap(dev->bus, dev->devfn,
 				   pos + PCI_CAP_LIST_NEXT, cap);
 }
 EXPORT_SYMBOL_GPL(pci_find_next_capability);
 
-static int __pci_bus_find_cap_start(struct pci_bus *bus,
+static u8 __pci_bus_find_cap_start(struct pci_bus *bus,
 				    unsigned int devfn, u8 hdr_type)
 {
 	u16 status;
@@ -468,9 +477,9 @@ static int __pci_bus_find_cap_start(struct pci_bus *bus,
  *  %PCI_CAP_ID_PCIX         PCI-X
  *  %PCI_CAP_ID_EXP          PCI Express
  */
-int pci_find_capability(struct pci_dev *dev, int cap)
+u8 pci_find_capability(struct pci_dev *dev, int cap)
 {
-	int pos;
+	u8 pos;
 
 	pos = __pci_bus_find_cap_start(dev->bus, dev->devfn, dev->hdr_type);
 	if (pos)
@@ -493,10 +502,9 @@ EXPORT_SYMBOL(pci_find_capability);
  * device's PCI configuration space or 0 in case the device does not
  * support it.
  */
-int pci_bus_find_capability(struct pci_bus *bus, unsigned int devfn, int cap)
+u8 pci_bus_find_capability(struct pci_bus *bus, unsigned int devfn, int cap)
 {
-	int pos;
-	u8 hdr_type;
+	u8 hdr_type, pos;
 
 	pci_bus_read_config_byte(bus, devfn, PCI_HEADER_TYPE, &hdr_type);
 
@@ -519,11 +527,11 @@ EXPORT_SYMBOL(pci_bus_find_capability);
  * not support it.  Some capabilities can occur several times, e.g., the
  * vendor-specific capability, and this provides a way to find them all.
  */
-int pci_find_next_ext_capability(struct pci_dev *dev, int start, int cap)
+u16 pci_find_next_ext_capability(struct pci_dev *dev, u16 start, int cap)
 {
 	u32 header;
 	int ttl;
-	int pos = PCI_CFG_SPACE_SIZE;
+	u16 pos = PCI_CFG_SPACE_SIZE;
 
 	/* minimum 8 bytes per capability */
 	ttl = (PCI_CFG_SPACE_EXP_SIZE - PCI_CFG_SPACE_SIZE) / 8;
@@ -574,7 +582,7 @@ EXPORT_SYMBOL_GPL(pci_find_next_ext_capability);
  *  %PCI_EXT_CAP_ID_DSN		Device Serial Number
  *  %PCI_EXT_CAP_ID_PWR		Power Budgeting
  */
-int pci_find_ext_capability(struct pci_dev *dev, int cap)
+u16 pci_find_ext_capability(struct pci_dev *dev, int cap)
 {
 	return pci_find_next_ext_capability(dev, 0, cap);
 }
@@ -614,7 +622,7 @@ u64 pci_get_dsn(struct pci_dev *dev)
 }
 EXPORT_SYMBOL_GPL(pci_get_dsn);
 
-static int __pci_find_next_ht_cap(struct pci_dev *dev, int pos, int ht_cap)
+static u8 __pci_find_next_ht_cap(struct pci_dev *dev, u8 pos, int ht_cap)
 {
 	int rc, ttl = PCI_FIND_CAP_TTL;
 	u8 cap, mask;
@@ -641,11 +649,12 @@ static int __pci_find_next_ht_cap(struct pci_dev *dev, int pos, int ht_cap)
 
 	return 0;
 }
+
 /**
- * pci_find_next_ht_capability - query a device's Hypertransport capabilities
+ * pci_find_next_ht_capability - query a device's HyperTransport capabilities
  * @dev: PCI device to query
  * @pos: Position from which to continue searching
- * @ht_cap: Hypertransport capability code
+ * @ht_cap: HyperTransport capability code
  *
  * To be used in conjunction with pci_find_ht_capability() to search for
  * all capabilities matching @ht_cap. @pos should always be a value returned
@@ -654,26 +663,26 @@ static int __pci_find_next_ht_cap(struct pci_dev *dev, int pos, int ht_cap)
  * NB. To be 100% safe against broken PCI devices, the caller should take
  * steps to avoid an infinite loop.
  */
-int pci_find_next_ht_capability(struct pci_dev *dev, int pos, int ht_cap)
+u8 pci_find_next_ht_capability(struct pci_dev *dev, u8 pos, int ht_cap)
 {
 	return __pci_find_next_ht_cap(dev, pos + PCI_CAP_LIST_NEXT, ht_cap);
 }
 EXPORT_SYMBOL_GPL(pci_find_next_ht_capability);
 
 /**
- * pci_find_ht_capability - query a device's Hypertransport capabilities
+ * pci_find_ht_capability - query a device's HyperTransport capabilities
  * @dev: PCI device to query
- * @ht_cap: Hypertransport capability code
+ * @ht_cap: HyperTransport capability code
  *
- * Tell if a device supports a given Hypertransport capability.
+ * Tell if a device supports a given HyperTransport capability.
  * Returns an address within the device's PCI configuration space
  * or 0 in case the device does not support the request capability.
  * The address points to the PCI capability, of type PCI_CAP_ID_HT,
- * which has a Hypertransport capability matching @ht_cap.
+ * which has a HyperTransport capability matching @ht_cap.
  */
-int pci_find_ht_capability(struct pci_dev *dev, int ht_cap)
+u8 pci_find_ht_capability(struct pci_dev *dev, int ht_cap)
 {
-	int pos;
+	u8 pos;
 
 	pos = __pci_bus_find_cap_start(dev->bus, dev->devfn, dev->hdr_type);
 	if (pos)
@@ -775,6 +784,137 @@ int pci_wait_for_pending(struct pci_dev *dev, int pos, u16 mask)
 	}
 
 	return 0;
+}
+
+static int pci_acs_enable;
+
+/**
+ * pci_request_acs - ask for ACS to be enabled if supported
+ */
+void pci_request_acs(void)
+{
+	pci_acs_enable = 1;
+}
+
+static const char *disable_acs_redir_param;
+
+/**
+ * pci_disable_acs_redir - disable ACS redirect capabilities
+ * @dev: the PCI device
+ *
+ * For only devices specified in the disable_acs_redir parameter.
+ */
+static void pci_disable_acs_redir(struct pci_dev *dev)
+{
+	int ret = 0;
+	const char *p;
+	int pos;
+	u16 ctrl;
+
+	if (!disable_acs_redir_param)
+		return;
+
+	p = disable_acs_redir_param;
+	while (*p) {
+		ret = pci_dev_str_match(dev, p, &p);
+		if (ret < 0) {
+			pr_info_once("PCI: Can't parse disable_acs_redir parameter: %s\n",
+				     disable_acs_redir_param);
+
+			break;
+		} else if (ret == 1) {
+			/* Found a match */
+			break;
+		}
+
+		if (*p != ';' && *p != ',') {
+			/* End of param or invalid format */
+			break;
+		}
+		p++;
+	}
+
+	if (ret != 1)
+		return;
+
+	if (!pci_dev_specific_disable_acs_redir(dev))
+		return;
+
+	pos = dev->acs_cap;
+	if (!pos) {
+		pci_warn(dev, "cannot disable ACS redirect for this hardware as it does not have ACS capabilities\n");
+		return;
+	}
+
+	pci_read_config_word(dev, pos + PCI_ACS_CTRL, &ctrl);
+
+	/* P2P Request & Completion Redirect */
+	ctrl &= ~(PCI_ACS_RR | PCI_ACS_CR | PCI_ACS_EC);
+
+	pci_write_config_word(dev, pos + PCI_ACS_CTRL, ctrl);
+
+	pci_info(dev, "disabled ACS redirect\n");
+}
+
+/**
+ * pci_std_enable_acs - enable ACS on devices using standard ACS capabilities
+ * @dev: the PCI device
+ */
+static void pci_std_enable_acs(struct pci_dev *dev)
+{
+	int pos;
+	u16 cap;
+	u16 ctrl;
+
+	pos = dev->acs_cap;
+	if (!pos)
+		return;
+
+	pci_read_config_word(dev, pos + PCI_ACS_CAP, &cap);
+	pci_read_config_word(dev, pos + PCI_ACS_CTRL, &ctrl);
+
+	/* Source Validation */
+	ctrl |= (cap & PCI_ACS_SV);
+
+	/* P2P Request Redirect */
+	ctrl |= (cap & PCI_ACS_RR);
+
+	/* P2P Completion Redirect */
+	ctrl |= (cap & PCI_ACS_CR);
+
+	/* Upstream Forwarding */
+	ctrl |= (cap & PCI_ACS_UF);
+
+	/* Enable Translation Blocking for external devices */
+	if (dev->external_facing || dev->untrusted)
+		ctrl |= (cap & PCI_ACS_TB);
+
+	pci_write_config_word(dev, pos + PCI_ACS_CTRL, ctrl);
+}
+
+/**
+ * pci_enable_acs - enable ACS if hardware support it
+ * @dev: the PCI device
+ */
+static void pci_enable_acs(struct pci_dev *dev)
+{
+	if (!pci_acs_enable)
+		goto disable_acs_redir;
+
+	if (!pci_dev_specific_enable_acs(dev))
+		goto disable_acs_redir;
+
+	pci_std_enable_acs(dev);
+
+disable_acs_redir:
+	/*
+	 * Note: pci_disable_acs_redir() must be called even if ACS was not
+	 * enabled by the kernel because it may have been enabled by
+	 * platform firmware.  So if we are told to disable it, we should
+	 * always disable it after setting the kernel's default
+	 * preferences.
+	 */
+	pci_disable_acs_redir(dev);
 }
 
 /**
@@ -922,7 +1062,7 @@ static int pci_raw_set_power_state(struct pci_dev *dev, pci_power_t state)
 		if ((pmcsr & PCI_PM_CTRL_STATE_MASK) == PCI_D3hot
 		 && !(pmcsr & PCI_PM_CTRL_NO_SOFT_RESET))
 			need_restore = true;
-		/* Fall-through - force to D0 */
+		fallthrough;	/* force to D0 */
 	default:
 		pmcsr = 0;
 		break;
@@ -938,7 +1078,7 @@ static int pci_raw_set_power_state(struct pci_dev *dev, pci_power_t state)
 	if (state == PCI_D3hot || dev->current_state == PCI_D3hot)
 		pci_dev_d3_sleep(dev);
 	else if (state == PCI_D2 || dev->current_state == PCI_D2)
-		msleep(PCI_PM_D2_DELAY);
+		udelay(PCI_PM_D2_DELAY);
 
 	pci_read_config_word(dev, dev->pm_cap + PCI_PM_CTRL, &pmcsr);
 	dev->current_state = (pmcsr & PCI_PM_CTRL_STATE_MASK);
@@ -1034,26 +1174,20 @@ int pci_platform_power_transition(struct pci_dev *dev, pci_power_t state)
 }
 EXPORT_SYMBOL_GPL(pci_platform_power_transition);
 
-/**
- * pci_wakeup - Wake up a PCI device
- * @pci_dev: Device to handle.
- * @ign: ignored parameter
- */
-static int pci_wakeup(struct pci_dev *pci_dev, void *ign)
+static int pci_resume_one(struct pci_dev *pci_dev, void *ign)
 {
-	pci_wakeup_event(pci_dev);
 	pm_request_resume(&pci_dev->dev);
 	return 0;
 }
 
 /**
- * pci_wakeup_bus - Walk given bus and wake up devices on it
+ * pci_resume_bus - Walk given bus and runtime resume devices on it
  * @bus: Top bus of the subtree to walk.
  */
-void pci_wakeup_bus(struct pci_bus *bus)
+void pci_resume_bus(struct pci_bus *bus)
 {
 	if (bus)
-		pci_walk_bus(bus, pci_wakeup, NULL);
+		pci_walk_bus(bus, pci_resume_one, NULL);
 }
 
 static int pci_dev_wait(struct pci_dev *dev, char *reset_type, int timeout)
@@ -1116,7 +1250,7 @@ int pci_power_up(struct pci_dev *dev)
 		 * may be powered on into D0uninitialized state, resume them to
 		 * give them a chance to suspend again
 		 */
-		pci_wakeup_bus(dev->subordinate);
+		pci_resume_bus(dev->subordinate);
 	}
 
 	return pci_raw_set_power_state(dev, PCI_D0);
@@ -1424,8 +1558,10 @@ int pci_save_state(struct pci_dev *dev)
 		return i;
 
 	pci_save_ltr_state(dev);
+	pci_save_aspm_l1ss_state(dev);
 	pci_save_dpc_state(dev);
 	pci_save_aer_state(dev);
+	pci_save_ptm_state(dev);
 	return pci_save_vc_state(dev);
 }
 EXPORT_SYMBOL(pci_save_state);
@@ -1529,6 +1665,7 @@ void pci_restore_state(struct pci_dev *dev)
 	 * LTR itself (in the PCIe capability).
 	 */
 	pci_restore_ltr_state(dev);
+	pci_restore_aspm_l1ss_state(dev);
 
 	pci_restore_pcie_state(dev);
 	pci_restore_pasid_state(dev);
@@ -1537,6 +1674,7 @@ void pci_restore_state(struct pci_dev *dev)
 	pci_restore_vc_state(dev);
 	pci_restore_rebar_state(dev);
 	pci_restore_dpc_state(dev);
+	pci_restore_ptm_state(dev);
 
 	pci_aer_clear_status(dev);
 	pci_restore_aer_state(dev);
@@ -2046,6 +2184,14 @@ int pci_set_pcie_reset_state(struct pci_dev *dev, enum pcie_reset_state state)
 }
 EXPORT_SYMBOL_GPL(pci_set_pcie_reset_state);
 
+void pcie_clear_device_status(struct pci_dev *dev)
+{
+	u16 sta;
+
+	pcie_capability_read_word(dev, PCI_EXP_DEVSTA, &sta);
+	pcie_capability_write_word(dev, PCI_EXP_DEVSTA, sta);
+}
+
 /**
  * pcie_clear_root_pme_status - Clear root port PME interrupt status.
  * @dev: PCIe root port or event collector.
@@ -2406,7 +2552,7 @@ static pci_power_t pci_target_state(struct pci_dev *dev, bool wakeup)
 		case PCI_D2:
 			if (pci_no_d1d2(dev))
 				break;
-			/* else, fall through */
+			fallthrough;
 		default:
 			target_state = state;
 		}
@@ -2458,12 +2604,24 @@ int pci_prepare_to_sleep(struct pci_dev *dev)
 	if (target_state == PCI_POWER_ERROR)
 		return -EIO;
 
+	/*
+	 * There are systems (for example, Intel mobile chips since Coffee
+	 * Lake) where the power drawn while suspended can be significantly
+	 * reduced by disabling PTM on PCIe root ports as this allows the
+	 * port to enter a lower-power PM state and the SoC to reach a
+	 * lower-power idle state as a whole.
+	 */
+	if (pci_pcie_type(dev) == PCI_EXP_TYPE_ROOT_PORT)
+		pci_disable_ptm(dev);
+
 	pci_enable_wake(dev, target_state, wakeup);
 
 	error = pci_set_power_state(dev, target_state);
 
-	if (error)
+	if (error) {
 		pci_enable_wake(dev, target_state, false);
+		pci_restore_ptm_state(dev);
+	}
 
 	return error;
 }
@@ -2501,12 +2659,23 @@ int pci_finish_runtime_suspend(struct pci_dev *dev)
 
 	dev->runtime_d3cold = target_state == PCI_D3cold;
 
+	/*
+	 * There are systems (for example, Intel mobile chips since Coffee
+	 * Lake) where the power drawn while suspended can be significantly
+	 * reduced by disabling PTM on PCIe root ports as this allows the
+	 * port to enter a lower-power PM state and the SoC to reach a
+	 * lower-power idle state as a whole.
+	 */
+	if (pci_pcie_type(dev) == PCI_EXP_TYPE_ROOT_PORT)
+		pci_disable_ptm(dev);
+
 	__pci_enable_wake(dev, target_state, pci_dev_run_wake(dev));
 
 	error = pci_set_power_state(dev, target_state);
 
 	if (error) {
 		pci_enable_wake(dev, target_state, false);
+		pci_restore_ptm_state(dev);
 		dev->runtime_d3cold = false;
 	}
 
@@ -2878,7 +3047,7 @@ void pci_pm_init(struct pci_dev *dev)
 	}
 
 	dev->pm_cap = pm;
-	dev->d3_delay = PCI_PM_D3_WAIT;
+	dev->d3hot_delay = PCI_PM_D3HOT_WAIT;
 	dev->d3cold_delay = PCI_PM_D3COLD_WAIT;
 	dev->bridge_d3 = pci_bridge_d3_possible(dev);
 	dev->d3cold_allowed = true;
@@ -2903,7 +3072,7 @@ void pci_pm_init(struct pci_dev *dev)
 			 (pmc & PCI_PM_CAP_PME_D0) ? " D0" : "",
 			 (pmc & PCI_PM_CAP_PME_D1) ? " D1" : "",
 			 (pmc & PCI_PM_CAP_PME_D2) ? " D2" : "",
-			 (pmc & PCI_PM_CAP_PME_D3) ? " D3hot" : "",
+			 (pmc & PCI_PM_CAP_PME_D3hot) ? " D3hot" : "",
 			 (pmc & PCI_PM_CAP_PME_D3cold) ? " D3cold" : "");
 		dev->pme_support = pmc >> PCI_PM_CAP_PME_SHIFT;
 		dev->pme_poll = true;
@@ -3184,6 +3353,11 @@ void pci_allocate_cap_save_buffers(struct pci_dev *dev)
 	if (error)
 		pci_err(dev, "unable to allocate suspend buffer for LTR\n");
 
+	error = pci_add_ext_cap_save_buffer(dev, PCI_EXT_CAP_ID_L1SS,
+					    2 * sizeof(u32));
+	if (error)
+		pci_err(dev, "unable to allocate suspend buffer for ASPM-L1SS\n");
+
 	pci_allocate_vc_save_buffers(dev);
 }
 
@@ -3230,139 +3404,12 @@ void pci_configure_ari(struct pci_dev *dev)
 	}
 }
 
-static int pci_acs_enable;
-
-/**
- * pci_request_acs - ask for ACS to be enabled if supported
- */
-void pci_request_acs(void)
-{
-	pci_acs_enable = 1;
-}
-
-static const char *disable_acs_redir_param;
-
-/**
- * pci_disable_acs_redir - disable ACS redirect capabilities
- * @dev: the PCI device
- *
- * For only devices specified in the disable_acs_redir parameter.
- */
-static void pci_disable_acs_redir(struct pci_dev *dev)
-{
-	int ret = 0;
-	const char *p;
-	int pos;
-	u16 ctrl;
-
-	if (!disable_acs_redir_param)
-		return;
-
-	p = disable_acs_redir_param;
-	while (*p) {
-		ret = pci_dev_str_match(dev, p, &p);
-		if (ret < 0) {
-			pr_info_once("PCI: Can't parse disable_acs_redir parameter: %s\n",
-				     disable_acs_redir_param);
-
-			break;
-		} else if (ret == 1) {
-			/* Found a match */
-			break;
-		}
-
-		if (*p != ';' && *p != ',') {
-			/* End of param or invalid format */
-			break;
-		}
-		p++;
-	}
-
-	if (ret != 1)
-		return;
-
-	if (!pci_dev_specific_disable_acs_redir(dev))
-		return;
-
-	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ACS);
-	if (!pos) {
-		pci_warn(dev, "cannot disable ACS redirect for this hardware as it does not have ACS capabilities\n");
-		return;
-	}
-
-	pci_read_config_word(dev, pos + PCI_ACS_CTRL, &ctrl);
-
-	/* P2P Request & Completion Redirect */
-	ctrl &= ~(PCI_ACS_RR | PCI_ACS_CR | PCI_ACS_EC);
-
-	pci_write_config_word(dev, pos + PCI_ACS_CTRL, ctrl);
-
-	pci_info(dev, "disabled ACS redirect\n");
-}
-
-/**
- * pci_std_enable_acs - enable ACS on devices using standard ACS capabilities
- * @dev: the PCI device
- */
-static void pci_std_enable_acs(struct pci_dev *dev)
-{
-	int pos;
-	u16 cap;
-	u16 ctrl;
-
-	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ACS);
-	if (!pos)
-		return;
-
-	pci_read_config_word(dev, pos + PCI_ACS_CAP, &cap);
-	pci_read_config_word(dev, pos + PCI_ACS_CTRL, &ctrl);
-
-	/* Source Validation */
-	ctrl |= (cap & PCI_ACS_SV);
-
-	/* P2P Request Redirect */
-	ctrl |= (cap & PCI_ACS_RR);
-
-	/* P2P Completion Redirect */
-	ctrl |= (cap & PCI_ACS_CR);
-
-	/* Upstream Forwarding */
-	ctrl |= (cap & PCI_ACS_UF);
-
-	pci_write_config_word(dev, pos + PCI_ACS_CTRL, ctrl);
-}
-
-/**
- * pci_enable_acs - enable ACS if hardware support it
- * @dev: the PCI device
- */
-void pci_enable_acs(struct pci_dev *dev)
-{
-	if (!pci_acs_enable)
-		goto disable_acs_redir;
-
-	if (!pci_dev_specific_enable_acs(dev))
-		goto disable_acs_redir;
-
-	pci_std_enable_acs(dev);
-
-disable_acs_redir:
-	/*
-	 * Note: pci_disable_acs_redir() must be called even if ACS was not
-	 * enabled by the kernel because it may have been enabled by
-	 * platform firmware.  So if we are told to disable it, we should
-	 * always disable it after setting the kernel's default
-	 * preferences.
-	 */
-	pci_disable_acs_redir(dev);
-}
-
 static bool pci_acs_flags_enabled(struct pci_dev *pdev, u16 acs_flags)
 {
 	int pos;
 	u16 cap, ctrl;
 
-	pos = pci_find_ext_capability(pdev, PCI_EXT_CAP_ID_ACS);
+	pos = pdev->acs_cap;
 	if (!pos)
 		return false;
 
@@ -3459,7 +3506,7 @@ bool pci_acs_enabled(struct pci_dev *pdev, u16 acs_flags)
 }
 
 /**
- * pci_acs_path_enable - test ACS flags from start to end in a hierarchy
+ * pci_acs_path_enabled - test ACS flags from start to end in a hierarchy
  * @start: starting downstream device
  * @end: ending upstream device or NULL to search to the root bus
  * @acs_flags: required flags
@@ -3485,6 +3532,23 @@ bool pci_acs_path_enabled(struct pci_dev *start,
 	} while (pdev != end);
 
 	return true;
+}
+
+/**
+ * pci_acs_init - Initialize ACS if hardware supports it
+ * @dev: the PCI device
+ */
+void pci_acs_init(struct pci_dev *dev)
+{
+	dev->acs_cap = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ACS);
+
+	/*
+	 * Attempt to enable ACS regardless of capability because some Root
+	 * Ports (e.g. those quirked with *_intel_pch_acs_*) do not have
+	 * the standard ACS capability but still support ACS via those
+	 * quirks.
+	 */
+	pci_enable_acs(dev);
 }
 
 /**
@@ -4150,7 +4214,14 @@ void __iomem *devm_pci_remap_cfg_resource(struct device *dev,
 	}
 
 	size = resource_size(res);
-	name = res->name ?: dev_name(dev);
+
+	if (res->name)
+		name = devm_kasprintf(dev, GFP_KERNEL, "%s %s", dev_name(dev),
+				      res->name);
+	else
+		name = devm_kstrdup(dev, dev_name(dev), GFP_KERNEL);
+	if (!name)
+		return IOMEM_ERR_PTR(-ENOMEM);
 
 	if (!devm_request_mem_region(dev, res->start, size, name)) {
 		dev_err(dev, "can't request region for resource %pR\n", res);
@@ -4279,7 +4350,7 @@ int pci_set_cacheline_size(struct pci_dev *dev)
 	if (cacheline_size == pci_cache_line_size)
 		return 0;
 
-	pci_info(dev, "cache line size of %d is not supported\n",
+	pci_dbg(dev, "cache line size of %d is not supported\n",
 		   pci_cache_line_size << 2);
 
 	return -EINVAL;
@@ -4601,7 +4672,7 @@ static int pci_af_flr(struct pci_dev *dev, int probe)
  *
  * NOTE: This causes the caller to sleep for twice the device power transition
  * cooldown period, which for the D0->D3hot and D3hot->D0 transitions is 10 ms
- * by default (i.e. unless the @dev's d3_delay field has a different value).
+ * by default (i.e. unless the @dev's d3hot_delay field has a different value).
  * Moreover, only devices in D0 can be reset by this function.
  */
 static int pci_pm_reset(struct pci_dev *dev, int probe)
@@ -4638,8 +4709,7 @@ static int pci_pm_reset(struct pci_dev *dev, int probe)
  * pcie_wait_for_link_delay - Wait until link is active or inactive
  * @pdev: Bridge device
  * @active: waiting for active or inactive?
- * @delay: Delay to wait after link has become active (in ms). Specify %0
- *	   for no delay.
+ * @delay: Delay to wait after link has become active (in ms)
  *
  * Use this to wait till link becomes active or inactive.
  */
@@ -4680,11 +4750,9 @@ static bool pcie_wait_for_link_delay(struct pci_dev *pdev, bool active,
 		msleep(10);
 		timeout -= 10;
 	}
-	if (active && ret && delay)
+	if (active && ret)
 		msleep(delay);
-	else if (ret != active)
-		pci_info(pdev, "Data Link Layer Link Active not %s in 1000 msec\n",
-			active ? "set" : "cleared");
+
 	return ret == active;
 }
 
@@ -4801,28 +4869,18 @@ void pci_bridge_wait_for_secondary_bus(struct pci_dev *dev)
 	if (!pcie_downstream_port(dev))
 		return;
 
-	/*
-	 * Per PCIe r5.0, sec 6.6.1, for downstream ports that support
-	 * speeds > 5 GT/s, we must wait for link training to complete
-	 * before the mandatory delay.
-	 *
-	 * We can only tell when link training completes via DLL Link
-	 * Active, which is required for downstream ports that support
-	 * speeds > 5 GT/s (sec 7.5.3.6).  Unfortunately some common
-	 * devices do not implement Link Active reporting even when it's
-	 * required, so we'll check for that directly instead of checking
-	 * the supported link speed.  We assume devices without Link Active
-	 * reporting can train in 100 ms regardless of speed.
-	 */
-	if (dev->link_active_reporting) {
-		pci_dbg(dev, "waiting for link to train\n");
-		if (!pcie_wait_for_link_delay(dev, true, 0)) {
+	if (pcie_get_speed_cap(dev) <= PCIE_SPEED_5_0GT) {
+		pci_dbg(dev, "waiting %d ms for downstream link\n", delay);
+		msleep(delay);
+	} else {
+		pci_dbg(dev, "waiting %d ms for downstream link, after activation\n",
+			delay);
+		if (!pcie_wait_for_link_delay(dev, true, delay)) {
 			/* Did not train, no need to wait any further */
+			pci_info(dev, "Data Link Layer Link Active not set in 1000 msec\n");
 			return;
 		}
 	}
-	pci_dbg(child, "waiting %d ms to become accessible\n", delay);
-	msleep(delay);
 
 	if (!pci_device_is_present(child)) {
 		pci_dbg(child, "waiting additional %d ms to become accessible\n", delay);
@@ -4912,15 +4970,9 @@ static int pci_reset_hotplug_slot(struct hotplug_slot *hotplug, int probe)
 
 static int pci_dev_reset_slot_function(struct pci_dev *dev, int probe)
 {
-	struct pci_dev *pdev;
-
-	if (dev->subordinate || !dev->slot ||
+	if (dev->multifunction || dev->subordinate || !dev->slot ||
 	    dev->dev_flags & PCI_DEV_FLAGS_NO_BUS_RESET)
 		return -ENOTTY;
-
-	list_for_each_entry(pdev, &dev->bus->devices, bus_list)
-		if (pdev != dev && pdev->slot == dev->slot)
-			return -ENOTTY;
 
 	return pci_reset_hotplug_slot(dev->slot->hotplug, probe);
 }
@@ -5688,6 +5740,7 @@ EXPORT_SYMBOL(pcie_get_readrq);
 int pcie_set_readrq(struct pci_dev *dev, int rq)
 {
 	u16 v;
+	int ret;
 
 	if (rq < 128 || rq > 4096 || !is_power_of_2(rq))
 		return -EINVAL;
@@ -5706,8 +5759,10 @@ int pcie_set_readrq(struct pci_dev *dev, int rq)
 
 	v = (ffs(rq) - 8) << 12;
 
-	return pcie_capability_clear_and_set_word(dev, PCI_EXP_DEVCTL,
+	ret = pcie_capability_clear_and_set_word(dev, PCI_EXP_DEVCTL,
 						  PCI_EXP_DEVCTL_READRQ, v);
+
+	return pcibios_err_to_errno(ret);
 }
 EXPORT_SYMBOL(pcie_set_readrq);
 
@@ -5738,6 +5793,7 @@ EXPORT_SYMBOL(pcie_get_mps);
 int pcie_set_mps(struct pci_dev *dev, int mps)
 {
 	u16 v;
+	int ret;
 
 	if (mps < 128 || mps > 4096 || !is_power_of_2(mps))
 		return -EINVAL;
@@ -5747,8 +5803,10 @@ int pcie_set_mps(struct pci_dev *dev, int mps)
 		return -EINVAL;
 	v <<= 5;
 
-	return pcie_capability_clear_and_set_word(dev, PCI_EXP_DEVCTL,
+	ret = pcie_capability_clear_and_set_word(dev, PCI_EXP_DEVCTL,
 						  PCI_EXP_DEVCTL_PAYLOAD, v);
+
+	return pcibios_err_to_errno(ret);
 }
 EXPORT_SYMBOL(pcie_set_mps);
 
@@ -5991,7 +6049,7 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
 
 	if (flags & PCI_VGA_STATE_CHANGE_DECODES) {
 		pci_read_config_word(dev, PCI_COMMAND, &cmd);
-		if (decode == true)
+		if (decode)
 			cmd |= command_bits;
 		else
 			cmd &= ~command_bits;
@@ -6007,7 +6065,7 @@ int pci_set_vga_state(struct pci_dev *dev, bool decode,
 		if (bridge) {
 			pci_read_config_word(bridge, PCI_BRIDGE_CONTROL,
 					     &cmd);
-			if (decode == true)
+			if (decode)
 				cmd |= PCI_BRIDGE_CTL_VGA;
 			else
 				cmd &= ~PCI_BRIDGE_CTL_VGA;
@@ -6177,19 +6235,21 @@ static resource_size_t pci_specified_resource_alignment(struct pci_dev *dev,
 	while (*p) {
 		count = 0;
 		if (sscanf(p, "%d%n", &align_order, &count) == 1 &&
-							p[count] == '@') {
+		    p[count] == '@') {
 			p += count + 1;
+			if (align_order > 63) {
+				pr_err("PCI: Invalid requested alignment (order %d)\n",
+				       align_order);
+				align_order = PAGE_SHIFT;
+			}
 		} else {
-			align_order = -1;
+			align_order = PAGE_SHIFT;
 		}
 
 		ret = pci_dev_str_match(dev, p, &p);
 		if (ret == 1) {
 			*resize = true;
-			if (align_order == -1)
-				align = PAGE_SIZE;
-			else
-				align = 1 << align_order;
+			align = 1ULL << align_order;
 			break;
 		} else if (ret < 0) {
 			pr_err("PCI: Can't parse resource_alignment parameter: %s\n",
@@ -6336,7 +6396,7 @@ static ssize_t resource_alignment_show(struct bus_type *bus, char *buf)
 
 	spin_lock(&resource_alignment_lock);
 	if (resource_alignment_param)
-		count = snprintf(buf, PAGE_SIZE, "%s", resource_alignment_param);
+		count = scnprintf(buf, PAGE_SIZE, "%s", resource_alignment_param);
 	spin_unlock(&resource_alignment_lock);
 
 	/*

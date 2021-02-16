@@ -125,7 +125,7 @@ static int qxlhw_handle_to_bo(struct drm_file *file_priv, uint64_t handle,
 	qobj = gem_to_qxl_bo(gobj);
 
 	ret = qxl_release_list_add(release, qobj);
-	drm_gem_object_put_unlocked(gobj);
+	drm_gem_object_put(gobj);
 	if (ret)
 		return ret;
 
@@ -160,7 +160,6 @@ static int qxl_process_single_command(struct qxl_device *qdev,
 	default:
 		DRM_DEBUG("Only draw commands in execbuffers\n");
 		return -EINVAL;
-		break;
 	}
 
 	if (cmd->command_size > PAGE_SIZE - sizeof(union qxl_release_info))
@@ -322,12 +321,12 @@ static int qxl_update_area_ioctl(struct drm_device *dev, void *data,
 
 	qobj = gem_to_qxl_bo(gobj);
 
-	ret = qxl_bo_reserve(qobj, false);
+	ret = qxl_bo_reserve(qobj);
 	if (ret)
 		goto out;
 
-	if (!qobj->pin_count) {
-		qxl_ttm_placement_from_domain(qobj, qobj->type, false);
+	if (!qobj->tbo.pin_count) {
+		qxl_ttm_placement_from_domain(qobj, qobj->type);
 		ret = ttm_bo_validate(&qobj->tbo, &qobj->placement, &ctx);
 		if (unlikely(ret))
 			goto out;
@@ -344,7 +343,7 @@ out2:
 	qxl_bo_unreserve(qobj);
 
 out:
-	drm_gem_object_put_unlocked(gobj);
+	drm_gem_object_put(gobj);
 	return ret;
 }
 

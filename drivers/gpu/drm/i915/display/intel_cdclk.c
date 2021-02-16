@@ -21,7 +21,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <linux/time.h>
+
 #include "intel_atomic.h"
+#include "intel_bw.h"
 #include "intel_cdclk.h"
 #include "intel_display_types.h"
 #include "intel_sideband.h"
@@ -323,7 +326,7 @@ static void pnv_get_cdclk(struct drm_i915_private *dev_priv,
 	default:
 		drm_err(&dev_priv->drm,
 			"Unknown pnv display core clock 0x%04x\n", gcfgc);
-		/* fall through */
+		fallthrough;
 	case GC_DISPLAY_CLOCK_133_MHZ_PNV:
 		cdclk_config->cdclk = 133333;
 		break;
@@ -763,7 +766,7 @@ static void bdw_set_cdclk(struct drm_i915_private *dev_priv,
 	switch (cdclk) {
 	default:
 		MISSING_CASE(cdclk);
-		/* fall through */
+		fallthrough;
 	case 337500:
 		val |= LCPLL_CLK_FREQ_337_5_BDW;
 		break;
@@ -1039,7 +1042,7 @@ static void skl_set_cdclk(struct drm_i915_private *dev_priv,
 		drm_WARN_ON(&dev_priv->drm,
 			    cdclk != dev_priv->cdclk.hw.bypass);
 		drm_WARN_ON(&dev_priv->drm, vco != 0);
-		/* fall through */
+		fallthrough;
 	case 308571:
 	case 337500:
 		freq_select = CDCLK_FREQ_337_308;
@@ -1230,6 +1233,30 @@ static const struct intel_cdclk_vals icl_cdclk_table[] = {
 	{}
 };
 
+static const struct intel_cdclk_vals rkl_cdclk_table[] = {
+	{ .refclk = 19200, .cdclk = 172800, .divider = 4, .ratio =  36 },
+	{ .refclk = 19200, .cdclk = 192000, .divider = 4, .ratio =  40 },
+	{ .refclk = 19200, .cdclk = 307200, .divider = 4, .ratio =  64 },
+	{ .refclk = 19200, .cdclk = 326400, .divider = 8, .ratio = 136 },
+	{ .refclk = 19200, .cdclk = 556800, .divider = 4, .ratio = 116 },
+	{ .refclk = 19200, .cdclk = 652800, .divider = 4, .ratio = 136 },
+
+	{ .refclk = 24000, .cdclk = 180000, .divider = 4, .ratio =  30 },
+	{ .refclk = 24000, .cdclk = 192000, .divider = 4, .ratio =  32 },
+	{ .refclk = 24000, .cdclk = 312000, .divider = 4, .ratio =  52 },
+	{ .refclk = 24000, .cdclk = 324000, .divider = 8, .ratio = 108 },
+	{ .refclk = 24000, .cdclk = 552000, .divider = 4, .ratio =  92 },
+	{ .refclk = 24000, .cdclk = 648000, .divider = 4, .ratio = 108 },
+
+	{ .refclk = 38400, .cdclk = 172800, .divider = 4, .ratio = 18 },
+	{ .refclk = 38400, .cdclk = 192000, .divider = 4, .ratio = 20 },
+	{ .refclk = 38400, .cdclk = 307200, .divider = 4, .ratio = 32 },
+	{ .refclk = 38400, .cdclk = 326400, .divider = 8, .ratio = 68 },
+	{ .refclk = 38400, .cdclk = 556800, .divider = 4, .ratio = 58 },
+	{ .refclk = 38400, .cdclk = 652800, .divider = 4, .ratio = 68 },
+	{}
+};
+
 static int bxt_calc_cdclk(struct drm_i915_private *dev_priv, int min_cdclk)
 {
 	const struct intel_cdclk_vals *table = dev_priv->cdclk.table;
@@ -1330,7 +1357,7 @@ static void icl_readout_refclk(struct drm_i915_private *dev_priv,
 	switch (dssm) {
 	default:
 		MISSING_CASE(dssm);
-		/* fall through */
+		fallthrough;
 	case ICL_DSSM_CDCLK_PLL_REFCLK_24MHz:
 		cdclk_config->ref = 24000;
 		break;
@@ -1558,7 +1585,7 @@ static void bxt_set_cdclk(struct drm_i915_private *dev_priv,
 		drm_WARN_ON(&dev_priv->drm,
 			    cdclk != dev_priv->cdclk.hw.bypass);
 		drm_WARN_ON(&dev_priv->drm, vco != 0);
-		/* fall through */
+		fallthrough;
 	case 2:
 		divider = BXT_CDCLK_CD2X_DIV_SEL_1;
 		break;
@@ -2077,8 +2104,15 @@ int intel_crtc_compute_min_cdclk(const struct intel_crtc_state *crtc_state)
 	 * Explicitly stating here that this seems to be currently
 	 * rather a Hack, than final solution.
 	 */
-	if (IS_TIGERLAKE(dev_priv))
-		min_cdclk = max(min_cdclk, (int)crtc_state->pixel_rate);
+	if (IS_TIGERLAKE(dev_priv)) {
+		/*
+		 * Clamp to max_cdclk_freq in case pixel rate is higher,
+		 * in order not to break an 8K, but still leave W/A at place.
+		 */
+		min_cdclk = max_t(int, min_cdclk,
+				  min_t(int, crtc_state->pixel_rate,
+					dev_priv->max_cdclk_freq));
+	}
 
 	if (min_cdclk > dev_priv->max_cdclk_freq) {
 		drm_dbg_kms(&dev_priv->drm,
@@ -2094,6 +2128,7 @@ static int intel_compute_min_cdclk(struct intel_cdclk_state *cdclk_state)
 {
 	struct intel_atomic_state *state = cdclk_state->base.state;
 	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
+	struct intel_bw_state *bw_state = NULL;
 	struct intel_crtc *crtc;
 	struct intel_crtc_state *crtc_state;
 	int min_cdclk, i;
@@ -2106,6 +2141,10 @@ static int intel_compute_min_cdclk(struct intel_cdclk_state *cdclk_state)
 		if (min_cdclk < 0)
 			return min_cdclk;
 
+		bw_state = intel_atomic_get_bw_state(state);
+		if (IS_ERR(bw_state))
+			return PTR_ERR(bw_state);
+
 		if (cdclk_state->min_cdclk[i] == min_cdclk)
 			continue;
 
@@ -2117,8 +2156,14 @@ static int intel_compute_min_cdclk(struct intel_cdclk_state *cdclk_state)
 	}
 
 	min_cdclk = cdclk_state->force_min_cdclk;
-	for_each_pipe(dev_priv, pipe)
+	for_each_pipe(dev_priv, pipe) {
 		min_cdclk = max(cdclk_state->min_cdclk[pipe], min_cdclk);
+
+		if (!bw_state)
+			continue;
+
+		min_cdclk = max(bw_state->min_cdclk, min_cdclk);
+	}
 
 	return min_cdclk;
 }
@@ -2405,7 +2450,6 @@ static struct intel_global_state *intel_cdclk_duplicate_state(struct intel_globa
 	if (!cdclk_state)
 		return NULL;
 
-	cdclk_state->force_min_cdclk_changed = false;
 	cdclk_state->pipe = INVALID_PIPE;
 
 	return &cdclk_state->base;
@@ -2480,6 +2524,7 @@ int intel_modeset_calc_cdclk(struct intel_atomic_state *state)
 		if (ret)
 			return ret;
 	} else if (old_cdclk_state->active_pipes != new_cdclk_state->active_pipes ||
+		   old_cdclk_state->force_min_cdclk != new_cdclk_state->force_min_cdclk ||
 		   intel_cdclk_changed(&old_cdclk_state->logical,
 				       &new_cdclk_state->logical)) {
 		ret = intel_atomic_lock_global_state(&new_cdclk_state->base);
@@ -2567,7 +2612,7 @@ static int intel_compute_max_dotclk(struct drm_i915_private *dev_priv)
  */
 void intel_update_max_cdclk(struct drm_i915_private *dev_priv)
 {
-	if (IS_ELKHARTLAKE(dev_priv)) {
+	if (IS_JSL_EHL(dev_priv)) {
 		if (dev_priv->cdclk.hw.ref == 24000)
 			dev_priv->max_cdclk_freq = 552000;
 		else
@@ -2656,7 +2701,19 @@ void intel_update_cdclk(struct drm_i915_private *dev_priv)
 	 */
 	if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
 		intel_de_write(dev_priv, GMBUSFREQ_VLV,
-		               DIV_ROUND_UP(dev_priv->cdclk.hw.cdclk, 1000));
+			       DIV_ROUND_UP(dev_priv->cdclk.hw.cdclk, 1000));
+}
+
+static int dg1_rawclk(struct drm_i915_private *dev_priv)
+{
+	/*
+	 * DG1 always uses a 38.4 MHz rawclk.  The bspec tells us
+	 * "Program Numerator=2, Denominator=4, Divider=37 decimal."
+	 */
+	I915_WRITE(PCH_RAWCLK_FREQ,
+		   CNP_RAWCLK_DEN(4) | CNP_RAWCLK_DIV(37) | ICP_RAWCLK_NUM(2));
+
+	return 38400;
 }
 
 static int cnp_rawclk(struct drm_i915_private *dev_priv)
@@ -2700,29 +2757,59 @@ static int vlv_hrawclk(struct drm_i915_private *dev_priv)
 				      CCK_DISPLAY_REF_CLOCK_CONTROL);
 }
 
-static int g4x_hrawclk(struct drm_i915_private *dev_priv)
+static int i9xx_hrawclk(struct drm_i915_private *dev_priv)
 {
 	u32 clkcfg;
 
-	/* hrawclock is 1/4 the FSB frequency */
-	clkcfg = intel_de_read(dev_priv, CLKCFG);
-	switch (clkcfg & CLKCFG_FSB_MASK) {
-	case CLKCFG_FSB_400:
-		return 100000;
-	case CLKCFG_FSB_533:
-		return 133333;
-	case CLKCFG_FSB_667:
-		return 166667;
-	case CLKCFG_FSB_800:
-		return 200000;
-	case CLKCFG_FSB_1067:
-	case CLKCFG_FSB_1067_ALT:
-		return 266667;
-	case CLKCFG_FSB_1333:
-	case CLKCFG_FSB_1333_ALT:
-		return 333333;
-	default:
-		return 133333;
+	/*
+	 * hrawclock is 1/4 the FSB frequency
+	 *
+	 * Note that this only reads the state of the FSB
+	 * straps, not the actual FSB frequency. Some BIOSen
+	 * let you configure each independently. Ideally we'd
+	 * read out the actual FSB frequency but sadly we
+	 * don't know which registers have that information,
+	 * and all the relevant docs have gone to bit heaven :(
+	 */
+	clkcfg = intel_de_read(dev_priv, CLKCFG) & CLKCFG_FSB_MASK;
+
+	if (IS_MOBILE(dev_priv)) {
+		switch (clkcfg) {
+		case CLKCFG_FSB_400:
+			return 100000;
+		case CLKCFG_FSB_533:
+			return 133333;
+		case CLKCFG_FSB_667:
+			return 166667;
+		case CLKCFG_FSB_800:
+			return 200000;
+		case CLKCFG_FSB_1067:
+			return 266667;
+		case CLKCFG_FSB_1333:
+			return 333333;
+		default:
+			MISSING_CASE(clkcfg);
+			return 133333;
+		}
+	} else {
+		switch (clkcfg) {
+		case CLKCFG_FSB_400_ALT:
+			return 100000;
+		case CLKCFG_FSB_533:
+			return 133333;
+		case CLKCFG_FSB_667:
+			return 166667;
+		case CLKCFG_FSB_800:
+			return 200000;
+		case CLKCFG_FSB_1067_ALT:
+			return 266667;
+		case CLKCFG_FSB_1333_ALT:
+			return 333333;
+		case CLKCFG_FSB_1600_ALT:
+			return 400000;
+		default:
+			return 133333;
+		}
 	}
 }
 
@@ -2737,14 +2824,16 @@ u32 intel_read_rawclk(struct drm_i915_private *dev_priv)
 {
 	u32 freq;
 
-	if (INTEL_PCH_TYPE(dev_priv) >= PCH_CNP)
+	if (INTEL_PCH_TYPE(dev_priv) >= PCH_DG1)
+		freq = dg1_rawclk(dev_priv);
+	else if (INTEL_PCH_TYPE(dev_priv) >= PCH_CNP)
 		freq = cnp_rawclk(dev_priv);
 	else if (HAS_PCH_SPLIT(dev_priv))
 		freq = pch_rawclk(dev_priv);
 	else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
 		freq = vlv_hrawclk(dev_priv);
-	else if (IS_G4X(dev_priv) || IS_PINEVIEW(dev_priv))
-		freq = g4x_hrawclk(dev_priv);
+	else if (INTEL_GEN(dev_priv) >= 3)
+		freq = i9xx_hrawclk(dev_priv);
 	else
 		/* no rawclk on other platforms, or no need to know it */
 		return 0;
@@ -2758,27 +2847,38 @@ u32 intel_read_rawclk(struct drm_i915_private *dev_priv)
  */
 void intel_init_cdclk_hooks(struct drm_i915_private *dev_priv)
 {
-	if (INTEL_GEN(dev_priv) >= 12) {
+	if (IS_ROCKETLAKE(dev_priv)) {
 		dev_priv->display.set_cdclk = bxt_set_cdclk;
+		dev_priv->display.bw_calc_min_cdclk = skl_bw_calc_min_cdclk;
+		dev_priv->display.modeset_calc_cdclk = bxt_modeset_calc_cdclk;
+		dev_priv->display.calc_voltage_level = tgl_calc_voltage_level;
+		dev_priv->cdclk.table = rkl_cdclk_table;
+	} else if (INTEL_GEN(dev_priv) >= 12) {
+		dev_priv->display.set_cdclk = bxt_set_cdclk;
+		dev_priv->display.bw_calc_min_cdclk = skl_bw_calc_min_cdclk;
 		dev_priv->display.modeset_calc_cdclk = bxt_modeset_calc_cdclk;
 		dev_priv->display.calc_voltage_level = tgl_calc_voltage_level;
 		dev_priv->cdclk.table = icl_cdclk_table;
-	} else if (IS_ELKHARTLAKE(dev_priv)) {
+	} else if (IS_JSL_EHL(dev_priv)) {
 		dev_priv->display.set_cdclk = bxt_set_cdclk;
+		dev_priv->display.bw_calc_min_cdclk = skl_bw_calc_min_cdclk;
 		dev_priv->display.modeset_calc_cdclk = bxt_modeset_calc_cdclk;
 		dev_priv->display.calc_voltage_level = ehl_calc_voltage_level;
 		dev_priv->cdclk.table = icl_cdclk_table;
 	} else if (INTEL_GEN(dev_priv) >= 11) {
 		dev_priv->display.set_cdclk = bxt_set_cdclk;
+		dev_priv->display.bw_calc_min_cdclk = skl_bw_calc_min_cdclk;
 		dev_priv->display.modeset_calc_cdclk = bxt_modeset_calc_cdclk;
 		dev_priv->display.calc_voltage_level = icl_calc_voltage_level;
 		dev_priv->cdclk.table = icl_cdclk_table;
 	} else if (IS_CANNONLAKE(dev_priv)) {
+		dev_priv->display.bw_calc_min_cdclk = skl_bw_calc_min_cdclk;
 		dev_priv->display.set_cdclk = bxt_set_cdclk;
 		dev_priv->display.modeset_calc_cdclk = bxt_modeset_calc_cdclk;
 		dev_priv->display.calc_voltage_level = cnl_calc_voltage_level;
 		dev_priv->cdclk.table = cnl_cdclk_table;
 	} else if (IS_GEN9_LP(dev_priv)) {
+		dev_priv->display.bw_calc_min_cdclk = skl_bw_calc_min_cdclk;
 		dev_priv->display.set_cdclk = bxt_set_cdclk;
 		dev_priv->display.modeset_calc_cdclk = bxt_modeset_calc_cdclk;
 		dev_priv->display.calc_voltage_level = bxt_calc_voltage_level;
@@ -2787,18 +2887,23 @@ void intel_init_cdclk_hooks(struct drm_i915_private *dev_priv)
 		else
 			dev_priv->cdclk.table = bxt_cdclk_table;
 	} else if (IS_GEN9_BC(dev_priv)) {
+		dev_priv->display.bw_calc_min_cdclk = skl_bw_calc_min_cdclk;
 		dev_priv->display.set_cdclk = skl_set_cdclk;
 		dev_priv->display.modeset_calc_cdclk = skl_modeset_calc_cdclk;
 	} else if (IS_BROADWELL(dev_priv)) {
+		dev_priv->display.bw_calc_min_cdclk = intel_bw_calc_min_cdclk;
 		dev_priv->display.set_cdclk = bdw_set_cdclk;
 		dev_priv->display.modeset_calc_cdclk = bdw_modeset_calc_cdclk;
 	} else if (IS_CHERRYVIEW(dev_priv)) {
+		dev_priv->display.bw_calc_min_cdclk = intel_bw_calc_min_cdclk;
 		dev_priv->display.set_cdclk = chv_set_cdclk;
 		dev_priv->display.modeset_calc_cdclk = vlv_modeset_calc_cdclk;
 	} else if (IS_VALLEYVIEW(dev_priv)) {
+		dev_priv->display.bw_calc_min_cdclk = intel_bw_calc_min_cdclk;
 		dev_priv->display.set_cdclk = vlv_set_cdclk;
 		dev_priv->display.modeset_calc_cdclk = vlv_modeset_calc_cdclk;
 	} else {
+		dev_priv->display.bw_calc_min_cdclk = intel_bw_calc_min_cdclk;
 		dev_priv->display.modeset_calc_cdclk = fixed_modeset_calc_cdclk;
 	}
 
@@ -2842,9 +2947,10 @@ void intel_init_cdclk_hooks(struct drm_i915_private *dev_priv)
 		dev_priv->display.get_cdclk = i85x_get_cdclk;
 	else if (IS_I845G(dev_priv))
 		dev_priv->display.get_cdclk = fixed_200mhz_get_cdclk;
-	else { /* 830 */
-		drm_WARN(&dev_priv->drm, !IS_I830(dev_priv),
-			 "Unknown platform. Assuming 133 MHz CDCLK\n");
+	else if (IS_I830(dev_priv))
 		dev_priv->display.get_cdclk = fixed_133mhz_get_cdclk;
-	}
+
+	if (drm_WARN(&dev_priv->drm, !dev_priv->display.get_cdclk,
+		     "Unknown platform. Assuming 133 MHz CDCLK\n"))
+		dev_priv->display.get_cdclk = fixed_133mhz_get_cdclk;
 }

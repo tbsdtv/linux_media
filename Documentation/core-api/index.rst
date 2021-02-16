@@ -39,6 +39,8 @@ Library functionality that is used throughout the kernel.
    rbtree
    generic-radix-tree
    packing
+   bus-virt-phys-mapping
+   this_cpu_ops
    timekeeping
    errseq
 
@@ -51,7 +53,6 @@ How Linux keeps everything from happening at the same time.  See
 .. toctree::
    :maxdepth: 1
 
-   atomic_ops
    refcount-vs-atomic
    irq/index
    local_ops
@@ -82,6 +83,7 @@ more memory-management documentation in :doc:`/vm/index`.
    :maxdepth: 1
 
    memory-allocation
+   unaligned-memory-access
    dma-api
    dma-api-howto
    dma-attributes

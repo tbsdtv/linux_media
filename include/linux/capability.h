@@ -261,9 +261,15 @@ static inline bool bpf_capable(void)
 	return capable(CAP_BPF) || capable(CAP_SYS_ADMIN);
 }
 
+static inline bool checkpoint_restore_ns_capable(struct user_namespace *ns)
+{
+	return ns_capable(ns, CAP_CHECKPOINT_RESTORE) ||
+		ns_capable(ns, CAP_SYS_ADMIN);
+}
+
 /* audit system wants to get cap info from files as well */
 extern int get_vfs_caps_from_disk(const struct dentry *dentry, struct cpu_vfs_cap_data *cpu_caps);
 
-extern int cap_convert_nscap(struct dentry *dentry, void **ivalue, size_t size);
+extern int cap_convert_nscap(struct dentry *dentry, const void **ivalue, size_t size);
 
 #endif /* !_LINUX_CAPABILITY_H */

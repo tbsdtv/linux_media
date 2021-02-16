@@ -10,8 +10,7 @@
 #define MAX_MP_XMITBUF_SZ	2048
 #define NR_MP_XMITFRAME		8
 
-struct mp_xmit_frame
-{
+struct mp_xmit_frame {
 	struct list_head	list;
 
 	struct pkt_attrib attrib;
@@ -25,18 +24,16 @@ struct mp_xmit_frame
 	uint mem[(MAX_MP_XMITBUF_SZ >> 2)];
 };
 
-struct mp_wiparam
-{
+struct mp_wiparam {
 	u32 bcompleted;
 	u32 act_type;
 	u32 io_offset;
 	u32 io_value;
 };
 
-typedef void(*wi_act_func)(void* padapter);
+typedef void(*wi_act_func)(void *padapter);
 
-struct mp_tx
-{
+struct mp_tx {
 	u8 stop;
 	u32 count, sended;
 	u8 payload;
@@ -54,8 +51,7 @@ struct mp_tx
 #define MP_MAX_LINES_BYTES	256
 
 typedef void (*MPT_WORK_ITEM_HANDLER)(void *Adapter);
-typedef struct _MPT_CONTEXT
-{
+typedef struct _MPT_CONTEXT {
 	/*  Indicate if we have started Mass Production Test. */
 	bool			bMassProdTest;
 
@@ -205,8 +201,7 @@ enum {
 	MP_GET_TXPOWER_INX,
 };
 
-struct mp_priv
-{
+struct mp_priv {
 	struct adapter *papdater;
 
 	/* Testing Flag */
@@ -483,13 +478,13 @@ void Hal_SetChannel(struct adapter *padapter);
 void Hal_SetAntennaPathPower(struct adapter *padapter);
 s32 Hal_SetThermalMeter(struct adapter *padapter, u8 target_ther);
 s32 Hal_SetPowerTracking(struct adapter *padapter, u8 enable);
-void Hal_GetPowerTracking(struct adapter *padapter, u8 * enable);
+void Hal_GetPowerTracking(struct adapter *padapter, u8 *enable);
 void Hal_GetThermalMeter(struct adapter *padapter, u8 *value);
 void Hal_mpt_SwitchRfSetting(struct adapter *padapter);
-void Hal_MPT_CCKTxPowerAdjust(struct adapter * Adapter, bool bInCH14);
+void Hal_MPT_CCKTxPowerAdjust(struct adapter *Adapter, bool bInCH14);
 void Hal_MPT_CCKTxPowerAdjustbyIndex(struct adapter *padapter, bool beven);
-void Hal_SetCCKTxPower(struct adapter *padapter, u8 * TxPower);
-void Hal_SetOFDMTxPower(struct adapter *padapter, u8 * TxPower);
+void Hal_SetCCKTxPower(struct adapter *padapter, u8 *TxPower);
+void Hal_SetOFDMTxPower(struct adapter *padapter, u8 *TxPower);
 void Hal_TriggerRFThermalMeter(struct adapter *padapter);
 u8 Hal_ReadRFThermalMeter(struct adapter *padapter);
 void Hal_SetCCKContinuousTx(struct adapter *padapter, u8 bStart);

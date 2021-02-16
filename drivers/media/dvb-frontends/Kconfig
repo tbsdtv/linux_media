@@ -100,6 +100,14 @@ config DVB_M88DS3103
 	help
 	  Say Y when you want to support this frontend.
 
+config DVB_M88RS6060
+        tristate "Montage Technology M88RS6060 Demodulation and tuner"
+        depends on DVB_CORE && I2C 
+        select REGMAP_I2C
+        default m if !MEDIA_SUBDRV_AUTOSELECT
+        help
+          Say Y when you want to support this frontend.
+
 config DVB_GP8PSK_FE
 	tristate
 	depends on DVB_CORE
@@ -134,6 +142,13 @@ config DVB_MXL5XX
 
 config DVB_TAS2101
 	tristate "Tmax TAS2101 based"
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	Say Y when you want to support this frontend.
+
+config DVB_GX1133
+	tristate "NationalChip GX1133 based"
 	depends on DVB_CORE && I2C
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 	help
@@ -566,7 +581,7 @@ config DVB_RTL2830
 config DVB_RTL2832
 	tristate "Realtek RTL2832 DVB-T"
 	depends on DVB_CORE && I2C && I2C_MUX
-	select REGMAP
+	select REGMAP_I2C
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 	help
 	  Say Y when you want to support this frontend.

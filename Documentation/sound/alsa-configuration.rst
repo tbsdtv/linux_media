@@ -309,7 +309,7 @@ pcifix
 This module supports all ADB PCM channels, ac97 mixer, SPDIF, hardware
 EQ, mpu401, gameport. A3D and wavetable support are still in development.
 Development and reverse engineering work is being coordinated at
-http://savannah.nongnu.org/projects/openvortex/
+https://savannah.nongnu.org/projects/openvortex/
 SPDIF output has a copy of the AC97 codec output, unless you use the
 ``spdif`` pcm device, which allows raw data passthru.
 The hardware EQ hardware and SPDIF is only present in the Vortex2 and 
@@ -1501,7 +1501,7 @@ Module for Digigram miXart8 sound cards.
 
 This module supports multiple cards.
 Note: One miXart8 board will be represented as 4 alsa cards.
-See MIXART.txt for details.
+See Documentation/sound/cards/mixart.rst for details.
 
 When the driver is compiled as a module and the hotplug firmware
 is supported, the firmware data is loaded via hotplug automatically.
@@ -1575,7 +1575,7 @@ See Documentation/sound/cards/multisound.sh for important information
 about this driver.  Note that it has been discontinued, but the 
 Voyetra Turtle Beach knowledge base entry for it is still available
 at
-http://www.turtlebeach.com
+https://www.turtlebeach.com
 
 Module snd-msnd-pinnacle
 ------------------------
@@ -2227,6 +2227,11 @@ quirk_alias
     Quirk alias list, pass strings like ``0123abcd:5678beef``, which
     applies the existing quirk for the device 5678:beef to a new
     device 0123:abcd.
+implicit_fb
+    Apply the generic implicit feedback sync mode.  When this is set
+    and the playback stream sync mode is ASYNC, the driver tries to
+    tie an adjacent ASYNC capture stream as the implicit feedback
+    source.
 use_vmalloc
     Use vmalloc() for allocations of the PCM buffers (default: yes).
     For architectures with non-coherent memory like ARM or MIPS, the
@@ -2703,4 +2708,4 @@ Kernel Bugzilla
 ALSA Developers ML
     mailto:alsa-devel@alsa-project.org
 alsa-info.sh script
-    http://www.alsa-project.org/alsa-info.sh
+    https://www.alsa-project.org/alsa-info.sh

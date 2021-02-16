@@ -8,6 +8,7 @@
 #include "pmc.h"
 
 static DEFINE_SPINLOCK(pmc_pll_lock);
+static DEFINE_SPINLOCK(mck_lock);
 
 static const struct clk_master_characteristics mck_characteristics = {
 	.output = { .min = 140000000, .max = 200000000 },
@@ -22,7 +23,7 @@ static const struct clk_master_layout sam9x60_master_layout = {
 };
 
 static const struct clk_range plla_outputs[] = {
-	{ .min = 300000000, .max = 600000000 },
+	{ .min = 2343750, .max = 1200000000 },
 };
 
 static const struct clk_pll_characteristics plla_characteristics = {
@@ -40,6 +41,20 @@ static const struct clk_pll_characteristics upll_characteristics = {
 	.num_output = ARRAY_SIZE(upll_outputs),
 	.output = upll_outputs,
 	.upll = true,
+};
+
+static const struct clk_pll_layout pll_frac_layout = {
+	.mul_mask = GENMASK(31, 24),
+	.frac_mask = GENMASK(21, 0),
+	.mul_shift = 24,
+	.frac_shift = 0,
+};
+
+static const struct clk_pll_layout pll_div_layout = {
+	.div_mask = GENMASK(7, 0),
+	.endiv_mask = BIT(29),
+	.div_shift = 0,
+	.endiv_shift = 29,
 };
 
 static const struct clk_programmable_layout sam9x60_programmable_layout = {
@@ -62,11 +77,11 @@ static const struct {
 	char *p;
 	u8 id;
 } sam9x60_systemck[] = {
-	{ .n = "ddrck",  .p = "masterck", .id = 2 },
+	{ .n = "ddrck",  .p = "masterck_div", .id = 2 },
 	{ .n = "uhpck",  .p = "usbck",    .id = 6 },
 	{ .n = "pck0",   .p = "prog0",    .id = 8 },
 	{ .n = "pck1",   .p = "prog1",    .id = 9 },
-	{ .n = "qspick", .p = "masterck", .id = 19 },
+	{ .n = "qspick", .p = "masterck_div", .id = 19 },
 };
 
 static const struct {
@@ -156,10 +171,10 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 	const char *td_slck_name, *md_slck_name, *mainxtal_name;
 	struct pmc_data *sam9x60_pmc;
 	const char *parent_names[6];
+	struct clk_hw *main_osc_hw;
 	struct regmap *regmap;
 	struct clk_hw *hw;
 	int i;
-	bool bypass;
 
 	i = of_property_match_string(np, "clock-names", "td_slck");
 	if (i < 0)
@@ -178,7 +193,7 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 		return;
 	mainxtal_name = of_clk_get_parent_name(np, i);
 
-	regmap = syscon_node_to_regmap(np);
+	regmap = device_node_to_regmap(np);
 	if (IS_ERR(regmap))
 		return;
 
@@ -189,17 +204,15 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 	if (!sam9x60_pmc)
 		return;
 
-	hw = at91_clk_register_main_rc_osc(regmap, "main_rc_osc", 24000000,
+	hw = at91_clk_register_main_rc_osc(regmap, "main_rc_osc", 12000000,
 					   50000000);
 	if (IS_ERR(hw))
 		goto err_free;
 
-	bypass = of_property_read_bool(np, "atmel,osc-bypass");
-
-	hw = at91_clk_register_main_osc(regmap, "main_osc", mainxtal_name,
-					bypass);
+	hw = at91_clk_register_main_osc(regmap, "main_osc", mainxtal_name, 0);
 	if (IS_ERR(hw))
 		goto err_free;
+	main_osc_hw = hw;
 
 	parent_names[0] = "main_rc_osc";
 	parent_names[1] = "main_osc";
@@ -209,15 +222,45 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 
 	sam9x60_pmc->chws[PMC_MAIN] = hw;
 
-	hw = sam9x60_clk_register_pll(regmap, &pmc_pll_lock, "pllack",
-				      "mainck", 0, &plla_characteristics);
+	hw = sam9x60_clk_register_frac_pll(regmap, &pmc_pll_lock, "pllack_fracck",
+					   "mainck", sam9x60_pmc->chws[PMC_MAIN],
+					   0, &plla_characteristics,
+					   &pll_frac_layout,
+					   /*
+					    * This feeds pllack_divck which
+					    * feeds CPU. It should not be
+					    * disabled.
+					    */
+					   CLK_IS_CRITICAL | CLK_SET_RATE_GATE);
+	if (IS_ERR(hw))
+		goto err_free;
+
+	hw = sam9x60_clk_register_div_pll(regmap, &pmc_pll_lock, "pllack_divck",
+					  "pllack_fracck", 0, &plla_characteristics,
+					  &pll_div_layout,
+					   /*
+					    * This feeds CPU. It should not
+					    * be disabled.
+					    */
+					  CLK_IS_CRITICAL | CLK_SET_RATE_GATE);
 	if (IS_ERR(hw))
 		goto err_free;
 
 	sam9x60_pmc->chws[PMC_PLLACK] = hw;
 
-	hw = sam9x60_clk_register_pll(regmap, &pmc_pll_lock, "upllck",
-				      "main_osc", 1, &upll_characteristics);
+	hw = sam9x60_clk_register_frac_pll(regmap, &pmc_pll_lock, "upllck_fracck",
+					   "main_osc", main_osc_hw, 1,
+					   &upll_characteristics,
+					   &pll_frac_layout, CLK_SET_RATE_GATE);
+	if (IS_ERR(hw))
+		goto err_free;
+
+	hw = sam9x60_clk_register_div_pll(regmap, &pmc_pll_lock, "upllck_divck",
+					  "upllck_fracck", 1, &upll_characteristics,
+					  &pll_div_layout,
+					  CLK_SET_RATE_GATE |
+					  CLK_SET_PARENT_GATE |
+					  CLK_SET_RATE_PARENT);
 	if (IS_ERR(hw))
 		goto err_free;
 
@@ -225,17 +268,25 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 
 	parent_names[0] = md_slck_name;
 	parent_names[1] = "mainck";
-	parent_names[2] = "pllack";
-	hw = at91_clk_register_master(regmap, "masterck", 3, parent_names,
-				      &sam9x60_master_layout,
-				      &mck_characteristics);
+	parent_names[2] = "pllack_divck";
+	hw = at91_clk_register_master_pres(regmap, "masterck_pres", 3,
+					   parent_names, &sam9x60_master_layout,
+					   &mck_characteristics, &mck_lock,
+					   CLK_SET_RATE_GATE, INT_MIN);
+	if (IS_ERR(hw))
+		goto err_free;
+
+	hw = at91_clk_register_master_div(regmap, "masterck_div",
+					  "masterck_pres", &sam9x60_master_layout,
+					  &mck_characteristics, &mck_lock,
+					  CLK_SET_RATE_GATE);
 	if (IS_ERR(hw))
 		goto err_free;
 
 	sam9x60_pmc->chws[PMC_MCK] = hw;
 
-	parent_names[0] = "pllack";
-	parent_names[1] = "upllck";
+	parent_names[0] = "pllack_divck";
+	parent_names[1] = "upllck_divck";
 	parent_names[2] = "main_osc";
 	hw = sam9x60_clk_register_usb(regmap, "usbck", parent_names, 3);
 	if (IS_ERR(hw))
@@ -244,17 +295,18 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 	parent_names[0] = md_slck_name;
 	parent_names[1] = td_slck_name;
 	parent_names[2] = "mainck";
-	parent_names[3] = "masterck";
-	parent_names[4] = "pllack";
-	parent_names[5] = "upllck";
-	for (i = 0; i < 8; i++) {
+	parent_names[3] = "masterck_div";
+	parent_names[4] = "pllack_divck";
+	parent_names[5] = "upllck_divck";
+	for (i = 0; i < 2; i++) {
 		char name[6];
 
 		snprintf(name, sizeof(name), "prog%d", i);
 
 		hw = at91_clk_register_programmable(regmap, name,
 						    parent_names, 6, i,
-						    &sam9x60_programmable_layout);
+						    &sam9x60_programmable_layout,
+						    NULL);
 		if (IS_ERR(hw))
 			goto err_free;
 
@@ -275,9 +327,9 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 		hw = at91_clk_register_sam9x5_peripheral(regmap, &pmc_pcr_lock,
 							 &sam9x60_pcr_layout,
 							 sam9x60_periphck[i].n,
-							 "masterck",
+							 "masterck_div",
 							 sam9x60_periphck[i].id,
-							 &range);
+							 &range, INT_MIN);
 		if (IS_ERR(hw))
 			goto err_free;
 
@@ -288,10 +340,9 @@ static void __init sam9x60_pmc_setup(struct device_node *np)
 		hw = at91_clk_register_generated(regmap, &pmc_pcr_lock,
 						 &sam9x60_pcr_layout,
 						 sam9x60_gck[i].n,
-						 parent_names, 6,
+						 parent_names, NULL, 6,
 						 sam9x60_gck[i].id,
-						 false,
-						 &sam9x60_gck[i].r);
+						 &sam9x60_gck[i].r, INT_MIN);
 		if (IS_ERR(hw))
 			goto err_free;
 

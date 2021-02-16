@@ -25,7 +25,6 @@
 #include <asm/ptrace.h>
 #include <asm/kvm_arm.h>
 #include <asm/kvm_asm.h>
-#include <asm/kvm_coproc.h>
 #include <asm/kvm_emulate.h>
 #include <asm/kvm_mmu.h>
 #include <asm/virt.h>
@@ -41,54 +40,6 @@ static u32 kvm_ipa_limit;
 
 #define VCPU_RESET_PSTATE_SVC	(PSR_AA32_MODE_SVC | PSR_AA32_A_BIT | \
 				 PSR_AA32_I_BIT | PSR_AA32_F_BIT)
-
-/**
- * kvm_arch_vm_ioctl_check_extension
- *
- * We currently assume that the number of HW registers is uniform
- * across all CPUs (see cpuinfo_sanity_check).
- */
-int kvm_arch_vm_ioctl_check_extension(struct kvm *kvm, long ext)
-{
-	int r;
-
-	switch (ext) {
-	case KVM_CAP_ARM_EL1_32BIT:
-		r = cpus_have_const_cap(ARM64_HAS_32BIT_EL1);
-		break;
-	case KVM_CAP_GUEST_DEBUG_HW_BPS:
-		r = get_num_brps();
-		break;
-	case KVM_CAP_GUEST_DEBUG_HW_WPS:
-		r = get_num_wrps();
-		break;
-	case KVM_CAP_ARM_PMU_V3:
-		r = kvm_arm_support_pmu_v3();
-		break;
-	case KVM_CAP_ARM_INJECT_SERROR_ESR:
-		r = cpus_have_const_cap(ARM64_HAS_RAS_EXTN);
-		break;
-	case KVM_CAP_SET_GUEST_DEBUG:
-	case KVM_CAP_VCPU_ATTRIBUTES:
-		r = 1;
-		break;
-	case KVM_CAP_ARM_VM_IPA_SIZE:
-		r = kvm_ipa_limit;
-		break;
-	case KVM_CAP_ARM_SVE:
-		r = system_supports_sve();
-		break;
-	case KVM_CAP_ARM_PTRAUTH_ADDRESS:
-	case KVM_CAP_ARM_PTRAUTH_GENERIC:
-		r = has_vhe() && system_supports_address_auth() &&
-				 system_supports_generic_auth();
-		break;
-	default:
-		r = 0;
-	}
-
-	return r;
-}
 
 unsigned int kvm_sve_max_vl;
 
@@ -205,19 +156,14 @@ static void kvm_vcpu_reset_sve(struct kvm_vcpu *vcpu)
 
 static int kvm_vcpu_enable_ptrauth(struct kvm_vcpu *vcpu)
 {
-	/* Support ptrauth only if the system supports these capabilities. */
-	if (!has_vhe())
-		return -EINVAL;
-
-	if (!system_supports_address_auth() ||
-	    !system_supports_generic_auth())
-		return -EINVAL;
 	/*
 	 * For now make sure that both address/generic pointer authentication
-	 * features are requested by the userspace together.
+	 * features are requested by the userspace together and the system
+	 * supports these capabilities.
 	 */
 	if (!test_bit(KVM_ARM_VCPU_PTRAUTH_ADDRESS, vcpu->arch.features) ||
-	    !test_bit(KVM_ARM_VCPU_PTRAUTH_GENERIC, vcpu->arch.features))
+	    !test_bit(KVM_ARM_VCPU_PTRAUTH_GENERIC, vcpu->arch.features) ||
+	    !system_has_full_ptr_auth())
 		return -EINVAL;
 
 	vcpu->arch.flags |= KVM_ARM64_GUEST_HAS_PTRAUTH;
@@ -245,7 +191,7 @@ static int kvm_vcpu_enable_ptrauth(struct kvm_vcpu *vcpu)
  */
 int kvm_reset_vcpu(struct kvm_vcpu *vcpu)
 {
-	int ret = -EINVAL;
+	int ret;
 	bool loaded;
 	u32 pstate;
 
@@ -269,26 +215,34 @@ int kvm_reset_vcpu(struct kvm_vcpu *vcpu)
 
 	if (test_bit(KVM_ARM_VCPU_PTRAUTH_ADDRESS, vcpu->arch.features) ||
 	    test_bit(KVM_ARM_VCPU_PTRAUTH_GENERIC, vcpu->arch.features)) {
-		if (kvm_vcpu_enable_ptrauth(vcpu))
+		if (kvm_vcpu_enable_ptrauth(vcpu)) {
+			ret = -EINVAL;
 			goto out;
+		}
 	}
 
 	switch (vcpu->arch.target) {
 	default:
 		if (test_bit(KVM_ARM_VCPU_EL1_32BIT, vcpu->arch.features)) {
-			if (!cpus_have_const_cap(ARM64_HAS_32BIT_EL1))
+			if (!cpus_have_const_cap(ARM64_HAS_32BIT_EL1)) {
+				ret = -EINVAL;
 				goto out;
+			}
 			pstate = VCPU_RESET_PSTATE_SVC;
 		} else {
 			pstate = VCPU_RESET_PSTATE_EL1;
 		}
 
+		if (kvm_vcpu_has_pmu(vcpu) && !kvm_arm_support_pmu_v3()) {
+			ret = -EINVAL;
+			goto out;
+		}
 		break;
 	}
 
 	/* Reset core registers */
 	memset(vcpu_gp_regs(vcpu), 0, sizeof(*vcpu_gp_regs(vcpu)));
-	vcpu_gp_regs(vcpu)->regs.pstate = pstate;
+	vcpu_gp_regs(vcpu)->pstate = pstate;
 
 	/* Reset system registers */
 	kvm_reset_sys_regs(vcpu);
@@ -316,10 +270,6 @@ int kvm_reset_vcpu(struct kvm_vcpu *vcpu)
 		vcpu->arch.reset_state.reset = false;
 	}
 
-	/* Default workaround setup is enabled (if supported) */
-	if (kvm_arm_have_ssbd() == KVM_SSBD_KERNEL)
-		vcpu->arch.workaround_flags |= VCPU_WORKAROUND_2_FLAG;
-
 	/* Reset timer */
 	ret = kvm_timer_vcpu_reset(vcpu);
 out:
@@ -336,7 +286,7 @@ u32 get_kvm_ipa_limit(void)
 
 int kvm_set_ipa_limit(void)
 {
-	unsigned int ipa_max, pa_max, va_max, parange, tgran_2;
+	unsigned int parange, tgran_2;
 	u64 mmfr0;
 
 	mmfr0 = read_sanitised_ftr_reg(SYS_ID_AA64MMFR0_EL1);
@@ -373,39 +323,11 @@ int kvm_set_ipa_limit(void)
 		break;
 	}
 
-	pa_max = id_aa64mmfr0_parange_to_phys_shift(parange);
-
-	/* Clamp the IPA limit to the PA size supported by the kernel */
-	ipa_max = (pa_max > PHYS_MASK_SHIFT) ? PHYS_MASK_SHIFT : pa_max;
-	/*
-	 * Since our stage2 table is dependent on the stage1 page table code,
-	 * we must always honor the following condition:
-	 *
-	 *  Number of levels in Stage1 >= Number of levels in Stage2.
-	 *
-	 * So clamp the ipa limit further down to limit the number of levels.
-	 * Since we can concatenate upto 16 tables at entry level, we could
-	 * go upto 4bits above the maximum VA addressable with the current
-	 * number of levels.
-	 */
-	va_max = PGDIR_SHIFT + PAGE_SHIFT - 3;
-	va_max += 4;
-
-	if (va_max < ipa_max)
-		ipa_max = va_max;
-
-	/*
-	 * If the final limit is lower than the real physical address
-	 * limit of the CPUs, report the reason.
-	 */
-	if (ipa_max < pa_max)
-		pr_info("kvm: Limiting the IPA size due to kernel %s Address limit\n",
-			(va_max < pa_max) ? "Virtual" : "Physical");
-
-	WARN(ipa_max < KVM_PHYS_SHIFT,
-	     "KVM IPA limit (%d bit) is smaller than default size\n", ipa_max);
-	kvm_ipa_limit = ipa_max;
-	kvm_info("IPA Size Limit: %dbits\n", kvm_ipa_limit);
+	kvm_ipa_limit = id_aa64mmfr0_parange_to_phys_shift(parange);
+	WARN(kvm_ipa_limit < KVM_PHYS_SHIFT,
+	     "KVM IPA Size Limit (%d bits) is smaller than default size\n",
+	     kvm_ipa_limit);
+	kvm_info("IPA Size Limit: %d bits\n", kvm_ipa_limit);
 
 	return 0;
 }

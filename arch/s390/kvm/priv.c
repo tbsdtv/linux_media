@@ -22,7 +22,6 @@
 #include <asm/ebcdic.h>
 #include <asm/sysinfo.h>
 #include <asm/page-states.h>
-#include <asm/pgalloc.h>
 #include <asm/gmap.h>
 #include <asm/io.h>
 #include <asm/ptrace.h>
@@ -274,7 +273,7 @@ retry:
 	rc = get_guest_storage_key(current->mm, vmaddr, &key);
 
 	if (rc) {
-		rc = fixup_user_fault(current, current->mm, vmaddr,
+		rc = fixup_user_fault(current->mm, vmaddr,
 				      FAULT_FLAG_WRITE, &unlocked);
 		if (!rc) {
 			mmap_read_unlock(current->mm);
@@ -320,7 +319,7 @@ retry:
 	mmap_read_lock(current->mm);
 	rc = reset_guest_reference_bit(current->mm, vmaddr);
 	if (rc < 0) {
-		rc = fixup_user_fault(current, current->mm, vmaddr,
+		rc = fixup_user_fault(current->mm, vmaddr,
 				      FAULT_FLAG_WRITE, &unlocked);
 		if (!rc) {
 			mmap_read_unlock(current->mm);
@@ -391,7 +390,7 @@ static int handle_sske(struct kvm_vcpu *vcpu)
 						m3 & SSKE_MC);
 
 		if (rc < 0) {
-			rc = fixup_user_fault(current, current->mm, vmaddr,
+			rc = fixup_user_fault(current->mm, vmaddr,
 					      FAULT_FLAG_WRITE, &unlocked);
 			rc = !rc ? -EAGAIN : rc;
 		}
@@ -880,7 +879,7 @@ static int handle_stsi(struct kvm_vcpu *vcpu)
 	switch (fc) {
 	case 1: /* same handling for 1 and 2 */
 	case 2:
-		mem = get_zeroed_page(GFP_KERNEL);
+		mem = get_zeroed_page(GFP_KERNEL_ACCOUNT);
 		if (!mem)
 			goto out_no_data;
 		if (stsi((void *) mem, fc, sel1, sel2))
@@ -889,7 +888,7 @@ static int handle_stsi(struct kvm_vcpu *vcpu)
 	case 3:
 		if (sel1 != 2 || sel2 != 2)
 			goto out_no_data;
-		mem = get_zeroed_page(GFP_KERNEL);
+		mem = get_zeroed_page(GFP_KERNEL_ACCOUNT);
 		if (!mem)
 			goto out_no_data;
 		handle_stsi_3_2_2(vcpu, (void *) mem);
@@ -1095,7 +1094,7 @@ static int handle_pfmf(struct kvm_vcpu *vcpu)
 			rc = cond_set_guest_storage_key(current->mm, vmaddr,
 							key, NULL, nq, mr, mc);
 			if (rc < 0) {
-				rc = fixup_user_fault(current, current->mm, vmaddr,
+				rc = fixup_user_fault(current->mm, vmaddr,
 						      FAULT_FLAG_WRITE, &unlocked);
 				rc = !rc ? -EAGAIN : rc;
 			}

@@ -219,7 +219,7 @@ static void ll_device_want_to_wakeup(struct hci_uart *hu)
 		 * perfectly safe to always send one.
 		 */
 		BT_DBG("dual wake-up-indication");
-		/* fall through */
+		fallthrough;
 	case HCILL_ASLEEP:
 		/* acknowledge device wake up */
 		if (send_hcill_cmd(HCILL_WAKE_UP_ACK, hu) < 0) {
@@ -626,6 +626,7 @@ static int ll_setup(struct hci_uart *hu)
 		gpiod_set_value_cansleep(lldev->enable_gpio, 0);
 		msleep(5);
 		gpiod_set_value_cansleep(lldev->enable_gpio, 1);
+		mdelay(100);
 		err = serdev_device_wait_for_cts(serdev, true, 200);
 		if (err) {
 			bt_dev_err(hu->hdev, "Failed to get CTS");

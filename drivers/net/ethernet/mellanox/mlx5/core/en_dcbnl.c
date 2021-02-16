@@ -1151,6 +1151,7 @@ static int mlx5e_set_trust_state(struct mlx5e_priv *priv, u8 trust_state)
 {
 	struct mlx5e_channels new_channels = {};
 	bool reset_channels = true;
+	bool opened;
 	int err = 0;
 
 	mutex_lock(&priv->state_lock);
@@ -1159,22 +1160,24 @@ static int mlx5e_set_trust_state(struct mlx5e_priv *priv, u8 trust_state)
 	mlx5e_params_calc_trust_tx_min_inline_mode(priv->mdev, &new_channels.params,
 						   trust_state);
 
-	if (!test_bit(MLX5E_STATE_OPENED, &priv->state)) {
-		priv->channels.params = new_channels.params;
+	opened = test_bit(MLX5E_STATE_OPENED, &priv->state);
+	if (!opened)
 		reset_channels = false;
-	}
 
 	/* Skip if tx_min_inline is the same */
 	if (new_channels.params.tx_min_inline_mode ==
 	    priv->channels.params.tx_min_inline_mode)
 		reset_channels = false;
 
-	if (reset_channels)
+	if (reset_channels) {
 		err = mlx5e_safe_switch_channels(priv, &new_channels,
 						 mlx5e_update_trust_state_hw,
 						 &trust_state);
-	else
+	} else {
 		err = mlx5e_update_trust_state_hw(priv, &trust_state);
+		if (!err && !opened)
+			priv->channels.params = new_channels.params;
+	}
 
 	mutex_unlock(&priv->state_lock);
 
@@ -1217,6 +1220,24 @@ static int mlx5e_trust_initialize(struct mlx5e_priv *priv)
 	return 0;
 }
 
+#define MLX5E_BUFFER_CELL_SHIFT 7
+
+static u16 mlx5e_query_port_buffers_cell_size(struct mlx5e_priv *priv)
+{
+	struct mlx5_core_dev *mdev = priv->mdev;
+	u32 out[MLX5_ST_SZ_DW(sbcam_reg)] = {};
+	u32 in[MLX5_ST_SZ_DW(sbcam_reg)] = {};
+
+	if (!MLX5_CAP_GEN(mdev, sbcam_reg))
+		return (1 << MLX5E_BUFFER_CELL_SHIFT);
+
+	if (mlx5_core_access_reg(mdev, in, sizeof(in), out, sizeof(out),
+				 MLX5_REG_SBCAM, 0, 0))
+		return (1 << MLX5E_BUFFER_CELL_SHIFT);
+
+	return MLX5_GET(sbcam_reg, out, cap_cell_size);
+}
+
 void mlx5e_dcbnl_initialize(struct mlx5e_priv *priv)
 {
 	struct mlx5e_dcbx *dcbx = &priv->dcbx;
@@ -1234,6 +1255,7 @@ void mlx5e_dcbnl_initialize(struct mlx5e_priv *priv)
 	if (priv->dcbx.mode == MLX5E_DCBX_PARAM_VER_OPER_HOST)
 		priv->dcbx.cap |= DCB_CAP_DCBX_HOST;
 
+	priv->dcbx.port_buff_cell_sz = mlx5e_query_port_buffers_cell_size(priv);
 	priv->dcbx.manual_buffer = false;
 	priv->dcbx.cable_len = MLX5E_DEFAULT_CABLE_LEN;
 

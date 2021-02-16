@@ -40,11 +40,11 @@ static void guest_code(void)
 
 	/* Single step test, covers 2 basic instructions and 2 emulated */
 	asm volatile("ss_start: "
-		     "xor %%rax,%%rax\n\t"
+		     "xor %%eax,%%eax\n\t"
 		     "cpuid\n\t"
 		     "movl $0x1a0,%%ecx\n\t"
 		     "rdmsr\n\t"
-		     : : : "rax", "ecx");
+		     : : : "eax", "ebx", "ecx", "edx");
 
 	/* DR6.BD test */
 	asm volatile("bd_start: mov %%dr0, %%rax" : : : "rax");
@@ -73,7 +73,7 @@ int main(void)
 	int i;
 	/* Instruction lengths starting at ss_start */
 	int ss_size[4] = {
-		3,		/* xor */
+		2,		/* xor */
 		2,		/* cpuid */
 		5,		/* mov */
 		2,		/* rdmsr */
@@ -85,7 +85,6 @@ int main(void)
 	}
 
 	vm = vm_create_default(VCPU_ID, 0, guest_code);
-	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
 	run = vcpu_state(vm, VCPU_ID);
 
 	/* Test software BPs - int3 */

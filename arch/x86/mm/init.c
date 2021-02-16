@@ -25,6 +25,7 @@
 #include <asm/cpufeature.h>
 #include <asm/pti.h>
 #include <asm/text-patching.h>
+#include <asm/memtype.h>
 
 /*
  * We need to define the tracepoints somewhere, and tlb.c
@@ -595,7 +596,7 @@ static unsigned long __init get_new_step_size(unsigned long step_size)
 static void __init memory_map_top_down(unsigned long map_start,
 				       unsigned long map_end)
 {
-	unsigned long real_end, start, last_start;
+	unsigned long real_end, last_start;
 	unsigned long step_size;
 	unsigned long addr;
 	unsigned long mapped_ram_size = 0;
@@ -608,7 +609,7 @@ static void __init memory_map_top_down(unsigned long map_start,
 	step_size = PMD_SIZE;
 	max_pfn_mapped = 0; /* will get exact value next */
 	min_pfn_mapped = real_end >> PAGE_SHIFT;
-	last_start = start = real_end;
+	last_start = real_end;
 
 	/*
 	 * We start from the top (end of memory) and go to the bottom.
@@ -617,6 +618,8 @@ static void __init memory_map_top_down(unsigned long map_start,
 	 * for page table.
 	 */
 	while (last_start > map_start) {
+		unsigned long start;
+
 		if (last_start > step_size) {
 			start = round_down(last_start - 1, step_size);
 			if (start < map_start)
@@ -911,8 +914,6 @@ void free_kernel_image_pages(const char *what, void *begin, void *end)
 	if (IS_ENABLED(CONFIG_X86_64) && cpu_feature_enabled(X86_FEATURE_PTI))
 		set_memory_np_noalias(begin_ul, len_pages);
 }
-
-void __weak mem_encrypt_free_decrypted_mem(void) { }
 
 void __ref free_initmem(void)
 {

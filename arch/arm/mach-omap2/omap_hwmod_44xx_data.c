@@ -124,21 +124,6 @@ static struct omap_hwmod_class omap44xx_l4_hwmod_class = {
 	.name	= "l4",
 };
 
-/* l4_abe */
-static struct omap_hwmod omap44xx_l4_abe_hwmod = {
-	.name		= "l4_abe",
-	.class		= &omap44xx_l4_hwmod_class,
-	.clkdm_name	= "abe_clkdm",
-	.prcm = {
-		.omap4 = {
-			.clkctrl_offs = OMAP4_CM1_ABE_L4ABE_CLKCTRL_OFFSET,
-			.context_offs = OMAP4_RM_ABE_AESS_CONTEXT_OFFSET,
-			.lostcontext_mask = OMAP4430_LOSTMEM_AESSMEM_MASK,
-			.flags	      = HWMOD_OMAP4_NO_CONTEXT_LOSS_BIT,
-		},
-	},
-};
-
 /* l4_cfg */
 static struct omap_hwmod omap44xx_l4_cfg_hwmod = {
 	.name		= "l4_cfg",
@@ -369,42 +354,6 @@ static struct omap_hwmod omap44xx_emif2_hwmod = {
 };
 
 /*
- * 'gpmc' class
- * general purpose memory controller
- */
-
-static struct omap_hwmod_class_sysconfig omap44xx_gpmc_sysc = {
-	.rev_offs	= 0x0000,
-	.sysc_offs	= 0x0010,
-	.syss_offs	= 0x0014,
-	.sysc_flags	= (SYSC_HAS_AUTOIDLE | SYSC_HAS_SIDLEMODE |
-			   SYSC_HAS_SOFTRESET | SYSS_HAS_RESET_STATUS),
-	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART),
-	.sysc_fields	= &omap_hwmod_sysc_type1,
-};
-
-static struct omap_hwmod_class omap44xx_gpmc_hwmod_class = {
-	.name	= "gpmc",
-	.sysc	= &omap44xx_gpmc_sysc,
-};
-
-/* gpmc */
-static struct omap_hwmod omap44xx_gpmc_hwmod = {
-	.name		= "gpmc",
-	.class		= &omap44xx_gpmc_hwmod_class,
-	.clkdm_name	= "l3_2_clkdm",
-	/* Skip reset for CONFIG_OMAP_GPMC_DEBUG for bootloader timings */
-	.flags		= DEBUG_OMAP_GPMC_HWMOD_FLAGS,
-	.prcm = {
-		.omap4 = {
-			.clkctrl_offs = OMAP4_CM_L3_2_GPMC_CLKCTRL_OFFSET,
-			.context_offs = OMAP4_RM_L3_2_GPMC_CONTEXT_OFFSET,
-			.modulemode   = MODULEMODE_HWCTRL,
-		},
-	},
-};
-
-/*
  * 'iss' class
  * external images sensor pixel data processor
  */
@@ -453,39 +402,6 @@ static struct omap_hwmod omap44xx_iss_hwmod = {
 	},
 	.opt_clks	= iss_opt_clks,
 	.opt_clks_cnt	= ARRAY_SIZE(iss_opt_clks),
-};
-
-/*
- * 'iva' class
- * multi-standard video encoder/decoder hardware accelerator
- */
-
-static struct omap_hwmod_class omap44xx_iva_hwmod_class = {
-	.name	= "iva",
-};
-
-/* iva */
-static struct omap_hwmod_rst_info omap44xx_iva_resets[] = {
-	{ .name = "seq0", .rst_shift = 0 },
-	{ .name = "seq1", .rst_shift = 1 },
-	{ .name = "logic", .rst_shift = 2 },
-};
-
-static struct omap_hwmod omap44xx_iva_hwmod = {
-	.name		= "iva",
-	.class		= &omap44xx_iva_hwmod_class,
-	.clkdm_name	= "ivahd_clkdm",
-	.rst_lines	= omap44xx_iva_resets,
-	.rst_lines_cnt	= ARRAY_SIZE(omap44xx_iva_resets),
-	.main_clk	= "dpll_iva_m5x2_ck",
-	.prcm = {
-		.omap4 = {
-			.clkctrl_offs = OMAP4_CM_IVAHD_IVAHD_CLKCTRL_OFFSET,
-			.rstctrl_offs = OMAP4_RM_IVAHD_RSTCTRL_OFFSET,
-			.context_offs = OMAP4_RM_IVAHD_IVAHD_CONTEXT_OFFSET,
-			.modulemode   = MODULEMODE_HWCTRL,
-		},
-	},
 };
 
 /*
@@ -640,154 +556,6 @@ static struct omap_hwmod omap44xx_sl2if_hwmod = {
 };
 
 /*
- * 'usb_host_fs' class
- * full-speed usb host controller
- */
-
-/* The IP is not compliant to type1 / type2 scheme */
-static struct omap_hwmod_class_sysconfig omap44xx_usb_host_fs_sysc = {
-	.rev_offs	= 0x0000,
-	.sysc_offs	= 0x0210,
-	.sysc_flags	= (SYSC_HAS_MIDLEMODE | SYSC_HAS_SIDLEMODE |
-			   SYSC_HAS_SOFTRESET),
-	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART |
-			   SIDLE_SMART_WKUP),
-	.sysc_fields	= &omap_hwmod_sysc_type_usb_host_fs,
-};
-
-static struct omap_hwmod_class omap44xx_usb_host_fs_hwmod_class = {
-	.name	= "usb_host_fs",
-	.sysc	= &omap44xx_usb_host_fs_sysc,
-};
-
-/* usb_host_fs */
-static struct omap_hwmod omap44xx_usb_host_fs_hwmod = {
-	.name		= "usb_host_fs",
-	.class		= &omap44xx_usb_host_fs_hwmod_class,
-	.clkdm_name	= "l3_init_clkdm",
-	.main_clk	= "usb_host_fs_fck",
-	.prcm = {
-		.omap4 = {
-			.clkctrl_offs = OMAP4_CM_L3INIT_USB_HOST_FS_CLKCTRL_OFFSET,
-			.context_offs = OMAP4_RM_L3INIT_USB_HOST_FS_CONTEXT_OFFSET,
-			.modulemode   = MODULEMODE_SWCTRL,
-		},
-	},
-};
-
-/*
- * 'usb_host_hs' class
- * high-speed multi-port usb host controller
- */
-
-static struct omap_hwmod_class_sysconfig omap44xx_usb_host_hs_sysc = {
-	.rev_offs	= 0x0000,
-	.sysc_offs	= 0x0010,
-	.syss_offs	= 0x0014,
-	.sysc_flags	= (SYSC_HAS_MIDLEMODE | SYSC_HAS_SIDLEMODE |
-			   SYSC_HAS_SOFTRESET | SYSC_HAS_RESET_STATUS),
-	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART |
-			   SIDLE_SMART_WKUP | MSTANDBY_FORCE | MSTANDBY_NO |
-			   MSTANDBY_SMART | MSTANDBY_SMART_WKUP),
-	.sysc_fields	= &omap_hwmod_sysc_type2,
-};
-
-static struct omap_hwmod_class omap44xx_usb_host_hs_hwmod_class = {
-	.name	= "usb_host_hs",
-	.sysc	= &omap44xx_usb_host_hs_sysc,
-};
-
-/* usb_host_hs */
-static struct omap_hwmod omap44xx_usb_host_hs_hwmod = {
-	.name		= "usb_host_hs",
-	.class		= &omap44xx_usb_host_hs_hwmod_class,
-	.clkdm_name	= "l3_init_clkdm",
-	.main_clk	= "usb_host_hs_fck",
-	.prcm = {
-		.omap4 = {
-			.clkctrl_offs = OMAP4_CM_L3INIT_USB_HOST_CLKCTRL_OFFSET,
-			.context_offs = OMAP4_RM_L3INIT_USB_HOST_CONTEXT_OFFSET,
-			.modulemode   = MODULEMODE_SWCTRL,
-		},
-	},
-
-	/*
-	 * Errata: USBHOST Configured In Smart-Idle Can Lead To a Deadlock
-	 * id: i660
-	 *
-	 * Description:
-	 * In the following configuration :
-	 * - USBHOST module is set to smart-idle mode
-	 * - PRCM asserts idle_req to the USBHOST module ( This typically
-	 *   happens when the system is going to a low power mode : all ports
-	 *   have been suspended, the master part of the USBHOST module has
-	 *   entered the standby state, and SW has cut the functional clocks)
-	 * - an USBHOST interrupt occurs before the module is able to answer
-	 *   idle_ack, typically a remote wakeup IRQ.
-	 * Then the USB HOST module will enter a deadlock situation where it
-	 * is no more accessible nor functional.
-	 *
-	 * Workaround:
-	 * Don't use smart idle; use only force idle, hence HWMOD_SWSUP_SIDLE
-	 */
-
-	/*
-	 * Errata: USB host EHCI may stall when entering smart-standby mode
-	 * Id: i571
-	 *
-	 * Description:
-	 * When the USBHOST module is set to smart-standby mode, and when it is
-	 * ready to enter the standby state (i.e. all ports are suspended and
-	 * all attached devices are in suspend mode), then it can wrongly assert
-	 * the Mstandby signal too early while there are still some residual OCP
-	 * transactions ongoing. If this condition occurs, the internal state
-	 * machine may go to an undefined state and the USB link may be stuck
-	 * upon the next resume.
-	 *
-	 * Workaround:
-	 * Don't use smart standby; use only force standby,
-	 * hence HWMOD_SWSUP_MSTANDBY
-	 */
-
-	.flags		= HWMOD_SWSUP_SIDLE | HWMOD_SWSUP_MSTANDBY,
-};
-
-/*
- * 'usb_tll_hs' class
- * usb_tll_hs module is the adapter on the usb_host_hs ports
- */
-
-static struct omap_hwmod_class_sysconfig omap44xx_usb_tll_hs_sysc = {
-	.rev_offs	= 0x0000,
-	.sysc_offs	= 0x0010,
-	.syss_offs	= 0x0014,
-	.sysc_flags	= (SYSC_HAS_CLOCKACTIVITY | SYSC_HAS_SIDLEMODE |
-			   SYSC_HAS_ENAWAKEUP | SYSC_HAS_SOFTRESET |
-			   SYSC_HAS_AUTOIDLE),
-	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART),
-	.sysc_fields	= &omap_hwmod_sysc_type1,
-};
-
-static struct omap_hwmod_class omap44xx_usb_tll_hs_hwmod_class = {
-	.name	= "usb_tll_hs",
-	.sysc	= &omap44xx_usb_tll_hs_sysc,
-};
-
-static struct omap_hwmod omap44xx_usb_tll_hs_hwmod = {
-	.name		= "usb_tll_hs",
-	.class		= &omap44xx_usb_tll_hs_hwmod_class,
-	.clkdm_name	= "l3_init_clkdm",
-	.main_clk	= "usb_tll_hs_ick",
-	.prcm = {
-		.omap4 = {
-			.clkctrl_offs = OMAP4_CM_L3INIT_USB_TLL_CLKCTRL_OFFSET,
-			.context_offs = OMAP4_RM_L3INIT_USB_TLL_CONTEXT_OFFSET,
-			.modulemode   = MODULEMODE_HWCTRL,
-		},
-	},
-};
-
-/*
  * interfaces
  */
 
@@ -805,14 +573,6 @@ static struct omap_hwmod_ocp_if omap44xx_mpu__dmm = {
 	.slave		= &omap44xx_dmm_hwmod,
 	.clk		= "l3_div_ck",
 	.user		= OCP_USER_MPU,
-};
-
-/* iva -> l3_instr */
-static struct omap_hwmod_ocp_if omap44xx_iva__l3_instr = {
-	.master		= &omap44xx_iva_hwmod,
-	.slave		= &omap44xx_l3_instr_hwmod,
-	.clk		= "l3_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
 /* l3_main_3 -> l3_instr */
@@ -871,14 +631,6 @@ static struct omap_hwmod_ocp_if omap44xx_iss__l3_main_2 = {
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
-/* iva -> l3_main_2 */
-static struct omap_hwmod_ocp_if omap44xx_iva__l3_main_2 = {
-	.master		= &omap44xx_iva_hwmod,
-	.slave		= &omap44xx_l3_main_2_hwmod,
-	.clk		= "l3_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
 /* l3_main_1 -> l3_main_2 */
 static struct omap_hwmod_ocp_if omap44xx_l3_main_1__l3_main_2 = {
 	.master		= &omap44xx_l3_main_1_hwmod,
@@ -892,22 +644,6 @@ static struct omap_hwmod_ocp_if omap44xx_l4_cfg__l3_main_2 = {
 	.master		= &omap44xx_l4_cfg_hwmod,
 	.slave		= &omap44xx_l3_main_2_hwmod,
 	.clk		= "l4_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
-/* usb_host_fs -> l3_main_2 */
-static struct omap_hwmod_ocp_if __maybe_unused omap44xx_usb_host_fs__l3_main_2 = {
-	.master		= &omap44xx_usb_host_fs_hwmod,
-	.slave		= &omap44xx_l3_main_2_hwmod,
-	.clk		= "l3_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
-/* usb_host_hs -> l3_main_2 */
-static struct omap_hwmod_ocp_if omap44xx_usb_host_hs__l3_main_2 = {
-	.master		= &omap44xx_usb_host_hs_hwmod,
-	.slave		= &omap44xx_l3_main_2_hwmod,
-	.clk		= "l3_div_ck",
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
@@ -932,22 +668,6 @@ static struct omap_hwmod_ocp_if omap44xx_l4_cfg__l3_main_3 = {
 	.master		= &omap44xx_l4_cfg_hwmod,
 	.slave		= &omap44xx_l3_main_3_hwmod,
 	.clk		= "l4_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
-/* l3_main_1 -> l4_abe */
-static struct omap_hwmod_ocp_if omap44xx_l3_main_1__l4_abe = {
-	.master		= &omap44xx_l3_main_1_hwmod,
-	.slave		= &omap44xx_l4_abe_hwmod,
-	.clk		= "l3_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
-/* mpu -> l4_abe */
-static struct omap_hwmod_ocp_if omap44xx_mpu__l4_abe = {
-	.master		= &omap44xx_mpu_hwmod,
-	.slave		= &omap44xx_l4_abe_hwmod,
-	.clk		= "ocp_abe_iclk",
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
@@ -1031,36 +751,12 @@ static struct omap_hwmod_ocp_if omap44xx_l3_instr__debugss = {
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
-/* l3_main_2 -> gpmc */
-static struct omap_hwmod_ocp_if omap44xx_l3_main_2__gpmc = {
-	.master		= &omap44xx_l3_main_2_hwmod,
-	.slave		= &omap44xx_gpmc_hwmod,
-	.clk		= "l3_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
 /* l3_main_2 -> iss */
 static struct omap_hwmod_ocp_if omap44xx_l3_main_2__iss = {
 	.master		= &omap44xx_l3_main_2_hwmod,
 	.slave		= &omap44xx_iss_hwmod,
 	.clk		= "l3_div_ck",
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
-/* iva -> sl2if */
-static struct omap_hwmod_ocp_if __maybe_unused omap44xx_iva__sl2if = {
-	.master		= &omap44xx_iva_hwmod,
-	.slave		= &omap44xx_sl2if_hwmod,
-	.clk		= "dpll_iva_m5x2_ck",
-	.user		= OCP_USER_IVA,
-};
-
-/* l3_main_2 -> iva */
-static struct omap_hwmod_ocp_if omap44xx_l3_main_2__iva = {
-	.master		= &omap44xx_l3_main_2_hwmod,
-	.slave		= &omap44xx_iva_hwmod,
-	.clk		= "l3_div_ck",
-	.user		= OCP_USER_MPU,
 };
 
 /* l3_main_2 -> ocmc_ram */
@@ -1119,30 +815,6 @@ static struct omap_hwmod_ocp_if __maybe_unused omap44xx_l3_main_2__sl2if = {
 	.user		= OCP_USER_MPU | OCP_USER_SDMA,
 };
 
-/* l4_cfg -> usb_host_fs */
-static struct omap_hwmod_ocp_if __maybe_unused omap44xx_l4_cfg__usb_host_fs = {
-	.master		= &omap44xx_l4_cfg_hwmod,
-	.slave		= &omap44xx_usb_host_fs_hwmod,
-	.clk		= "l4_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
-/* l4_cfg -> usb_host_hs */
-static struct omap_hwmod_ocp_if omap44xx_l4_cfg__usb_host_hs = {
-	.master		= &omap44xx_l4_cfg_hwmod,
-	.slave		= &omap44xx_usb_host_hs_hwmod,
-	.clk		= "l4_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
-/* l4_cfg -> usb_tll_hs */
-static struct omap_hwmod_ocp_if omap44xx_l4_cfg__usb_tll_hs = {
-	.master		= &omap44xx_l4_cfg_hwmod,
-	.slave		= &omap44xx_usb_tll_hs_hwmod,
-	.clk		= "l4_div_ck",
-	.user		= OCP_USER_MPU | OCP_USER_SDMA,
-};
-
 /* mpu -> emif1 */
 static struct omap_hwmod_ocp_if omap44xx_mpu__emif1 = {
 	.master		= &omap44xx_mpu_hwmod,
@@ -1162,7 +834,6 @@ static struct omap_hwmod_ocp_if omap44xx_mpu__emif2 = {
 static struct omap_hwmod_ocp_if *omap44xx_hwmod_ocp_ifs[] __initdata = {
 	&omap44xx_l3_main_1__dmm,
 	&omap44xx_mpu__dmm,
-	&omap44xx_iva__l3_instr,
 	&omap44xx_l3_main_3__l3_instr,
 	&omap44xx_ocp_wp_noc__l3_instr,
 	&omap44xx_l3_main_2__l3_main_1,
@@ -1170,16 +841,11 @@ static struct omap_hwmod_ocp_if *omap44xx_hwmod_ocp_ifs[] __initdata = {
 	&omap44xx_mpu__l3_main_1,
 	&omap44xx_debugss__l3_main_2,
 	&omap44xx_iss__l3_main_2,
-	&omap44xx_iva__l3_main_2,
 	&omap44xx_l3_main_1__l3_main_2,
 	&omap44xx_l4_cfg__l3_main_2,
-	/* &omap44xx_usb_host_fs__l3_main_2, */
-	&omap44xx_usb_host_hs__l3_main_2,
 	&omap44xx_l3_main_1__l3_main_3,
 	&omap44xx_l3_main_2__l3_main_3,
 	&omap44xx_l4_cfg__l3_main_3,
-	&omap44xx_l3_main_1__l4_abe,
-	&omap44xx_mpu__l4_abe,
 	&omap44xx_l3_main_1__l4_cfg,
 	&omap44xx_l3_main_2__l4_per,
 	&omap44xx_l4_cfg__l4_wkup,
@@ -1190,10 +856,7 @@ static struct omap_hwmod_ocp_if *omap44xx_hwmod_ocp_ifs[] __initdata = {
 	&omap44xx_l4_wkup__ctrl_module_wkup,
 	&omap44xx_l4_wkup__ctrl_module_pad_wkup,
 	&omap44xx_l3_instr__debugss,
-	&omap44xx_l3_main_2__gpmc,
 	&omap44xx_l3_main_2__iss,
-	/* &omap44xx_iva__sl2if, */
-	&omap44xx_l3_main_2__iva,
 	&omap44xx_l3_main_2__ocmc_ram,
 	&omap44xx_mpu_private__prcm_mpu,
 	&omap44xx_l4_wkup__cm_core_aon,
@@ -1201,9 +864,6 @@ static struct omap_hwmod_ocp_if *omap44xx_hwmod_ocp_ifs[] __initdata = {
 	&omap44xx_l4_wkup__prm,
 	&omap44xx_l4_wkup__scrm,
 	/* &omap44xx_l3_main_2__sl2if, */
-	/* &omap44xx_l4_cfg__usb_host_fs, */
-	&omap44xx_l4_cfg__usb_host_hs,
-	&omap44xx_l4_cfg__usb_tll_hs,
 	&omap44xx_mpu__emif1,
 	&omap44xx_mpu__emif2,
 	NULL,

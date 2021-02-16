@@ -34,11 +34,13 @@ static int external_module = 0;
 static int warn_unresolved = 0;
 /* How a symbol is exported */
 static int sec_mismatch_count = 0;
-static int sec_mismatch_fatal = 0;
+static int sec_mismatch_warn_only = true;
 /* ignore missing files */
 static int ignore_missing_files;
 /* If set to 1, only warn (instead of error) about missing ns imports */
 static int allow_missing_ns_imports;
+
+static bool error_occurred;
 
 enum export {
 	export_plain,      export_unused,     export_gpl,
@@ -78,6 +80,8 @@ modpost_log(enum loglevel loglevel, const char *fmt, ...)
 
 	if (loglevel == LOG_FATAL)
 		exit(1);
+	if (loglevel == LOG_ERROR)
+		error_occurred = true;
 }
 
 static inline bool strends(const char *str, const char *postfix)
@@ -138,11 +142,20 @@ char *read_text_file(const char *filename)
 
 char *get_line(char **stringp)
 {
+	char *orig = *stringp, *next;
+
 	/* do not return the unwanted extra line at EOF */
-	if (*stringp && **stringp == '\0')
+	if (!orig || *orig == '\0')
 		return NULL;
 
-	return strsep(stringp, "\n");
+	/* don't use strsep here, it is not available everywhere */
+	next = strchr(orig, '\n');
+	if (next)
+		*next++ = '\0';
+
+	*stringp = next;
+
+	return orig;
 }
 
 /* A list of all modules we processed */
@@ -394,8 +407,8 @@ static void sym_update_namespace(const char *symname, const char *namespace)
 	 * actually an assertion.
 	 */
 	if (!s) {
-		merror("Could not update namespace(%s) for symbol %s\n",
-		       namespace, symname);
+		error("Could not update namespace(%s) for symbol %s\n",
+		      namespace, symname);
 		return;
 	}
 
@@ -2005,7 +2018,7 @@ static void read_symbols(const char *modname)
 	if (!mod->is_vmlinux) {
 		license = get_modinfo(&info, "license");
 		if (!license)
-			warn("missing MODULE_LICENSE() in %s\n", modname);
+			error("missing MODULE_LICENSE() in %s\n", modname);
 		while (license) {
 			if (license_is_gpl_compatible(license))
 				mod->gpl_compatible = 1;
@@ -2132,11 +2145,11 @@ static void check_for_gpl_usage(enum export exp, const char *m, const char *s)
 {
 	switch (exp) {
 	case export_gpl:
-		fatal("GPL-incompatible module %s.ko uses GPL-only symbol '%s'\n",
+		error("GPL-incompatible module %s.ko uses GPL-only symbol '%s'\n",
 		      m, s);
 		break;
 	case export_unused_gpl:
-		fatal("GPL-incompatible module %s.ko uses GPL-only symbol marked UNUSED '%s'\n",
+		error("GPL-incompatible module %s.ko uses GPL-only symbol marked UNUSED '%s'\n",
 		      m, s);
 		break;
 	case export_gpl_future:
@@ -2165,22 +2178,18 @@ static void check_for_unused(enum export exp, const char *m, const char *s)
 	}
 }
 
-static int check_exports(struct module *mod)
+static void check_exports(struct module *mod)
 {
 	struct symbol *s, *exp;
-	int err = 0;
 
 	for (s = mod->unres; s; s = s->next) {
 		const char *basename;
 		exp = find_symbol(s->name);
 		if (!exp || exp->module == mod) {
-			if (have_vmlinux && !s->weak) {
+			if (have_vmlinux && !s->weak)
 				modpost_log(warn_unresolved ? LOG_WARN : LOG_ERROR,
 					    "\"%s\" [%s.ko] undefined!\n",
 					    s->name, mod->name);
-				if (!warn_unresolved)
-					err = 1;
-			}
 			continue;
 		}
 		basename = strrchr(mod->name, '/');
@@ -2194,8 +2203,6 @@ static int check_exports(struct module *mod)
 			modpost_log(allow_missing_ns_imports ? LOG_WARN : LOG_ERROR,
 				    "module %s uses symbol %s from namespace %s, but does not import it.\n",
 				    basename, exp->name, exp->namespace);
-			if (!allow_missing_ns_imports)
-				err = 1;
 			add_namespace(&mod->missing_namespaces, exp->namespace);
 		}
 
@@ -2203,11 +2210,9 @@ static int check_exports(struct module *mod)
 			check_for_gpl_usage(exp->export, basename, exp->name);
 		check_for_unused(exp->export, basename, exp->name);
 	}
-
-	return err;
 }
 
-static int check_modname_len(struct module *mod)
+static void check_modname_len(struct module *mod)
 {
 	const char *mod_name;
 
@@ -2216,12 +2221,8 @@ static int check_modname_len(struct module *mod)
 		mod_name = mod->name;
 	else
 		mod_name++;
-	if (strlen(mod_name) >= MODULE_NAME_LEN) {
-		merror("module name is too long [%s.ko]\n", mod->name);
-		return 1;
-	}
-
-	return 0;
+	if (strlen(mod_name) >= MODULE_NAME_LEN)
+		error("module name is too long [%s.ko]\n", mod->name);
 }
 
 /**
@@ -2245,7 +2246,7 @@ static void add_header(struct buffer *b, struct module *mod)
 	buf_printf(b, "MODULE_INFO(name, KBUILD_MODNAME);\n");
 	buf_printf(b, "\n");
 	buf_printf(b, "__visible struct module __this_module\n");
-	buf_printf(b, "__section(.gnu.linkonce.this_module) = {\n");
+	buf_printf(b, "__section(\".gnu.linkonce.this_module\") = {\n");
 	buf_printf(b, "\t.name = KBUILD_MODNAME,\n");
 	if (mod->has_init)
 		buf_printf(b, "\t.init = init_module,\n");
@@ -2280,10 +2281,9 @@ static void add_staging_flag(struct buffer *b, const char *name)
 /**
  * Record CRCs for unresolved symbols
  **/
-static int add_versions(struct buffer *b, struct module *mod)
+static void add_versions(struct buffer *b, struct module *mod)
 {
 	struct symbol *s, *exp;
-	int err = 0;
 
 	for (s = mod->unres; s; s = s->next) {
 		exp = find_symbol(s->name);
@@ -2295,11 +2295,11 @@ static int add_versions(struct buffer *b, struct module *mod)
 	}
 
 	if (!modversions)
-		return err;
+		return;
 
 	buf_printf(b, "\n");
 	buf_printf(b, "static const struct modversion_info ____versions[]\n");
-	buf_printf(b, "__used __section(__versions) = {\n");
+	buf_printf(b, "__used __section(\"__versions\") = {\n");
 
 	for (s = mod->unres; s; s = s->next) {
 		if (!s->module)
@@ -2310,9 +2310,8 @@ static int add_versions(struct buffer *b, struct module *mod)
 			continue;
 		}
 		if (strlen(s->name) >= MODULE_NAME_LEN) {
-			merror("too long symbol \"%s\" [%s.ko]\n",
-			       s->name, mod->name);
-			err = 1;
+			error("too long symbol \"%s\" [%s.ko]\n",
+			      s->name, mod->name);
 			break;
 		}
 		buf_printf(b, "\t{ %#8x, \"%s\" },\n",
@@ -2320,8 +2319,6 @@ static int add_versions(struct buffer *b, struct module *mod)
 	}
 
 	buf_printf(b, "};\n");
-
-	return err;
 }
 
 static void add_depends(struct buffer *b, struct module *mod)
@@ -2545,7 +2542,6 @@ int main(int argc, char **argv)
 	char *missing_namespace_deps = NULL;
 	char *dump_write = NULL, *files_source = NULL;
 	int opt;
-	int err;
 	int n;
 	struct dump_list *dump_read_start = NULL;
 	struct dump_list **dump_read_iter = &dump_read_start;
@@ -2580,7 +2576,7 @@ int main(int argc, char **argv)
 			warn_unresolved = 1;
 			break;
 		case 'E':
-			sec_mismatch_fatal = 1;
+			sec_mismatch_warn_only = false;
 			break;
 		case 'N':
 			allow_missing_ns_imports = 1;
@@ -2615,8 +2611,6 @@ int main(int argc, char **argv)
 	if (!have_vmlinux)
 		warn("Symbol info of vmlinux is missing. Unresolved symbol check will be entirely skipped.\n");
 
-	err = 0;
-
 	for (mod = modules; mod; mod = mod->next) {
 		char fname[PATH_MAX];
 
@@ -2625,14 +2619,14 @@ int main(int argc, char **argv)
 
 		buf.pos = 0;
 
-		err |= check_modname_len(mod);
-		err |= check_exports(mod);
+		check_modname_len(mod);
+		check_exports(mod);
 
 		add_header(&buf, mod);
 		add_intree_flag(&buf, !external_module);
 		add_retpoline(&buf);
 		add_staging_flag(&buf, mod->name);
-		err |= add_versions(&buf, mod);
+		add_versions(&buf, mod);
 		add_depends(&buf, mod);
 		add_moddevtable(&buf, mod);
 		add_srcversion(&buf, mod);
@@ -2646,21 +2640,21 @@ int main(int argc, char **argv)
 
 	if (dump_write)
 		write_dump(dump_write);
-	if (sec_mismatch_count && sec_mismatch_fatal)
-		fatal("Section mismatches detected.\n"
+	if (sec_mismatch_count && !sec_mismatch_warn_only)
+		error("Section mismatches detected.\n"
 		      "Set CONFIG_SECTION_MISMATCH_WARN_ONLY=y to allow them.\n");
 	for (n = 0; n < SYMBOL_HASH_SIZE; n++) {
 		struct symbol *s;
 
 		for (s = symbolhash[n]; s; s = s->next) {
 			if (s->is_static)
-				warn("\"%s\" [%s] is a static %s\n",
-				     s->name, s->module->name,
-				     export_str(s->export));
+				error("\"%s\" [%s] is a static %s\n",
+				      s->name, s->module->name,
+				      export_str(s->export));
 		}
 	}
 
 	free(buf.p);
 
-	return err;
+	return error_occurred ? 1 : 0;
 }

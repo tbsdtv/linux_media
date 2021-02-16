@@ -26,6 +26,7 @@
 #include "core_types.h"
 #include "clk_mgr_internal.h"
 #include "reg_helper.h"
+#include <linux/delay.h>
 
 #include "renoir_ip_offset.h"
 
@@ -51,12 +52,46 @@
 #define VBIOSSMC_MSG_GetFclkFrequency             0xB
 #define VBIOSSMC_MSG_SetDisplayCount              0xC
 #define VBIOSSMC_MSG_EnableTmdp48MHzRefclkPwrDown 0xD
-#define VBIOSSMC_MSG_UpdatePmeRestore			  0xE
+#define VBIOSSMC_MSG_UpdatePmeRestore             0xE
+#define VBIOSSMC_MSG_IsPeriodicRetrainingDisabled 0xF
+
+#define VBIOSSMC_Status_BUSY                      0x0
+#define VBIOSSMC_Result_OK                        0x1
+#define VBIOSSMC_Result_Failed                    0xFF
+#define VBIOSSMC_Result_UnknownCmd                0xFE
+#define VBIOSSMC_Result_CmdRejectedPrereq         0xFD
+#define VBIOSSMC_Result_CmdRejectedBusy           0xFC
+
+/*
+ * Function to be used instead of REG_WAIT macro because the wait ends when
+ * the register is NOT EQUAL to zero, and because the translation in msg_if.h
+ * won't work with REG_WAIT.
+ */
+static uint32_t rn_smu_wait_for_response(struct clk_mgr_internal *clk_mgr, unsigned int delay_us, unsigned int max_retries)
+{
+	uint32_t res_val = VBIOSSMC_Status_BUSY;
+
+	do {
+		res_val = REG_READ(MP1_SMN_C2PMSG_91);
+		if (res_val != VBIOSSMC_Status_BUSY)
+			break;
+
+		if (delay_us >= 1000)
+			msleep(delay_us/1000);
+		else if (delay_us > 0)
+			udelay(delay_us);
+	} while (max_retries--);
+
+	return res_val;
+}
+
 
 int rn_vbios_smu_send_msg_with_param(struct clk_mgr_internal *clk_mgr, unsigned int msg_id, unsigned int param)
 {
+	uint32_t result;
+
 	/* First clear response register */
-	REG_WRITE(MP1_SMN_C2PMSG_91, 0);
+	REG_WRITE(MP1_SMN_C2PMSG_91, VBIOSSMC_Status_BUSY);
 
 	/* Set the parameter register for the SMU message, unit is Mhz */
 	REG_WRITE(MP1_SMN_C2PMSG_83, param);
@@ -64,7 +99,9 @@ int rn_vbios_smu_send_msg_with_param(struct clk_mgr_internal *clk_mgr, unsigned 
 	/* Trigger the message transaction by writing the message ID */
 	REG_WRITE(MP1_SMN_C2PMSG_67, msg_id);
 
-	REG_WAIT(MP1_SMN_C2PMSG_91, CONTENT, 1, 10, 200000);
+	result = rn_smu_wait_for_response(clk_mgr, 10, 200000);
+
+	ASSERT(result == VBIOSSMC_Result_OK || result == VBIOSSMC_Result_UnknownCmd);
 
 	/* Actual dispclk set is returned in the parameter register */
 	return REG_READ(MP1_SMN_C2PMSG_83);
@@ -98,6 +135,10 @@ int rn_vbios_smu_set_dispclk(struct clk_mgr_internal *clk_mgr, int requested_dis
 						actual_dispclk_set_mhz / 7);
 		}
 	}
+
+	// pmfw always set clock more than or equal requested clock
+	if (!IS_DIAG_DC(dc->ctx->dce_environment))
+		ASSERT(actual_dispclk_set_mhz >= requested_dispclk_khz / 1000);
 
 	return actual_dispclk_set_mhz * 1000;
 }
@@ -157,11 +198,15 @@ void rn_vbios_smu_set_phyclk(struct clk_mgr_internal *clk_mgr, int requested_phy
 int rn_vbios_smu_set_dppclk(struct clk_mgr_internal *clk_mgr, int requested_dpp_khz)
 {
 	int actual_dppclk_set_mhz = -1;
+	struct dc *dc = clk_mgr->base.ctx->dc;
 
 	actual_dppclk_set_mhz = rn_vbios_smu_send_msg_with_param(
 			clk_mgr,
 			VBIOSSMC_MSG_SetDppclkFreq,
 			requested_dpp_khz / 1000);
+
+	if (!IS_DIAG_DC(dc->ctx->dce_environment))
+		ASSERT(actual_dppclk_set_mhz >= requested_dpp_khz / 1000);
 
 	return actual_dppclk_set_mhz * 1000;
 }
@@ -195,4 +240,13 @@ void rn_vbios_smu_enable_pme_wa(struct clk_mgr_internal *clk_mgr)
 			clk_mgr,
 			VBIOSSMC_MSG_UpdatePmeRestore,
 			0);
+}
+
+int rn_vbios_smu_is_periodic_retraining_disabled(struct clk_mgr_internal *clk_mgr)
+{
+	return rn_vbios_smu_send_msg_with_param(
+			clk_mgr,
+			VBIOSSMC_MSG_IsPeriodicRetrainingDisabled,
+			1);	// if PMFW doesn't support this message, assume retraining is disabled
+				// so we only use most optimal watermark if we know retraining is enabled.
 }

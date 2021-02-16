@@ -242,13 +242,8 @@ static int td028ttec1_prepare(struct drm_panel *panel)
 static int td028ttec1_enable(struct drm_panel *panel)
 {
 	struct td028ttec1_panel *lcd = to_td028ttec1_device(panel);
-	int ret;
 
-	ret = jbt_ret_write_0(lcd, JBT_REG_DISPLAY_ON, NULL);
-	if (ret)
-		return ret;
-
-	return 0;
+	return jbt_ret_write_0(lcd, JBT_REG_DISPLAY_ON, NULL);
 }
 
 static int td028ttec1_disable(struct drm_panel *panel)
@@ -281,7 +276,6 @@ static const struct drm_display_mode td028ttec1_mode = {
 	.vsync_start = 640 + 4,
 	.vsync_end = 640 + 4 + 2,
 	.vtotal = 640 + 4 + 2 + 2,
-	.vrefresh = 66,
 	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
 	.flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC,
 	.width_mm = 43,
@@ -351,7 +345,9 @@ static int td028ttec1_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	return drm_panel_add(&lcd->panel);
+	drm_panel_add(&lcd->panel);
+
+	return 0;
 }
 
 static int td028ttec1_remove(struct spi_device *spi)

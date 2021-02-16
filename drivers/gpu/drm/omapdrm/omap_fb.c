@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2011 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2011 Texas Instruments Incorporated - https://www.ti.com/
  * Author: Rob Clark <rob@ti.com>
  */
 
@@ -326,7 +326,7 @@ struct drm_framebuffer *omap_framebuffer_create(struct drm_device *dev,
 
 error:
 	while (--i >= 0)
-		drm_gem_object_put_unlocked(bos[i]);
+		drm_gem_object_put(bos[i]);
 
 	return fb;
 }

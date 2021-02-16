@@ -16,6 +16,8 @@
 
 #include "bnx2fc.h"
 
+#include <linux/ethtool.h>
+
 static struct list_head adapter_list;
 static struct list_head if_list;
 static u32 adapter_count;
@@ -50,7 +52,7 @@ struct workqueue_struct *bnx2fc_wq;
  * Here the io threads are per cpu but the l2 thread is just one
  */
 struct fcoe_percpu_s bnx2fc_global;
-DEFINE_SPINLOCK(bnx2fc_global_lock);
+static DEFINE_SPINLOCK(bnx2fc_global_lock);
 
 static struct cnic_ulp_ops bnx2fc_cnic_cb;
 static struct libfc_function_template bnx2fc_libfc_fcn_templ;
@@ -108,22 +110,22 @@ MODULE_PARM_DESC(debug_logging,
 		"\t\t0x10 - fcoe L2 fame related logs.\n"
 		"\t\t0xff - LOG all messages.");
 
-uint bnx2fc_devloss_tmo;
+static uint bnx2fc_devloss_tmo;
 module_param_named(devloss_tmo, bnx2fc_devloss_tmo, uint, S_IRUGO);
 MODULE_PARM_DESC(devloss_tmo, " Change devloss_tmo for the remote ports "
 	"attached via bnx2fc.");
 
-uint bnx2fc_max_luns = BNX2FC_MAX_LUN;
+static uint bnx2fc_max_luns = BNX2FC_MAX_LUN;
 module_param_named(max_luns, bnx2fc_max_luns, uint, S_IRUGO);
 MODULE_PARM_DESC(max_luns, " Change the default max_lun per SCSI host. Default "
 	"0xffff.");
 
-uint bnx2fc_queue_depth;
+static uint bnx2fc_queue_depth;
 module_param_named(queue_depth, bnx2fc_queue_depth, uint, S_IRUGO);
 MODULE_PARM_DESC(queue_depth, " Change the default queue depth of SCSI devices "
 	"attached via bnx2fc.");
 
-uint bnx2fc_log_fka;
+static uint bnx2fc_log_fka;
 module_param_named(log_fka, bnx2fc_log_fka, uint, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(log_fka, " Print message to kernel log when fcoe is "
 	"initiating a FIP keep alive when debug logging is enabled.");
@@ -1071,9 +1073,8 @@ static int bnx2fc_fip_recv(struct sk_buff *skb, struct net_device *dev,
 /**
  * bnx2fc_update_src_mac - Update Ethernet MAC filters.
  *
- * @fip: FCoE controller.
- * @old: Unicast MAC address to delete if the MAC is non-zero.
- * @new: Unicast MAC address to add.
+ * @lport: The local port
+ * @addr: Location of data to copy
  *
  * Remove any previously-set unicast MAC filter.
  * Add secondary FCoE MAC address filter for our OUI.
@@ -1659,8 +1660,7 @@ static void __bnx2fc_destroy(struct bnx2fc_interface *interface)
 /**
  * bnx2fc_destroy - Destroy a bnx2fc FCoE interface
  *
- * @buffer: The name of the Ethernet interface to be destroyed
- * @kp:     The associated kernel parameter
+ * @netdev: The net device that the FCoE interface is on
  *
  * Called from sysfs.
  *
@@ -2088,7 +2088,7 @@ static int __bnx2fc_disable(struct fcoe_ctlr *ctlr)
 {
 	struct bnx2fc_interface *interface = fcoe_ctlr_priv(ctlr);
 
-	if (interface->enabled == true) {
+	if (interface->enabled) {
 		if (!ctlr->lp) {
 			pr_err(PFX "__bnx2fc_disable: lport not found\n");
 			return -ENODEV;
@@ -2101,7 +2101,7 @@ static int __bnx2fc_disable(struct fcoe_ctlr *ctlr)
 	return 0;
 }
 
-/**
+/*
  * Deperecated: Use bnx2fc_enabled()
  */
 static int bnx2fc_disable(struct net_device *netdev)
@@ -2186,7 +2186,7 @@ static int __bnx2fc_enable(struct fcoe_ctlr *ctlr)
 	struct cnic_fc_npiv_tbl *npiv_tbl;
 	struct fc_lport *lport;
 
-	if (interface->enabled == false) {
+	if (!interface->enabled) {
 		if (!ctlr->lp) {
 			pr_err(PFX "__bnx2fc_enable: lport not found\n");
 			return -ENODEV;
@@ -2229,7 +2229,7 @@ done:
 	return 0;
 }
 
-/**
+/*
  * Deprecated: Use bnx2fc_enabled()
  */
 static int bnx2fc_enable(struct net_device *netdev)
@@ -2277,7 +2277,7 @@ static int bnx2fc_ctlr_enabled(struct fcoe_ctlr_device *cdev)
 	case FCOE_CTLR_UNUSED:
 	default:
 		return -ENOTSUPP;
-	};
+	}
 }
 
 enum bnx2fc_create_link_state {
@@ -2523,7 +2523,7 @@ static struct bnx2fc_hba *bnx2fc_hba_lookup(struct net_device
 /**
  * bnx2fc_ulp_exit - shuts down adapter instance and frees all resources
  *
- * @dev		cnic device handle
+ * @dev:	cnic device handle
  */
 static void bnx2fc_ulp_exit(struct cnic_dev *dev)
 {
@@ -2956,7 +2956,7 @@ static struct device_attribute *bnx2fc_host_attrs[] = {
 	NULL,
 };
 
-/**
+/*
  * scsi_host_template structure used while registering with SCSI-ml
  */
 static struct scsi_host_template bnx2fc_shost_template = {
@@ -2989,7 +2989,7 @@ static struct libfc_function_template bnx2fc_libfc_fcn_templ = {
 	.rport_event_callback	= bnx2fc_rport_event_handler,
 };
 
-/**
+/*
  * bnx2fc_cnic_cb - global template of bnx2fc - cnic driver interface
  *			structure carrying callback function pointers
  */

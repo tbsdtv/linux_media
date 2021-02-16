@@ -90,25 +90,14 @@ static int meson_dumb_create(struct drm_file *file, struct drm_device *dev,
 
 DEFINE_DRM_GEM_CMA_FOPS(fops);
 
-static struct drm_driver meson_driver = {
+static const struct drm_driver meson_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 
 	/* IRQ */
 	.irq_handler		= meson_irq,
 
-	/* PRIME Ops */
-	.prime_handle_to_fd	= drm_gem_prime_handle_to_fd,
-	.prime_fd_to_handle	= drm_gem_prime_fd_to_handle,
-	.gem_prime_get_sg_table	= drm_gem_cma_prime_get_sg_table,
-	.gem_prime_import_sg_table = drm_gem_cma_prime_import_sg_table,
-	.gem_prime_vmap		= drm_gem_cma_prime_vmap,
-	.gem_prime_vunmap	= drm_gem_cma_prime_vunmap,
-	.gem_prime_mmap		= drm_gem_cma_prime_mmap,
-
-	/* GEM Ops */
-	.dumb_create		= meson_dumb_create,
-	.gem_free_object_unlocked = drm_gem_cma_free_object,
-	.gem_vm_ops		= &drm_gem_cma_vm_ops,
+	/* CMA Ops */
+	DRM_GEM_CMA_DRIVER_OPS_WITH_DUMB_CREATE(meson_dumb_create),
 
 	/* Misc */
 	.fops			= &fops,
@@ -400,15 +389,17 @@ static void meson_drv_unbind(struct device *dev)
 		meson_canvas_free(priv->canvas, priv->canvas_id_vd1_2);
 	}
 
+	drm_dev_unregister(drm);
+	drm_kms_helper_poll_fini(drm);
+	drm_atomic_helper_shutdown(drm);
+	component_unbind_all(dev, drm);
+	drm_irq_uninstall(drm);
+	drm_dev_put(drm);
+
 	if (priv->afbcd.ops) {
 		priv->afbcd.ops->reset(priv);
 		meson_rdma_free(priv);
 	}
-
-	drm_dev_unregister(drm);
-	drm_irq_uninstall(drm);
-	drm_kms_helper_poll_fini(drm);
-	drm_dev_put(drm);
 }
 
 static const struct component_master_ops meson_drv_master_ops = {

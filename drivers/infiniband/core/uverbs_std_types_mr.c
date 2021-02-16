@@ -33,6 +33,7 @@
 #include "rdma_core.h"
 #include "uverbs.h"
 #include <rdma/uverbs_std_types.h>
+#include "restrack.h"
 
 static int uverbs_free_mr(struct ib_uobject *uobject,
 			  enum rdma_remove_reason why,
@@ -69,7 +70,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_ADVISE_MR)(
 
 	num_sge = uverbs_attr_ptr_get_array_size(
 		attrs, UVERBS_ATTR_ADVISE_MR_SGE_LIST, sizeof(struct ib_sge));
-	if (num_sge < 0)
+	if (num_sge <= 0)
 		return num_sge;
 
 	sg_list = uverbs_attr_get_alloced_ptr(attrs,
@@ -114,7 +115,7 @@ static int UVERBS_HANDLER(UVERBS_METHOD_DM_MR_REG)(
 	if (!(attr.access_flags & IB_ZERO_BASED))
 		return -EINVAL;
 
-	ret = ib_check_mr_access(attr.access_flags);
+	ret = ib_check_mr_access(ib_dev, attr.access_flags);
 	if (ret)
 		return ret;
 
@@ -134,6 +135,9 @@ static int UVERBS_HANDLER(UVERBS_METHOD_DM_MR_REG)(
 	atomic_inc(&pd->usecnt);
 	atomic_inc(&dm->usecnt);
 
+	rdma_restrack_new(&mr->res, RDMA_RESTRACK_MR);
+	rdma_restrack_set_name(&mr->res, NULL);
+	rdma_restrack_add(&mr->res);
 	uobj->object = mr;
 
 	uverbs_finalize_uobj_create(attrs, UVERBS_ATTR_REG_DM_MR_HANDLE);
@@ -146,6 +150,36 @@ static int UVERBS_HANDLER(UVERBS_METHOD_DM_MR_REG)(
 	ret = uverbs_copy_to(attrs, UVERBS_ATTR_REG_DM_MR_RESP_RKEY,
 			     &mr->rkey, sizeof(mr->rkey));
 	return ret;
+}
+
+static int UVERBS_HANDLER(UVERBS_METHOD_QUERY_MR)(
+	struct uverbs_attr_bundle *attrs)
+{
+	struct ib_mr *mr =
+		uverbs_attr_get_obj(attrs, UVERBS_ATTR_QUERY_MR_HANDLE);
+	int ret;
+
+	ret = uverbs_copy_to(attrs, UVERBS_ATTR_QUERY_MR_RESP_LKEY, &mr->lkey,
+			     sizeof(mr->lkey));
+	if (ret)
+		return ret;
+
+	ret = uverbs_copy_to(attrs, UVERBS_ATTR_QUERY_MR_RESP_RKEY,
+			     &mr->rkey, sizeof(mr->rkey));
+
+	if (ret)
+		return ret;
+
+	ret = uverbs_copy_to(attrs, UVERBS_ATTR_QUERY_MR_RESP_LENGTH,
+			     &mr->length, sizeof(mr->length));
+
+	if (ret)
+		return ret;
+
+	ret = uverbs_copy_to(attrs, UVERBS_ATTR_QUERY_MR_RESP_IOVA,
+			     &mr->iova, sizeof(mr->iova));
+
+	return IS_UVERBS_COPY_ERR(ret) ? ret : 0;
 }
 
 DECLARE_UVERBS_NAMED_METHOD(
@@ -164,6 +198,25 @@ DECLARE_UVERBS_NAMED_METHOD(
 			   UVERBS_ATTR_MIN_SIZE(sizeof(struct ib_uverbs_sge)),
 			   UA_MANDATORY,
 			   UA_ALLOC_AND_COPY));
+
+DECLARE_UVERBS_NAMED_METHOD(
+	UVERBS_METHOD_QUERY_MR,
+	UVERBS_ATTR_IDR(UVERBS_ATTR_QUERY_MR_HANDLE,
+			UVERBS_OBJECT_MR,
+			UVERBS_ACCESS_READ,
+			UA_MANDATORY),
+	UVERBS_ATTR_PTR_OUT(UVERBS_ATTR_QUERY_MR_RESP_RKEY,
+			    UVERBS_ATTR_TYPE(u32),
+			    UA_MANDATORY),
+	UVERBS_ATTR_PTR_OUT(UVERBS_ATTR_QUERY_MR_RESP_LKEY,
+			    UVERBS_ATTR_TYPE(u32),
+			    UA_MANDATORY),
+	UVERBS_ATTR_PTR_OUT(UVERBS_ATTR_QUERY_MR_RESP_LENGTH,
+			    UVERBS_ATTR_TYPE(u64),
+			    UA_MANDATORY),
+	UVERBS_ATTR_PTR_OUT(UVERBS_ATTR_QUERY_MR_RESP_IOVA,
+			    UVERBS_ATTR_TYPE(u64),
+			    UA_OPTIONAL));
 
 DECLARE_UVERBS_NAMED_METHOD(
 	UVERBS_METHOD_DM_MR_REG,
@@ -206,7 +259,8 @@ DECLARE_UVERBS_NAMED_OBJECT(
 	UVERBS_TYPE_ALLOC_IDR(uverbs_free_mr),
 	&UVERBS_METHOD(UVERBS_METHOD_DM_MR_REG),
 	&UVERBS_METHOD(UVERBS_METHOD_MR_DESTROY),
-	&UVERBS_METHOD(UVERBS_METHOD_ADVISE_MR));
+	&UVERBS_METHOD(UVERBS_METHOD_ADVISE_MR),
+	&UVERBS_METHOD(UVERBS_METHOD_QUERY_MR));
 
 const struct uapi_definition uverbs_def_obj_mr[] = {
 	UAPI_DEF_CHAIN_OBJ_TREE_NAMED(UVERBS_OBJECT_MR,

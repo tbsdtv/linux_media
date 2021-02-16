@@ -703,7 +703,7 @@ static struct dso *machine__findnew_module_dso(struct machine *machine,
 
 		dso__set_module_info(dso, m, machine);
 		dso__set_long_name(dso, strdup(filename), true);
-		dso->kernel = DSO_TYPE_KERNEL;
+		dso->kernel = DSO_SPACE__KERNEL;
 	}
 
 	dso__get(dso);
@@ -736,12 +736,6 @@ int machine__process_switch_event(struct machine *machine __maybe_unused,
 	return 0;
 }
 
-static int is_bpf_image(const char *name)
-{
-	return strncmp(name, "bpf_trampoline_", sizeof("bpf_trampoline_") - 1) == 0 ||
-	       strncmp(name, "bpf_dispatcher_", sizeof("bpf_dispatcher_") - 1) == 0;
-}
-
 static int machine__process_ksymbol_register(struct machine *machine,
 					     union perf_event *event,
 					     struct perf_sample *sample __maybe_unused)
@@ -753,13 +747,19 @@ static int machine__process_ksymbol_register(struct machine *machine,
 		struct dso *dso = dso__new(event->ksymbol.name);
 
 		if (dso) {
-			dso->kernel = DSO_TYPE_KERNEL;
+			dso->kernel = DSO_SPACE__KERNEL;
 			map = map__new2(0, dso);
 		}
 
 		if (!dso || !map) {
 			dso__put(dso);
 			return -ENOMEM;
+		}
+
+		if (event->ksymbol.ksym_type == PERF_RECORD_KSYMBOL_TYPE_OOL) {
+			map->dso->binary_type = DSO_BINARY_TYPE__OOL;
+			map->dso->data.file_size = event->ksymbol.len;
+			dso__set_loaded(map->dso);
 		}
 
 		map->start = event->ksymbol.addr;
@@ -786,11 +786,20 @@ static int machine__process_ksymbol_unregister(struct machine *machine,
 					       union perf_event *event,
 					       struct perf_sample *sample __maybe_unused)
 {
+	struct symbol *sym;
 	struct map *map;
 
 	map = maps__find(&machine->kmaps, event->ksymbol.addr);
-	if (map)
+	if (!map)
+		return 0;
+
+	if (map != machine->vmlinux_map)
 		maps__remove(&machine->kmaps, map);
+	else {
+		sym = dso__find_symbol(map->dso, map->map_ip(map, map->start));
+		if (sym)
+			dso__delete_symbol(map->dso, sym);
+	}
 
 	return 0;
 }
@@ -806,6 +815,47 @@ int machine__process_ksymbol(struct machine *machine __maybe_unused,
 		return machine__process_ksymbol_unregister(machine, event,
 							   sample);
 	return machine__process_ksymbol_register(machine, event, sample);
+}
+
+int machine__process_text_poke(struct machine *machine, union perf_event *event,
+			       struct perf_sample *sample __maybe_unused)
+{
+	struct map *map = maps__find(&machine->kmaps, event->text_poke.addr);
+	u8 cpumode = event->header.misc & PERF_RECORD_MISC_CPUMODE_MASK;
+
+	if (dump_trace)
+		perf_event__fprintf_text_poke(event, machine, stdout);
+
+	if (!event->text_poke.new_len)
+		return 0;
+
+	if (cpumode != PERF_RECORD_MISC_KERNEL) {
+		pr_debug("%s: unsupported cpumode - ignoring\n", __func__);
+		return 0;
+	}
+
+	if (map && map->dso) {
+		u8 *new_bytes = event->text_poke.bytes + event->text_poke.old_len;
+		int ret;
+
+		/*
+		 * Kernel maps might be changed when loading symbols so loading
+		 * must be done prior to using kernel maps.
+		 */
+		map__load(map);
+		ret = dso__data_write_cache_addr(map->dso, map, machine,
+						 event->text_poke.addr,
+						 new_bytes,
+						 event->text_poke.new_len);
+		if (ret != event->text_poke.new_len)
+			pr_debug("Failed to write kernel text poke at %#" PRI_lx64 "\n",
+				 event->text_poke.addr);
+	} else {
+		pr_debug("Failed to find kernel text poke address map for %#" PRI_lx64 "\n",
+			 event->text_poke.addr);
+	}
+
+	return 0;
 }
 
 static struct map *machine__addnew_module_map(struct machine *machine, u64 start,
@@ -924,14 +974,14 @@ static struct dso *machine__get_kernel(struct machine *machine)
 			vmlinux_name = symbol_conf.vmlinux_name;
 
 		kernel = machine__findnew_kernel(machine, vmlinux_name,
-						 "[kernel]", DSO_TYPE_KERNEL);
+						 "[kernel]", DSO_SPACE__KERNEL);
 	} else {
 		if (symbol_conf.default_guest_vmlinux_name)
 			vmlinux_name = symbol_conf.default_guest_vmlinux_name;
 
 		kernel = machine__findnew_kernel(machine, vmlinux_name,
 						 "[guest.kernel]",
-						 DSO_TYPE_GUEST_KERNEL);
+						 DSO_SPACE__KERNEL_GUEST);
 	}
 
 	if (kernel != NULL && (!kernel->has_build_id))
@@ -1531,35 +1581,28 @@ static bool machine__uses_kcore(struct machine *machine)
 }
 
 static bool perf_event__is_extra_kernel_mmap(struct machine *machine,
-					     union perf_event *event)
+					     struct extra_kernel_map *xm)
 {
 	return machine__is(machine, "x86_64") &&
-	       is_entry_trampoline(event->mmap.filename);
+	       is_entry_trampoline(xm->name);
 }
 
 static int machine__process_extra_kernel_map(struct machine *machine,
-					     union perf_event *event)
+					     struct extra_kernel_map *xm)
 {
 	struct dso *kernel = machine__kernel_dso(machine);
-	struct extra_kernel_map xm = {
-		.start = event->mmap.start,
-		.end   = event->mmap.start + event->mmap.len,
-		.pgoff = event->mmap.pgoff,
-	};
 
 	if (kernel == NULL)
 		return -1;
 
-	strlcpy(xm.name, event->mmap.filename, KMAP_NAME_LEN);
-
-	return machine__create_extra_kernel_map(machine, kernel, &xm);
+	return machine__create_extra_kernel_map(machine, kernel, xm);
 }
 
 static int machine__process_kernel_mmap_event(struct machine *machine,
-					      union perf_event *event)
+					      struct extra_kernel_map *xm)
 {
 	struct map *map;
-	enum dso_kernel_type kernel_type;
+	enum dso_space_type dso_space;
 	bool is_kernel_mmap;
 
 	/* If we have maps from kcore then we do not need or want any others */
@@ -1567,24 +1610,22 @@ static int machine__process_kernel_mmap_event(struct machine *machine,
 		return 0;
 
 	if (machine__is_host(machine))
-		kernel_type = DSO_TYPE_KERNEL;
+		dso_space = DSO_SPACE__KERNEL;
 	else
-		kernel_type = DSO_TYPE_GUEST_KERNEL;
+		dso_space = DSO_SPACE__KERNEL_GUEST;
 
-	is_kernel_mmap = memcmp(event->mmap.filename,
-				machine->mmap_name,
+	is_kernel_mmap = memcmp(xm->name, machine->mmap_name,
 				strlen(machine->mmap_name) - 1) == 0;
-	if (event->mmap.filename[0] == '/' ||
-	    (!is_kernel_mmap && event->mmap.filename[0] == '[')) {
-		map = machine__addnew_module_map(machine, event->mmap.start,
-						 event->mmap.filename);
+	if (xm->name[0] == '/' ||
+	    (!is_kernel_mmap && xm->name[0] == '[')) {
+		map = machine__addnew_module_map(machine, xm->start,
+						 xm->name);
 		if (map == NULL)
 			goto out_problem;
 
-		map->end = map->start + event->mmap.len;
+		map->end = map->start + xm->end - xm->start;
 	} else if (is_kernel_mmap) {
-		const char *symbol_name = (event->mmap.filename +
-				strlen(machine->mmap_name));
+		const char *symbol_name = (xm->name + strlen(machine->mmap_name));
 		/*
 		 * Should be there already, from the build-id table in
 		 * the header.
@@ -1629,7 +1670,7 @@ static int machine__process_kernel_mmap_event(struct machine *machine,
 		if (kernel == NULL)
 			goto out_problem;
 
-		kernel->kernel = kernel_type;
+		kernel->kernel = dso_space;
 		if (__machine__create_kernel_maps(machine, kernel) < 0) {
 			dso__put(kernel);
 			goto out_problem;
@@ -1638,18 +1679,17 @@ static int machine__process_kernel_mmap_event(struct machine *machine,
 		if (strstr(kernel->long_name, "vmlinux"))
 			dso__set_short_name(kernel, "[kernel.vmlinux]", false);
 
-		machine__update_kernel_mmap(machine, event->mmap.start,
-					 event->mmap.start + event->mmap.len);
+		machine__update_kernel_mmap(machine, xm->start, xm->end);
 
 		/*
 		 * Avoid using a zero address (kptr_restrict) for the ref reloc
 		 * symbol. Effectively having zero here means that at record
 		 * time /proc/sys/kernel/kptr_restrict was non zero.
 		 */
-		if (event->mmap.pgoff != 0) {
+		if (xm->pgoff != 0) {
 			map__set_kallsyms_ref_reloc_sym(machine->vmlinux_map,
 							symbol_name,
-							event->mmap.pgoff);
+							xm->pgoff);
 		}
 
 		if (machine__is_default_guest(machine)) {
@@ -1658,8 +1698,8 @@ static int machine__process_kernel_mmap_event(struct machine *machine,
 			 */
 			dso__load(kernel, machine__kernel_map(machine));
 		}
-	} else if (perf_event__is_extra_kernel_mmap(machine, event)) {
-		return machine__process_extra_kernel_map(machine, event);
+	} else if (perf_event__is_extra_kernel_mmap(machine, xm)) {
+		return machine__process_extra_kernel_map(machine, xm);
 	}
 	return 0;
 out_problem:
@@ -1685,7 +1725,14 @@ int machine__process_mmap2_event(struct machine *machine,
 
 	if (sample->cpumode == PERF_RECORD_MISC_GUEST_KERNEL ||
 	    sample->cpumode == PERF_RECORD_MISC_KERNEL) {
-		ret = machine__process_kernel_mmap_event(machine, event);
+		struct extra_kernel_map xm = {
+			.start = event->mmap2.start,
+			.end   = event->mmap2.start + event->mmap2.len,
+			.pgoff = event->mmap2.pgoff,
+		};
+
+		strlcpy(xm.name, event->mmap2.filename, KMAP_NAME_LEN);
+		ret = machine__process_kernel_mmap_event(machine, &xm);
 		if (ret < 0)
 			goto out_problem;
 		return 0;
@@ -1735,7 +1782,14 @@ int machine__process_mmap_event(struct machine *machine, union perf_event *event
 
 	if (sample->cpumode == PERF_RECORD_MISC_GUEST_KERNEL ||
 	    sample->cpumode == PERF_RECORD_MISC_KERNEL) {
-		ret = machine__process_kernel_mmap_event(machine, event);
+		struct extra_kernel_map xm = {
+			.start = event->mmap.start,
+			.end   = event->mmap.start + event->mmap.len,
+			.pgoff = event->mmap.pgoff,
+		};
+
+		strlcpy(xm.name, event->mmap.filename, KMAP_NAME_LEN);
+		ret = machine__process_kernel_mmap_event(machine, &xm);
 		if (ret < 0)
 			goto out_problem;
 		return 0;
@@ -1930,6 +1984,8 @@ int machine__process_event(struct machine *machine, union perf_event *event,
 		ret = machine__process_ksymbol(machine, event, sample); break;
 	case PERF_RECORD_BPF_EVENT:
 		ret = machine__process_bpf(machine, event, sample); break;
+	case PERF_RECORD_TEXT_POKE:
+		ret = machine__process_text_poke(machine, event, sample); break;
 	default:
 		ret = -1;
 		break;
@@ -1967,11 +2023,12 @@ static void ip__resolve_ams(struct thread *thread,
 	ams->ms.sym = al.sym;
 	ams->ms.map = al.map;
 	ams->phys_addr = 0;
+	ams->data_page_size = 0;
 }
 
 static void ip__resolve_data(struct thread *thread,
 			     u8 m, struct addr_map_symbol *ams,
-			     u64 addr, u64 phys_addr)
+			     u64 addr, u64 phys_addr, u64 daddr_page_size)
 {
 	struct addr_location al;
 
@@ -1985,6 +2042,7 @@ static void ip__resolve_data(struct thread *thread,
 	ams->ms.sym = al.sym;
 	ams->ms.map = al.map;
 	ams->phys_addr = phys_addr;
+	ams->data_page_size = daddr_page_size;
 }
 
 struct mem_info *sample__resolve_mem(struct perf_sample *sample,
@@ -1997,7 +2055,8 @@ struct mem_info *sample__resolve_mem(struct perf_sample *sample,
 
 	ip__resolve_ams(al->thread, &mi->iaddr, sample->ip);
 	ip__resolve_data(al->thread, al->cpumode, &mi->daddr,
-			 sample->addr, sample->phys_addr);
+			 sample->addr, sample->phys_addr,
+			 sample->data_page_size);
 	mi->data_src.val = sample->data_src;
 
 	return mi;
@@ -2921,7 +2980,7 @@ int machines__for_each_thread(struct machines *machines,
 
 pid_t machine__get_current_tid(struct machine *machine, int cpu)
 {
-	int nr_cpus = min(machine->env->nr_cpus_online, MAX_NR_CPUS);
+	int nr_cpus = min(machine->env->nr_cpus_avail, MAX_NR_CPUS);
 
 	if (cpu < 0 || cpu >= nr_cpus || !machine->current_tid)
 		return -1;
@@ -2933,7 +2992,7 @@ int machine__set_current_tid(struct machine *machine, int cpu, pid_t pid,
 			     pid_t tid)
 {
 	struct thread *thread;
-	int nr_cpus = min(machine->env->nr_cpus_online, MAX_NR_CPUS);
+	int nr_cpus = min(machine->env->nr_cpus_avail, MAX_NR_CPUS);
 
 	if (cpu < 0)
 		return -EINVAL;
@@ -3056,4 +3115,16 @@ char *machine__resolve_kernel_addr(void *vmachine, unsigned long long *addrp, ch
 	*modp = __map__is_kmodule(map) ? (char *)map->dso->short_name : NULL;
 	*addrp = map->unmap_ip(map, sym->start);
 	return sym->name;
+}
+
+int machine__for_each_dso(struct machine *machine, machine__dso_t fn, void *priv)
+{
+	struct dso *pos;
+	int err = 0;
+
+	list_for_each_entry(pos, &machine->dsos.head, node) {
+		if (fn(pos, machine, priv))
+			err = -1;
+	}
+	return err;
 }

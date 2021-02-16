@@ -32,6 +32,7 @@
 #include <drm/drm_device.h>
 #include <drm/drm_plane.h>
 #include <drm/drm_print.h>
+#include <drm/drm_vblank.h>
 #include <drm/drm_writeback.h>
 
 #include <linux/slab.h>
@@ -92,6 +93,9 @@ __drm_atomic_helper_crtc_reset(struct drm_crtc *crtc,
 {
 	if (crtc_state)
 		__drm_atomic_helper_crtc_state_reset(crtc_state, crtc);
+
+	if (drm_dev_has_vblank(crtc->dev))
+		drm_crtc_vblank_reset(crtc);
 
 	crtc->state = crtc_state;
 }
@@ -539,7 +543,7 @@ void drm_atomic_helper_connector_destroy_state(struct drm_connector *connector,
 EXPORT_SYMBOL(drm_atomic_helper_connector_destroy_state);
 
 /**
- * __drm_atomic_helper_private_duplicate_state - copy atomic private state
+ * __drm_atomic_helper_private_obj_duplicate_state - copy atomic private state
  * @obj: CRTC object
  * @state: new private object state
  *

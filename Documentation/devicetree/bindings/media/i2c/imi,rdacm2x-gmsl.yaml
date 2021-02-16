@@ -5,7 +5,7 @@
 $id: http://devicetree.org/schemas/media/i2c/imi,rdacm2x-gmsl.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title:  IMI D&D RDACM20 and RDACM21 Automotive Camera Platforms
+title: IMI D&D RDACM20 and RDACM21 Automotive Camera Platforms
 
 maintainers:
   - Jacopo Mondi <jacopo+renesas@jmondi.org>
@@ -86,38 +86,16 @@ properties:
     maxItems: 3
 
   port:
-    type: object
-    additionalProperties: false
-    description: -|
-      Connection to the remote GMSL endpoint are modelled using the OF graph
-      bindings in accordance with the video interface bindings defined in
-      Documentation/devicetree/bindings/media/video-interfaces.txt.
-
-      The device node contains a single "port" child node with a single
-      "endpoint" sub-device.
-
-    properties:
-      endpoint:
-        type: object
-        additionalProperties: false
-
-        properties:
-          remote-endpoint:
-            description: -|
-              phandle to the remote GMSL endpoint sub-node in the remote node
-              port.
-            maxItems: 1
-
-        required:
-          - remote-endpoint
-
-    required:
-      - endpoint
+    $ref: /schemas/graph.yaml#/properties/port
+    description:
+      Connection to the remote GMSL endpoint.
 
 required:
   - compatible
   - reg
   - port
+
+additionalProperties: false
 
 examples:
   - |

@@ -94,38 +94,12 @@ static inline int ip6_tnl_mpls_supported(void)
 	return IS_ENABLED(CONFIG_MPLS);
 }
 
-static struct net_device_stats *ip6_get_stats(struct net_device *dev)
-{
-	struct pcpu_sw_netstats tmp, sum = { 0 };
-	int i;
-
-	for_each_possible_cpu(i) {
-		unsigned int start;
-		const struct pcpu_sw_netstats *tstats =
-						   per_cpu_ptr(dev->tstats, i);
-
-		do {
-			start = u64_stats_fetch_begin_irq(&tstats->syncp);
-			tmp.rx_packets = tstats->rx_packets;
-			tmp.rx_bytes = tstats->rx_bytes;
-			tmp.tx_packets = tstats->tx_packets;
-			tmp.tx_bytes =  tstats->tx_bytes;
-		} while (u64_stats_fetch_retry_irq(&tstats->syncp, start));
-
-		sum.rx_packets += tmp.rx_packets;
-		sum.rx_bytes   += tmp.rx_bytes;
-		sum.tx_packets += tmp.tx_packets;
-		sum.tx_bytes   += tmp.tx_bytes;
-	}
-	dev->stats.rx_packets = sum.rx_packets;
-	dev->stats.rx_bytes   = sum.rx_bytes;
-	dev->stats.tx_packets = sum.tx_packets;
-	dev->stats.tx_bytes   = sum.tx_bytes;
-	return &dev->stats;
-}
+#define for_each_ip6_tunnel_rcu(start) \
+	for (t = rcu_dereference(start); t; t = rcu_dereference(t->next))
 
 /**
  * ip6_tnl_lookup - fetch tunnel matching the end-point addresses
+ *   @net: network namespace
  *   @link: ifindex of underlying interface
  *   @remote: the address of the tunnel exit-point
  *   @local: the address of the tunnel entry-point
@@ -135,9 +109,6 @@ static struct net_device_stats *ip6_get_stats(struct net_device *dev)
  *   else fallback tunnel if its device is up,
  *   else %NULL
  **/
-
-#define for_each_ip6_tunnel_rcu(start) \
-	for (t = rcu_dereference(start); t; t = rcu_dereference(t->next))
 
 static struct ip6_tnl *
 ip6_tnl_lookup(struct net *net, int link,
@@ -203,6 +174,7 @@ ip6_tnl_lookup(struct net *net, int link,
 
 /**
  * ip6_tnl_bucket - get head of list matching given tunnel parameters
+ *   @ip6n: the private data for ip6_vti in the netns
  *   @p: parameters containing tunnel end-points
  *
  * Description:
@@ -229,6 +201,7 @@ ip6_tnl_bucket(struct ip6_tnl_net *ip6n, const struct __ip6_tnl_parm *p)
 
 /**
  * ip6_tnl_link - add tunnel to hash table
+ *   @ip6n: the private data for ip6_vti in the netns
  *   @t: tunnel to be added
  **/
 
@@ -245,6 +218,7 @@ ip6_tnl_link(struct ip6_tnl_net *ip6n, struct ip6_tnl *t)
 
 /**
  * ip6_tnl_unlink - remove tunnel from hash table
+ *   @ip6n: the private data for ip6_vti in the netns
  *   @t: tunnel to be removed
  **/
 
@@ -302,8 +276,8 @@ out:
 
 /**
  * ip6_tnl_create - create a new tunnel
+ *   @net: network namespace
  *   @p: tunnel parameters
- *   @pt: pointer to new tunnel
  *
  * Description:
  *   Create tunnel matching given parameters.
@@ -351,6 +325,7 @@ failed:
 
 /**
  * ip6_tnl_locate - find or create tunnel matching given parameters
+ *   @net: network namespace
  *   @p: tunnel parameters
  *   @create: != 0 if allowed to create new tunnel if no match found
  *
@@ -415,6 +390,7 @@ ip6_tnl_dev_uninit(struct net_device *dev)
 /**
  * parse_tvl_tnl_enc_lim - handle encapsulation limit option
  *   @skb: received socket buffer
+ *   @raw: the ICMPv6 error message data
  *
  * Return:
  *   0 if none was found,
@@ -483,14 +459,9 @@ __u16 ip6_tnl_parse_tlv_enc_lim(struct sk_buff *skb, __u8 *raw)
 }
 EXPORT_SYMBOL(ip6_tnl_parse_tlv_enc_lim);
 
-/**
- * ip6_tnl_err - tunnel error handler
- *
- * Description:
- *   ip6_tnl_err() should handle errors in the tunnel according
- *   to the specifications in RFC 2473.
- **/
-
+/* ip6_tnl_err() should handle errors in the tunnel according to the
+ * specifications in RFC 2473.
+ */
 static int
 ip6_tnl_err(struct sk_buff *skb, __u8 ipproto, struct inet6_skb_parm *opt,
 	    u8 *type, u8 *code, int *msg, __u32 *info, int offset)
@@ -913,7 +884,15 @@ int ip6_tnl_rcv(struct ip6_tnl *t, struct sk_buff *skb,
 		struct metadata_dst *tun_dst,
 		bool log_ecn_err)
 {
-	return __ip6_tnl_rcv(t, skb, tpi, tun_dst, ip6ip6_dscp_ecn_decapsulate,
+	int (*dscp_ecn_decapsulate)(const struct ip6_tnl *t,
+				    const struct ipv6hdr *ipv6h,
+				    struct sk_buff *skb);
+
+	dscp_ecn_decapsulate = ip6ip6_dscp_ecn_decapsulate;
+	if (tpi->proto == htons(ETH_P_IP))
+		dscp_ecn_decapsulate = ip4ip6_dscp_ecn_decapsulate;
+
+	return __ip6_tnl_rcv(t, skb, tpi, tun_dst, dscp_ecn_decapsulate,
 			     log_ecn_err);
 }
 EXPORT_SYMBOL(ip6_tnl_rcv);
@@ -1261,6 +1240,8 @@ route_lookup:
 	if (max_headroom > dev->needed_headroom)
 		dev->needed_headroom = max_headroom;
 
+	skb_set_inner_ipproto(skb, proto);
+
 	err = ip6_tnl_encap(skb, t, &proto, fl6);
 	if (err)
 		return err;
@@ -1269,8 +1250,6 @@ route_lookup:
 		init_tel_txopt(&opt, encap_limit);
 		ipv6_push_frag_opts(skb, &opt.ops, &proto);
 	}
-
-	skb_set_inner_ipproto(skb, proto);
 
 	skb_push(skb, sizeof(struct ipv6hdr));
 	skb_reset_network_header(skb);
@@ -1825,7 +1804,7 @@ static const struct net_device_ops ip6_tnl_netdev_ops = {
 	.ndo_start_xmit = ip6_tnl_start_xmit,
 	.ndo_do_ioctl	= ip6_tnl_ioctl,
 	.ndo_change_mtu = ip6_tnl_change_mtu,
-	.ndo_get_stats	= ip6_get_stats,
+	.ndo_get_stats64 = dev_get_tstats64,
 	.ndo_get_iflink = ip6_tnl_get_iflink,
 };
 
@@ -1846,6 +1825,7 @@ static const struct net_device_ops ip6_tnl_netdev_ops = {
 static void ip6_tnl_dev_setup(struct net_device *dev)
 {
 	dev->netdev_ops = &ip6_tnl_netdev_ops;
+	dev->header_ops = &ip_tunnel_header_ops;
 	dev->needs_free_netdev = true;
 	dev->priv_destructor = ip6_dev_free;
 

@@ -984,6 +984,7 @@ static int tegra_emc_load_timings_from_dt(struct tegra_emc *emc,
 
 static const struct of_device_id tegra_emc_of_match[] = {
 	{ .compatible = "nvidia,tegra124-emc" },
+	{ .compatible = "nvidia,tegra132-emc" },
 	{}
 };
 
@@ -1059,19 +1060,7 @@ static int tegra_emc_debug_available_rates_show(struct seq_file *s,
 	return 0;
 }
 
-static int tegra_emc_debug_available_rates_open(struct inode *inode,
-						struct file *file)
-{
-	return single_open(file, tegra_emc_debug_available_rates_show,
-			   inode->i_private);
-}
-
-static const struct file_operations tegra_emc_debug_available_rates_fops = {
-	.open = tegra_emc_debug_available_rates_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(tegra_emc_debug_available_rates);
 
 static int tegra_emc_debug_min_rate_get(void *data, u64 *rate)
 {
@@ -1178,20 +1167,18 @@ static void emc_debugfs_init(struct device *dev, struct tegra_emc *emc)
 		return;
 	}
 
-	debugfs_create_file("available_rates", S_IRUGO, emc->debugfs.root, emc,
+	debugfs_create_file("available_rates", 0444, emc->debugfs.root, emc,
 			    &tegra_emc_debug_available_rates_fops);
-	debugfs_create_file("min_rate", S_IRUGO | S_IWUSR, emc->debugfs.root,
+	debugfs_create_file("min_rate", 0644, emc->debugfs.root,
 			    emc, &tegra_emc_debug_min_rate_fops);
-	debugfs_create_file("max_rate", S_IRUGO | S_IWUSR, emc->debugfs.root,
+	debugfs_create_file("max_rate", 0644, emc->debugfs.root,
 			    emc, &tegra_emc_debug_max_rate_fops);
 }
 
 static int tegra_emc_probe(struct platform_device *pdev)
 {
-	struct platform_device *mc;
 	struct device_node *np;
 	struct tegra_emc *emc;
-	struct resource *res;
 	u32 ram_code;
 	int err;
 
@@ -1201,25 +1188,13 @@ static int tegra_emc_probe(struct platform_device *pdev)
 
 	emc->dev = &pdev->dev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	emc->regs = devm_ioremap_resource(&pdev->dev, res);
+	emc->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(emc->regs))
 		return PTR_ERR(emc->regs);
 
-	np = of_parse_phandle(pdev->dev.of_node, "nvidia,memory-controller", 0);
-	if (!np) {
-		dev_err(&pdev->dev, "could not get memory controller\n");
-		return -ENOENT;
-	}
-
-	mc = of_find_device_by_node(np);
-	of_node_put(np);
-	if (!mc)
-		return -ENOENT;
-
-	emc->mc = platform_get_drvdata(mc);
-	if (!emc->mc)
-		return -EPROBE_DEFER;
+	emc->mc = devm_tegra_memory_controller_get(&pdev->dev);
+	if (IS_ERR(emc->mc))
+		return PTR_ERR(emc->mc);
 
 	ram_code = tegra_read_ram_code();
 

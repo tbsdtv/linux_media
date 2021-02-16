@@ -41,6 +41,7 @@ ipa_mem_zero_region_add(struct gsi_trans *trans, const struct ipa_mem *mem)
 
 /**
  * ipa_mem_setup() - Set up IPA AP and modem shared memory areas
+ * @ipa:	IPA pointer
  *
  * Set up the shared memory regions in IPA local memory.  This involves
  * zero-filling memory regions, and in the case of header memory, telling
@@ -52,7 +53,7 @@ ipa_mem_zero_region_add(struct gsi_trans *trans, const struct ipa_mem *mem)
  * The AP informs the modem where its portions of memory are located
  * in a QMI exchange that occurs at modem startup.
  *
- * @Return:	0 if successful, or a negative error code
+ * Return:	0 if successful, or a negative error code
  */
 int ipa_mem_setup(struct ipa *ipa)
 {
@@ -88,7 +89,7 @@ int ipa_mem_setup(struct ipa *ipa)
 	gsi_trans_commit_wait(trans);
 
 	/* Tell the hardware where the processing context area is located */
-	iowrite32(ipa->mem_offset + offset,
+	iowrite32(ipa->mem_offset + ipa->mem[IPA_MEM_MODEM_PROC_CTX].offset,
 		  ipa->reg_virt + IPA_REG_LOCAL_PKT_PROC_CNTXT_BASE_OFFSET);
 
 	return 0;
@@ -137,8 +138,9 @@ static bool ipa_mem_valid(struct ipa *ipa, enum ipa_mem_id mem_id)
 
 /**
  * ipa_mem_config() - Configure IPA shared memory
+ * @ipa:	IPA pointer
  *
- * @Return:	0 if successful, or a negative error code
+ * Return:	0 if successful, or a negative error code
  */
 int ipa_mem_config(struct ipa *ipa)
 {
@@ -158,13 +160,13 @@ int ipa_mem_config(struct ipa *ipa)
 	mem_size = 8 * u32_get_bits(val, SHARED_MEM_SIZE_FMASK);
 
 	/* If the sizes don't match, issue a warning */
-	if (ipa->mem_offset + mem_size > ipa->mem_size) {
-		dev_warn(dev, "ignoring larger reported memory size: 0x%08x\n",
-			mem_size);
-	} else if (ipa->mem_offset + mem_size < ipa->mem_size) {
+	if (ipa->mem_offset + mem_size < ipa->mem_size) {
 		dev_warn(dev, "limiting IPA memory size to 0x%08x\n",
 			 mem_size);
 		ipa->mem_size = mem_size;
+	} else if (ipa->mem_offset + mem_size > ipa->mem_size) {
+		dev_dbg(dev, "ignoring larger reported memory size: 0x%08x\n",
+			mem_size);
 	}
 
 	/* Prealloc DMA memory for zeroing regions */
@@ -238,6 +240,7 @@ void ipa_mem_deconfig(struct ipa *ipa)
 
 /**
  * ipa_mem_zero_modem() - Zero IPA-local memory regions owned by the modem
+ * @ipa:	IPA pointer
  *
  * Zero regions of IPA-local memory used by the modem.  These are configured
  * (and initially zeroed) by ipa_mem_setup(), but if the modem crashes and

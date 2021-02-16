@@ -7,6 +7,7 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
+#include <linux/mdio/mdio-i2c.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -16,7 +17,6 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
-#include "mdio-i2c.h"
 #include "sfp.h"
 #include "swphy.h"
 
@@ -219,6 +219,7 @@ struct sfp {
 	struct sfp_bus *sfp_bus;
 	struct phy_device *mod_phy;
 	const struct sff_data *type;
+	size_t i2c_block_size;
 	u32 max_power_mW;
 
 	unsigned int (*get_state)(struct sfp *);
@@ -335,9 +336,18 @@ static int sfp_i2c_read(struct sfp *sfp, bool a2, u8 dev_addr, void *buf,
 			size_t len)
 {
 	struct i2c_msg msgs[2];
-	u8 bus_addr = a2 ? 0x51 : 0x50;
+	size_t block_size;
 	size_t this_len;
+	u8 bus_addr;
 	int ret;
+
+	if (a2) {
+		block_size = 16;
+		bus_addr = 0x51;
+	} else {
+		block_size = sfp->i2c_block_size;
+		bus_addr = 0x50;
+	}
 
 	msgs[0].addr = bus_addr;
 	msgs[0].flags = 0;
@@ -350,8 +360,8 @@ static int sfp_i2c_read(struct sfp *sfp, bool a2, u8 dev_addr, void *buf,
 
 	while (len) {
 		this_len = len;
-		if (this_len > 16)
-			this_len = 16;
+		if (this_len > block_size)
+			this_len = block_size;
 
 		msgs[1].len = this_len;
 
@@ -552,7 +562,7 @@ static umode_t sfp_hwmon_is_visible(const void *data,
 		case hwmon_temp_crit:
 			if (!(sfp->id.ext.enhopts & SFP_ENHOPTS_ALARMWARN))
 				return 0;
-			/* fall through */
+			fallthrough;
 		case hwmon_temp_input:
 		case hwmon_temp_label:
 			return 0444;
@@ -571,7 +581,7 @@ static umode_t sfp_hwmon_is_visible(const void *data,
 		case hwmon_in_crit:
 			if (!(sfp->id.ext.enhopts & SFP_ENHOPTS_ALARMWARN))
 				return 0;
-			/* fall through */
+			fallthrough;
 		case hwmon_in_input:
 		case hwmon_in_label:
 			return 0444;
@@ -590,7 +600,7 @@ static umode_t sfp_hwmon_is_visible(const void *data,
 		case hwmon_curr_crit:
 			if (!(sfp->id.ext.enhopts & SFP_ENHOPTS_ALARMWARN))
 				return 0;
-			/* fall through */
+			fallthrough;
 		case hwmon_curr_input:
 		case hwmon_curr_label:
 			return 0444;
@@ -618,7 +628,7 @@ static umode_t sfp_hwmon_is_visible(const void *data,
 		case hwmon_power_crit:
 			if (!(sfp->id.ext.enhopts & SFP_ENHOPTS_ALARMWARN))
 				return 0;
-			/* fall through */
+			fallthrough;
 		case hwmon_power_input:
 		case hwmon_power_label:
 			return 0444;
@@ -1632,22 +1642,83 @@ static int sfp_sm_mod_hpower(struct sfp *sfp, bool enable)
 	return 0;
 }
 
+/* Some modules (Nokia 3FE46541AA) lock up if byte 0x51 is read as a
+ * single read. Switch back to reading 16 byte blocks unless we have
+ * a CarlitoxxPro module (rebranded VSOL V2801F). Even more annoyingly,
+ * some VSOL V2801F have the vendor name changed to OEM.
+ */
+static int sfp_quirk_i2c_block_size(const struct sfp_eeprom_base *base)
+{
+	if (!memcmp(base->vendor_name, "VSOL            ", 16))
+		return 1;
+	if (!memcmp(base->vendor_name, "OEM             ", 16) &&
+	    !memcmp(base->vendor_pn,   "V2801F          ", 16))
+		return 1;
+
+	/* Some modules can't cope with long reads */
+	return 16;
+}
+
+static void sfp_quirks_base(struct sfp *sfp, const struct sfp_eeprom_base *base)
+{
+	sfp->i2c_block_size = sfp_quirk_i2c_block_size(base);
+}
+
+static int sfp_cotsworks_fixup_check(struct sfp *sfp, struct sfp_eeprom_id *id)
+{
+	u8 check;
+	int err;
+
+	if (id->base.phys_id != SFF8024_ID_SFF_8472 ||
+	    id->base.phys_ext_id != SFP_PHYS_EXT_ID_SFP ||
+	    id->base.connector != SFF8024_CONNECTOR_LC) {
+		dev_warn(sfp->dev, "Rewriting fiber module EEPROM with corrected values\n");
+		id->base.phys_id = SFF8024_ID_SFF_8472;
+		id->base.phys_ext_id = SFP_PHYS_EXT_ID_SFP;
+		id->base.connector = SFF8024_CONNECTOR_LC;
+		err = sfp_write(sfp, false, SFP_PHYS_ID, &id->base, 3);
+		if (err != 3) {
+			dev_err(sfp->dev, "Failed to rewrite module EEPROM: %d\n", err);
+			return err;
+		}
+
+		/* Cotsworks modules have been found to require a delay between write operations. */
+		mdelay(50);
+
+		/* Update base structure checksum */
+		check = sfp_check(&id->base, sizeof(id->base) - 1);
+		err = sfp_write(sfp, false, SFP_CC_BASE, &check, 1);
+		if (err != 1) {
+			dev_err(sfp->dev, "Failed to update base structure checksum in fiber module EEPROM: %d\n", err);
+			return err;
+		}
+	}
+	return 0;
+}
+
 static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 {
 	/* SFP module inserted - read I2C data */
 	struct sfp_eeprom_id id;
+	bool cotsworks_sfbg;
 	bool cotsworks;
 	u8 check;
 	int ret;
 
-	ret = sfp_read(sfp, false, 0, &id, sizeof(id));
+	/* Some modules (CarlitoxxPro CPGOS03-0490) do not support multibyte
+	 * reads from the EEPROM, so start by reading the base identifying
+	 * information one byte at a time.
+	 */
+	sfp->i2c_block_size = 1;
+
+	ret = sfp_read(sfp, false, 0, &id.base, sizeof(id.base));
 	if (ret < 0) {
 		if (report)
 			dev_err(sfp->dev, "failed to read EEPROM: %d\n", ret);
 		return -EAGAIN;
 	}
 
-	if (ret != sizeof(id)) {
+	if (ret != sizeof(id.base)) {
 		dev_err(sfp->dev, "EEPROM short read: %d\n", ret);
 		return -EAGAIN;
 	}
@@ -1657,6 +1728,17 @@ static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 	 * serial number and date code.
 	 */
 	cotsworks = !memcmp(id.base.vendor_name, "COTSWORKS       ", 16);
+	cotsworks_sfbg = !memcmp(id.base.vendor_pn, "SFBG", 4);
+
+	/* Cotsworks SFF module EEPROM do not always have valid phys_id,
+	 * phys_ext_id, and connector bytes.  Rewrite SFF EEPROM bytes if
+	 * Cotsworks PN matches and bytes are not correct.
+	 */
+	if (cotsworks && cotsworks_sfbg) {
+		ret = sfp_cotsworks_fixup_check(sfp, &id);
+		if (ret < 0)
+			return ret;
+	}
 
 	/* Validate the checksum over the base structure */
 	check = sfp_check(&id.base, sizeof(id.base) - 1);
@@ -1673,6 +1755,21 @@ static int sfp_sm_mod_probe(struct sfp *sfp, bool report)
 				       16, 1, &id, sizeof(id), true);
 			return -EINVAL;
 		}
+	}
+
+	/* Apply any early module-specific quirks */
+	sfp_quirks_base(sfp, &id.base);
+
+	ret = sfp_read(sfp, false, SFP_CC_BASE + 1, &id.ext, sizeof(id.ext));
+	if (ret < 0) {
+		if (report)
+			dev_err(sfp->dev, "failed to read EEPROM: %d\n", ret);
+		return -EAGAIN;
+	}
+
+	if (ret != sizeof(id.ext)) {
+		dev_err(sfp->dev, "EEPROM short read: %d\n", ret);
+		return -EAGAIN;
 	}
 
 	check = sfp_check(&id.ext, sizeof(id.ext) - 1);
@@ -1828,7 +1925,7 @@ static void sfp_sm_module(struct sfp *sfp, unsigned int event)
 			dev_warn(sfp->dev, "hwmon probe failed: %d\n", err);
 
 		sfp_sm_mod_next(sfp, SFP_MOD_WAITDEV, 0);
-		/* fall through */
+		fallthrough;
 	case SFP_MOD_WAITDEV:
 		/* Ensure that the device is attached before proceeding */
 		if (sfp->sm_dev_state < SFP_DEV_DOWN)
@@ -1846,7 +1943,7 @@ static void sfp_sm_module(struct sfp *sfp, unsigned int event)
 			goto insert;
 
 		sfp_sm_mod_next(sfp, SFP_MOD_HPOWER, 0);
-		/* fall through */
+		fallthrough;
 	case SFP_MOD_HPOWER:
 		/* Enable high power mode */
 		err = sfp_sm_mod_hpower(sfp, true);
@@ -2238,6 +2335,7 @@ static int sfp_probe(struct platform_device *pdev)
 {
 	const struct sff_data *sff;
 	struct i2c_adapter *i2c;
+	char *sfp_irq_name;
 	struct sfp *sfp;
 	int err, i;
 
@@ -2344,17 +2442,25 @@ static int sfp_probe(struct platform_device *pdev)
 			continue;
 
 		sfp->gpio_irq[i] = gpiod_to_irq(sfp->gpio[i]);
-		if (!sfp->gpio_irq[i]) {
+		if (sfp->gpio_irq[i] < 0) {
+			sfp->gpio_irq[i] = 0;
 			sfp->need_poll = true;
 			continue;
 		}
+
+		sfp_irq_name = devm_kasprintf(sfp->dev, GFP_KERNEL,
+					      "%s-%s", dev_name(sfp->dev),
+					      gpio_of_names[i]);
+
+		if (!sfp_irq_name)
+			return -ENOMEM;
 
 		err = devm_request_threaded_irq(sfp->dev, sfp->gpio_irq[i],
 						NULL, sfp_irq,
 						IRQF_ONESHOT |
 						IRQF_TRIGGER_RISING |
 						IRQF_TRIGGER_FALLING,
-						dev_name(sfp->dev), sfp);
+						sfp_irq_name, sfp);
 		if (err) {
 			sfp->gpio_irq[i] = 0;
 			sfp->need_poll = true;

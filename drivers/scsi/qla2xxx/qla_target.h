@@ -258,7 +258,7 @@ struct fcp_hdr {
 	__be16   ox_id;
 	uint16_t rx_id;
 	__le32	parameter;
-} __packed;
+};
 
 struct fcp_hdr_le {
 	le_id_t  d_id;
@@ -273,7 +273,7 @@ struct fcp_hdr_le {
 	__le16	rx_id;
 	__le16	ox_id;
 	__le32	parameter;
-} __packed;
+};
 
 #define F_CTL_EXCH_CONTEXT_RESP	BIT_23
 #define F_CTL_SEQ_CONTEXT_RESIP	BIT_22
@@ -856,6 +856,7 @@ struct qla_tgt_cmd {
 	uint8_t cmd_type;
 	uint8_t pad[7];
 	struct se_cmd se_cmd;
+	struct list_head sess_cmd_list;
 	struct fc_port *sess;
 	struct qla_qpair *qpair;
 	uint32_t reset_count;

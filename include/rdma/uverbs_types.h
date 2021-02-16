@@ -1,33 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB */
 /*
  * Copyright (c) 2017, Mellanox Technologies inc.  All rights reserved.
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and/or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 
 #ifndef _UVERBS_TYPES_
@@ -98,6 +71,8 @@ struct uverbs_obj_type_class {
 				       enum rdma_remove_reason why,
 				       struct uverbs_attr_bundle *attrs);
 	void (*remove_handle)(struct ib_uobject *uobj);
+	void (*swap_uobjects)(struct ib_uobject *obj_old,
+			      struct ib_uobject *obj_new);
 };
 
 struct uverbs_obj_type {
@@ -143,6 +118,9 @@ void rdma_alloc_abort_uobject(struct ib_uobject *uobj,
 			      bool hw_obj_valid);
 void rdma_alloc_commit_uobject(struct ib_uobject *uobj,
 			       struct uverbs_attr_bundle *attrs);
+void rdma_assign_uobject(struct ib_uobject *to_uobj,
+			 struct ib_uobject *new_uobj,
+			 struct uverbs_attr_bundle *attrs);
 
 /*
  * uverbs_uobject_get is called in order to increase the reference count on
@@ -165,8 +143,8 @@ struct uverbs_obj_fd_type {
 	 * because the driver is removed or the FD is closed.
 	 */
 	struct uverbs_obj_type  type;
-	int (*destroy_object)(struct ib_uobject *uobj,
-			      enum rdma_remove_reason why);
+	void (*destroy_object)(struct ib_uobject *uobj,
+			       enum rdma_remove_reason why);
 	const struct file_operations	*fops;
 	const char			*name;
 	int				flags;

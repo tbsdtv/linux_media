@@ -18,6 +18,7 @@
 #include <linux/kref.h>
 #include <linux/limits.h>
 #include <linux/list.h>
+#include <linux/minmax.h>
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/printk.h>
@@ -31,14 +32,12 @@
 
 #include "bat_v.h"
 #include "bridge_loop_avoidance.h"
-#include "debugfs.h"
 #include "distributed-arp-table.h"
 #include "gateway_client.h"
 #include "log.h"
 #include "originator.h"
 #include "send.h"
 #include "soft-interface.h"
-#include "sysfs.h"
 #include "translation-table.h"
 
 /**
@@ -138,10 +137,10 @@ static bool batadv_mutual_parents(const struct net_device *dev1,
  * @net_dev: the device to check
  *
  * If the user creates any virtual device on top of a batman-adv interface, it
- * is important to prevent this new interface to be used to create a new mesh
- * network (this behaviour would lead to a batman-over-batman configuration).
- * This function recursively checks all the fathers of the device passed as
- * argument looking for a batman-adv soft interface.
+ * is important to prevent this new interface from being used to create a new
+ * mesh network (this behaviour would lead to a batman-over-batman
+ * configuration). This function recursively checks all the fathers of the
+ * device passed as argument looking for a batman-adv soft interface.
  *
  * Return: true if the device is descendant of a batman-adv mesh interface (or
  * if it is a batman-adv interface itself), false otherwise
@@ -554,6 +553,9 @@ static void batadv_hardif_recalc_extra_skbroom(struct net_device *soft_iface)
 	needed_headroom = lower_headroom + (lower_header_len - ETH_HLEN);
 	needed_headroom += batadv_max_header_len();
 
+	/* fragmentation headers don't strip the unicast/... header */
+	needed_headroom += sizeof(struct batadv_frag_packet);
+
 	soft_iface->needed_headroom = needed_headroom;
 	soft_iface->needed_tailroom = lower_tailroom;
 }
@@ -599,7 +601,7 @@ out:
 	/* report to the other components the maximum amount of bytes that
 	 * batman-adv can send over the wire (without considering the payload
 	 * overhead). For example, this value is used by TT to compute the
-	 * maximum local table table size
+	 * maximum local table size
 	 */
 	atomic_set(&bat_priv->packet_size_max, min_mtu);
 
@@ -680,8 +682,8 @@ batadv_hardif_deactivate_interface(struct batadv_hard_iface *hard_iface)
  * @slave: the interface enslaved in another master
  * @master: the master from which slave has to be removed
  *
- * Invoke ndo_del_slave on master passing slave as argument. In this way slave
- * is free'd and master can correctly change its internal state.
+ * Invoke ndo_del_slave on master passing slave as argument. In this way the
+ * slave is free'd and the master can correctly change its internal state.
  *
  * Return: 0 on success, a negative value representing the error otherwise
  */
@@ -818,7 +820,7 @@ err:
  * @soft_iface: soft interface to check
  *
  * This function is only using RCU for locking - the result can therefore be
- * off when another functions is modifying the list at the same time. The
+ * off when another function is modifying the list at the same time. The
  * caller can use the rtnl_lock to make sure that the count is accurate.
  *
  * Return: number of connected/enslaved hard interfaces
@@ -843,11 +845,8 @@ static size_t batadv_hardif_cnt(const struct net_device *soft_iface)
 /**
  * batadv_hardif_disable_interface() - Remove hard interface from soft interface
  * @hard_iface: hard interface to be removed
- * @autodel: whether to delete soft interface when it doesn't contain any other
- *  slave interfaces
  */
-void batadv_hardif_disable_interface(struct batadv_hard_iface *hard_iface,
-				     enum batadv_hard_if_cleanup autodel)
+void batadv_hardif_disable_interface(struct batadv_hard_iface *hard_iface)
 {
 	struct batadv_priv *bat_priv = netdev_priv(hard_iface->soft_iface);
 	struct batadv_hard_iface *primary_if = NULL;
@@ -885,12 +884,8 @@ void batadv_hardif_disable_interface(struct batadv_hard_iface *hard_iface,
 	batadv_hardif_recalc_extra_skbroom(hard_iface->soft_iface);
 
 	/* nobody uses this interface anymore */
-	if (batadv_hardif_cnt(hard_iface->soft_iface) <= 1) {
+	if (batadv_hardif_cnt(hard_iface->soft_iface) <= 1)
 		batadv_gw_check_client_stop(bat_priv);
-
-		if (autodel == BATADV_IF_CLEANUP_AUTO)
-			batadv_softif_destroy_sysfs(hard_iface->soft_iface);
-	}
 
 	hard_iface->soft_iface = NULL;
 	batadv_hardif_put(hard_iface);
@@ -904,7 +899,6 @@ static struct batadv_hard_iface *
 batadv_hardif_add_interface(struct net_device *net_dev)
 {
 	struct batadv_hard_iface *hard_iface;
-	int ret;
 
 	ASSERT_RTNL();
 
@@ -917,15 +911,9 @@ batadv_hardif_add_interface(struct net_device *net_dev)
 	if (!hard_iface)
 		goto release_dev;
 
-	ret = batadv_sysfs_add_hardif(&hard_iface->hardif_obj, net_dev);
-	if (ret)
-		goto free_if;
-
 	hard_iface->net_dev = net_dev;
 	hard_iface->soft_iface = NULL;
 	hard_iface->if_status = BATADV_IF_NOT_IN_USE;
-
-	batadv_debugfs_add_hardif(hard_iface);
 
 	INIT_LIST_HEAD(&hard_iface->list);
 	INIT_HLIST_HEAD(&hard_iface->neigh_list);
@@ -939,6 +927,8 @@ batadv_hardif_add_interface(struct net_device *net_dev)
 	if (batadv_is_wifi_hardif(hard_iface))
 		hard_iface->num_bcasts = BATADV_NUM_BCASTS_WIRELESS;
 
+	atomic_set(&hard_iface->hop_penalty, 0);
+
 	batadv_v_hardif_init(hard_iface);
 
 	batadv_check_known_mac_addr(hard_iface->net_dev);
@@ -948,8 +938,6 @@ batadv_hardif_add_interface(struct net_device *net_dev)
 
 	return hard_iface;
 
-free_if:
-	kfree(hard_iface);
 release_dev:
 	dev_put(net_dev);
 out:
@@ -962,33 +950,13 @@ static void batadv_hardif_remove_interface(struct batadv_hard_iface *hard_iface)
 
 	/* first deactivate interface */
 	if (hard_iface->if_status != BATADV_IF_NOT_IN_USE)
-		batadv_hardif_disable_interface(hard_iface,
-						BATADV_IF_CLEANUP_KEEP);
+		batadv_hardif_disable_interface(hard_iface);
 
 	if (hard_iface->if_status != BATADV_IF_NOT_IN_USE)
 		return;
 
 	hard_iface->if_status = BATADV_IF_TO_BE_REMOVED;
-	batadv_debugfs_del_hardif(hard_iface);
-	batadv_sysfs_del_hardif(&hard_iface->hardif_obj);
 	batadv_hardif_put(hard_iface);
-}
-
-/**
- * batadv_hardif_remove_interfaces() - Remove all hard interfaces
- */
-void batadv_hardif_remove_interfaces(void)
-{
-	struct batadv_hard_iface *hard_iface, *hard_iface_tmp;
-
-	rtnl_lock();
-	list_for_each_entry_safe(hard_iface, hard_iface_tmp,
-				 &batadv_hardif_list, list) {
-		list_del_rcu(&hard_iface->list);
-		batadv_hardif_generation++;
-		batadv_hardif_remove_interface(hard_iface);
-	}
-	rtnl_unlock();
 }
 
 /**
@@ -1005,12 +973,8 @@ static int batadv_hard_if_event_softif(unsigned long event,
 
 	switch (event) {
 	case NETDEV_REGISTER:
-		batadv_sysfs_add_meshif(net_dev);
 		bat_priv = netdev_priv(net_dev);
 		batadv_softif_create_vlan(bat_priv, BATADV_NO_FLAGS);
-		break;
-	case NETDEV_CHANGENAME:
-		batadv_debugfs_rename_meshif(net_dev);
 		break;
 	}
 
@@ -1075,9 +1039,6 @@ static int batadv_hard_if_event(struct notifier_block *this,
 		hard_iface->wifi_flags = batadv_wifi_flags_evaluate(net_dev);
 		if (batadv_is_wifi_hardif(hard_iface))
 			hard_iface->num_bcasts = BATADV_NUM_BCASTS_WIRELESS;
-		break;
-	case NETDEV_CHANGENAME:
-		batadv_debugfs_rename_hardif(hard_iface);
 		break;
 	default:
 		break;

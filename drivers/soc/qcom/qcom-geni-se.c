@@ -3,6 +3,7 @@
 
 #include <linux/acpi.h>
 #include <linux/clk.h>
+#include <linux/console.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
@@ -81,16 +82,23 @@
 #define NUM_AHB_CLKS 2
 
 /**
- * @struct geni_wrapper - Data structure to represent the QUP Wrapper Core
+ * struct geni_wrapper - Data structure to represent the QUP Wrapper Core
  * @dev:		Device pointer of the QUP wrapper core
  * @base:		Base address of this instance of QUP wrapper core
  * @ahb_clks:		Handle to the primary & secondary AHB clocks
+ * @to_core:		Core ICC path
  */
 struct geni_wrapper {
 	struct device *dev;
 	void __iomem *base;
 	struct clk_bulk_data ahb_clks[NUM_AHB_CLKS];
+	struct geni_icc_path to_core;
 };
+
+static const char * const icc_path_names[] = {"qup-core", "qup-config",
+						"qup-memory"};
+
+static struct geni_wrapper *earlycon_wrapper;
 
 #define QUP_HW_VER_REG			0x4
 
@@ -230,7 +238,7 @@ static void geni_se_irq_clear(struct geni_se *se)
  * geni_se_init() - Initialize the GENI serial engine
  * @se:		Pointer to the concerned serial engine.
  * @rx_wm:	Receive watermark, in units of FIFO words.
- * @rx_rfr_wm:	Ready-for-receive watermark, in units of FIFO words.
+ * @rx_rfr:	Ready-for-receive watermark, in units of FIFO words.
  *
  * This function is used to initialize the GENI serial engine, configure
  * receive watermark and ready-for-receive watermarks.
@@ -259,36 +267,63 @@ EXPORT_SYMBOL(geni_se_init);
 static void geni_se_select_fifo_mode(struct geni_se *se)
 {
 	u32 proto = geni_se_read_proto(se);
-	u32 val;
+	u32 val, val_old;
 
 	geni_se_irq_clear(se);
 
-	val = readl_relaxed(se->base + SE_GENI_M_IRQ_EN);
+	/*
+	 * The RX path for the UART is asynchronous and so needs more
+	 * complex logic for enabling / disabling its interrupts.
+	 *
+	 * Specific notes:
+	 * - The done and TX-related interrupts are managed manually.
+	 * - We don't RX from the main sequencer (we use the secondary) so
+	 *   we don't need the RX-related interrupts enabled in the main
+	 *   sequencer for UART.
+	 */
 	if (proto != GENI_SE_UART) {
+		val_old = val = readl_relaxed(se->base + SE_GENI_M_IRQ_EN);
 		val |= M_CMD_DONE_EN | M_TX_FIFO_WATERMARK_EN;
 		val |= M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN;
-	}
-	writel_relaxed(val, se->base + SE_GENI_M_IRQ_EN);
+		if (val != val_old)
+			writel_relaxed(val, se->base + SE_GENI_M_IRQ_EN);
 
-	val = readl_relaxed(se->base + SE_GENI_S_IRQ_EN);
-	if (proto != GENI_SE_UART)
+		val_old = val = readl_relaxed(se->base + SE_GENI_S_IRQ_EN);
 		val |= S_CMD_DONE_EN;
-	writel_relaxed(val, se->base + SE_GENI_S_IRQ_EN);
+		if (val != val_old)
+			writel_relaxed(val, se->base + SE_GENI_S_IRQ_EN);
+	}
 
-	val = readl_relaxed(se->base + SE_GENI_DMA_MODE_EN);
+	val_old = val = readl_relaxed(se->base + SE_GENI_DMA_MODE_EN);
 	val &= ~GENI_DMA_MODE_EN;
-	writel_relaxed(val, se->base + SE_GENI_DMA_MODE_EN);
+	if (val != val_old)
+		writel_relaxed(val, se->base + SE_GENI_DMA_MODE_EN);
 }
 
 static void geni_se_select_dma_mode(struct geni_se *se)
 {
-	u32 val;
+	u32 proto = geni_se_read_proto(se);
+	u32 val, val_old;
 
 	geni_se_irq_clear(se);
 
-	val = readl_relaxed(se->base + SE_GENI_DMA_MODE_EN);
+	if (proto != GENI_SE_UART) {
+		val_old = val = readl_relaxed(se->base + SE_GENI_M_IRQ_EN);
+		val &= ~(M_CMD_DONE_EN | M_TX_FIFO_WATERMARK_EN);
+		val &= ~(M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN);
+		if (val != val_old)
+			writel_relaxed(val, se->base + SE_GENI_M_IRQ_EN);
+
+		val_old = val = readl_relaxed(se->base + SE_GENI_S_IRQ_EN);
+		val &= ~S_CMD_DONE_EN;
+		if (val != val_old)
+			writel_relaxed(val, se->base + SE_GENI_S_IRQ_EN);
+	}
+
+	val_old = val = readl_relaxed(se->base + SE_GENI_DMA_MODE_EN);
 	val |= GENI_DMA_MODE_EN;
-	writel_relaxed(val, se->base + SE_GENI_DMA_MODE_EN);
+	if (val != val_old)
+		writel_relaxed(val, se->base + SE_GENI_DMA_MODE_EN);
 }
 
 /**
@@ -644,7 +679,7 @@ int geni_se_tx_dma_prep(struct geni_se *se, void *buf, size_t len,
 	writel_relaxed(lower_32_bits(*iova), se->base + SE_DMA_TX_PTR_L);
 	writel_relaxed(upper_32_bits(*iova), se->base + SE_DMA_TX_PTR_H);
 	writel_relaxed(GENI_SE_DMA_EOT_BUF, se->base + SE_DMA_TX_ATTR);
-	writel_relaxed(len, se->base + SE_DMA_TX_LEN);
+	writel(len, se->base + SE_DMA_TX_LEN);
 	return 0;
 }
 EXPORT_SYMBOL(geni_se_tx_dma_prep);
@@ -681,7 +716,7 @@ int geni_se_rx_dma_prep(struct geni_se *se, void *buf, size_t len,
 	writel_relaxed(upper_32_bits(*iova), se->base + SE_DMA_RX_PTR_H);
 	/* RX does not have EOT buffer type bit. So just reset RX_ATTR */
 	writel_relaxed(0, se->base + SE_DMA_RX_ATTR);
-	writel_relaxed(len, se->base + SE_DMA_RX_LEN);
+	writel(len, se->base + SE_DMA_RX_LEN);
 	return 0;
 }
 EXPORT_SYMBOL(geni_se_rx_dma_prep);
@@ -698,7 +733,7 @@ void geni_se_tx_dma_unprep(struct geni_se *se, dma_addr_t iova, size_t len)
 {
 	struct geni_wrapper *wrapper = se->wrapper;
 
-	if (iova && !dma_mapping_error(wrapper->dev, iova))
+	if (!dma_mapping_error(wrapper->dev, iova))
 		dma_unmap_single(wrapper->dev, iova, len, DMA_TO_DEVICE);
 }
 EXPORT_SYMBOL(geni_se_tx_dma_unprep);
@@ -715,16 +750,137 @@ void geni_se_rx_dma_unprep(struct geni_se *se, dma_addr_t iova, size_t len)
 {
 	struct geni_wrapper *wrapper = se->wrapper;
 
-	if (iova && !dma_mapping_error(wrapper->dev, iova))
+	if (!dma_mapping_error(wrapper->dev, iova))
 		dma_unmap_single(wrapper->dev, iova, len, DMA_FROM_DEVICE);
 }
 EXPORT_SYMBOL(geni_se_rx_dma_unprep);
+
+int geni_icc_get(struct geni_se *se, const char *icc_ddr)
+{
+	int i, err;
+	const char *icc_names[] = {"qup-core", "qup-config", icc_ddr};
+
+	for (i = 0; i < ARRAY_SIZE(se->icc_paths); i++) {
+		if (!icc_names[i])
+			continue;
+
+		se->icc_paths[i].path = devm_of_icc_get(se->dev, icc_names[i]);
+		if (IS_ERR(se->icc_paths[i].path))
+			goto err;
+	}
+
+	return 0;
+
+err:
+	err = PTR_ERR(se->icc_paths[i].path);
+	if (err != -EPROBE_DEFER)
+		dev_err_ratelimited(se->dev, "Failed to get ICC path '%s': %d\n",
+					icc_names[i], err);
+	return err;
+
+}
+EXPORT_SYMBOL(geni_icc_get);
+
+int geni_icc_set_bw(struct geni_se *se)
+{
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(se->icc_paths); i++) {
+		ret = icc_set_bw(se->icc_paths[i].path,
+			se->icc_paths[i].avg_bw, se->icc_paths[i].avg_bw);
+		if (ret) {
+			dev_err_ratelimited(se->dev, "ICC BW voting failed on path '%s': %d\n",
+					icc_path_names[i], ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(geni_icc_set_bw);
+
+void geni_icc_set_tag(struct geni_se *se, u32 tag)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(se->icc_paths); i++)
+		icc_set_tag(se->icc_paths[i].path, tag);
+}
+EXPORT_SYMBOL(geni_icc_set_tag);
+
+/* To do: Replace this by icc_bulk_enable once it's implemented in ICC core */
+int geni_icc_enable(struct geni_se *se)
+{
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(se->icc_paths); i++) {
+		ret = icc_enable(se->icc_paths[i].path);
+		if (ret) {
+			dev_err_ratelimited(se->dev, "ICC enable failed on path '%s': %d\n",
+					icc_path_names[i], ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(geni_icc_enable);
+
+int geni_icc_disable(struct geni_se *se)
+{
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(se->icc_paths); i++) {
+		ret = icc_disable(se->icc_paths[i].path);
+		if (ret) {
+			dev_err_ratelimited(se->dev, "ICC disable failed on path '%s': %d\n",
+					icc_path_names[i], ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(geni_icc_disable);
+
+void geni_remove_earlycon_icc_vote(void)
+{
+	struct platform_device *pdev;
+	struct geni_wrapper *wrapper;
+	struct device_node *parent;
+	struct device_node *child;
+
+	if (!earlycon_wrapper)
+		return;
+
+	wrapper = earlycon_wrapper;
+	parent = of_get_next_parent(wrapper->dev->of_node);
+	for_each_child_of_node(parent, child) {
+		if (!of_device_is_compatible(child, "qcom,geni-se-qup"))
+			continue;
+
+		pdev = of_find_device_by_node(child);
+		if (!pdev)
+			continue;
+
+		wrapper = platform_get_drvdata(pdev);
+		icc_put(wrapper->to_core.path);
+		wrapper->to_core.path = NULL;
+
+	}
+	of_node_put(parent);
+
+	earlycon_wrapper = NULL;
+}
+EXPORT_SYMBOL(geni_remove_earlycon_icc_vote);
 
 static int geni_se_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct resource *res;
 	struct geni_wrapper *wrapper;
+	struct console __maybe_unused *bcon;
+	bool __maybe_unused has_earlycon = false;
 	int ret;
 
 	wrapper = devm_kzalloc(dev, sizeof(*wrapper), GFP_KERNEL);
@@ -747,6 +903,43 @@ static int geni_se_probe(struct platform_device *pdev)
 		}
 	}
 
+#ifdef CONFIG_SERIAL_EARLYCON
+	for_each_console(bcon) {
+		if (!strcmp(bcon->name, "qcom_geni")) {
+			has_earlycon = true;
+			break;
+		}
+	}
+	if (!has_earlycon)
+		goto exit;
+
+	wrapper->to_core.path = devm_of_icc_get(dev, "qup-core");
+	if (IS_ERR(wrapper->to_core.path))
+		return PTR_ERR(wrapper->to_core.path);
+	/*
+	 * Put minmal BW request on core clocks on behalf of early console.
+	 * The vote will be removed earlycon exit function.
+	 *
+	 * Note: We are putting vote on each QUP wrapper instead only to which
+	 * earlycon is connected because QUP core clock of different wrapper
+	 * share same voltage domain. If core1 is put to 0, then core2 will
+	 * also run at 0, if not voted. Default ICC vote will be removed ASA
+	 * we touch any of the core clock.
+	 * core1 = core2 = max(core1, core2)
+	 */
+	ret = icc_set_bw(wrapper->to_core.path, GENI_DEFAULT_BW,
+				GENI_DEFAULT_BW);
+	if (ret) {
+		dev_err(&pdev->dev, "%s: ICC BW voting failed for core: %d\n",
+			__func__, ret);
+		return ret;
+	}
+
+	if (of_get_compatible_child(pdev->dev.of_node, "qcom,geni-debug-uart"))
+		earlycon_wrapper = wrapper;
+	of_node_put(pdev->dev.of_node);
+exit:
+#endif
 	dev_set_drvdata(dev, wrapper);
 	dev_dbg(dev, "GENI SE Driver probed\n");
 	return devm_of_platform_populate(dev);

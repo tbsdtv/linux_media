@@ -746,11 +746,6 @@ static const char * const i2c3_groups[] = {
 	"i2c3_sck_x", "i2c3_sda_x", "i2c3_sck_f", "i2c3_sda_f",
 };
 
-static const char * const i2c_slave_groups[] = {
-	"i2c_slave_sda_a", "i2c_slave_sck_a",
-	"i2c_slave_sda_f", "i2c_slave_sck_f",
-};
-
 static const char * const spi_a_groups[] = {
 	"spi_a_mosi_x2", "spi_a_ss0_x3", "spi_a_sclk_x4", "spi_a_miso_x5",
 	"spi_a_mosi_x7", "spi_a_miso_x8", "spi_a_ss0_x9", "spi_a_sclk_x10",
@@ -930,6 +925,7 @@ static const struct of_device_id meson_a1_pinctrl_dt_match[] = {
 	},
 	{ },
 };
+MODULE_DEVICE_TABLE(of, meson_a1_pinctrl_dt_match);
 
 static struct platform_driver meson_a1_pinctrl_driver = {
 	.probe  = meson_pinctrl_probe,
@@ -939,4 +935,5 @@ static struct platform_driver meson_a1_pinctrl_driver = {
 	},
 };
 
-builtin_platform_driver(meson_a1_pinctrl_driver);
+module_platform_driver(meson_a1_pinctrl_driver);
+MODULE_LICENSE("Dual BSD/GPL");

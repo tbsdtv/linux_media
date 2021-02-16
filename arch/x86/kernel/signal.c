@@ -25,6 +25,7 @@
 #include <linux/user-return-notifier.h>
 #include <linux/uprobes.h>
 #include <linux/context_tracking.h>
+#include <linux/entry-common.h>
 #include <linux/syscalls.h>
 
 #include <asm/processor.h>
@@ -725,7 +726,7 @@ handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 				regs->ax = -EINTR;
 				break;
 			}
-		/* fallthrough */
+			fallthrough;
 		case -ERESTARTNOINTR:
 			regs->ax = regs->orig_ax;
 			regs->ip -= 2;
@@ -803,11 +804,11 @@ static inline unsigned long get_nr_restart_syscall(const struct pt_regs *regs)
  * want to handle. Thus you cannot kill init even with a SIGKILL even by
  * mistake.
  */
-void do_signal(struct pt_regs *regs)
+void arch_do_signal_or_restart(struct pt_regs *regs, bool has_signal)
 {
 	struct ksignal ksig;
 
-	if (get_signal(&ksig)) {
+	if (has_signal && get_signal(&ksig)) {
 		/* Whee! Actually deliver the signal.  */
 		handle_signal(&ksig, regs);
 		return;

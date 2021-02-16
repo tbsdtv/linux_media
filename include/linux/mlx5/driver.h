@@ -48,6 +48,7 @@
 #include <linux/idr.h>
 #include <linux/notifier.h>
 #include <linux/refcount.h>
+#include <linux/auxiliary_bus.h>
 
 #include <linux/mlx5/device.h>
 #include <linux/mlx5/doorbell.h>
@@ -55,6 +56,8 @@
 #include <linux/timecounter.h>
 #include <linux/ptp_clock_kernel.h>
 #include <net/devlink.h>
+
+#define MLX5_ADEV_NAME "mlx5_core"
 
 enum {
 	MLX5_BOARD_ID_LEN = 64,
@@ -147,6 +150,7 @@ enum {
 	MLX5_REG_MCDA		 = 0x9063,
 	MLX5_REG_MCAM		 = 0x907f,
 	MLX5_REG_MIRC		 = 0x9162,
+	MLX5_REG_SBCAM		 = 0xB01F,
 	MLX5_REG_RESOURCE_DUMP   = 0xC000,
 };
 
@@ -500,6 +504,7 @@ struct mlx5_mpfs;
 struct mlx5_eswitch;
 struct mlx5_lag;
 struct mlx5_devcom;
+struct mlx5_fw_reset;
 struct mlx5_eq_table;
 struct mlx5_irq_table;
 
@@ -532,6 +537,17 @@ struct mlx5_core_roce {
 	struct mlx5_flow_handle *allow_rule;
 };
 
+enum {
+	MLX5_PRIV_FLAGS_DISABLE_IB_ADEV = 1 << 0,
+	MLX5_PRIV_FLAGS_DISABLE_ALL_ADEV = 1 << 1,
+};
+
+struct mlx5_adev {
+	struct auxiliary_device adev;
+	struct mlx5_core_dev *mdev;
+	int idx;
+};
+
 struct mlx5_priv {
 	/* IRQ table valid only for real pci devices PF or VF */
 	struct mlx5_irq_table   *irq_table;
@@ -540,12 +556,12 @@ struct mlx5_priv {
 	/* pages stuff */
 	struct mlx5_nb          pg_nb;
 	struct workqueue_struct *pg_wq;
-	struct rb_root		page_root;
+	struct xarray           page_root_xa;
 	int			fw_pages;
 	atomic_t		reg_pages;
 	struct list_head	free_list;
 	int			vfs_pages;
-	int			peer_pf_pages;
+	int			host_pf_pages;
 
 	struct mlx5_core_health health;
 
@@ -569,6 +585,8 @@ struct mlx5_priv {
 	struct list_head        dev_list;
 	struct list_head        ctx_list;
 	spinlock_t              ctx_lock;
+	struct mlx5_adev       **adev;
+	int			adev_idx;
 	struct mlx5_events      *events;
 
 	struct mlx5_flow_steering *steering;
@@ -576,7 +594,9 @@ struct mlx5_priv {
 	struct mlx5_eswitch     *eswitch;
 	struct mlx5_core_sriov	sriov;
 	struct mlx5_lag		*lag;
+	u32			flags;
 	struct mlx5_devcom	*devcom;
+	struct mlx5_fw_reset	*fw_reset;
 	struct mlx5_core_roce	roce;
 	struct mlx5_fc_stats		fc_stats;
 	struct mlx5_rl_table            rl_table;
@@ -642,7 +662,6 @@ struct mlx5_pps {
 };
 
 struct mlx5_clock {
-	struct mlx5_core_dev      *mdev;
 	struct mlx5_nb             pps_nb;
 	seqlock_t                  lock;
 	struct cyclecounter        cycles;
@@ -707,6 +726,9 @@ struct mlx5_core_dev {
 #ifdef CONFIG_MLX5_FPGA
 	struct mlx5_fpga_device *fpga;
 #endif
+#ifdef CONFIG_MLX5_ACCEL
+	const struct mlx5_accel_ipsec_ops *ipsec_ops;
+#endif
 	struct mlx5_clock        clock;
 	struct mlx5_ib_clock_info  *clock_info;
 	struct mlx5_fw_tracer   *tracer;
@@ -763,6 +785,8 @@ struct mlx5_cmd_work_ent {
 	u64			ts2;
 	u16			op;
 	bool			polling;
+	/* Track the max comp handlers */
+	refcount_t              refcnt;
 };
 
 struct mlx5_pas {
@@ -881,10 +905,6 @@ enum {
 	CMD_ALLOWED_OPCODE_ALL,
 };
 
-int mlx5_cmd_init(struct mlx5_core_dev *dev);
-void mlx5_cmd_cleanup(struct mlx5_core_dev *dev);
-void mlx5_cmd_set_state(struct mlx5_core_dev *dev,
-			enum mlx5_cmdif_state cmdif_state);
 void mlx5_cmd_use_events(struct mlx5_core_dev *dev);
 void mlx5_cmd_use_polling(struct mlx5_core_dev *dev);
 void mlx5_cmd_allowed_opcode(struct mlx5_core_dev *dev, u16 opcode);
@@ -929,6 +949,7 @@ int mlx5_cmd_exec(struct mlx5_core_dev *dev, void *in, int in_size, void *out,
 int mlx5_cmd_exec_polling(struct mlx5_core_dev *dev, void *in, int in_size,
 			  void *out, int out_size);
 void mlx5_cmd_mbox_status(void *out, u8 *status, u32 *syndrome);
+bool mlx5_cmd_is_down(struct mlx5_core_dev *dev);
 
 int mlx5_core_get_caps(struct mlx5_core_dev *dev, enum mlx5_cap_type cap_type);
 int mlx5_cmd_alloc_uar(struct mlx5_core_dev *dev, u32 *uarn);
@@ -971,6 +992,7 @@ void mlx5_register_debugfs(void);
 void mlx5_unregister_debugfs(void);
 
 void mlx5_fill_page_array(struct mlx5_frag_buf *buf, __be64 *pas);
+void mlx5_fill_page_frag_array_perm(struct mlx5_frag_buf *buf, __be64 *pas, u8 perm);
 void mlx5_fill_page_frag_array(struct mlx5_frag_buf *frag_buf, __be64 *pas);
 int mlx5_vector2eqn(struct mlx5_core_dev *dev, int vector, int *eqn,
 		    unsigned int *irqn);
@@ -1050,22 +1072,6 @@ enum {
 	MAX_MR_CACHE_ENTRIES
 };
 
-enum {
-	MLX5_INTERFACE_PROTOCOL_IB  = 0,
-	MLX5_INTERFACE_PROTOCOL_ETH = 1,
-};
-
-struct mlx5_interface {
-	void *			(*add)(struct mlx5_core_dev *dev);
-	void			(*remove)(struct mlx5_core_dev *dev, void *context);
-	int			(*attach)(struct mlx5_core_dev *dev, void *context);
-	void			(*detach)(struct mlx5_core_dev *dev, void *context);
-	int			protocol;
-	struct list_head	list;
-};
-
-int mlx5_register_interface(struct mlx5_interface *intf);
-void mlx5_unregister_interface(struct mlx5_interface *intf);
 int mlx5_notifier_register(struct mlx5_core_dev *dev, struct notifier_block *nb);
 int mlx5_notifier_unregister(struct mlx5_core_dev *dev, struct notifier_block *nb);
 int mlx5_eq_notifier_register(struct mlx5_core_dev *dev, struct mlx5_nb *nb);
@@ -1127,7 +1133,7 @@ static inline bool mlx5_core_is_vf(const struct mlx5_core_dev *dev)
 	return dev->coredev_type == MLX5_COREDEV_VF;
 }
 
-static inline bool mlx5_core_is_ecpf(struct mlx5_core_dev *dev)
+static inline bool mlx5_core_is_ecpf(const struct mlx5_core_dev *dev)
 {
 	return dev->caps.embedded_cpu;
 }

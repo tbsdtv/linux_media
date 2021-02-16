@@ -3,7 +3,6 @@
 #define _LINUX_TIME_H
 
 # include <linux/cache.h>
-# include <linux/seqlock.h>
 # include <linux/math64.h>
 # include <linux/time64.h>
 
@@ -21,19 +20,6 @@ int put_itimerspec64(const struct itimerspec64 *it,
 extern time64_t mktime64(const unsigned int year, const unsigned int mon,
 			const unsigned int day, const unsigned int hour,
 			const unsigned int min, const unsigned int sec);
-
-/* Some architectures do not supply their own clocksource.
- * This is mainly the case in architectures that get their
- * inter-tick times by reading the counter on their interval
- * timer. Since these timers wrap every tick, they're not really
- * useful as clocksources. Wrapping them to act like one is possible
- * but not very efficient. So we provide a callout these arches
- * can implement for use with the jiffies clocksource to provide
- * finer then tick granular time.
- */
-#ifdef CONFIG_ARCH_USES_GETTIMEOFFSET
-extern u32 (*arch_gettimeoffset)(void);
-#endif
 
 #ifdef CONFIG_POSIX_TIMERS
 extern void clear_itimer(void);

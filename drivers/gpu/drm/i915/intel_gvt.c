@@ -24,6 +24,7 @@
 #include "i915_drv.h"
 #include "i915_vgpu.h"
 #include "intel_gvt.h"
+#include "gvt/gvt.h"
 
 /**
  * DOC: Intel GVT-g host support
@@ -52,6 +53,8 @@ static bool is_supported_device(struct drm_i915_private *dev_priv)
 		return true;
 	if (IS_COFFEELAKE(dev_priv))
 		return true;
+	if (IS_COMETLAKE(dev_priv))
+		return true;
 
 	return false;
 }
@@ -64,7 +67,7 @@ static bool is_supported_device(struct drm_i915_private *dev_priv)
  */
 void intel_gvt_sanitize_options(struct drm_i915_private *dev_priv)
 {
-	if (!i915_modparams.enable_gvt)
+	if (!dev_priv->params.enable_gvt)
 		return;
 
 	if (intel_vgpu_active(dev_priv)) {
@@ -80,7 +83,7 @@ void intel_gvt_sanitize_options(struct drm_i915_private *dev_priv)
 
 	return;
 bail:
-	i915_modparams.enable_gvt = 0;
+	dev_priv->params.enable_gvt = 0;
 }
 
 /**
@@ -100,7 +103,7 @@ int intel_gvt_init(struct drm_i915_private *dev_priv)
 	if (i915_inject_probe_failure(dev_priv))
 		return -ENODEV;
 
-	if (!i915_modparams.enable_gvt) {
+	if (!dev_priv->params.enable_gvt) {
 		drm_dbg(&dev_priv->drm,
 			"GVT-g is disabled by kernel params\n");
 		return 0;
@@ -121,7 +124,7 @@ int intel_gvt_init(struct drm_i915_private *dev_priv)
 	return 0;
 
 bail:
-	i915_modparams.enable_gvt = 0;
+	dev_priv->params.enable_gvt = 0;
 	return 0;
 }
 
@@ -144,4 +147,18 @@ void intel_gvt_driver_remove(struct drm_i915_private *dev_priv)
 		return;
 
 	intel_gvt_clean_device(dev_priv);
+}
+
+/**
+ * intel_gvt_resume - GVT resume routine wapper
+ *
+ * @dev_priv: drm i915 private *
+ *
+ * This function is called at the i915 driver resume stage to restore required
+ * HW status for GVT so that vGPU can continue running after resumed.
+ */
+void intel_gvt_resume(struct drm_i915_private *dev_priv)
+{
+	if (intel_gvt_active(dev_priv))
+		intel_gvt_pm_resume(dev_priv->gvt);
 }

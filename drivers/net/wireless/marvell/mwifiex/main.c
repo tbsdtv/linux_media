@@ -48,6 +48,8 @@ bool aggr_ctrl;
 module_param(aggr_ctrl, bool, 0000);
 MODULE_PARM_DESC(aggr_ctrl, "usb tx aggregation enable:1, disable:0");
 
+const u16 mwifiex_1d_to_wmm_queue[8] = { 1, 0, 0, 1, 2, 2, 3, 3 };
+
 /*
  * This function registers the device and performs all the necessary
  * initializations.
@@ -953,7 +955,7 @@ int mwifiex_set_mac_address(struct mwifiex_private *priv,
 	} else {
 		/* Internal mac address change */
 		if (priv->bss_type == MWIFIEX_BSS_TYPE_ANY)
-			return -ENOTSUPP;
+			return -EOPNOTSUPP;
 
 		mac_addr = old_mac_addr;
 
@@ -1453,7 +1455,7 @@ static void mwifiex_uninit_sw(struct mwifiex_adapter *adapter)
 }
 
 /*
- * This function gets called during PCIe function level reset.
+ * This function can be used for shutting down the adapter SW.
  */
 int mwifiex_shutdown_sw(struct mwifiex_adapter *adapter)
 {
@@ -1469,6 +1471,8 @@ int mwifiex_shutdown_sw(struct mwifiex_adapter *adapter)
 	priv = mwifiex_get_priv(adapter, MWIFIEX_BSS_ROLE_ANY);
 	mwifiex_deauthenticate(priv, NULL);
 
+	mwifiex_init_shutdown_fw(priv, MWIFIEX_FUNC_SHUTDOWN);
+
 	mwifiex_uninit_sw(adapter);
 	adapter->is_up = false;
 
@@ -1479,7 +1483,7 @@ int mwifiex_shutdown_sw(struct mwifiex_adapter *adapter)
 }
 EXPORT_SYMBOL_GPL(mwifiex_shutdown_sw);
 
-/* This function gets called during PCIe function level reset. Required
+/* This function can be used for reinitting the adapter SW. Required
  * code is extracted from mwifiex_add_card()
  */
 int

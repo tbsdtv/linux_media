@@ -48,6 +48,8 @@ enum cursor_lines_per_chunk {
 enum hubp_ind_block_size {
 	hubp_ind_block_unconstrained = 0,
 	hubp_ind_block_64b,
+	hubp_ind_block_128b,
+	hubp_ind_block_64b_no_128bcl,
 };
 
 struct hubp {
@@ -103,9 +105,6 @@ struct hubp_funcs {
 			struct hubp *hubp,
 			const struct rect *viewport,
 			const struct rect *viewport_c);
-
-	void (*apply_PLAT_54186_wa)(struct hubp *hubp,
-			const struct dc_plane_address *address);
 
 	bool (*hubp_program_surface_flip_and_addr)(
 		struct hubp *hubp,
@@ -186,6 +185,11 @@ struct hubp_funcs {
 			struct _vcs_dpi_display_rq_regs_st *dml_rq_regs,
 			struct _vcs_dpi_display_dlg_regs_st *dml_dlg_attr,
 			struct _vcs_dpi_display_ttu_regs_st *dml_ttu_attr);
+	void (*set_unbounded_requesting)(
+		struct hubp *hubp,
+		bool enable);
+	bool (*hubp_in_blank)(struct hubp *hubp);
+	void (*hubp_soft_reset)(struct hubp *hubp, bool reset);
 
 };
 

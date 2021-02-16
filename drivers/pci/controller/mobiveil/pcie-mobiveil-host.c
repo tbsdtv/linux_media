@@ -29,18 +29,15 @@
 
 static bool mobiveil_pcie_valid_device(struct pci_bus *bus, unsigned int devfn)
 {
-	struct mobiveil_pcie *pcie = bus->sysdata;
-	struct mobiveil_root_port *rp = &pcie->rp;
-
 	/* Only one device down on each root port */
-	if ((bus->number == rp->root_bus_nr) && (devfn > 0))
+	if (pci_is_root_bus(bus) && (devfn > 0))
 		return false;
 
 	/*
 	 * Do not read more than one device on the bus directly
 	 * attached to RC
 	 */
-	if ((bus->primary == rp->root_bus_nr) && (PCI_SLOT(devfn) > 0))
+	if ((bus->primary == to_pci_host_bridge(bus->bridge)->busnr) && (PCI_SLOT(devfn) > 0))
 		return false;
 
 	return true;
@@ -61,7 +58,7 @@ static void __iomem *mobiveil_pcie_map_bus(struct pci_bus *bus,
 		return NULL;
 
 	/* RC config access */
-	if (bus->number == rp->root_bus_nr)
+	if (pci_is_root_bus(bus))
 		return pcie->csr_axi_slave_base + where;
 
 	/*
@@ -309,13 +306,11 @@ int mobiveil_host_init(struct mobiveil_pcie *pcie, bool reinit)
 
 static void mobiveil_mask_intx_irq(struct irq_data *data)
 {
-	struct irq_desc *desc = irq_to_desc(data->irq);
-	struct mobiveil_pcie *pcie;
+	struct mobiveil_pcie *pcie = irq_data_get_irq_chip_data(data);
 	struct mobiveil_root_port *rp;
 	unsigned long flags;
 	u32 mask, shifted_val;
 
-	pcie = irq_desc_get_chip_data(desc);
 	rp = &pcie->rp;
 	mask = 1 << ((data->hwirq + PAB_INTX_START) - 1);
 	raw_spin_lock_irqsave(&rp->intx_mask_lock, flags);
@@ -327,13 +322,11 @@ static void mobiveil_mask_intx_irq(struct irq_data *data)
 
 static void mobiveil_unmask_intx_irq(struct irq_data *data)
 {
-	struct irq_desc *desc = irq_to_desc(data->irq);
-	struct mobiveil_pcie *pcie;
+	struct mobiveil_pcie *pcie = irq_data_get_irq_chip_data(data);
 	struct mobiveil_root_port *rp;
 	unsigned long flags;
 	u32 shifted_val, mask;
 
-	pcie = irq_desc_get_chip_data(desc);
 	rp = &pcie->rp;
 	mask = 1 << ((data->hwirq + PAB_INTX_START) - 1);
 	raw_spin_lock_irqsave(&rp->intx_mask_lock, flags);
@@ -483,7 +476,6 @@ static int mobiveil_pcie_init_irq_domain(struct mobiveil_pcie *pcie)
 	struct device *dev = &pcie->pdev->dev;
 	struct device_node *node = dev->of_node;
 	struct mobiveil_root_port *rp = &pcie->rp;
-	int ret;
 
 	/* setup INTx */
 	rp->intx_domain = irq_domain_add_linear(node, PCI_NUM_INTX,
@@ -497,11 +489,7 @@ static int mobiveil_pcie_init_irq_domain(struct mobiveil_pcie *pcie)
 	raw_spin_lock_init(&rp->intx_mask_lock);
 
 	/* setup MSI */
-	ret = mobiveil_allocate_msi_domains(pcie);
-	if (ret)
-		return ret;
-
-	return 0;
+	return mobiveil_allocate_msi_domains(pcie);
 }
 
 static int mobiveil_pcie_integrated_interrupt_init(struct mobiveil_pcie *pcie)
@@ -522,10 +510,8 @@ static int mobiveil_pcie_integrated_interrupt_init(struct mobiveil_pcie *pcie)
 	mobiveil_pcie_enable_msi(pcie);
 
 	rp->irq = platform_get_irq(pdev, 0);
-	if (rp->irq < 0) {
-		dev_err(dev, "failed to map IRQ: %d\n", rp->irq);
+	if (rp->irq < 0)
 		return rp->irq;
-	}
 
 	/* initialize the IRQ domains */
 	ret = mobiveil_pcie_init_irq_domain(pcie);
@@ -569,8 +555,6 @@ int mobiveil_pcie_host_probe(struct mobiveil_pcie *pcie)
 	struct mobiveil_root_port *rp = &pcie->rp;
 	struct pci_host_bridge *bridge = rp->bridge;
 	struct device *dev = &pcie->pdev->dev;
-	struct pci_bus *bus;
-	struct pci_bus *child;
 	int ret;
 
 	ret = mobiveil_pcie_parse_dt(pcie);
@@ -581,14 +565,6 @@ int mobiveil_pcie_host_probe(struct mobiveil_pcie *pcie)
 
 	if (!mobiveil_pcie_is_bridge(pcie))
 		return -ENODEV;
-
-	/* parse the host bridge base addresses from the device tree file */
-	ret = pci_parse_request_of_pci_ranges(dev, &bridge->windows,
-					      &bridge->dma_ranges, NULL);
-	if (ret) {
-		dev_err(dev, "Getting bridge resources failed\n");
-		return ret;
-	}
 
 	/*
 	 * configure all inbound and outbound windows and prepare the RC for
@@ -607,12 +583,8 @@ int mobiveil_pcie_host_probe(struct mobiveil_pcie *pcie)
 	}
 
 	/* Initialize bridge */
-	bridge->dev.parent = dev;
 	bridge->sysdata = pcie;
-	bridge->busnr = rp->root_bus_nr;
 	bridge->ops = &mobiveil_pcie_ops;
-	bridge->map_irq = of_irq_parse_and_map_pci;
-	bridge->swizzle_irq = pci_common_swizzle;
 
 	ret = mobiveil_bringup_link(pcie);
 	if (ret) {
@@ -620,17 +592,5 @@ int mobiveil_pcie_host_probe(struct mobiveil_pcie *pcie)
 		return ret;
 	}
 
-	/* setup the kernel resources for the newly added PCIe root bus */
-	ret = pci_scan_root_bus_bridge(bridge);
-	if (ret)
-		return ret;
-
-	bus = bridge->bus;
-
-	pci_assign_unassigned_bus_resources(bus);
-	list_for_each_entry(child, &bus->children, node)
-		pcie_bus_configure_settings(child);
-	pci_bus_add_devices(bus);
-
-	return 0;
+	return pci_host_probe(bridge);
 }

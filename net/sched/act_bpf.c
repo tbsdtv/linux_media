@@ -65,7 +65,7 @@ static int tcf_bpf_act(struct sk_buff *skb, const struct tc_action *act,
 	 * In case a different well-known TC_ACT opcode has been
 	 * returned, it will overwrite the default one.
 	 *
-	 * For everything else that is unkown, TC_ACT_UNSPEC is
+	 * For everything else that is unknown, TC_ACT_UNSPEC is
 	 * returned.
 	 */
 	switch (filter_res) {
@@ -365,9 +365,7 @@ static int tcf_bpf_init(struct net *net, struct nlattr *nla,
 	if (goto_ch)
 		tcf_chain_put_by_act(goto_ch);
 
-	if (res == ACT_P_CREATED) {
-		tcf_idr_insert(tn, *act);
-	} else {
+	if (res != ACT_P_CREATED) {
 		/* make sure the program being replaced is no longer executing */
 		synchronize_rcu();
 		tcf_bpf_cfg_cleanup(&old);

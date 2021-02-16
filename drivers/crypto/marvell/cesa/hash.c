@@ -11,7 +11,10 @@
 
 #include <crypto/hmac.h>
 #include <crypto/md5.h>
-#include <crypto/sha.h>
+#include <crypto/sha1.h>
+#include <crypto/sha2.h>
+#include <linux/device.h>
+#include <linux/dma-mapping.h>
 
 #include "cesa.h"
 
@@ -222,9 +225,11 @@ static void mv_cesa_ahash_std_step(struct ahash_request *req)
 					      CESA_SA_DATA_SRAM_OFFSET + len,
 					      new_cache_ptr);
 			} else {
-				len += mv_cesa_ahash_pad_req(creq,
-						engine->sram + len +
-						CESA_SA_DATA_SRAM_OFFSET);
+				i = mv_cesa_ahash_pad_req(creq, creq->cache);
+				len += i;
+				memcpy_toio(engine->sram + len +
+					    CESA_SA_DATA_SRAM_OFFSET,
+					    creq->cache, i);
 			}
 
 			if (frag_mode == CESA_SA_DESC_CFG_LAST_FRAG)
@@ -342,7 +347,7 @@ static void mv_cesa_ahash_complete(struct crypto_async_request *req)
 		 */
 		data = creq->base.chain.last->op->ctx.hash.hash;
 		for (i = 0; i < digsize / 4; i++)
-			creq->state[i] = cpu_to_le32(data[i]);
+			creq->state[i] = le32_to_cpu(data[i]);
 
 		memcpy(ahashreq->result, data, digsize);
 	} else {
@@ -921,6 +926,7 @@ struct ahash_alg mv_md5_alg = {
 			.cra_driver_name = "mv-md5",
 			.cra_priority = 300,
 			.cra_flags = CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY |
 				     CRYPTO_ALG_KERN_DRIVER_ONLY,
 			.cra_blocksize = MD5_HMAC_BLOCK_SIZE,
 			.cra_ctxsize = sizeof(struct mv_cesa_hash_ctx),
@@ -991,6 +997,7 @@ struct ahash_alg mv_sha1_alg = {
 			.cra_driver_name = "mv-sha1",
 			.cra_priority = 300,
 			.cra_flags = CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY |
 				     CRYPTO_ALG_KERN_DRIVER_ONLY,
 			.cra_blocksize = SHA1_BLOCK_SIZE,
 			.cra_ctxsize = sizeof(struct mv_cesa_hash_ctx),
@@ -1064,6 +1071,7 @@ struct ahash_alg mv_sha256_alg = {
 			.cra_driver_name = "mv-sha256",
 			.cra_priority = 300,
 			.cra_flags = CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY |
 				     CRYPTO_ALG_KERN_DRIVER_ONLY,
 			.cra_blocksize = SHA256_BLOCK_SIZE,
 			.cra_ctxsize = sizeof(struct mv_cesa_hash_ctx),
@@ -1154,7 +1162,7 @@ static int mv_cesa_ahmac_pad_init(struct ahash_request *req,
 		}
 
 		/* Set the memory region to 0 to avoid any leak. */
-		kzfree(keydup);
+		kfree_sensitive(keydup);
 
 		if (ret)
 			return ret;
@@ -1262,10 +1270,10 @@ static int mv_cesa_ahmac_md5_setkey(struct crypto_ahash *tfm, const u8 *key,
 		return ret;
 
 	for (i = 0; i < ARRAY_SIZE(istate.hash); i++)
-		ctx->iv[i] = be32_to_cpu(istate.hash[i]);
+		ctx->iv[i] = cpu_to_be32(istate.hash[i]);
 
 	for (i = 0; i < ARRAY_SIZE(ostate.hash); i++)
-		ctx->iv[i + 8] = be32_to_cpu(ostate.hash[i]);
+		ctx->iv[i + 8] = cpu_to_be32(ostate.hash[i]);
 
 	return 0;
 }
@@ -1298,6 +1306,7 @@ struct ahash_alg mv_ahmac_md5_alg = {
 			.cra_driver_name = "mv-hmac-md5",
 			.cra_priority = 300,
 			.cra_flags = CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY |
 				     CRYPTO_ALG_KERN_DRIVER_ONLY,
 			.cra_blocksize = MD5_HMAC_BLOCK_SIZE,
 			.cra_ctxsize = sizeof(struct mv_cesa_hmac_ctx),
@@ -1332,10 +1341,10 @@ static int mv_cesa_ahmac_sha1_setkey(struct crypto_ahash *tfm, const u8 *key,
 		return ret;
 
 	for (i = 0; i < ARRAY_SIZE(istate.state); i++)
-		ctx->iv[i] = be32_to_cpu(istate.state[i]);
+		ctx->iv[i] = cpu_to_be32(istate.state[i]);
 
 	for (i = 0; i < ARRAY_SIZE(ostate.state); i++)
-		ctx->iv[i + 8] = be32_to_cpu(ostate.state[i]);
+		ctx->iv[i + 8] = cpu_to_be32(ostate.state[i]);
 
 	return 0;
 }
@@ -1368,6 +1377,7 @@ struct ahash_alg mv_ahmac_sha1_alg = {
 			.cra_driver_name = "mv-hmac-sha1",
 			.cra_priority = 300,
 			.cra_flags = CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY |
 				     CRYPTO_ALG_KERN_DRIVER_ONLY,
 			.cra_blocksize = SHA1_BLOCK_SIZE,
 			.cra_ctxsize = sizeof(struct mv_cesa_hmac_ctx),
@@ -1389,10 +1399,10 @@ static int mv_cesa_ahmac_sha256_setkey(struct crypto_ahash *tfm, const u8 *key,
 		return ret;
 
 	for (i = 0; i < ARRAY_SIZE(istate.state); i++)
-		ctx->iv[i] = be32_to_cpu(istate.state[i]);
+		ctx->iv[i] = cpu_to_be32(istate.state[i]);
 
 	for (i = 0; i < ARRAY_SIZE(ostate.state); i++)
-		ctx->iv[i + 8] = be32_to_cpu(ostate.state[i]);
+		ctx->iv[i + 8] = cpu_to_be32(ostate.state[i]);
 
 	return 0;
 }
@@ -1438,6 +1448,7 @@ struct ahash_alg mv_ahmac_sha256_alg = {
 			.cra_driver_name = "mv-hmac-sha256",
 			.cra_priority = 300,
 			.cra_flags = CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY |
 				     CRYPTO_ALG_KERN_DRIVER_ONLY,
 			.cra_blocksize = SHA256_BLOCK_SIZE,
 			.cra_ctxsize = sizeof(struct mv_cesa_hmac_ctx),

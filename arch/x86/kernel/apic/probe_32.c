@@ -10,6 +10,7 @@
 #include <linux/errno.h>
 #include <linux/smp.h>
 
+#include <asm/io_apic.h>
 #include <asm/apic.h>
 #include <asm/acpi.h>
 
@@ -68,16 +69,13 @@ static struct apic apic_default __ro_after_init = {
 	.apic_id_valid			= default_apic_id_valid,
 	.apic_id_registered		= default_apic_id_registered,
 
-	.irq_delivery_mode		= dest_Fixed,
-	/* logical delivery broadcast to all CPUs: */
-	.irq_dest_mode			= 1,
+	.delivery_mode			= APIC_DELIVERY_MODE_FIXED,
+	.dest_mode_logical		= true,
 
 	.disable_esr			= 0,
-	.dest_logical			= APIC_DEST_LOGICAL,
+
 	.check_apicid_used		= default_check_apicid_used,
-
 	.init_apic_ldr			= default_init_apic_ldr,
-
 	.ioapic_phys_id_map		= default_ioapic_phys_id_map,
 	.setup_apic_routing		= setup_apic_flat_routing,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
@@ -148,7 +146,7 @@ void __init default_setup_apic_routing(void)
 				break;
 			}
 			/* P4 and above */
-			/* fall through */
+			fallthrough;
 		case X86_VENDOR_HYGON:
 		case X86_VENDOR_AMD:
 			def_to_bigsmp = 1;
@@ -169,9 +167,6 @@ void __init default_setup_apic_routing(void)
 
 	if (apic->setup_apic_routing)
 		apic->setup_apic_routing();
-
-	if (x86_platform.apic_post_init)
-		x86_platform.apic_post_init();
 }
 
 void __init generic_apic_probe(void)

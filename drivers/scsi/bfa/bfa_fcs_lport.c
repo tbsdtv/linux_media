@@ -5671,7 +5671,7 @@ bfa_fcs_lport_scn_process_rscn(struct bfa_fcs_lport_s *port,
 				bfa_fcs_lport_ms_fabric_rscn(port);
 				break;
 			}
-			/* !!!!!!!!! Fall Through !!!!!!!!!!!!! */
+			fallthrough;
 
 		case FC_RSCN_FORMAT_AREA:
 		case FC_RSCN_FORMAT_DOMAIN:
@@ -6422,7 +6422,7 @@ bfa_fcs_vport_sm_logo_for_stop(struct bfa_fcs_vport_s *vport,
 	switch (event) {
 	case BFA_FCS_VPORT_SM_OFFLINE:
 		bfa_sm_send_event(vport->lps, BFA_LPS_SM_OFFLINE);
-		/* fall through */
+		fallthrough;
 
 	case BFA_FCS_VPORT_SM_RSP_OK:
 	case BFA_FCS_VPORT_SM_RSP_ERROR:
@@ -6448,7 +6448,7 @@ bfa_fcs_vport_sm_logo(struct bfa_fcs_vport_s *vport,
 	switch (event) {
 	case BFA_FCS_VPORT_SM_OFFLINE:
 		bfa_sm_send_event(vport->lps, BFA_LPS_SM_OFFLINE);
-		/* fall through */
+		fallthrough;
 
 	case BFA_FCS_VPORT_SM_RSP_OK:
 	case BFA_FCS_VPORT_SM_RSP_ERROR:

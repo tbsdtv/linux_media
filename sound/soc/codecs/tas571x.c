@@ -301,7 +301,7 @@ static int tas571x_hw_params(struct snd_pcm_substream *substream,
 				  TAS571X_SDI_FMT_MASK, val);
 }
 
-static int tas571x_mute(struct snd_soc_dai *dai, int mute)
+static int tas571x_mute(struct snd_soc_dai *dai, int mute, int direction)
 {
 	struct snd_soc_component *component = dai->component;
 	u8 sysctl2;
@@ -354,7 +354,8 @@ static int tas571x_set_bias_level(struct snd_soc_component *component,
 static const struct snd_soc_dai_ops tas571x_dai_ops = {
 	.set_fmt	= tas571x_set_dai_fmt,
 	.hw_params	= tas571x_hw_params,
-	.digital_mute	= tas571x_mute,
+	.mute_stream	= tas571x_mute,
+	.no_capture_mute = 1,
 };
 
 
@@ -772,7 +773,7 @@ static struct snd_soc_dai_driver tas571x_dai = {
 	.ops = &tas571x_dai_ops,
 };
 
-static const struct of_device_id tas571x_of_match[];
+static const struct of_device_id tas571x_of_match[] __maybe_unused;
 
 static int tas571x_i2c_probe(struct i2c_client *client,
 			     const struct i2c_device_id *id)
@@ -888,7 +889,7 @@ static int tas571x_i2c_remove(struct i2c_client *client)
 	return 0;
 }
 
-static const struct of_device_id tas571x_of_match[] = {
+static const struct of_device_id tas571x_of_match[] __maybe_unused = {
 	{ .compatible = "ti,tas5707", .data = &tas5707_chip, },
 	{ .compatible = "ti,tas5711", .data = &tas5711_chip, },
 	{ .compatible = "ti,tas5717", .data = &tas5717_chip, },

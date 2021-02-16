@@ -81,6 +81,7 @@
 #include "sif_rtr_ctrl_6_regs.h"
 #include "sif_rtr_ctrl_7_regs.h"
 #include "psoc_etr_regs.h"
+#include "psoc_cpu_pll_regs.h"
 
 #include "dma0_qm_masks.h"
 #include "mme0_qm_masks.h"
@@ -89,20 +90,27 @@
 #include "tpc0_cfg_masks.h"
 #include "psoc_global_conf_masks.h"
 
-#include "psoc_pci_pll_regs.h"
-#include "psoc_hbm_pll_regs.h"
+#include "nic0_qm0_regs.h"
+#include "nic1_qm0_regs.h"
+#include "nic2_qm0_regs.h"
+#include "nic3_qm0_regs.h"
+#include "nic4_qm0_regs.h"
+#include "nic0_qm1_regs.h"
+#include "nic1_qm1_regs.h"
+#include "nic2_qm1_regs.h"
+#include "nic3_qm1_regs.h"
+#include "nic4_qm1_regs.h"
 
-#define GAUDI_ECC_MEM_SEL_OFFSET	0xF18
-#define GAUDI_ECC_ADDRESS_OFFSET	0xF1C
-#define GAUDI_ECC_SYNDROME_OFFSET	0xF20
-#define GAUDI_ECC_SERR0_OFFSET		0xF30
-#define GAUDI_ECC_SERR1_OFFSET		0xF34
-#define GAUDI_ECC_SERR2_OFFSET		0xF38
-#define GAUDI_ECC_SERR3_OFFSET		0xF3C
-#define GAUDI_ECC_DERR0_OFFSET		0xF40
-#define GAUDI_ECC_DERR1_OFFSET		0xF44
-#define GAUDI_ECC_DERR2_OFFSET		0xF48
-#define GAUDI_ECC_DERR3_OFFSET		0xF4C
+#include "nic0_qm0_masks.h"
+
+#define GAUDI_ECC_MEM_SEL_OFFSET		0xF18
+#define GAUDI_ECC_ADDRESS_OFFSET		0xF1C
+#define GAUDI_ECC_SYNDROME_OFFSET		0xF20
+#define GAUDI_ECC_MEM_INFO_CLR_OFFSET		0xF28
+#define GAUDI_ECC_MEM_INFO_CLR_SERR_MASK	BIT(8)
+#define GAUDI_ECC_MEM_INFO_CLR_DERR_MASK	BIT(9)
+#define GAUDI_ECC_SERR0_OFFSET			0xF30
+#define GAUDI_ECC_DERR0_OFFSET			0xF40
 
 #define mmSYNC_MNGR_W_S_SYNC_MNGR_OBJS_SOB_OBJ_0                     0x492000
 #define mmSYNC_MNGR_W_S_SYNC_MNGR_OBJS_MON_PAY_ADDRL_0               0x494000
@@ -294,6 +302,17 @@
 
 #define mmPCIE_DBI_DEVICE_ID_VENDOR_ID_REG                           0xC02000
 
+#define mmPCIE_AUX_FLR_CTRL                                          0xC07394
 #define mmPCIE_AUX_DBI                                               0xC07490
+
+#define mmPSOC_PCI_PLL_NR                                            0xC72100
+#define mmSRAM_W_PLL_NR                                              0x4C8100
+#define mmPSOC_HBM_PLL_NR                                            0xC74100
+#define mmNIC0_PLL_NR                                                0xCF9100
+#define mmDMA_W_PLL_NR                                               0x487100
+#define mmMESH_W_PLL_NR                                              0x4C7100
+#define mmPSOC_MME_PLL_NR                                            0xC71100
+#define mmPSOC_TPC_PLL_NR                                            0xC73100
+#define mmIF_W_PLL_NR                                                0x488100
 
 #endif /* ASIC_REG_GAUDI_REGS_H_ */

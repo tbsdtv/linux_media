@@ -356,6 +356,7 @@ static int mxic_spi_mem_exec_op(struct spi_mem *mem,
 	int nio = 1, i, ret;
 	u32 ss_ctrl;
 	u8 addr[8];
+	u8 opcode = op->cmd.opcode;
 
 	ret = mxic_spi_set_freq(mxic, mem->spi->max_speed_hz);
 	if (ret)
@@ -393,7 +394,7 @@ static int mxic_spi_mem_exec_op(struct spi_mem *mem,
 	writel(readl(mxic->regs + HC_CFG) | HC_CFG_MAN_CS_ASSERT,
 	       mxic->regs + HC_CFG);
 
-	ret = mxic_spi_data_xfer(mxic, &op->cmd.opcode, NULL, 1);
+	ret = mxic_spi_data_xfer(mxic, &opcode, NULL, 1);
 	if (ret)
 		goto out;
 
@@ -528,7 +529,7 @@ static int mxic_spi_probe(struct platform_device *pdev)
 	struct mxic_spi *mxic;
 	int ret;
 
-	master = spi_alloc_master(&pdev->dev, sizeof(struct mxic_spi));
+	master = devm_spi_alloc_master(&pdev->dev, sizeof(struct mxic_spi));
 	if (!master)
 		return -ENOMEM;
 
@@ -573,14 +574,8 @@ static int mxic_spi_probe(struct platform_device *pdev)
 	ret = spi_register_master(master);
 	if (ret) {
 		dev_err(&pdev->dev, "spi_register_master failed\n");
-		goto err_put_master;
+		pm_runtime_disable(&pdev->dev);
 	}
-
-	return 0;
-
-err_put_master:
-	spi_master_put(master);
-	pm_runtime_disable(&pdev->dev);
 
 	return ret;
 }

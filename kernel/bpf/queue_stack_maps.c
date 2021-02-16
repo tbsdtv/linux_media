@@ -66,29 +66,21 @@ static int queue_stack_map_alloc_check(union bpf_attr *attr)
 
 static struct bpf_map *queue_stack_map_alloc(union bpf_attr *attr)
 {
-	int ret, numa_node = bpf_map_attr_numa_node(attr);
-	struct bpf_map_memory mem = {0};
+	int numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_queue_stack *qs;
-	u64 size, queue_size, cost;
+	u64 size, queue_size;
 
 	size = (u64) attr->max_entries + 1;
-	cost = queue_size = sizeof(*qs) + size * attr->value_size;
-
-	ret = bpf_map_charge_init(&mem, cost);
-	if (ret < 0)
-		return ERR_PTR(ret);
+	queue_size = sizeof(*qs) + size * attr->value_size;
 
 	qs = bpf_map_area_alloc(queue_size, numa_node);
-	if (!qs) {
-		bpf_map_charge_finish(&mem);
+	if (!qs)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	memset(qs, 0, sizeof(*qs));
 
 	bpf_map_init_from_attr(&qs->map, attr);
 
-	bpf_map_charge_move(&qs->map.memory, &mem);
 	qs->size = size;
 
 	raw_spin_lock_init(&qs->lock);
@@ -100,13 +92,6 @@ static struct bpf_map *queue_stack_map_alloc(union bpf_attr *attr)
 static void queue_stack_map_free(struct bpf_map *map)
 {
 	struct bpf_queue_stack *qs = bpf_queue_stack(map);
-
-	/* at this point bpf_prog->aux->refcnt == 0 and this map->refcnt == 0,
-	 * so the programs (can be more than one that used this map) were
-	 * disconnected from events. Wait for outstanding critical sections in
-	 * these programs to complete
-	 */
-	synchronize_rcu();
 
 	bpf_map_area_free(qs);
 }
@@ -262,7 +247,9 @@ static int queue_stack_map_get_next_key(struct bpf_map *map, void *key,
 	return -EINVAL;
 }
 
+static int queue_map_btf_id;
 const struct bpf_map_ops queue_map_ops = {
+	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = queue_stack_map_alloc_check,
 	.map_alloc = queue_stack_map_alloc,
 	.map_free = queue_stack_map_free,
@@ -273,9 +260,13 @@ const struct bpf_map_ops queue_map_ops = {
 	.map_pop_elem = queue_map_pop_elem,
 	.map_peek_elem = queue_map_peek_elem,
 	.map_get_next_key = queue_stack_map_get_next_key,
+	.map_btf_name = "bpf_queue_stack",
+	.map_btf_id = &queue_map_btf_id,
 };
 
+static int stack_map_btf_id;
 const struct bpf_map_ops stack_map_ops = {
+	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = queue_stack_map_alloc_check,
 	.map_alloc = queue_stack_map_alloc,
 	.map_free = queue_stack_map_free,
@@ -286,4 +277,6 @@ const struct bpf_map_ops stack_map_ops = {
 	.map_pop_elem = stack_map_pop_elem,
 	.map_peek_elem = stack_map_peek_elem,
 	.map_get_next_key = queue_stack_map_get_next_key,
+	.map_btf_name = "bpf_queue_stack",
+	.map_btf_id = &stack_map_btf_id,
 };

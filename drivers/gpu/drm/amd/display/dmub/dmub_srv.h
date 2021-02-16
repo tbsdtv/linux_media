@@ -64,11 +64,7 @@
  * other component within DAL.
  */
 
-#include "inc/dmub_types.h"
 #include "inc/dmub_cmd.h"
-#include "inc/dmub_gpint_cmd.h"
-#include "inc/dmub_cmd_dal.h"
-#include "inc/dmub_rb.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -92,6 +88,9 @@ enum dmub_asic {
 	DMUB_ASIC_NONE = 0,
 	DMUB_ASIC_DCN20,
 	DMUB_ASIC_DCN21,
+	DMUB_ASIC_DCN30,
+	DMUB_ASIC_DCN301,
+	DMUB_ASIC_DCN302,
 	DMUB_ASIC_MAX,
 };
 
@@ -257,13 +256,21 @@ struct dmub_srv_hw_funcs {
 
 	void (*set_inbox1_wptr)(struct dmub_srv *dmub, uint32_t wptr_offset);
 
+	uint32_t (*emul_get_inbox1_rptr)(struct dmub_srv *dmub);
+
+	void (*emul_set_inbox1_wptr)(struct dmub_srv *dmub, uint32_t wptr_offset);
+
 	bool (*is_supported)(struct dmub_srv *dmub);
 
 	bool (*is_hw_init)(struct dmub_srv *dmub);
 
 	bool (*is_phy_init)(struct dmub_srv *dmub);
+	void (*enable_dmub_boot_options)(struct dmub_srv *dmub);
 
-	bool (*is_auto_load_done)(struct dmub_srv *dmub);
+	void (*skip_dmub_panel_power_sequence)(struct dmub_srv *dmub, bool skip);
+
+	union dmub_fw_boot_status (*get_fw_status)(struct dmub_srv *dmub);
+
 
 	void (*set_gpint)(struct dmub_srv *dmub,
 			  union dmub_gpint_data_register reg);
@@ -280,6 +287,7 @@ struct dmub_srv_hw_funcs {
  * @hw_funcs: optional overrides for hw funcs
  * @user_ctx: context data for callback funcs
  * @asic: driver supplied asic
+ * @fw_version: the current firmware version, if any
  * @is_virtual: false for hw support only
  */
 struct dmub_srv_create_params {
@@ -287,6 +295,7 @@ struct dmub_srv_create_params {
 	struct dmub_srv_hw_funcs *hw_funcs;
 	void *user_ctx;
 	enum dmub_asic asic;
+	uint32_t fw_version;
 	bool is_virtual;
 };
 
@@ -304,18 +313,21 @@ struct dmub_srv_hw_params {
 	uint64_t fb_offset;
 	uint32_t psp_version;
 	bool load_inst_const;
+	bool skip_panel_power_sequence;
 };
 
 /**
  * struct dmub_srv - software state for dmcub
  * @asic: dmub asic identifier
  * @user_ctx: user provided context for the dmub_srv
+ * @fw_version: the current firmware version, if any
  * @is_virtual: false if hardware support only
  * @fw_state: dmub firmware state pointer
  */
 struct dmub_srv {
 	enum dmub_asic asic;
 	void *user_ctx;
+	uint32_t fw_version;
 	bool is_virtual;
 	struct dmub_fb scratch_mem_fb;
 	volatile const struct dmub_fw_state *fw_state;
@@ -333,7 +345,17 @@ struct dmub_srv {
 	uint64_t fb_base;
 	uint64_t fb_offset;
 	uint32_t psp_version;
+
+	/* Feature capabilities reported by fw */
+	struct dmub_feature_caps feature_caps;
 };
+
+/**
+ * DMUB firmware version helper macro - useful for checking if the version
+ * of a firmware to know if feature or functionality is supported or present.
+ */
+#define DMUB_FW_VERSION(major, minor, revision) \
+	((((major) & 0xFF) << 24) | (((minor) & 0xFF) << 16) | ((revision) & 0xFFFF))
 
 /**
  * dmub_srv_create() - creates the DMUB service.
@@ -575,6 +597,22 @@ enum dmub_status dmub_srv_get_gpint_response(struct dmub_srv *dmub,
  * Can be called after software initialization.
  */
 void dmub_flush_buffer_mem(const struct dmub_fb *fb);
+
+/**
+ * dmub_srv_get_fw_boot_status() - Returns the DMUB boot status bits.
+ *
+ * @dmub: the dmub service
+ * @status: out pointer for firmware status
+ *
+ * Return:
+ *   DMUB_STATUS_OK - success
+ *   DMUB_STATUS_INVALID - unspecified error, unsupported
+ */
+enum dmub_status dmub_srv_get_fw_boot_status(struct dmub_srv *dmub,
+					     union dmub_fw_boot_status *status);
+
+enum dmub_status dmub_srv_cmd_with_reply_data(struct dmub_srv *dmub,
+					      union dmub_rb_cmd *cmd);
 
 #if defined(__cplusplus)
 }

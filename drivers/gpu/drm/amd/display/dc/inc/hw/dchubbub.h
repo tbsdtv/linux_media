@@ -31,6 +31,7 @@ enum dcc_control {
 	dcc_control__256_256_xxx,
 	dcc_control__128_128_xxx,
 	dcc_control__256_64_64,
+	dcc_control__256_128_128,
 };
 
 enum segment_order {
@@ -62,6 +63,7 @@ enum dcn_hubbub_page_table_depth {
 enum dcn_hubbub_page_table_block_size {
 	DCN_PAGE_TABLE_BLOCK_SIZE_4KB = 0,
 	DCN_PAGE_TABLE_BLOCK_SIZE_64KB = 4,
+	DCN_PAGE_TABLE_BLOCK_SIZE_32KB = 3
 };
 
 struct dcn_hubbub_phys_addr_config {
@@ -146,11 +148,16 @@ struct hubbub_funcs {
 	void (*apply_DEDCN21_147_wa)(struct hubbub *hubbub);
 
 	void (*force_wm_propagate_to_pipes)(struct hubbub *hubbub);
+
+	void (*force_pstate_change_control)(struct hubbub *hubbub, bool force, bool allow);
+
+	void (*init_watermarks)(struct hubbub *hubbub);
 };
 
 struct hubbub {
 	const struct hubbub_funcs *funcs;
 	struct dc_context *ctx;
+	bool riommu_active;
 };
 
 #endif

@@ -26,11 +26,6 @@ config GENERIC_IRQ_SHOW_LEVEL
 config GENERIC_IRQ_EFFECTIVE_AFF_MASK
        bool
 
-# Facility to allocate a hardware interrupt. This is legacy support
-# and should not be used in new code. Use irq domains instead.
-config GENERIC_IRQ_LEGACY_ALLOC_HWIRQ
-       bool
-
 # Support for delayed migration from interrupt context
 config GENERIC_PENDING_IRQ
 	bool
@@ -49,10 +44,6 @@ config GENERIC_IRQ_INJECTION
 
 # Tasklet based software resend for pending interrupts on enable_irq()
 config HARDIRQS_SW_RESEND
-       bool
-
-# Preflow handler support for fasteoi (sparc64)
-config IRQ_PREFLOW_FASTEOI
        bool
 
 # Edge style eoi based handler (cell)
@@ -86,6 +77,7 @@ config IRQ_FASTEOI_HIERARCHY_HANDLERS
 # Generic IRQ IPI support
 config GENERIC_IRQ_IPI
 	bool
+	select IRQ_DOMAIN_HIERARCHY
 
 # Generic MSI interrupt support
 config GENERIC_MSI_IRQ

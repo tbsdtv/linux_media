@@ -7,7 +7,7 @@
  *
  * SMP scalability work:
  *    Copyright (C) 2001 Anton Blanchard <anton@au.ibm.com>, IBM
- * 
+ *
  *    Module name: htab.c
  *
  *    Description:
@@ -112,6 +112,7 @@ int mmu_linear_psize = MMU_PAGE_4K;
 EXPORT_SYMBOL_GPL(mmu_linear_psize);
 int mmu_virtual_psize = MMU_PAGE_4K;
 int mmu_vmalloc_psize = MMU_PAGE_4K;
+EXPORT_SYMBOL_GPL(mmu_vmalloc_psize);
 #ifdef CONFIG_SPARSEMEM_VMEMMAP
 int mmu_vmemmap_psize = MMU_PAGE_4K;
 #endif
@@ -186,7 +187,7 @@ static struct mmu_psize_def mmu_psize_defaults_gp[] = {
  *    - We make sure R is always set and never lost
  *    - C is _PAGE_DIRTY, and *should* always be set for a writeable mapping
  */
-unsigned long htab_convert_pte_flags(unsigned long pteflags)
+unsigned long htab_convert_pte_flags(unsigned long pteflags, unsigned long flags)
 {
 	unsigned long rflags = 0;
 
@@ -240,7 +241,7 @@ unsigned long htab_convert_pte_flags(unsigned long pteflags)
 		 */
 		rflags |= HPTE_R_M;
 
-	rflags |= pte_to_hpte_pkey_bits(pteflags);
+	rflags |= pte_to_hpte_pkey_bits(pteflags, flags);
 	return rflags;
 }
 
@@ -255,13 +256,17 @@ int htab_bolt_mapping(unsigned long vstart, unsigned long vend,
 	shift = mmu_psize_defs[psize].shift;
 	step = 1 << shift;
 
-	prot = htab_convert_pte_flags(prot);
+	prot = htab_convert_pte_flags(prot, HPTE_USE_KERNEL_KEY);
 
 	DBG("htab_bolt_mapping(%lx..%lx -> %lx (%lx,%d,%d)\n",
 	    vstart, vend, pstart, prot, psize, ssize);
 
-	for (vaddr = vstart, paddr = pstart; vaddr < vend;
-	     vaddr += step, paddr += step) {
+	/* Carefully map only the possible range */
+	vaddr = ALIGN(vstart, step);
+	paddr = ALIGN(pstart, step);
+	vend  = ALIGN_DOWN(vend, step);
+
+	for (; vaddr < vend; vaddr += step, paddr += step) {
 		unsigned long hash, hpteg;
 		unsigned long vsid = get_kernel_vsid(vaddr, ssize);
 		unsigned long vpn  = hpt_vpn(vaddr, vsid, ssize);
@@ -343,7 +348,9 @@ int htab_remove_mapping(unsigned long vstart, unsigned long vend,
 	if (!mmu_hash_ops.hpte_removebolted)
 		return -ENODEV;
 
-	for (vaddr = vstart; vaddr < vend; vaddr += step) {
+	/* Unmap the full range specificied */
+	vaddr = ALIGN_DOWN(vstart, step);
+	for (;vaddr < vend; vaddr += step) {
 		rc = mmu_hash_ops.hpte_removebolted(vaddr, psize, ssize);
 		if (rc == -ENOENT) {
 			ret = -ENOENT;
@@ -596,7 +603,7 @@ static void __init htab_scan_page_sizes(void)
 	}
 
 #ifdef CONFIG_HUGETLB_PAGE
-	if (!hugetlb_disabled) {
+	if (!hugetlb_disabled && !early_radix_enabled() ) {
 		/* Reserve 16G huge page memory sections for huge pages */
 		of_scan_flat_dt(htab_dt_scan_hugepage_blocks, NULL);
 	}
@@ -663,11 +670,10 @@ static void __init htab_init_page_sizes(void)
 		 * Pick a size for the linear mapping. Currently, we only
 		 * support 16M, 1M and 4K which is the default
 		 */
-		if (IS_ENABLED(STRICT_KERNEL_RWX) &&
+		if (IS_ENABLED(CONFIG_STRICT_KERNEL_RWX) &&
 		    (unsigned long)_stext % 0x1000000) {
 			if (mmu_psize_defs[MMU_PAGE_16M].shift)
-				pr_warn("Kernel not 16M aligned, "
-					"disabling 16M linear map alignment");
+				pr_warn("Kernel not 16M aligned, disabling 16M linear map alignment\n");
 			aligned = false;
 		}
 
@@ -788,7 +794,7 @@ static unsigned long __init htab_get_table_size(void)
 }
 
 #ifdef CONFIG_MEMORY_HOTPLUG
-int resize_hpt_for_hotplug(unsigned long new_mem_size)
+static int resize_hpt_for_hotplug(unsigned long new_mem_size)
 {
 	unsigned target_hpt_shift;
 
@@ -822,6 +828,8 @@ int hash__create_section_mapping(unsigned long start, unsigned long end,
 		return -1;
 	}
 
+	resize_hpt_for_hotplug(memblock_phys_mem_size());
+
 	rc = htab_bolt_mapping(start, end, __pa(start),
 			       pgprot_val(prot), mmu_linear_psize,
 			       mmu_kernel_ssize);
@@ -838,7 +846,10 @@ int hash__remove_section_mapping(unsigned long start, unsigned long end)
 {
 	int rc = htab_remove_mapping(start, end, mmu_linear_psize,
 				     mmu_kernel_ssize);
-	WARN_ON(rc < 0);
+
+	if (resize_hpt_for_hotplug(memblock_phys_mem_size()) == -ENOSPC)
+		pr_warn("Hash collision while resizing HPT\n");
+
 	return rc;
 }
 #endif /* CONFIG_MEMORY_HOTPLUG */
@@ -862,8 +873,8 @@ static void __init htab_initialize(void)
 	unsigned long table;
 	unsigned long pteg_count;
 	unsigned long prot;
-	unsigned long base = 0, size = 0;
-	struct memblock_region *reg;
+	phys_addr_t base = 0, size = 0, end;
+	u64 i;
 
 	DBG(" -> htab_initialize()\n");
 
@@ -879,7 +890,7 @@ static void __init htab_initialize(void)
 	/*
 	 * Calculate the required size of the htab.  We want the number of
 	 * PTEGs to equal one half the number of real pages.
-	 */ 
+	 */
 	htab_size_bytes = htab_get_table_size();
 	pteg_count = htab_size_bytes >> 7;
 
@@ -889,7 +900,7 @@ static void __init htab_initialize(void)
 	    firmware_has_feature(FW_FEATURE_PS3_LV1)) {
 		/* Using a hypervisor which owns the htab */
 		htab_address = NULL;
-		_SDR1 = 0; 
+		_SDR1 = 0;
 #ifdef CONFIG_FA_DUMP
 		/*
 		 * If firmware assisted dump is active firmware preserves
@@ -955,9 +966,9 @@ static void __init htab_initialize(void)
 #endif /* CONFIG_DEBUG_PAGEALLOC */
 
 	/* create bolted the linear mapping in the hash table */
-	for_each_memblock(memory, reg) {
-		base = (unsigned long)__va(reg->base);
-		size = reg->size;
+	for_each_mem_range(i, &base, &end) {
+		size = end - base;
+		base = (unsigned long)__va(base);
 
 		DBG("creating mapping for region: %lx..%lx (prot: %lx)\n",
 		    base, size, prot);
@@ -1111,6 +1122,11 @@ void hash__early_init_mmu_secondary(void)
 	if (cpu_has_feature(CPU_FTR_ARCH_206)
 			&& cpu_has_feature(CPU_FTR_HVMODE))
 		tlbiel_all();
+
+#ifdef CONFIG_PPC_MEM_KEYS
+	if (mmu_has_feature(MMU_FTR_PKEY))
+		mtspr(SPRN_UAMOR, default_uamor);
+#endif
 }
 #endif /* CONFIG_SMP */
 
@@ -1301,12 +1317,14 @@ int hash_page_mm(struct mm_struct *mm, unsigned long ea,
 		vsid = get_kernel_vsid(ea, mmu_kernel_ssize);
 		psize = mmu_vmalloc_psize;
 		ssize = mmu_kernel_ssize;
+		flags |= HPTE_USE_KERNEL_KEY;
 		break;
 
 	case IO_REGION_ID:
 		vsid = get_kernel_vsid(ea, mmu_kernel_ssize);
 		psize = mmu_io_psize;
 		ssize = mmu_kernel_ssize;
+		flags |= HPTE_USE_KERNEL_KEY;
 		break;
 	default:
 		/*
@@ -1559,6 +1577,7 @@ static void hash_preload(struct mm_struct *mm, pte_t *ptep, unsigned long ea,
 	pgd_t *pgdir;
 	int rc, ssize, update_flags = 0;
 	unsigned long access = _PAGE_PRESENT | _PAGE_READ | (is_exec ? _PAGE_EXEC : 0);
+	unsigned long flags;
 
 	BUG_ON(get_region_id(ea) != USER_REGION_ID);
 
@@ -1592,6 +1611,28 @@ static void hash_preload(struct mm_struct *mm, pte_t *ptep, unsigned long ea,
 		return;
 #endif /* CONFIG_PPC_64K_PAGES */
 
+	/*
+	 * __hash_page_* must run with interrupts off, as it sets the
+	 * H_PAGE_BUSY bit. It's possible for perf interrupts to hit at any
+	 * time and may take a hash fault reading the user stack, see
+	 * read_user_stack_slow() in the powerpc/perf code.
+	 *
+	 * If that takes a hash fault on the same page as we lock here, it
+	 * will bail out when seeing H_PAGE_BUSY set, and retry the access
+	 * leading to an infinite loop.
+	 *
+	 * Disabling interrupts here does not prevent perf interrupts, but it
+	 * will prevent them taking hash faults (see the NMI test in
+	 * do_hash_page), then read_user_stack's copy_from_user_nofault will
+	 * fail and perf will fall back to read_user_stack_slow(), which
+	 * walks the Linux page tables.
+	 *
+	 * Interrupts must also be off for the duration of the
+	 * mm_is_thread_local test and update, to prevent preempt running the
+	 * mm on another CPU (XXX: this may be racy vs kthread_use_mm).
+	 */
+	local_irq_save(flags);
+
 	/* Is that local to this CPU ? */
 	if (mm_is_thread_local(mm))
 		update_flags |= HPTE_LOCAL_UPDATE;
@@ -1614,6 +1655,8 @@ static void hash_preload(struct mm_struct *mm, pte_t *ptep, unsigned long ea,
 				   mm_ctx_user_psize(&mm->context),
 				   mm_ctx_user_psize(&mm->context),
 				   pte_val(*ptep));
+
+	local_irq_restore(flags);
 }
 
 /*
@@ -1706,10 +1749,6 @@ unsigned long pte_get_hash_gslot(unsigned long vpn, unsigned long shift,
 	return gslot;
 }
 
-/*
- * WARNING: This is called from hash_low_64.S, if you change this prototype,
- *          do not forget to update the assembly call site !
- */
 void flush_hash_page(unsigned long vpn, real_pte_t pte, int psize, int ssize,
 		     unsigned long flags)
 {
@@ -1864,7 +1903,7 @@ static void kernel_map_linear_page(unsigned long vaddr, unsigned long lmi)
 	unsigned long hash;
 	unsigned long vsid = get_kernel_vsid(vaddr, mmu_kernel_ssize);
 	unsigned long vpn = hpt_vpn(vaddr, vsid, mmu_kernel_ssize);
-	unsigned long mode = htab_convert_pte_flags(pgprot_val(PAGE_KERNEL));
+	unsigned long mode = htab_convert_pte_flags(pgprot_val(PAGE_KERNEL), HPTE_USE_KERNEL_KEY);
 	long ret;
 
 	hash = hpt_hash(vpn, PAGE_SHIFT, mmu_kernel_ssize);

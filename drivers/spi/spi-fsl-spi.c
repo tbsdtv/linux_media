@@ -90,7 +90,7 @@ static void fsl_spi_change_mode(struct spi_device *spi)
 {
 	struct mpc8xxx_spi *mspi = spi_master_get_devdata(spi->master);
 	struct spi_mpc8xxx_cs *cs = spi->controller_state;
-	struct fsl_spi_reg *reg_base = mspi->reg_base;
+	struct fsl_spi_reg __iomem *reg_base = mspi->reg_base;
 	__be32 __iomem *mode = &reg_base->mode;
 	unsigned long flags;
 
@@ -115,14 +115,13 @@ static void fsl_spi_chipselect(struct spi_device *spi, int value)
 {
 	struct mpc8xxx_spi *mpc8xxx_spi = spi_master_get_devdata(spi->master);
 	struct fsl_spi_platform_data *pdata;
-	bool pol = spi->mode & SPI_CS_HIGH;
 	struct spi_mpc8xxx_cs	*cs = spi->controller_state;
 
 	pdata = spi->dev.parent->parent->platform_data;
 
 	if (value == BITBANG_CS_INACTIVE) {
 		if (pdata->cs_control)
-			pdata->cs_control(spi, !pol);
+			pdata->cs_control(spi, false);
 	}
 
 	if (value == BITBANG_CS_ACTIVE) {
@@ -134,7 +133,7 @@ static void fsl_spi_chipselect(struct spi_device *spi, int value)
 		fsl_spi_change_mode(spi);
 
 		if (pdata->cs_control)
-			pdata->cs_control(spi, pol);
+			pdata->cs_control(spi, true);
 	}
 }
 
@@ -291,7 +290,7 @@ static int fsl_spi_cpu_bufs(struct mpc8xxx_spi *mspi,
 				struct spi_transfer *t, unsigned int len)
 {
 	u32 word;
-	struct fsl_spi_reg *reg_base = mspi->reg_base;
+	struct fsl_spi_reg __iomem *reg_base = mspi->reg_base;
 
 	mspi->count = len;
 
@@ -309,7 +308,7 @@ static int fsl_spi_bufs(struct spi_device *spi, struct spi_transfer *t,
 			    bool is_dma_mapped)
 {
 	struct mpc8xxx_spi *mpc8xxx_spi = spi_master_get_devdata(spi->master);
-	struct fsl_spi_reg *reg_base;
+	struct fsl_spi_reg __iomem *reg_base;
 	unsigned int len = t->len;
 	u8 bits_per_word;
 	int ret;
@@ -440,7 +439,7 @@ static int fsl_spi_do_one_msg(struct spi_master *master,
 static int fsl_spi_setup(struct spi_device *spi)
 {
 	struct mpc8xxx_spi *mpc8xxx_spi;
-	struct fsl_spi_reg *reg_base;
+	struct fsl_spi_reg __iomem *reg_base;
 	int retval;
 	u32 hw_mode;
 	struct spi_mpc8xxx_cs *cs = spi_get_ctldata(spi);
@@ -495,7 +494,7 @@ static void fsl_spi_cleanup(struct spi_device *spi)
 
 static void fsl_spi_cpu_irq(struct mpc8xxx_spi *mspi, u32 events)
 {
-	struct fsl_spi_reg *reg_base = mspi->reg_base;
+	struct fsl_spi_reg __iomem *reg_base = mspi->reg_base;
 
 	/* We need handle RX first */
 	if (events & SPIE_NE) {
@@ -530,7 +529,7 @@ static irqreturn_t fsl_spi_irq(s32 irq, void *context_data)
 	struct mpc8xxx_spi *mspi = context_data;
 	irqreturn_t ret = IRQ_NONE;
 	u32 events;
-	struct fsl_spi_reg *reg_base = mspi->reg_base;
+	struct fsl_spi_reg __iomem *reg_base = mspi->reg_base;
 
 	/* Get interrupt events(tx/rx) */
 	events = mpc8xxx_spi_read_reg(&reg_base->event);
@@ -550,7 +549,7 @@ static irqreturn_t fsl_spi_irq(s32 irq, void *context_data)
 static void fsl_spi_grlib_cs_control(struct spi_device *spi, bool on)
 {
 	struct mpc8xxx_spi *mpc8xxx_spi = spi_master_get_devdata(spi->master);
-	struct fsl_spi_reg *reg_base = mpc8xxx_spi->reg_base;
+	struct fsl_spi_reg __iomem *reg_base = mpc8xxx_spi->reg_base;
 	u32 slvsel;
 	u16 cs = spi->chip_select;
 
@@ -568,7 +567,7 @@ static void fsl_spi_grlib_probe(struct device *dev)
 	struct fsl_spi_platform_data *pdata = dev_get_platdata(dev);
 	struct spi_master *master = dev_get_drvdata(dev);
 	struct mpc8xxx_spi *mpc8xxx_spi = spi_master_get_devdata(master);
-	struct fsl_spi_reg *reg_base = mpc8xxx_spi->reg_base;
+	struct fsl_spi_reg __iomem *reg_base = mpc8xxx_spi->reg_base;
 	int mbits;
 	u32 capabilities;
 
@@ -594,7 +593,7 @@ static struct spi_master *fsl_spi_probe(struct device *dev,
 	struct fsl_spi_platform_data *pdata = dev_get_platdata(dev);
 	struct spi_master *master;
 	struct mpc8xxx_spi *mpc8xxx_spi;
-	struct fsl_spi_reg *reg_base;
+	struct fsl_spi_reg __iomem *reg_base;
 	u32 regval;
 	int ret = 0;
 
@@ -716,10 +715,11 @@ static int of_fsl_spi_probe(struct platform_device *ofdev)
 	type = fsl_spi_get_type(&ofdev->dev);
 	if (type == TYPE_FSL) {
 		struct fsl_spi_platform_data *pdata = dev_get_platdata(dev);
+		bool spisel_boot = false;
 #if IS_ENABLED(CONFIG_FSL_SOC)
 		struct mpc8xxx_spi_probe_info *pinfo = to_of_pinfo(pdata);
-		bool spisel_boot = of_property_read_bool(np, "fsl,spisel_boot");
 
+		spisel_boot = of_property_read_bool(np, "fsl,spisel_boot");
 		if (spisel_boot) {
 			pinfo->immr_spi_cs = ioremap(get_immrbase() + IMMR_SPI_CS_OFFSET, 4);
 			if (!pinfo->immr_spi_cs)
@@ -734,10 +734,14 @@ static int of_fsl_spi_probe(struct platform_device *ofdev)
 		 * supported on the GRLIB variant.
 		 */
 		ret = gpiod_count(dev, "cs");
-		if (ret <= 0)
+		if (ret < 0)
+			ret = 0;
+		if (ret == 0 && !spisel_boot) {
 			pdata->max_chipselect = 1;
-		else
+		} else {
+			pdata->max_chipselect = ret + spisel_boot;
 			pdata->cs_control = fsl_spi_cs_control;
+		}
 	}
 
 	ret = of_address_to_resource(np, 0, &mem);

@@ -57,7 +57,7 @@ To get help on a command, another level of help is provided. For example for the
 
 Summary of platform capability
 ------------------------------
-To check the current platform and driver capaibilities, execute::
+To check the current platform and driver capabilities, execute::
 
 #intel-speed-select --info
 
@@ -114,7 +114,7 @@ base performance profile (which is performance level 0).
 Lock/Unlock status
 ~~~~~~~~~~~~~~~~~~
 
-Even if there are multiple performance profiles, it is possible that that they
+Even if there are multiple performance profiles, it is possible that they
 are locked. If they are locked, users cannot issue a command to change the
 performance state. It is possible that there is a BIOS setup to unlock or check
 with your system vendor.
@@ -658,7 +658,7 @@ If -a option is not used, then the following steps are required before enabling
 Intel(R) SST-BF:
 
 - Discover Intel(R) SST-BF and note low and high priority base frequency
-- Note the high prioity CPU list
+- Note the high priority CPU list
 - Enable CLOS using core-power feature set
 - Configure CLOS parameters. Use CLOS.min to set to minimum performance
 - Subscribe desired CPUs to CLOS groups
@@ -883,7 +883,7 @@ To enable Intel(R) SST-TF, execute::
         enable:success
 
 In this case, the option "-a" is optional. If set, it enables Intel(R) SST-TF
-feature and also sets the CPUs to high and and low priority using Intel Speed
+feature and also sets the CPUs to high and low priority using Intel Speed
 Select Technology Core Power (Intel(R) SST-CP) features. The CPU numbers passed
 with "-c" arguments are marked as high priority, including its siblings.
 

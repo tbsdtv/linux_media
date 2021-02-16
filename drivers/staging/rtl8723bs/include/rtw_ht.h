@@ -8,8 +8,7 @@
 #define _RTW_HT_H_
 
 
-struct ht_priv
-{
+struct ht_priv {
 	u8 ht_option;
 	u8 ampdu_enable;/* for enable Tx A-MPDU */
 	u8 tx_amsdu_enable;/* for enable Tx A-MSDU */
@@ -34,7 +33,7 @@ struct ht_priv
 	u8 stbc_cap;
 	u8 beamform_cap;
 
-	struct rtw_ieee80211_ht_cap ht_cap;
+	struct ieee80211_ht_cap ht_cap;
 
 };
 

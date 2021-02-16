@@ -391,16 +391,17 @@ static bool task_participate_group_stop(struct task_struct *task)
 
 void task_join_group_stop(struct task_struct *task)
 {
+	unsigned long mask = current->jobctl & JOBCTL_STOP_SIGMASK;
+	struct signal_struct *sig = current->signal;
+
+	if (sig->group_stop_count) {
+		sig->group_stop_count++;
+		mask |= JOBCTL_STOP_CONSUME;
+	} else if (!(sig->flags & SIGNAL_STOP_STOPPED))
+		return;
+
 	/* Have the new thread join an on-going signal group stop */
-	unsigned long jobctl = current->jobctl;
-	if (jobctl & JOBCTL_STOP_PENDING) {
-		struct signal_struct *sig = current->signal;
-		unsigned long signr = jobctl & JOBCTL_STOP_SIGMASK;
-		unsigned long gstop = JOBCTL_STOP_PENDING | JOBCTL_STOP_CONSUME;
-		if (task_set_jobctl_pending(task, signr | gstop)) {
-			sig->group_stop_count++;
-		}
-	}
+	task_set_jobctl_pending(task, mask | JOBCTL_STOP_PENDING);
 }
 
 /*
@@ -719,7 +720,7 @@ static int dequeue_synchronous_signal(kernel_siginfo_t *info)
 	 * Return the first synchronous signal in the queue.
 	 */
 	list_for_each_entry(q, &pending->list, list) {
-		/* Synchronous signals have a postive si_code */
+		/* Synchronous signals have a positive si_code */
 		if ((q->info.si_code > SI_USER) &&
 		    (sigmask(q->info.si_signo) & SYNCHRONOUS_MASK)) {
 			sync = q;
@@ -851,7 +852,7 @@ static int check_kill_permission(int sig, struct kernel_siginfo *info,
 			 */
 			if (!sid || sid == task_session(current))
 				break;
-			/* fall through */
+			fallthrough;
 		default:
 			return -EPERM;
 		}
@@ -983,7 +984,7 @@ static inline bool wants_signal(int sig, struct task_struct *p)
 	if (task_is_stopped_or_traced(p))
 		return false;
 
-	return task_curr(p) || !signal_pending(p);
+	return task_curr(p) || !task_sigpending(p);
 }
 
 static void complete_signal(int sig, struct task_struct *p, enum pid_type type)
@@ -2523,6 +2524,26 @@ static int ptrace_signal(int signr, kernel_siginfo_t *info)
 	return signr;
 }
 
+static void hide_si_addr_tag_bits(struct ksignal *ksig)
+{
+	switch (siginfo_layout(ksig->sig, ksig->info.si_code)) {
+	case SIL_FAULT:
+	case SIL_FAULT_MCEERR:
+	case SIL_FAULT_BNDERR:
+	case SIL_FAULT_PKUERR:
+		ksig->info.si_addr = arch_untagged_si_addr(
+			ksig->info.si_addr, ksig->sig, ksig->info.si_code);
+		break;
+	case SIL_KILL:
+	case SIL_TIMER:
+	case SIL_POLL:
+	case SIL_CHLD:
+	case SIL_RT:
+	case SIL_SYS:
+		break;
+	}
+}
+
 bool get_signal(struct ksignal *ksig)
 {
 	struct sighand_struct *sighand = current->sighand;
@@ -2531,6 +2552,18 @@ bool get_signal(struct ksignal *ksig)
 
 	if (unlikely(current->task_works))
 		task_work_run();
+
+	/*
+	 * For non-generic architectures, check for TIF_NOTIFY_SIGNAL so
+	 * that the arch handlers don't all have to do it. If we get here
+	 * without TIF_SIGPENDING, just exit after running signal work.
+	 */
+	if (!IS_ENABLED(CONFIG_GENERIC_ENTRY)) {
+		if (test_thread_flag(TIF_NOTIFY_SIGNAL))
+			tracehook_notify_signal();
+		if (!task_sigpending(current))
+			return false;
+	}
 
 	if (unlikely(uprobe_deny_signal()))
 		return false;
@@ -2544,6 +2577,7 @@ bool get_signal(struct ksignal *ksig)
 
 relock:
 	spin_lock_irq(&sighand->siglock);
+
 	/*
 	 * Every stopped thread goes here after wakeup. Check to see if
 	 * we should notify the parent, prepare_signal(SIGCONT) encodes
@@ -2742,6 +2776,10 @@ relock:
 	spin_unlock_irq(&sighand->siglock);
 
 	ksig->sig = signr;
+
+	if (!(ksig->ka.sa.sa_flags & SA_EXPOSE_TAGBITS))
+		hide_si_addr_tag_bits(ksig);
+
 	return ksig->sig > 0;
 }
 
@@ -2804,7 +2842,7 @@ static void retarget_shared_pending(struct task_struct *tsk, sigset_t *which)
 		/* Remove the signals this thread can handle. */
 		sigandsets(&retarget, &retarget, &t->blocked);
 
-		if (!signal_pending(t))
+		if (!task_sigpending(t))
 			signal_wake_up(t, 0);
 
 		if (sigisemptyset(&retarget))
@@ -2838,7 +2876,7 @@ void exit_signals(struct task_struct *tsk)
 
 	cgroup_threadgroup_change_end(tsk);
 
-	if (!signal_pending(tsk))
+	if (!task_sigpending(tsk))
 		goto out;
 
 	unblocked = tsk->blocked;
@@ -2882,7 +2920,7 @@ long do_no_restart_syscall(struct restart_block *param)
 
 static void __set_task_blocked(struct task_struct *tsk, const sigset_t *newset)
 {
-	if (signal_pending(tsk) && !thread_group_empty(tsk)) {
+	if (task_sigpending(tsk) && !thread_group_empty(tsk)) {
 		sigset_t newblocked;
 		/* A set of now blocked but previously unblocked signals. */
 		sigandnsets(&newblocked, newset, &current->blocked);
@@ -3666,7 +3704,8 @@ static bool access_pidfd_pidns(struct pid *pid)
 	return true;
 }
 
-static int copy_siginfo_from_user_any(kernel_siginfo_t *kinfo, siginfo_t *info)
+static int copy_siginfo_from_user_any(kernel_siginfo_t *kinfo,
+		siginfo_t __user *info)
 {
 #ifdef CONFIG_COMPAT
 	/*
@@ -3965,6 +4004,22 @@ int do_sigaction(int sig, struct k_sigaction *act, struct k_sigaction *oact)
 	spin_lock_irq(&p->sighand->siglock);
 	if (oact)
 		*oact = *k;
+
+	/*
+	 * Make sure that we never accidentally claim to support SA_UNSUPPORTED,
+	 * e.g. by having an architecture use the bit in their uapi.
+	 */
+	BUILD_BUG_ON(UAPI_SA_FLAGS & SA_UNSUPPORTED);
+
+	/*
+	 * Clear unknown flag bits in order to allow userspace to detect missing
+	 * support for flag bits and to allow the kernel to use non-uapi bits
+	 * internally.
+	 */
+	if (act)
+		act->sa.sa_flags &= UAPI_SA_FLAGS;
+	if (oact)
+		oact->sa.sa_flags &= UAPI_SA_FLAGS;
 
 	sigaction_compat_abi(act, oact);
 

@@ -58,6 +58,12 @@ struct drm_mode_config_funcs {
 	 * actual modifier used if the request doesn't have it specified,
 	 * ie. when (@mode_cmd->flags & DRM_MODE_FB_MODIFIERS) == 0.
 	 *
+	 * IMPORTANT: These implied modifiers for legacy userspace must be
+	 * stored in struct &drm_framebuffer, including all relevant metadata
+	 * like &drm_framebuffer.pitches and &drm_framebuffer.offsets if the
+	 * modifier enables additional planes beyond the fourcc pixel format
+	 * code. This is required by the GETFB2 ioctl.
+	 *
 	 * If the parameters are deemed valid and the backing storage objects in
 	 * the underlying memory manager all exist, then the driver allocates
 	 * a new &drm_framebuffer structure, subclassed to contain
@@ -603,22 +609,22 @@ struct drm_mode_config {
 	struct drm_property *prop_src_h;
 	/**
 	 * @prop_crtc_x: Default atomic plane property for the plane destination
-	 * position in the &drm_crtc is is being shown on.
+	 * position in the &drm_crtc is being shown on.
 	 */
 	struct drm_property *prop_crtc_x;
 	/**
 	 * @prop_crtc_y: Default atomic plane property for the plane destination
-	 * position in the &drm_crtc is is being shown on.
+	 * position in the &drm_crtc is being shown on.
 	 */
 	struct drm_property *prop_crtc_y;
 	/**
 	 * @prop_crtc_w: Default atomic plane property for the plane destination
-	 * position in the &drm_crtc is is being shown on.
+	 * position in the &drm_crtc is being shown on.
 	 */
 	struct drm_property *prop_crtc_w;
 	/**
 	 * @prop_crtc_h: Default atomic plane property for the plane destination
-	 * position in the &drm_crtc is is being shown on.
+	 * position in the &drm_crtc is being shown on.
 	 */
 	struct drm_property *prop_crtc_h;
 	/**
@@ -679,6 +685,12 @@ struct drm_mode_config {
 	 * select between analog or digital mode.
 	 */
 	struct drm_property *dvi_i_select_subconnector_property;
+
+	/**
+	 * @dp_subconnector_property: Optional DP property to differentiate
+	 * between different DP downstream port types.
+	 */
+	struct drm_property *dp_subconnector_property;
 
 	/**
 	 * @tv_subconnector_property: Optional TV property to differentiate
@@ -897,6 +909,13 @@ struct drm_mode_config {
 	 * @allow_fb_modifiers:
 	 *
 	 * Whether the driver supports fb modifiers in the ADDFB2.1 ioctl call.
+	 *
+	 * IMPORTANT:
+	 *
+	 * If this is set the driver must fill out the full implicit modifier
+	 * information in their &drm_mode_config_funcs.fb_create hook for legacy
+	 * userspace which does not set modifiers. Otherwise the GETFB2 ioctl is
+	 * broken for modifier aware userspace.
 	 */
 	bool allow_fb_modifiers;
 

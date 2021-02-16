@@ -66,7 +66,8 @@ struct hisi_acc_sgl_pool *hisi_acc_create_sgl_pool(struct device *dev,
 
 	sgl_size = sizeof(struct acc_hw_sge) * sge_nr +
 		   sizeof(struct hisi_acc_hw_sgl);
-	block_size = PAGE_SIZE * (1 << (MAX_ORDER - 1));
+	block_size = 1 << (PAGE_SHIFT + MAX_ORDER <= 32 ?
+			   PAGE_SHIFT + MAX_ORDER - 1 : 31);
 	sgl_num_per_block = block_size / sgl_size;
 	block_num = count / sgl_num_per_block;
 	remain_sgl = count % sgl_num_per_block;
@@ -245,8 +246,6 @@ EXPORT_SYMBOL_GPL(hisi_acc_sg_buf_map_to_hw_sgl);
  * @dev: The device which hw sgl belongs to.
  * @sgl: Related scatterlist.
  * @hw_sgl: Virtual address of hw sgl.
- * @hw_sgl_dma: DMA address of hw sgl.
- * @pool: Pool which hw sgl is allocated in.
  *
  * This function unmaps allocated hw sgl.
  */

@@ -87,6 +87,7 @@ EXPORT_SYMBOL_GPL(ovs_vport_ops_unregister);
 /**
  *	ovs_vport_locate - find a port that has already been created
  *
+ * @net: network namespace
  * @name: name of port to find
  *
  * Must be called with ovs or RCU read lock.
@@ -97,7 +98,7 @@ struct vport *ovs_vport_locate(const struct net *net, const char *name)
 	struct vport *vport;
 
 	hlist_for_each_entry_rcu(vport, bucket, hash_node,
-				lockdep_ovsl_is_held())
+				 lockdep_ovsl_is_held())
 		if (!strcmp(name, ovs_vport_name(vport)) &&
 		    net_eq(ovs_dp_get_net(vport->dp), net))
 			return vport;
@@ -110,14 +111,16 @@ struct vport *ovs_vport_locate(const struct net *net, const char *name)
  *
  * @priv_size: Size of private data area to allocate.
  * @ops: vport device ops
+ * @parms: information about new vport.
  *
  * Allocate and initialize a new vport defined by @ops.  The vport will contain
  * a private data area of size @priv_size that can be accessed using
- * vport_priv().  vports that are no longer needed should be released with
+ * vport_priv().  Some parameters of the vport will be initialized from @parms.
+ * @vports that are no longer needed should be released with
  * vport_free().
  */
 struct vport *ovs_vport_alloc(int priv_size, const struct vport_ops *ops,
-			  const struct vport_parms *parms)
+			      const struct vport_parms *parms)
 {
 	struct vport *vport;
 	size_t alloc_size;
@@ -396,7 +399,8 @@ int ovs_vport_get_upcall_portids(const struct vport *vport,
  *
  * Returns the portid of the target socket.  Must be called with rcu_read_lock.
  */
-u32 ovs_vport_find_upcall_portid(const struct vport *vport, struct sk_buff *skb)
+u32 ovs_vport_find_upcall_portid(const struct vport *vport,
+				 struct sk_buff *skb)
 {
 	struct vport_portids *ids;
 	u32 ids_index;
@@ -418,7 +422,7 @@ u32 ovs_vport_find_upcall_portid(const struct vport *vport, struct sk_buff *skb)
  *
  * @vport: vport that received the packet
  * @skb: skb that was received
- * @tun_key: tunnel (if any) that carried packet
+ * @tun_info: tunnel (if any) that carried packet
  *
  * Must be called with rcu_read_lock.  The packet cannot be shared and
  * skb->data should point to the Ethernet header.

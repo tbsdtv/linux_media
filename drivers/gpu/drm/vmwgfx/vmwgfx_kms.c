@@ -186,7 +186,7 @@ void vmw_kms_cursor_snoop(struct vmw_surface *srf,
 		/* TODO handle none page aligned offsets */
 		/* TODO handle more dst & src != 0 */
 		/* TODO handle more then one copy */
-		DRM_ERROR("Cant snoop dma request for cursor!\n");
+		DRM_ERROR("Can't snoop dma request for cursor!\n");
 		DRM_ERROR("(%u, %u, %u) (%u, %u, %u) (%ux%ux%u) %u %u\n",
 			  box->srcx, box->srcy, box->srcz,
 			  box->x, box->y, box->z,
@@ -522,8 +522,10 @@ int vmw_du_cursor_plane_atomic_check(struct drm_plane *plane,
 
 
 int vmw_du_crtc_atomic_check(struct drm_crtc *crtc,
-			     struct drm_crtc_state *new_state)
+			     struct drm_atomic_state *state)
 {
+	struct drm_crtc_state *new_state = drm_atomic_get_new_crtc_state(state,
+									 crtc);
 	struct vmw_display_unit *du = vmw_crtc_to_du(new_state->crtc);
 	int connector_mask = drm_connector_mask(&du->connector);
 	bool has_primary = new_state->plane_mask &
@@ -552,13 +554,13 @@ int vmw_du_crtc_atomic_check(struct drm_crtc *crtc,
 
 
 void vmw_du_crtc_atomic_begin(struct drm_crtc *crtc,
-			      struct drm_crtc_state *old_crtc_state)
+			      struct drm_atomic_state *state)
 {
 }
 
 
 void vmw_du_crtc_atomic_flush(struct drm_crtc *crtc,
-			      struct drm_crtc_state *old_crtc_state)
+			      struct drm_atomic_state *state)
 {
 	struct drm_pending_vblank_event *event = crtc->state->event;
 
@@ -629,8 +631,7 @@ void vmw_du_crtc_reset(struct drm_crtc *crtc)
 		return;
 	}
 
-	crtc->state = &vcs->base;
-	crtc->state->crtc = crtc;
+	__drm_atomic_helper_crtc_reset(crtc, &vcs->base);
 }
 
 
@@ -2138,7 +2139,6 @@ void vmw_guess_mode_timing(struct drm_display_mode *mode)
 	mode->vtotal = mode->vsync_end + 50;
 
 	mode->clock = (u32)mode->htotal * (u32)mode->vtotal / 100 * 6;
-	mode->vrefresh = drm_mode_vrefresh(mode);
 }
 
 
@@ -2212,7 +2212,6 @@ int vmw_du_connector_fill_modes(struct drm_connector *connector,
 		mode = drm_mode_duplicate(dev, bmode);
 		if (!mode)
 			return 0;
-		mode->vrefresh = drm_mode_vrefresh(mode);
 
 		drm_mode_probed_add(connector, mode);
 	}
@@ -2578,7 +2577,7 @@ int vmw_kms_fbdev_init_data(struct vmw_private *dev_priv,
 		++i;
 	}
 
-	if (i != unit) {
+	if (&con->head == &dev_priv->dev->mode_config.connector_list) {
 		DRM_ERROR("Could not find initial display unit.\n");
 		ret = -EINVAL;
 		goto out_unlock;
@@ -2602,13 +2601,13 @@ int vmw_kms_fbdev_init_data(struct vmw_private *dev_priv,
 			break;
 	}
 
-	if (mode->type & DRM_MODE_TYPE_PREFERRED)
-		*p_mode = mode;
-	else {
+	if (&mode->head == &con->modes) {
 		WARN_ONCE(true, "Could not find initial preferred mode.\n");
 		*p_mode = list_first_entry(&con->modes,
 					   struct drm_display_mode,
 					   head);
+	} else {
+		*p_mode = mode;
 	}
 
  out_unlock:

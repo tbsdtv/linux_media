@@ -416,7 +416,7 @@ static int intel_pt_track_switches(struct evlist *evlist)
 	struct evsel *evsel;
 	int err;
 
-	if (!perf_evlist__can_select_event(evlist, sched_switch))
+	if (!evlist__can_select_event(evlist, sched_switch))
 		return -EPERM;
 
 	err = parse_events(evlist, sched_switch, NULL);
@@ -641,6 +641,7 @@ static int intel_pt_recording_options(struct auxtrace_record *itr,
 			}
 			evsel->core.attr.freq = 0;
 			evsel->core.attr.sample_period = 1;
+			evsel->no_aux_samples = true;
 			intel_pt_evsel = evsel;
 			opts->full_auxtrace = true;
 		}
@@ -836,12 +837,16 @@ static int intel_pt_recording_options(struct auxtrace_record *itr,
 		}
 	}
 
+	if (have_timing_info && !intel_pt_evsel->core.attr.exclude_kernel &&
+	    perf_can_record_text_poke_events() && perf_can_record_cpu_wide())
+		opts->text_poke = true;
+
 	if (intel_pt_evsel) {
 		/*
 		 * To obtain the auxtrace buffer file descriptor, the auxtrace
 		 * event must come first.
 		 */
-		perf_evlist__to_front(evlist, intel_pt_evsel);
+		evlist__to_front(evlist, intel_pt_evsel);
 		/*
 		 * In the case of per-cpu mmaps, we need the CPU on the
 		 * AUX event.
@@ -860,7 +865,7 @@ static int intel_pt_recording_options(struct auxtrace_record *itr,
 
 		tracking_evsel = evlist__last(evlist);
 
-		perf_evlist__set_tracking_event(evlist, tracking_evsel);
+		evlist__set_tracking_event(evlist, tracking_evsel);
 
 		tracking_evsel->core.attr.freq = 0;
 		tracking_evsel->core.attr.sample_period = 1;

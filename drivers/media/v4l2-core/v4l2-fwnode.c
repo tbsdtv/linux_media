@@ -28,17 +28,6 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-subdev.h>
 
-enum v4l2_fwnode_bus_type {
-	V4L2_FWNODE_BUS_TYPE_GUESS = 0,
-	V4L2_FWNODE_BUS_TYPE_CSI2_CPHY,
-	V4L2_FWNODE_BUS_TYPE_CSI1,
-	V4L2_FWNODE_BUS_TYPE_CCP2,
-	V4L2_FWNODE_BUS_TYPE_CSI2_DPHY,
-	V4L2_FWNODE_BUS_TYPE_PARALLEL,
-	V4L2_FWNODE_BUS_TYPE_BT656,
-	NR_OF_V4L2_FWNODE_BUS_TYPE,
-};
-
 static const struct v4l2_fwnode_bus_conv {
 	enum v4l2_fwnode_bus_type fwnode_bus_type;
 	enum v4l2_mbus_type mbus_type;
@@ -93,7 +82,7 @@ v4l2_fwnode_bus_type_to_mbus(enum v4l2_fwnode_bus_type type)
 	const struct v4l2_fwnode_bus_conv *conv =
 		get_v4l2_fwnode_bus_conv_by_fwnode_bus(type);
 
-	return conv ? conv->mbus_type : V4L2_MBUS_UNKNOWN;
+	return conv ? conv->mbus_type : V4L2_MBUS_INVALID;
 }
 
 static const char *
@@ -416,19 +405,7 @@ static int __v4l2_fwnode_endpoint_parse(struct fwnode_handle *fwnode,
 	enum v4l2_mbus_type mbus_type;
 	int rval;
 
-	if (vep->bus_type == V4L2_MBUS_UNKNOWN) {
-		/* Zero fields from bus union to until the end */
-		memset(&vep->bus, 0,
-		       sizeof(*vep) - offsetof(typeof(*vep), bus));
-	}
-
 	pr_debug("===== begin parsing endpoint %pfw\n", fwnode);
-
-	/*
-	 * Zero the fwnode graph endpoint memory in case we don't end up parsing
-	 * the endpoint.
-	 */
-	memset(&vep->base, 0, sizeof(vep->base));
 
 	fwnode_property_read_u32(fwnode, "bus-type", &bus_type);
 	pr_debug("fwnode video bus type %s (%u), mbus type %s (%u)\n",
@@ -436,6 +413,10 @@ static int __v4l2_fwnode_endpoint_parse(struct fwnode_handle *fwnode,
 		 v4l2_fwnode_mbus_type_to_string(vep->bus_type),
 		 vep->bus_type);
 	mbus_type = v4l2_fwnode_bus_type_to_mbus(bus_type);
+	if (mbus_type == V4L2_MBUS_INVALID) {
+		pr_debug("unsupported bus type %u\n", bus_type);
+		return -EINVAL;
+	}
 
 	if (vep->bus_type != V4L2_MBUS_UNKNOWN) {
 		if (mbus_type != V4L2_MBUS_UNKNOWN &&
@@ -547,8 +528,8 @@ int v4l2_fwnode_endpoint_alloc_parse(struct fwnode_handle *fwnode,
 		}
 
 		for (i = 0; i < vep->nr_of_link_frequencies; i++)
-			pr_info("link-frequencies %u value %llu\n", i,
-				vep->link_frequencies[i]);
+			pr_debug("link-frequencies %u value %llu\n", i,
+				 vep->link_frequencies[i]);
 	}
 
 	pr_debug("===== end parsing endpoint %pfw\n", fwnode);
@@ -918,20 +899,6 @@ v4l2_async_notifier_parse_fwnode_endpoints(struct device *dev,
 						     false, parse_endpoint);
 }
 EXPORT_SYMBOL_GPL(v4l2_async_notifier_parse_fwnode_endpoints);
-
-int
-v4l2_async_notifier_parse_fwnode_endpoints_by_port(struct device *dev,
-						   struct v4l2_async_notifier *notifier,
-						   size_t asd_struct_size,
-						   unsigned int port,
-						   parse_endpoint_func parse_endpoint)
-{
-	return __v4l2_async_notifier_parse_fwnode_ep(dev, notifier,
-						     asd_struct_size,
-						     port, true,
-						     parse_endpoint);
-}
-EXPORT_SYMBOL_GPL(v4l2_async_notifier_parse_fwnode_endpoints_by_port);
 
 /*
  * v4l2_fwnode_reference_parse - parse references for async sub-devices

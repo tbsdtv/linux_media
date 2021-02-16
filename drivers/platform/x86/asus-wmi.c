@@ -63,6 +63,7 @@ MODULE_LICENSE("GPL");
 #define NOTIFY_KBD_BRTTOGGLE		0xc7
 #define NOTIFY_KBD_FBM			0x99
 #define NOTIFY_KBD_TTP			0xae
+#define NOTIFY_LID_FLIP			0xfa
 
 #define ASUS_WMI_FNLOCK_BIOS_DISABLED	BIT(0)
 
@@ -365,12 +366,28 @@ static int asus_wmi_input_init(struct asus_wmi *asus)
 	if (err)
 		goto err_free_dev;
 
-	result = asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_KBD_DOCK);
-	if (result >= 0) {
-		input_set_capability(asus->inputdev, EV_SW, SW_TABLET_MODE);
-		input_report_switch(asus->inputdev, SW_TABLET_MODE, !result);
-	} else if (result != -ENODEV) {
-		pr_err("Error checking for keyboard-dock: %d\n", result);
+	if (asus->driver->quirks->use_kbd_dock_devid) {
+		result = asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_KBD_DOCK);
+		if (result >= 0) {
+			input_set_capability(asus->inputdev, EV_SW, SW_TABLET_MODE);
+			input_report_switch(asus->inputdev, SW_TABLET_MODE, !result);
+		} else if (result != -ENODEV) {
+			pr_err("Error checking for keyboard-dock: %d\n", result);
+		}
+	}
+
+	if (asus->driver->quirks->use_lid_flip_devid) {
+		result = asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_LID_FLIP);
+		if (result < 0)
+			asus->driver->quirks->use_lid_flip_devid = 0;
+		if (result >= 0) {
+			input_set_capability(asus->inputdev, EV_SW, SW_TABLET_MODE);
+			input_report_switch(asus->inputdev, SW_TABLET_MODE, result);
+		} else if (result == -ENODEV) {
+			pr_err("This device has lid_flip quirk but got ENODEV checking it. This is a bug.");
+		} else {
+			pr_err("Error checking for lid-flip: %d\n", result);
+		}
 	}
 
 	err = input_register_device(asus->inputdev);
@@ -390,6 +407,18 @@ static void asus_wmi_input_exit(struct asus_wmi *asus)
 		input_unregister_device(asus->inputdev);
 
 	asus->inputdev = NULL;
+}
+
+/* Tablet mode ****************************************************************/
+
+static void lid_flip_tablet_mode_get_state(struct asus_wmi *asus)
+{
+	int result = asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_LID_FLIP);
+
+	if (result >= 0) {
+		input_report_switch(asus->inputdev, SW_TABLET_MODE, result);
+		input_sync(asus->inputdev);
+	}
 }
 
 /* Battery ********************************************************************/
@@ -441,6 +470,8 @@ static int asus_wmi_battery_add(struct power_supply *battery)
 	 * battery is named BATT.
 	 */
 	if (strcmp(battery->desc->name, "BAT0") != 0 &&
+	    strcmp(battery->desc->name, "BAT1") != 0 &&
+	    strcmp(battery->desc->name, "BATC") != 0 &&
 	    strcmp(battery->desc->name, "BATT") != 0)
 		return -ENODEV;
 
@@ -1659,6 +1690,10 @@ static int fan_boost_mode_write(struct asus_wmi *asus)
 	pr_info("Set fan boost mode: %u\n", value);
 	err = asus_wmi_set_devstate(ASUS_WMI_DEVID_FAN_BOOST_MODE, value,
 				    &retval);
+
+	sysfs_notify(&asus->platform_device->dev.kobj, NULL,
+			"fan_boost_mode");
+
 	if (err) {
 		pr_warn("Failed to set fan boost mode: %d\n", err);
 		return err;
@@ -1770,6 +1805,10 @@ static int throttle_thermal_policy_write(struct asus_wmi *asus)
 
 	err = asus_wmi_set_devstate(ASUS_WMI_DEVID_THROTTLE_THERMAL_POLICY,
 				    value, &retval);
+
+	sysfs_notify(&asus->platform_device->dev.kobj, NULL,
+			"throttle_thermal_policy");
+
 	if (err) {
 		pr_warn("Failed to set throttle thermal policy: %d\n", err);
 		return err;
@@ -2113,7 +2152,7 @@ static void asus_wmi_handle_event_code(int code, struct asus_wmi *asus)
 		return;
 	}
 
-	if (code == NOTIFY_KBD_DOCK_CHANGE) {
+	if (asus->driver->quirks->use_kbd_dock_devid && code == NOTIFY_KBD_DOCK_CHANGE) {
 		result = asus_wmi_get_devstate_simple(asus,
 						      ASUS_WMI_DEVID_KBD_DOCK);
 		if (result >= 0) {
@@ -2121,6 +2160,11 @@ static void asus_wmi_handle_event_code(int code, struct asus_wmi *asus)
 					    !result);
 			input_sync(asus->inputdev);
 		}
+		return;
+	}
+
+	if (asus->driver->quirks->use_lid_flip_devid && code == NOTIFY_LID_FLIP) {
+		lid_flip_tablet_mode_get_state(asus);
 		return;
 	}
 
@@ -2715,6 +2759,10 @@ static int asus_hotk_resume(struct device *device)
 
 	if (asus_wmi_has_fnlock_key(asus))
 		asus_wmi_fnlock_update(asus);
+
+	if (asus->driver->quirks->use_lid_flip_devid)
+		lid_flip_tablet_mode_get_state(asus);
+
 	return 0;
 }
 
@@ -2753,6 +2801,10 @@ static int asus_hotk_restore(struct device *device)
 
 	if (asus_wmi_has_fnlock_key(asus))
 		asus_wmi_fnlock_update(asus);
+
+	if (asus->driver->quirks->use_lid_flip_devid)
+		lid_flip_tablet_mode_get_state(asus);
+
 	return 0;
 }
 

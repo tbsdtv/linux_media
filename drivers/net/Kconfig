@@ -287,7 +287,7 @@ config GTP
 	  3GPP TS 29.060 standards.
 
 	  To compile this drivers as a module, choose M here: the module
-	  wil be called gtp.
+	  will be called gtp.
 
 config MACSEC
 	tristate "IEEE 802.1AE MAC-level encryption (MACsec)"
@@ -426,6 +426,13 @@ config VSOCKMON
 	  mostly intended for developers or support to debug vsock issues. If
 	  unsure, say N.
 
+config MHI_NET
+	tristate "MHI network driver"
+	depends on MHI_BUS
+	help
+	  This is the network driver for MHI bus.  It can be used with
+	  QCOM based WWAN modems (like SDX55).  Say Y or M.
+
 endif # NET_CORE
 
 config SUNGEM_PHY
@@ -460,7 +467,7 @@ config NET_SB1000
 
 	  At present this driver only compiles as a module, so say M here if
 	  you have this card. The module will be called sb1000. Then read
-	  <file:Documentation/networking/device_drivers/sb1000.rst> for
+	  <file:Documentation/networking/device_drivers/cable/sb1000.rst> for
 	  information on how to use this module, as it needs special ppp
 	  scripts for establishing a connection. Further documentation
 	  and the necessary scripts can be found at:
@@ -472,6 +479,10 @@ config NET_SB1000
 	  If you don't have this card, of course say N.
 
 source "drivers/net/phy/Kconfig"
+
+source "drivers/net/mdio/Kconfig"
+
+source "drivers/net/pcs/Kconfig"
 
 source "drivers/net/plip/Kconfig"
 
@@ -485,8 +496,6 @@ source "drivers/net/usb/Kconfig"
 
 source "drivers/net/wireless/Kconfig"
 
-source "drivers/net/wimax/Kconfig"
-
 source "drivers/net/wan/Kconfig"
 
 source "drivers/net/ieee802154/Kconfig"
@@ -495,6 +504,7 @@ config XEN_NETDEV_FRONTEND
 	tristate "Xen network device frontend driver"
 	depends on XEN
 	select XEN_XENBUS_FRONTEND
+	select PAGE_POOL
 	default y
 	help
 	  This driver provides support for Xen paravirtual network

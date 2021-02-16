@@ -49,7 +49,7 @@ static int send4(struct wg_device *wg, struct sk_buff *skb,
 		rt = dst_cache_get_ip4(cache, &fl.saddr);
 
 	if (!rt) {
-		security_sk_classify_flow(sock, flowi4_to_flowi(&fl));
+		security_sk_classify_flow(sock, flowi4_to_flowi_common(&fl));
 		if (unlikely(!inet_confirm_addr(sock_net(sock), NULL, 0,
 						fl.saddr, RT_SCOPE_HOST))) {
 			endpoint->src4.s_addr = 0;
@@ -129,7 +129,7 @@ static int send6(struct wg_device *wg, struct sk_buff *skb,
 		dst = dst_cache_get_ip6(cache, &fl.saddr);
 
 	if (!dst) {
-		security_sk_classify_flow(sock, flowi6_to_flowi(&fl));
+		security_sk_classify_flow(sock, flowi6_to_flowi_common(&fl));
 		if (unlikely(!ipv6_addr_any(&fl.saddr) &&
 			     !ipv6_chk_addr(sock_net(sock), &fl.saddr, NULL, 0))) {
 			endpoint->src6 = fl.saddr = in6addr_any;
@@ -347,6 +347,7 @@ static void set_sock_opts(struct socket *sock)
 
 int wg_socket_init(struct wg_device *wg, u16 port)
 {
+	struct net *net;
 	int ret;
 	struct udp_tunnel_sock_cfg cfg = {
 		.sk_user_data = wg,
@@ -371,37 +372,47 @@ int wg_socket_init(struct wg_device *wg, u16 port)
 	};
 #endif
 
+	rcu_read_lock();
+	net = rcu_dereference(wg->creating_net);
+	net = net ? maybe_get_net(net) : NULL;
+	rcu_read_unlock();
+	if (unlikely(!net))
+		return -ENONET;
+
 #if IS_ENABLED(CONFIG_IPV6)
 retry:
 #endif
 
-	ret = udp_sock_create(wg->creating_net, &port4, &new4);
+	ret = udp_sock_create(net, &port4, &new4);
 	if (ret < 0) {
 		pr_err("%s: Could not create IPv4 socket\n", wg->dev->name);
-		return ret;
+		goto out;
 	}
 	set_sock_opts(new4);
-	setup_udp_tunnel_sock(wg->creating_net, new4, &cfg);
+	setup_udp_tunnel_sock(net, new4, &cfg);
 
 #if IS_ENABLED(CONFIG_IPV6)
 	if (ipv6_mod_enabled()) {
 		port6.local_udp_port = inet_sk(new4->sk)->inet_sport;
-		ret = udp_sock_create(wg->creating_net, &port6, &new6);
+		ret = udp_sock_create(net, &port6, &new6);
 		if (ret < 0) {
 			udp_tunnel_sock_release(new4);
 			if (ret == -EADDRINUSE && !port && retries++ < 100)
 				goto retry;
 			pr_err("%s: Could not create IPv6 socket\n",
 			       wg->dev->name);
-			return ret;
+			goto out;
 		}
 		set_sock_opts(new6);
-		setup_udp_tunnel_sock(wg->creating_net, new6, &cfg);
+		setup_udp_tunnel_sock(net, new6, &cfg);
 	}
 #endif
 
 	wg_socket_reinit(wg, new4->sk, new6 ? new6->sk : NULL);
-	return 0;
+	ret = 0;
+out:
+	put_net(net);
+	return ret;
 }
 
 void wg_socket_reinit(struct wg_device *wg, struct sock *new4,

@@ -7,6 +7,8 @@
 
 #include "pmc.h"
 
+static DEFINE_SPINLOCK(at91sam9n12_mck_lock);
+
 static const struct clk_master_characteristics mck_characteristics = {
 	.output = { .min = 0, .max = 133333333 },
 	.divisors = { 1, 2, 4, 3 },
@@ -54,12 +56,12 @@ static const struct {
 	char *p;
 	u8 id;
 } at91sam9n12_systemck[] = {
-	{ .n = "ddrck", .p = "masterck", .id = 2 },
-	{ .n = "lcdck", .p = "masterck", .id = 3 },
-	{ .n = "uhpck", .p = "usbck",    .id = 6 },
-	{ .n = "udpck", .p = "usbck",    .id = 7 },
-	{ .n = "pck0",  .p = "prog0",    .id = 8 },
-	{ .n = "pck1",  .p = "prog1",    .id = 9 },
+	{ .n = "ddrck", .p = "masterck_div", .id = 2 },
+	{ .n = "lcdck", .p = "masterck_div", .id = 3 },
+	{ .n = "uhpck", .p = "usbck",        .id = 6 },
+	{ .n = "udpck", .p = "usbck",        .id = 7 },
+	{ .n = "pck0",  .p = "prog0",        .id = 8 },
+	{ .n = "pck1",  .p = "prog1",        .id = 9 },
 };
 
 static const struct clk_pcr_layout at91sam9n12_pcr_layout = {
@@ -124,7 +126,7 @@ static void __init at91sam9n12_pmc_setup(struct device_node *np)
 		return;
 	mainxtal_name = of_clk_get_parent_name(np, i);
 
-	regmap = syscon_node_to_regmap(np);
+	regmap = device_node_to_regmap(np);
 	if (IS_ERR(regmap))
 		return;
 
@@ -175,9 +177,21 @@ static void __init at91sam9n12_pmc_setup(struct device_node *np)
 	parent_names[1] = "mainck";
 	parent_names[2] = "plladivck";
 	parent_names[3] = "pllbck";
-	hw = at91_clk_register_master(regmap, "masterck", 4, parent_names,
-				      &at91sam9x5_master_layout,
-				      &mck_characteristics);
+	hw = at91_clk_register_master_pres(regmap, "masterck_pres", 4,
+					   parent_names,
+					   &at91sam9x5_master_layout,
+					   &mck_characteristics,
+					   &at91sam9n12_mck_lock,
+					   CLK_SET_RATE_GATE, INT_MIN);
+	if (IS_ERR(hw))
+		goto err_free;
+
+	hw = at91_clk_register_master_div(regmap, "masterck_div",
+					  "masterck_pres",
+					  &at91sam9x5_master_layout,
+					  &mck_characteristics,
+					  &at91sam9n12_mck_lock,
+					  CLK_SET_RATE_GATE);
 	if (IS_ERR(hw))
 		goto err_free;
 
@@ -191,7 +205,7 @@ static void __init at91sam9n12_pmc_setup(struct device_node *np)
 	parent_names[1] = "mainck";
 	parent_names[2] = "plladivck";
 	parent_names[3] = "pllbck";
-	parent_names[4] = "masterck";
+	parent_names[4] = "masterck_div";
 	for (i = 0; i < 2; i++) {
 		char name[6];
 
@@ -199,7 +213,8 @@ static void __init at91sam9n12_pmc_setup(struct device_node *np)
 
 		hw = at91_clk_register_programmable(regmap, name,
 						    parent_names, 5, i,
-						    &at91sam9x5_programmable_layout);
+						    &at91sam9x5_programmable_layout,
+						    NULL);
 		if (IS_ERR(hw))
 			goto err_free;
 
@@ -220,9 +235,9 @@ static void __init at91sam9n12_pmc_setup(struct device_node *np)
 		hw = at91_clk_register_sam9x5_peripheral(regmap, &pmc_pcr_lock,
 							 &at91sam9n12_pcr_layout,
 							 at91sam9n12_periphck[i].n,
-							 "masterck",
+							 "masterck_div",
 							 at91sam9n12_periphck[i].id,
-							 &range);
+							 &range, INT_MIN);
 		if (IS_ERR(hw))
 			goto err_free;
 

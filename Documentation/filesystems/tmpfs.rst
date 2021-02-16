@@ -4,7 +4,7 @@
 Tmpfs
 =====
 
-Tmpfs is a file system which keeps all files in virtual memory.
+Tmpfs is a file system which keeps all of its files in virtual memory.
 
 
 Everything in tmpfs is temporary in the sense that no files will be
@@ -35,7 +35,7 @@ tmpfs has the following uses:
    memory.
 
    This mount does not depend on CONFIG_TMPFS. If CONFIG_TMPFS is not
-   set, the user visible part of tmpfs is not build. But the internal
+   set, the user visible part of tmpfs is not built. But the internal
    mechanisms are always present.
 
 2) glibc 2.2 and above expects tmpfs to be mounted at /dev/shm for
@@ -50,7 +50,7 @@ tmpfs has the following uses:
    This mount is _not_ needed for SYSV shared memory. The internal
    mount is used for that. (In the 2.3 kernel versions it was
    necessary to mount the predecessor of tmpfs (shm fs) to use SYSV
-   shared memory)
+   shared memory.)
 
 3) Some people (including me) find it very convenient to mount it
    e.g. on /tmp and /var/tmp and have a big swap partition. And now
@@ -83,7 +83,7 @@ If nr_blocks=0 (or size=0), blocks will not be limited in that instance;
 if nr_inodes=0, inodes will not be limited.  It is generally unwise to
 mount with such options, since it allows any user with write access to
 use up all the memory on the machine; but enhances the scalability of
-that instance in a system with many cpus making intensive use of it.
+that instance in a system with many CPUs making intensive use of it.
 
 
 tmpfs has a mount option to set the NUMA memory allocation policy for
@@ -150,6 +150,22 @@ These options do not have any effect on remount. You can change these
 parameters with chmod(1), chown(1) and chgrp(1) on a mounted filesystem.
 
 
+tmpfs has a mount option to select whether it will wrap at 32- or 64-bit inode
+numbers:
+
+=======   ========================
+inode64   Use 64-bit inode numbers
+inode32   Use 32-bit inode numbers
+=======   ========================
+
+On a 32-bit kernel, inode32 is implicit, and inode64 is refused at mount time.
+On a 64-bit kernel, CONFIG_TMPFS_INODE64 sets the default.  inode64 avoids the
+possibility of multiple files with the same inode number on a single device;
+but risks glibc failing with EOVERFLOW once 33-bit inode numbers are reached -
+if a long-lived tmpfs is accessed by 32-bit applications so ancient that
+opening a file larger than 2GiB fails with EINVAL.
+
+
 So 'mount -t tmpfs -o size=10G,nr_inodes=10k,mode=700 tmpfs /mytmpfs'
 will give you tmpfs instance on /mytmpfs which can allocate 10GB
 RAM/SWAP in 10240 inodes and it is only accessible by root.
@@ -161,3 +177,5 @@ RAM/SWAP in 10240 inodes and it is only accessible by root.
    Hugh Dickins, 4 June 2007
 :Updated:
    KOSAKI Motohiro, 16 Mar 2010
+:Updated:
+   Chris Down, 13 July 2020

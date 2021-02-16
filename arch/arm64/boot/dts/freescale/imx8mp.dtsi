@@ -23,6 +23,12 @@
 		gpio2 = &gpio3;
 		gpio3 = &gpio4;
 		gpio4 = &gpio5;
+		i2c0 = &i2c1;
+		i2c1 = &i2c2;
+		i2c2 = &i2c3;
+		i2c3 = &i2c4;
+		i2c4 = &i2c5;
+		i2c5 = &i2c6;
 		mmc0 = &usdhc1;
 		mmc1 = &usdhc2;
 		mmc2 = &usdhc3;
@@ -127,6 +133,13 @@
 		clock-output-names = "clk_ext4";
 	};
 
+	pmu {
+		compatible = "arm,cortex-a53-pmu";
+		interrupts = <GIC_PPI 7
+			     (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_HIGH)>;
+		interrupt-affinity = <&A53_0>, <&A53_1>, <&A53_2>, <&A53_3>;
+	};
+
 	psci {
 		compatible = "arm,psci-1.0";
 		method = "smc";
@@ -196,10 +209,10 @@
 
 	timer {
 		compatible = "arm,armv8-timer";
-		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>,
-			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>,
-			     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>,
-			     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(6) | IRQ_TYPE_LEVEL_LOW)>;
+		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 14 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 11 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>,
+			     <GIC_PPI 10 (GIC_CPU_MASK_SIMPLE(4) | IRQ_TYPE_LEVEL_LOW)>;
 		clock-frequency = <8000000>;
 		arm,no-tick-in-suspend;
 	};
@@ -253,7 +266,7 @@
 				#gpio-cells = <2>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
-				gpio-ranges = <&iomuxc 0 56 26>, <&iomuxc 0 144 4>;
+				gpio-ranges = <&iomuxc 0 56 26>, <&iomuxc 26 144 4>;
 			};
 
 			gpio4: gpio@30230000 {
@@ -307,8 +320,8 @@
 				reg = <0x30340000 0x10000>;
 			};
 
-			ocotp: ocotp-ctrl@30350000 {
-				compatible = "fsl,imx8mp-ocotp", "syscon";
+			ocotp: efuse@30350000 {
+				compatible = "fsl,imx8mp-ocotp", "fsl,imx8mm-ocotp", "syscon";
 				reg = <0x30350000 0x10000>;
 				clocks = <&clk IMX8MP_CLK_OCOTP_ROOT>;
 				/* For nvmem subnodes */
@@ -539,6 +552,36 @@
 				status = "disabled";
 			};
 
+			flexcan1: can@308c0000 {
+				compatible = "fsl,imx8mp-flexcan", "fsl,imx6q-flexcan";
+				reg = <0x308c0000 0x10000>;
+				interrupts = <GIC_SPI 142 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&clk IMX8MP_CLK_IPG_ROOT>,
+					 <&clk IMX8MP_CLK_CAN1_ROOT>;
+				clock-names = "ipg", "per";
+				assigned-clocks = <&clk IMX8MP_CLK_CAN1>;
+				assigned-clock-parents = <&clk IMX8MP_SYS_PLL1_40M>;
+				assigned-clock-rates = <40000000>;
+				fsl,clk-source = /bits/ 8 <0>;
+				fsl,stop-mode = <&gpr 0x10 4>;
+				status = "disabled";
+			};
+
+			flexcan2: can@308d0000 {
+				compatible = "fsl,imx8mp-flexcan", "fsl,imx6q-flexcan";
+				reg = <0x308d0000 0x10000>;
+				interrupts = <GIC_SPI 144 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&clk IMX8MP_CLK_IPG_ROOT>,
+					 <&clk IMX8MP_CLK_CAN2_ROOT>;
+				clock-names = "ipg", "per";
+				assigned-clocks = <&clk IMX8MP_CLK_CAN2>;
+				assigned-clock-parents = <&clk IMX8MP_SYS_PLL1_40M>;
+				assigned-clock-rates = <40000000>;
+				fsl,clk-source = /bits/ 8 <0>;
+				fsl,stop-mode = <&gpr 0x10 5>;
+				status = "disabled";
+			};
+
 			crypto: crypto@30900000 {
 				compatible = "fsl,sec-v4.0";
 				#address-cells = <1>;
@@ -621,6 +664,14 @@
 				status = "disabled";
 			};
 
+			mu: mailbox@30aa0000 {
+				compatible = "fsl,imx8mp-mu", "fsl,imx6sx-mu";
+				reg = <0x30aa0000 0x10000>;
+				interrupts = <GIC_SPI 88 IRQ_TYPE_LEVEL_HIGH>;
+				clocks = <&clk IMX8MP_CLK_MU_ROOT>;
+				#mbox-cells = <2>;
+			};
+
 			i2c5: i2c@30ad0000 {
 				compatible = "fsl,imx8mp-i2c", "fsl,imx21-i2c";
 				#address-cells = <1>;
@@ -688,7 +739,7 @@
 				reg = <0x30bd0000 0x10000>;
 				interrupts = <GIC_SPI 2 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clk IMX8MP_CLK_SDMA1_ROOT>,
-					 <&clk IMX8MP_CLK_SDMA1_ROOT>;
+					 <&clk IMX8MP_CLK_AHB>;
 				clock-names = "ipg", "ahb";
 				#dma-cells = <3>;
 				fsl,sdma-ram-script-name = "imx/sdma/sdma-imx7d.bin";
@@ -699,7 +750,8 @@
 				reg = <0x30be0000 0x10000>;
 				interrupts = <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>,
 					     <GIC_SPI 119 IRQ_TYPE_LEVEL_HIGH>,
-					     <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>;
+					     <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>,
+					     <GIC_SPI 121 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clk IMX8MP_CLK_ENET1_ROOT>,
 					 <&clk IMX8MP_CLK_SIM_ENET_ROOT>,
 					 <&clk IMX8MP_CLK_ENET_TIMER>,
@@ -729,6 +781,12 @@
 			interrupt-controller;
 			interrupts = <GIC_PPI 9 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-parent = <&gic>;
+		};
+
+		ddr-pmu@3d800000 {
+			compatible = "fsl,imx8mp-ddr-pmu", "fsl,imx8m-ddr-pmu";
+			reg = <0x3d800000 0x400000>;
+			interrupts = <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>;
 		};
 	};
 };

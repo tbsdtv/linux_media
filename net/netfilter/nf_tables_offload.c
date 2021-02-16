@@ -28,6 +28,23 @@ static struct nft_flow_rule *nft_flow_rule_alloc(int num_actions)
 	return flow;
 }
 
+void nft_flow_rule_set_addr_type(struct nft_flow_rule *flow,
+				 enum flow_dissector_key_id addr_type)
+{
+	struct nft_flow_match *match = &flow->match;
+	struct nft_flow_key *mask = &match->mask;
+	struct nft_flow_key *key = &match->key;
+
+	if (match->dissector.used_keys & BIT(FLOW_DISSECTOR_KEY_CONTROL))
+		return;
+
+	key->control.addr_type = addr_type;
+	mask->control.addr_type = 0xffff;
+	match->dissector.used_keys |= BIT(FLOW_DISSECTOR_KEY_CONTROL);
+	match->dissector.offset[FLOW_DISSECTOR_KEY_CONTROL] =
+		offsetof(struct nft_flow_key, control);
+}
+
 struct nft_flow_rule *nft_flow_rule_create(struct net *net,
 					   const struct nft_rule *rule)
 {
@@ -37,7 +54,7 @@ struct nft_flow_rule *nft_flow_rule_create(struct net *net,
 	struct nft_expr *expr;
 
 	expr = nft_expr_first(rule);
-	while (expr->ops && expr != nft_expr_last(rule)) {
+	while (nft_expr_more(rule, expr)) {
 		if (expr->ops->offload_flags & NFT_OFFLOAD_F_ACTION)
 			num_actions++;
 
@@ -61,7 +78,7 @@ struct nft_flow_rule *nft_flow_rule_create(struct net *net,
 	ctx->net = net;
 	ctx->dep.type = NFT_OFFLOAD_DEP_UNSPEC;
 
-	while (expr->ops && expr != nft_expr_last(rule)) {
+	while (nft_expr_more(rule, expr)) {
 		if (!expr->ops->offload) {
 			err = -EOPNOTSUPP;
 			goto err_out;
@@ -296,6 +313,7 @@ static void nft_indr_block_cleanup(struct flow_block_cb *block_cb)
 	nft_flow_block_offload_init(&bo, dev_net(dev), FLOW_BLOCK_UNBIND,
 				    basechain, &extack);
 	mutex_lock(&net->nft.commit_mutex);
+	list_del(&block_cb->driver_list);
 	list_move(&block_cb->list, &bo.cb_list);
 	nft_flow_offload_unbind(&bo, basechain);
 	mutex_unlock(&net->nft.commit_mutex);
@@ -311,7 +329,7 @@ static int nft_indr_block_offload_cmd(struct nft_base_chain *basechain,
 
 	nft_flow_block_offload_init(&bo, dev_net(dev), cmd, basechain, &extack);
 
-	err = flow_indr_dev_setup_offload(dev, TC_SETUP_BLOCK, basechain, &bo,
+	err = flow_indr_dev_setup_offload(dev, NULL, TC_SETUP_BLOCK, basechain, &bo,
 					  nft_indr_block_cleanup);
 	if (err < 0)
 		return err;
@@ -321,8 +339,6 @@ static int nft_indr_block_offload_cmd(struct nft_base_chain *basechain,
 
 	return nft_block_setup(basechain, &bo, cmd);
 }
-
-#define FLOW_SETUP_BLOCK TC_SETUP_BLOCK
 
 static int nft_chain_offload_cmd(struct nft_base_chain *basechain,
 				 struct net_device *dev,

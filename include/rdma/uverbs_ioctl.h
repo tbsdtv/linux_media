@@ -1,33 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB */
 /*
  * Copyright (c) 2017, Mellanox Technologies inc.  All rights reserved.
- *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and/or other materials
- *        provided with the distribution.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
- * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
- * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
  */
 
 #ifndef _UVERBS_IOCTL_
@@ -652,6 +625,7 @@ struct uverbs_attr_bundle {
 	struct ib_udata ucore;
 	struct ib_uverbs_file *ufile;
 	struct ib_ucontext *context;
+	struct ib_uobject *uobject;
 	DECLARE_BITMAP(attr_present, UVERBS_API_ATTR_BKEY_LEN);
 	struct uverbs_attr attrs[];
 };
@@ -673,12 +647,15 @@ static inline bool uverbs_attr_is_valid(const struct uverbs_attr_bundle *attrs_b
  * 'ucontext'.
  *
  */
-#define rdma_udata_to_drv_context(udata, drv_dev_struct, member)               \
-	(udata ? container_of(container_of(udata, struct uverbs_attr_bundle,   \
-					   driver_udata)                       \
-				      ->context,                               \
-			      drv_dev_struct, member) :                        \
-		 (drv_dev_struct *)NULL)
+static inline struct uverbs_attr_bundle *
+rdma_udata_to_uverbs_attr_bundle(struct ib_udata *udata)
+{
+	return container_of(udata, struct uverbs_attr_bundle, driver_udata);
+}
+
+#define rdma_udata_to_drv_context(udata, drv_dev_struct, member)                \
+	(udata ? container_of(rdma_udata_to_uverbs_attr_bundle(udata)->context, \
+			      drv_dev_struct, member) : (drv_dev_struct *)NULL)
 
 #define IS_UVERBS_COPY_ERR(_ret)		((_ret) && (_ret) != -ENOENT)
 
@@ -887,6 +864,16 @@ static inline __malloc void *uverbs_zalloc(struct uverbs_attr_bundle *bundle,
 					   size_t size)
 {
 	return _uverbs_alloc(bundle, size, GFP_KERNEL | __GFP_ZERO);
+}
+
+static inline __malloc void *uverbs_kcalloc(struct uverbs_attr_bundle *bundle,
+					    size_t n, size_t size)
+{
+	size_t bytes;
+
+	if (unlikely(check_mul_overflow(n, size, &bytes)))
+		return ERR_PTR(-EOVERFLOW);
+	return uverbs_zalloc(bundle, bytes);
 }
 int _uverbs_get_const(s64 *to, const struct uverbs_attr_bundle *attrs_bundle,
 		      size_t idx, s64 lower_bound, u64 upper_bound,

@@ -20,11 +20,14 @@ static struct reuseport_array *reuseport_array(struct bpf_map *map)
 /* The caller must hold the reuseport_lock */
 void bpf_sk_reuseport_detach(struct sock *sk)
 {
-	struct sock __rcu **socks;
+	uintptr_t sk_user_data;
 
 	write_lock_bh(&sk->sk_callback_lock);
-	socks = sk->sk_user_data;
-	if (socks) {
+	sk_user_data = (uintptr_t)sk->sk_user_data;
+	if (sk_user_data & SK_USER_DATA_BPF) {
+		struct sock __rcu **socks;
+
+		socks = (void *)(sk_user_data & SK_USER_DATA_PTRMASK);
 		WRITE_ONCE(sk->sk_user_data, NULL);
 		/*
 		 * Do not move this NULL assignment outside of
@@ -96,8 +99,6 @@ static void reuseport_array_free(struct bpf_map *map)
 	struct sock *sk;
 	u32 i;
 
-	synchronize_rcu();
-
 	/*
 	 * ops->map_*_elem() will not be able to access this
 	 * array now. Hence, this function only races with
@@ -149,9 +150,8 @@ static void reuseport_array_free(struct bpf_map *map)
 
 static struct bpf_map *reuseport_array_alloc(union bpf_attr *attr)
 {
-	int err, numa_node = bpf_map_attr_numa_node(attr);
+	int numa_node = bpf_map_attr_numa_node(attr);
 	struct reuseport_array *array;
-	struct bpf_map_memory mem;
 	u64 array_size;
 
 	if (!bpf_capable())
@@ -160,20 +160,13 @@ static struct bpf_map *reuseport_array_alloc(union bpf_attr *attr)
 	array_size = sizeof(*array);
 	array_size += (u64)attr->max_entries * sizeof(struct sock *);
 
-	err = bpf_map_charge_init(&mem, array_size);
-	if (err)
-		return ERR_PTR(err);
-
 	/* allocate all map elements and zero-initialize them */
 	array = bpf_map_area_alloc(array_size, numa_node);
-	if (!array) {
-		bpf_map_charge_finish(&mem);
+	if (!array)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	/* copy mandatory map attributes */
 	bpf_map_init_from_attr(&array->map, attr);
-	bpf_map_charge_move(&array->map.memory, &mem);
 
 	return &array->map;
 }
@@ -190,7 +183,7 @@ int bpf_fd_reuseport_array_lookup_elem(struct bpf_map *map, void *key,
 	rcu_read_lock();
 	sk = reuseport_array_lookup_elem(map, key);
 	if (sk) {
-		*(u64 *)value = sock_gen_cookie(sk);
+		*(u64 *)value = __sock_gen_cookie(sk);
 		err = 0;
 	} else {
 		err = -ENOENT;
@@ -252,6 +245,7 @@ int bpf_fd_reuseport_array_update_elem(struct bpf_map *map, void *key,
 	struct sock *free_osk = NULL, *osk, *nsk;
 	struct sock_reuseport *reuse;
 	u32 index = *(u32 *)key;
+	uintptr_t sk_user_data;
 	struct socket *socket;
 	int err, fd;
 
@@ -305,7 +299,9 @@ int bpf_fd_reuseport_array_update_elem(struct bpf_map *map, void *key,
 	if (err)
 		goto put_file_unlock;
 
-	WRITE_ONCE(nsk->sk_user_data, &array->ptrs[index]);
+	sk_user_data = (uintptr_t)&array->ptrs[index] | SK_USER_DATA_NOCOPY |
+		SK_USER_DATA_BPF;
+	WRITE_ONCE(nsk->sk_user_data, (void *)sk_user_data);
 	rcu_assign_pointer(array->ptrs[index], nsk);
 	free_osk = osk;
 	err = 0;
@@ -345,11 +341,15 @@ static int reuseport_array_get_next_key(struct bpf_map *map, void *key,
 	return 0;
 }
 
+static int reuseport_array_map_btf_id;
 const struct bpf_map_ops reuseport_array_ops = {
+	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc_check = reuseport_array_alloc_check,
 	.map_alloc = reuseport_array_alloc,
 	.map_free = reuseport_array_free,
 	.map_lookup_elem = reuseport_array_lookup_elem,
 	.map_get_next_key = reuseport_array_get_next_key,
 	.map_delete_elem = reuseport_array_delete_elem,
+	.map_btf_name = "reuseport_array",
+	.map_btf_id = &reuseport_array_map_btf_id,
 };

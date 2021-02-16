@@ -50,7 +50,6 @@ struct urb_list {
 struct udl_device {
 	struct drm_device drm;
 	struct device *dev;
-	struct usb_device *udev;
 
 	struct drm_simple_display_pipe display_pipe;
 
@@ -66,6 +65,11 @@ struct udl_device {
 
 #define to_udl(x) container_of(x, struct udl_device, drm)
 
+static inline struct usb_device *udl_to_usb_device(struct udl_device *udl)
+{
+	return interface_to_usbdev(to_usb_interface(udl->drm.dev));
+}
+
 /* modeset */
 int udl_modeset_init(struct drm_device *dev);
 struct drm_connector *udl_connector_init(struct drm_device *dev);
@@ -80,9 +84,6 @@ int udl_init(struct udl_device *udl);
 int udl_render_hline(struct drm_device *dev, int log_bpp, struct urb **urb_ptr,
 		     const char *front, char **urb_buf_ptr,
 		     u32 byte_offset, u32 device_byte_offset, u32 byte_width);
-
-struct drm_gem_object *udl_driver_gem_create_object(struct drm_device *dev,
-						    size_t size);
 
 int udl_drop_usb(struct drm_device *dev);
 

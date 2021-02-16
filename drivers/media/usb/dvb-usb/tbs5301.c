@@ -183,9 +183,9 @@ static void reg_i2cread(struct i2c_adapter *i2c,u8 chip_addr,u8 reg, u8 num, u8 
 	u8 data[20];
 
 	if (!d)
-		return -ENODEV;
+		return;
 	if (mutex_lock_interruptible(&d->i2c_mutex) < 0)
-		return -EAGAIN;
+		return;
 
 	/* read */
 	data[0] = num;
@@ -210,9 +210,9 @@ static void reg_i2cwrite(struct i2c_adapter *i2c,u8 chip_addr,u8 reg, u8 num, u8
 	int i=0;
 
 	if (!d)
-		return -ENODEV;
+		return;
 	if (mutex_lock_interruptible(&d->i2c_mutex) < 0)
-		return -EAGAIN;
+		return;
 	/* write to register */
 	data[0] = num + 2; //lenth
 	data[1] = chip_addr; //chip addr

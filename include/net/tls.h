@@ -199,6 +199,12 @@ enum tls_context_flags {
 	 * to be atomic.
 	 */
 	TLS_TX_SYNC_SCHED = 1,
+	/* tls_dev_del was called for the RX side, device state was released,
+	 * but tls_ctx->netdev might still be kept, because TX-side driver
+	 * resources might not be released yet. Used to prevent the second
+	 * tls_dev_del call in tls_device_down if it happens simultaneously.
+	 */
+	TLS_RX_DEV_CLOSED = 2,
 };
 
 struct cipher_context {
@@ -211,6 +217,7 @@ union tls_crypto_context {
 	union {
 		struct tls12_crypto_info_aes_gcm_128 aes_gcm_128;
 		struct tls12_crypto_info_aes_gcm_256 aes_gcm_256;
+		struct tls12_crypto_info_chacha20_poly1305 chacha20_poly1305;
 	};
 };
 
@@ -291,10 +298,19 @@ struct tlsdev_ops {
 enum tls_offload_sync_type {
 	TLS_OFFLOAD_SYNC_TYPE_DRIVER_REQ = 0,
 	TLS_OFFLOAD_SYNC_TYPE_CORE_NEXT_HINT = 1,
+	TLS_OFFLOAD_SYNC_TYPE_DRIVER_REQ_ASYNC = 2,
 };
 
 #define TLS_DEVICE_RESYNC_NH_START_IVAL		2
 #define TLS_DEVICE_RESYNC_NH_MAX_IVAL		128
+
+#define TLS_DEVICE_RESYNC_ASYNC_LOGMAX		13
+struct tls_offload_resync_async {
+	atomic64_t req;
+	u16 loglen;
+	u16 rcd_delta;
+	u32 log[TLS_DEVICE_RESYNC_ASYNC_LOGMAX];
+};
 
 struct tls_offload_context_rx {
 	/* sw must be the first member of tls_offload_context_rx */
@@ -314,6 +330,10 @@ struct tls_offload_context_rx {
 			u32 decrypted_failed;
 			u32 decrypted_tgt;
 		} resync_nh;
+		/* TLS_OFFLOAD_SYNC_TYPE_DRIVER_REQ_ASYNC */
+		struct {
+			struct tls_offload_resync_async *resync_async;
+		};
 	};
 	u8 driver_state[] __aligned(8);
 	/* The TLS layer reserves room for driver specific state
@@ -459,6 +479,18 @@ static inline bool tls_bigint_increment(unsigned char *seq, int len)
 	return (i == -1);
 }
 
+static inline void tls_bigint_subtract(unsigned char *seq, int  n)
+{
+	u64 rcd_sn;
+	__be64 *p;
+
+	BUILD_BUG_ON(TLS_MAX_REC_SEQ_SIZE != 8);
+
+	p = (__be64 *)seq;
+	rcd_sn = be64_to_cpu(*p);
+	*p = cpu_to_be64(rcd_sn - n);
+}
+
 static inline struct tls_context *tls_get_ctx(const struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -476,32 +508,33 @@ static inline void tls_advance_record_sn(struct sock *sk,
 	if (tls_bigint_increment(ctx->rec_seq, prot->rec_seq_size))
 		tls_err_abort(sk, EBADMSG);
 
-	if (prot->version != TLS_1_3_VERSION)
-		tls_bigint_increment(ctx->iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE,
+	if (prot->version != TLS_1_3_VERSION &&
+	    prot->cipher_type != TLS_CIPHER_CHACHA20_POLY1305)
+		tls_bigint_increment(ctx->iv + prot->salt_size,
 				     prot->iv_size);
 }
 
 static inline void tls_fill_prepend(struct tls_context *ctx,
 			     char *buf,
 			     size_t plaintext_len,
-			     unsigned char record_type,
-			     int version)
+			     unsigned char record_type)
 {
 	struct tls_prot_info *prot = &ctx->prot_info;
 	size_t pkt_len, iv_size = prot->iv_size;
 
 	pkt_len = plaintext_len + prot->tag_size;
-	if (version != TLS_1_3_VERSION) {
+	if (prot->version != TLS_1_3_VERSION &&
+	    prot->cipher_type != TLS_CIPHER_CHACHA20_POLY1305) {
 		pkt_len += iv_size;
 
 		memcpy(buf + TLS_NONCE_OFFSET,
-		       ctx->tx.iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE, iv_size);
+		       ctx->tx.iv + prot->salt_size, iv_size);
 	}
 
 	/* we cover nonce explicit here as well, so buf should be of
 	 * size KTLS_DTLS_HEADER_SIZE + KTLS_DTLS_NONCE_EXPLICIT_SIZE
 	 */
-	buf[0] = version == TLS_1_3_VERSION ?
+	buf[0] = prot->version == TLS_1_3_VERSION ?
 		   TLS_RECORD_TYPE_DATA : record_type;
 	/* Note that VERSION must be TLS_1_2 for both TLS1.2 and TLS1.3 */
 	buf[1] = TLS_1_2_VERSION_MINOR;
@@ -514,18 +547,17 @@ static inline void tls_fill_prepend(struct tls_context *ctx,
 static inline void tls_make_aad(char *buf,
 				size_t size,
 				char *record_sequence,
-				int record_sequence_size,
 				unsigned char record_type,
-				int version)
+				struct tls_prot_info *prot)
 {
-	if (version != TLS_1_3_VERSION) {
-		memcpy(buf, record_sequence, record_sequence_size);
+	if (prot->version != TLS_1_3_VERSION) {
+		memcpy(buf, record_sequence, prot->rec_seq_size);
 		buf += 8;
 	} else {
-		size += TLS_CIPHER_AES_GCM_128_TAG_SIZE;
+		size += prot->tag_size;
 	}
 
-	buf[0] = version == TLS_1_3_VERSION ?
+	buf[0] = prot->version == TLS_1_3_VERSION ?
 		  TLS_RECORD_TYPE_DATA : record_type;
 	buf[1] = TLS_1_2_VERSION_MAJOR;
 	buf[2] = TLS_1_2_VERSION_MINOR;
@@ -533,11 +565,12 @@ static inline void tls_make_aad(char *buf,
 	buf[4] = size & 0xFF;
 }
 
-static inline void xor_iv_with_seq(int version, char *iv, char *seq)
+static inline void xor_iv_with_seq(struct tls_prot_info *prot, char *iv, char *seq)
 {
 	int i;
 
-	if (version == TLS_1_3_VERSION) {
+	if (prot->version == TLS_1_3_VERSION ||
+	    prot->cipher_type == TLS_CIPHER_CHACHA20_POLY1305) {
 		for (i = 0; i < 8; i++)
 			iv[i + 4] ^= seq[i];
 	}
@@ -606,9 +639,9 @@ tls_driver_ctx(const struct sock *sk, enum tls_offload_ctx_dir direction)
 }
 #endif
 
+#define RESYNC_REQ BIT(0)
+#define RESYNC_REQ_ASYNC BIT(1)
 /* The TLS context is valid until sk_destruct is called */
-#define RESYNC_REQ (1 << 0)
-#define RESYNC_REQ_FORCE (1 << 1)
 static inline void tls_offload_rx_resync_request(struct sock *sk, __be32 seq)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
@@ -617,12 +650,27 @@ static inline void tls_offload_rx_resync_request(struct sock *sk, __be32 seq)
 	atomic64_set(&rx_ctx->resync_req, ((u64)ntohl(seq) << 32) | RESYNC_REQ);
 }
 
-static inline void tls_offload_rx_force_resync_request(struct sock *sk)
+/* Log all TLS record header TCP sequences in [seq, seq+len] */
+static inline void
+tls_offload_rx_resync_async_request_start(struct sock *sk, __be32 seq, u16 len)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_offload_context_rx *rx_ctx = tls_offload_ctx_rx(tls_ctx);
 
-	atomic64_set(&rx_ctx->resync_req, RESYNC_REQ | RESYNC_REQ_FORCE);
+	atomic64_set(&rx_ctx->resync_async->req, ((u64)ntohl(seq) << 32) |
+		     ((u64)len << 16) | RESYNC_REQ | RESYNC_REQ_ASYNC);
+	rx_ctx->resync_async->loglen = 0;
+	rx_ctx->resync_async->rcd_delta = 0;
+}
+
+static inline void
+tls_offload_rx_resync_async_request_end(struct sock *sk, __be32 seq)
+{
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+	struct tls_offload_context_rx *rx_ctx = tls_offload_ctx_rx(tls_ctx);
+
+	atomic64_set(&rx_ctx->resync_async->req,
+		     ((u64)ntohl(seq) << 32) | RESYNC_REQ);
 }
 
 static inline void
@@ -652,10 +700,6 @@ int tls_proccess_cmsg(struct sock *sk, struct msghdr *msg,
 int decrypt_skb(struct sock *sk, struct sk_buff *skb,
 		struct scatterlist *sgout);
 struct sk_buff *tls_encrypt_skb(struct sk_buff *skb);
-
-struct sk_buff *tls_validate_xmit_skb(struct sock *sk,
-				      struct net_device *dev,
-				      struct sk_buff *skb);
 
 int tls_sw_fallback_init(struct sock *sk,
 			 struct tls_offload_context_tx *offload_ctx,

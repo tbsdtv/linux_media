@@ -47,15 +47,15 @@ static void __confirm_options(struct intel_uc *uc)
 
 	drm_dbg(&i915->drm,
 		"enable_guc=%d (guc:%s submission:%s huc:%s)\n",
-		i915_modparams.enable_guc,
+		i915->params.enable_guc,
 		yesno(intel_uc_wants_guc(uc)),
 		yesno(intel_uc_wants_guc_submission(uc)),
 		yesno(intel_uc_wants_huc(uc)));
 
-	if (i915_modparams.enable_guc == -1)
+	if (i915->params.enable_guc == -1)
 		return;
 
-	if (i915_modparams.enable_guc == 0) {
+	if (i915->params.enable_guc == 0) {
 		GEM_BUG_ON(intel_uc_wants_guc(uc));
 		GEM_BUG_ON(intel_uc_wants_guc_submission(uc));
 		GEM_BUG_ON(intel_uc_wants_huc(uc));
@@ -65,25 +65,25 @@ static void __confirm_options(struct intel_uc *uc)
 	if (!intel_uc_supports_guc(uc))
 		drm_info(&i915->drm,
 			 "Incompatible option enable_guc=%d - %s\n",
-			 i915_modparams.enable_guc, "GuC is not supported!");
+			 i915->params.enable_guc, "GuC is not supported!");
 
-	if (i915_modparams.enable_guc & ENABLE_GUC_LOAD_HUC &&
+	if (i915->params.enable_guc & ENABLE_GUC_LOAD_HUC &&
 	    !intel_uc_supports_huc(uc))
 		drm_info(&i915->drm,
 			 "Incompatible option enable_guc=%d - %s\n",
-			 i915_modparams.enable_guc, "HuC is not supported!");
+			 i915->params.enable_guc, "HuC is not supported!");
 
-	if (i915_modparams.enable_guc & ENABLE_GUC_SUBMISSION &&
+	if (i915->params.enable_guc & ENABLE_GUC_SUBMISSION &&
 	    !intel_uc_supports_guc_submission(uc))
 		drm_info(&i915->drm,
 			 "Incompatible option enable_guc=%d - %s\n",
-			 i915_modparams.enable_guc, "GuC submission is N/A");
+			 i915->params.enable_guc, "GuC submission is N/A");
 
-	if (i915_modparams.enable_guc & ~(ENABLE_GUC_SUBMISSION |
+	if (i915->params.enable_guc & ~(ENABLE_GUC_SUBMISSION |
 					  ENABLE_GUC_LOAD_HUC))
 		drm_info(&i915->drm,
 			 "Incompatible option enable_guc=%d - %s\n",
-			 i915_modparams.enable_guc, "undocumented flag");
+			 i915->params.enable_guc, "undocumented flag");
 }
 
 void intel_uc_init_early(struct intel_uc *uc)
@@ -231,13 +231,15 @@ static int guc_enable_communication(struct intel_guc *guc)
 	intel_guc_ct_event_handler(&guc->ct);
 	spin_unlock_irq(&i915->irq_lock);
 
-	DRM_INFO("GuC communication enabled\n");
+	drm_dbg(&i915->drm, "GuC communication enabled\n");
 
 	return 0;
 }
 
 static void guc_disable_communication(struct intel_guc *guc)
 {
+	struct drm_i915_private *i915 = guc_to_gt(guc)->i915;
+
 	/*
 	 * Events generated during or after CT disable are logged by guc in
 	 * via mmio. Make sure the register is clear before disabling CT since
@@ -257,7 +259,7 @@ static void guc_disable_communication(struct intel_guc *guc)
 	 */
 	guc_get_mmio_msg(guc);
 
-	DRM_INFO("GuC communication disabled\n");
+	drm_dbg(&i915->drm, "GuC communication disabled\n");
 }
 
 static void __uc_fetch_firmwares(struct intel_uc *uc)
@@ -267,8 +269,17 @@ static void __uc_fetch_firmwares(struct intel_uc *uc)
 	GEM_BUG_ON(!intel_uc_wants_guc(uc));
 
 	err = intel_uc_fw_fetch(&uc->guc.fw);
-	if (err)
+	if (err) {
+		/* Make sure we transition out of transient "SELECTED" state */
+		if (intel_uc_wants_huc(uc)) {
+			drm_dbg(&uc_to_gt(uc)->i915->drm,
+				"Failed to fetch GuC: %d disabling HuC\n", err);
+			intel_uc_fw_change_status(&uc->huc.fw,
+						  INTEL_UC_FIRMWARE_ERROR);
+		}
+
 		return;
+	}
 
 	if (intel_uc_wants_huc(uc))
 		intel_uc_fw_fetch(&uc->huc.fw);

@@ -16,6 +16,8 @@
 #include <linux/blockgroup_lock.h>
 #include <linux/percpu_counter.h>
 #include <linux/rbtree.h>
+#include <linux/mm.h>
+#include <linux/highmem.h>
 
 /* XXX Here for now... not interested in restructing headers JUST now */
 
@@ -52,8 +54,8 @@ struct ext2_block_alloc_info {
 	/*
 	 * Was i_next_alloc_goal in ext2_inode_info
 	 * is the *physical* companion to i_next_alloc_block.
-	 * it the the physical block number of the block which was most-recentl
-	 * allocated to this file.  This give us the goal (target) for the next
+	 * it is the physical block number of the block which was most-recently
+	 * allocated to this file.  This gives us the goal (target) for the next
 	 * allocation when we detect linearly ascending requests.
 	 */
 	ext2_fsblk_t		last_alloc_physical_block;
@@ -374,7 +376,6 @@ struct ext2_inode {
 /*
  * Mount flags
  */
-#define EXT2_MOUNT_CHECK		0x000001  /* Do mount-time checks */
 #define EXT2_MOUNT_OLDALLOC		0x000002  /* Don't use the new Orlov allocator */
 #define EXT2_MOUNT_GRPID		0x000004  /* Create files with directory's group */
 #define EXT2_MOUNT_DEBUG		0x000008  /* Some debugging messages */
@@ -738,13 +739,19 @@ extern void ext2_rsv_window_add(struct super_block *sb, struct ext2_reserve_wind
 
 /* dir.c */
 extern int ext2_add_link (struct dentry *, struct inode *);
-extern ino_t ext2_inode_by_name(struct inode *, const struct qstr *);
+extern int ext2_inode_by_name(struct inode *dir,
+			      const struct qstr *child, ino_t *ino);
 extern int ext2_make_empty(struct inode *, struct inode *);
 extern struct ext2_dir_entry_2 * ext2_find_entry (struct inode *,const struct qstr *, struct page **);
 extern int ext2_delete_entry (struct ext2_dir_entry_2 *, struct page *);
 extern int ext2_empty_dir (struct inode *);
 extern struct ext2_dir_entry_2 * ext2_dotdot (struct inode *, struct page **);
 extern void ext2_set_link(struct inode *, struct ext2_dir_entry_2 *, struct page *, struct inode *, int);
+static inline void ext2_put_page(struct page *page)
+{
+	kunmap(page);
+	put_page(page);
+}
 
 /* ialloc.c */
 extern struct inode * ext2_new_inode (struct inode *, umode_t, const struct qstr *);

@@ -140,17 +140,14 @@ mcp77_clk_read(struct nvkm_clk *base, enum nv_clk_src src)
 		break;
 	case nv_clk_src_mem:
 		return 0;
-		break;
 	case nv_clk_src_vdec:
 		P = (read_div(clk) & 0x00000700) >> 8;
 
 		switch (mast & 0x00400000) {
 		case 0x00400000:
 			return nvkm_clk_read(&clk->base, nv_clk_src_core) >> P;
-			break;
 		default:
 			return 500000 >> P;
-			break;
 		}
 		break;
 	default:
@@ -363,7 +360,7 @@ mcp77_clk_prog(struct nvkm_clk *base)
 	switch (clk->vsrc) {
 	case nv_clk_src_cclk:
 		mast |= 0x00400000;
-		/* fall through */
+		fallthrough;
 	default:
 		nvkm_wr32(device, 0x4600, clk->vdiv);
 	}

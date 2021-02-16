@@ -34,7 +34,7 @@
 		compatible = "regulator-fixed";
 		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
-		pinctrl-0 = <&sdmmc0m1_gpio>;
+		pinctrl-0 = <&sdmmc0m1_pin>;
 		regulator-boot-on;
 		regulator-name = "vcc_sd";
 		regulator-min-microvolt = <3300000>;
@@ -104,6 +104,14 @@
 	};
 };
 
+&analog_sound {
+	status = "okay";
+};
+
+&codec {
+	status = "okay";
+};
+
 &cpu0 {
 	cpu-supply = <&vdd_arm>;
 };
@@ -158,6 +166,10 @@
 };
 
 &hdmiphy {
+	status = "okay";
+};
+
+&hdmi_sound {
 	status = "okay";
 };
 
@@ -270,6 +282,14 @@
 	};
 };
 
+&i2s0 {
+	status = "okay";
+};
+
+&i2s1 {
+	status = "okay";
+};
+
 &io_domains {
 	status = "okay";
 
@@ -334,6 +354,7 @@
 };
 
 &usb20_otg {
+	dr_mode = "host";
 	status = "okay";
 };
 

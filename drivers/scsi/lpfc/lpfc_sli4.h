@@ -20,6 +20,9 @@
  * included with this package.                                     *
  *******************************************************************/
 
+#include <linux/irq_poll.h>
+#include <linux/cpufreq.h>
+
 #if defined(CONFIG_DEBUG_FS) && !defined(CONFIG_SCSI_LPFC_DEBUG_FS)
 #define CONFIG_SCSI_LPFC_DEBUG_FS
 #endif
@@ -133,6 +136,16 @@ struct lpfc_rqb {
 				  /* Callback for HBQ buffer free */
 	void               (*rqb_free_buffer)(struct lpfc_hba *,
 					       struct rqb_dmabuf *);
+};
+
+enum lpfc_poll_mode {
+	LPFC_QUEUE_WORK,
+	LPFC_IRQ_POLL
+};
+
+struct lpfc_idle_stat {
+	u64 prev_idle;
+	u64 prev_wall;
 };
 
 struct lpfc_queue {
@@ -265,6 +278,10 @@ struct lpfc_queue {
 	struct lpfc_queue *assoc_qp;
 	struct list_head _poll_list;
 	void **q_pgs;	/* array to index entries per page */
+
+#define LPFC_IRQ_POLL_WEIGHT 256
+	struct irq_poll iop;
+	enum lpfc_poll_mode poll_mode;
 };
 
 struct lpfc_sli4_link {
@@ -532,6 +549,14 @@ struct lpfc_pc_sli4_params {
 	uint32_t hdr_pp_align;
 	uint32_t sgl_pages_max;
 	uint32_t sgl_pp_align;
+	uint32_t mib_size;
+	uint16_t mi_ver;
+#define LPFC_MIB1_SUPPORT	1
+#define LPFC_MIB2_SUPPORT	2
+#define LPFC_MIB3_SUPPORT	3
+	uint16_t mi_value;
+#define LPFC_DFLT_MIB_VAL	2
+	uint8_t mib_bde_cnt;
 	uint8_t cqv;
 	uint8_t mqv;
 	uint8_t wqv;
@@ -903,8 +928,9 @@ struct lpfc_sli4_hba {
 	struct list_head sp_queue_event;
 	struct list_head sp_cqe_event_pool;
 	struct list_head sp_asynce_work_queue;
-	struct list_head sp_fcp_xri_aborted_work_queue;
+	spinlock_t asynce_list_lock; /* protect sp_asynce_work_queue list */
 	struct list_head sp_els_xri_aborted_work_queue;
+	spinlock_t els_xri_abrt_list_lock; /* protect els_xri_aborted list */
 	struct list_head sp_unsol_work_queue;
 	struct lpfc_sli4_link link_state;
 	struct lpfc_sli4_lnk_info lnk_info;
@@ -926,6 +952,7 @@ struct lpfc_sli4_hba {
 #ifdef CONFIG_SCSI_LPFC_DEBUG_FS
 	struct lpfc_hdwq_stat __percpu *c_stat;
 #endif
+	struct lpfc_idle_stat *idle_stat;
 	uint32_t conf_trunk;
 #define lpfc_conf_trunk_port0_WORD	conf_trunk
 #define lpfc_conf_trunk_port0_SHIFT	0
@@ -1085,8 +1112,7 @@ void lpfc_sli4_async_event_proc(struct lpfc_hba *);
 void lpfc_sli4_fcf_redisc_event_proc(struct lpfc_hba *);
 int lpfc_sli4_resume_rpi(struct lpfc_nodelist *,
 			void (*)(struct lpfc_hba *, LPFC_MBOXQ_t *), void *);
-void lpfc_sli4_fcp_xri_abort_event_proc(struct lpfc_hba *);
-void lpfc_sli4_els_xri_abort_event_proc(struct lpfc_hba *);
+void lpfc_sli4_els_xri_abort_event_proc(struct lpfc_hba *phba);
 void lpfc_sli4_nvme_xri_aborted(struct lpfc_hba *phba,
 				struct sli4_wcqe_xri_aborted *axri,
 				struct lpfc_io_buf *lpfc_ncmd);

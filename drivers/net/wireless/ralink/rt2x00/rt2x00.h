@@ -182,6 +182,15 @@ struct rf_channel {
 };
 
 /*
+ * Information structure for channel survey.
+ */
+struct rt2x00_chan_survey {
+	u64 time_idle;
+	u64 time_busy;
+	u64 time_ext_busy;
+};
+
+/*
  * Channel information structure
  */
 struct channel_info {
@@ -518,11 +527,11 @@ struct rt2x00lib_ops {
 	/*
 	 * TX status tasklet handler.
 	 */
-	void (*txstatus_tasklet) (unsigned long data);
-	void (*pretbtt_tasklet) (unsigned long data);
-	void (*tbtt_tasklet) (unsigned long data);
-	void (*rxdone_tasklet) (unsigned long data);
-	void (*autowake_tasklet) (unsigned long data);
+	void (*txstatus_tasklet) (struct tasklet_struct *t);
+	void (*pretbtt_tasklet) (struct tasklet_struct *t);
+	void (*tbtt_tasklet) (struct tasklet_struct *t);
+	void (*rxdone_tasklet) (struct tasklet_struct *t);
+	void (*autowake_tasklet) (struct tasklet_struct *t);
 
 	/*
 	 * Device init handlers.
@@ -752,6 +761,7 @@ struct rt2x00_dev {
 	 */
 	struct ieee80211_hw *hw;
 	struct ieee80211_supported_band bands[NUM_NL80211_BANDS];
+	struct rt2x00_chan_survey *chan_survey;
 	enum nl80211_band curr_band;
 	int curr_freq;
 
@@ -1487,9 +1497,8 @@ bool rt2x00mac_tx_frames_pending(struct ieee80211_hw *hw);
  */
 int rt2x00lib_probe_dev(struct rt2x00_dev *rt2x00dev);
 void rt2x00lib_remove_dev(struct rt2x00_dev *rt2x00dev);
-#ifdef CONFIG_PM
-int rt2x00lib_suspend(struct rt2x00_dev *rt2x00dev, pm_message_t state);
+
+int rt2x00lib_suspend(struct rt2x00_dev *rt2x00dev);
 int rt2x00lib_resume(struct rt2x00_dev *rt2x00dev);
-#endif /* CONFIG_PM */
 
 #endif /* RT2X00_H */

@@ -133,7 +133,6 @@ int intel_digital_connector_atomic_check(struct drm_connector *conn,
 	struct drm_crtc_state *crtc_state;
 
 	intel_hdcp_atomic_check(conn, old_state, new_state);
-	intel_psr_atomic_check(conn, old_state, new_state);
 
 	if (!new_state->crtc)
 		return 0;
@@ -249,9 +248,11 @@ intel_crtc_duplicate_state(struct drm_crtc *crtc)
 	crtc_state->update_wm_post = false;
 	crtc_state->fifo_changed = false;
 	crtc_state->preload_luts = false;
+	crtc_state->inherited = false;
 	crtc_state->wm.need_postvbl_update = false;
 	crtc_state->fb_bits = 0;
 	crtc_state->update_planes = 0;
+	crtc_state->dsb = NULL;
 
 	return &crtc_state->uapi;
 }
@@ -268,14 +269,15 @@ void intel_crtc_free_hw_state(struct intel_crtc_state *crtc_state)
 	intel_crtc_put_color_blobs(crtc_state);
 }
 
-void intel_crtc_copy_color_blobs(struct intel_crtc_state *crtc_state)
+void intel_crtc_copy_color_blobs(struct intel_crtc_state *crtc_state,
+				 const struct intel_crtc_state *from_crtc_state)
 {
 	drm_property_replace_blob(&crtc_state->hw.degamma_lut,
-				  crtc_state->uapi.degamma_lut);
+				  from_crtc_state->uapi.degamma_lut);
 	drm_property_replace_blob(&crtc_state->hw.gamma_lut,
-				  crtc_state->uapi.gamma_lut);
+				  from_crtc_state->uapi.gamma_lut);
 	drm_property_replace_blob(&crtc_state->hw.ctm,
-				  crtc_state->uapi.ctm);
+				  from_crtc_state->uapi.ctm);
 }
 
 /**
@@ -291,6 +293,8 @@ intel_crtc_destroy_state(struct drm_crtc *crtc,
 			 struct drm_crtc_state *state)
 {
 	struct intel_crtc_state *crtc_state = to_intel_crtc_state(state);
+
+	drm_WARN_ON(crtc->dev, crtc_state->dsb);
 
 	__drm_atomic_helper_crtc_destroy_state(&crtc_state->uapi);
 	intel_crtc_free_hw_state(crtc_state);
@@ -523,8 +527,6 @@ void intel_atomic_state_clear(struct drm_atomic_state *s)
 	intel_atomic_clear_global_state(state);
 
 	state->dpll_set = state->modeset = false;
-	state->global_state_changed = false;
-	state->active_pipes = 0;
 }
 
 struct intel_crtc_state *
@@ -537,41 +539,4 @@ intel_atomic_get_crtc_state(struct drm_atomic_state *state,
 		return ERR_CAST(crtc_state);
 
 	return to_intel_crtc_state(crtc_state);
-}
-
-int _intel_atomic_lock_global_state(struct intel_atomic_state *state)
-{
-	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
-	struct intel_crtc *crtc;
-
-	state->global_state_changed = true;
-
-	for_each_intel_crtc(&dev_priv->drm, crtc) {
-		int ret;
-
-		ret = drm_modeset_lock(&crtc->base.mutex,
-				       state->base.acquire_ctx);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
-int _intel_atomic_serialize_global_state(struct intel_atomic_state *state)
-{
-	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
-	struct intel_crtc *crtc;
-
-	state->global_state_changed = true;
-
-	for_each_intel_crtc(&dev_priv->drm, crtc) {
-		struct intel_crtc_state *crtc_state;
-
-		crtc_state = intel_atomic_get_crtc_state(&state->base, crtc);
-		if (IS_ERR(crtc_state))
-			return PTR_ERR(crtc_state);
-	}
-
-	return 0;
 }

@@ -76,10 +76,8 @@ void set_default_state(struct kvm_nested_state *state)
 void set_default_vmx_state(struct kvm_nested_state *state, int size)
 {
 	memset(state, 0, size);
-	state->flags = KVM_STATE_NESTED_GUEST_MODE  |
-			KVM_STATE_NESTED_RUN_PENDING;
 	if (have_evmcs)
-		state->flags |= KVM_STATE_NESTED_EVMCS;
+		state->flags = KVM_STATE_NESTED_EVMCS;
 	state->format = 0;
 	state->size = size;
 	state->hdr.vmx.vmxon_pa = 0x1000;
@@ -148,6 +146,11 @@ void test_vmx_nested_state(struct kvm_vm *vm)
 	state->hdr.vmx.smm.flags = 1;
 	test_nested_state_expect_einval(vm, state);
 
+	/* Invalid flags are rejected. */
+	set_default_vmx_state(state, state_sz);
+	state->hdr.vmx.flags = ~0;
+	test_nested_state_expect_einval(vm, state);
+
 	/* It is invalid to have vmxon_pa == -1ull and vmcs_pa != -1ull. */
 	set_default_vmx_state(state, state_sz);
 	state->hdr.vmx.vmxon_pa = -1ull;
@@ -185,20 +188,41 @@ void test_vmx_nested_state(struct kvm_vm *vm)
 	state->hdr.vmx.smm.flags = KVM_STATE_NESTED_SMM_GUEST_MODE;
 	test_nested_state_expect_einval(vm, state);
 
-	/* Size must be large enough to fit kvm_nested_state and vmcs12. */
+	/*
+	 * Size must be large enough to fit kvm_nested_state and vmcs12
+	 * if VMCS12 physical address is set
+	 */
 	set_default_vmx_state(state, state_sz);
 	state->size = sizeof(*state);
+	state->flags = 0;
+	test_nested_state_expect_einval(vm, state);
+
+	set_default_vmx_state(state, state_sz);
+	state->size = sizeof(*state);
+	state->flags = 0;
+	state->hdr.vmx.vmcs12_pa = -1;
 	test_nested_state(vm, state);
+
+	/*
+	 * KVM_SET_NESTED_STATE succeeds with invalid VMCS
+	 * contents but L2 not running.
+	 */
+	set_default_vmx_state(state, state_sz);
+	state->flags = 0;
+	test_nested_state(vm, state);
+
+	/* Invalid flags are rejected, even if no VMCS loaded. */
+	set_default_vmx_state(state, state_sz);
+	state->size = sizeof(*state);
+	state->flags = 0;
+	state->hdr.vmx.vmcs12_pa = -1;
+	state->hdr.vmx.flags = ~0;
+	test_nested_state_expect_einval(vm, state);
 
 	/* vmxon_pa cannot be the same address as vmcs_pa. */
 	set_default_vmx_state(state, state_sz);
 	state->hdr.vmx.vmxon_pa = 0;
 	state->hdr.vmx.vmcs12_pa = 0;
-	test_nested_state_expect_einval(vm, state);
-
-	/* The revision id for vmcs12 must be VMCS12_REVISION. */
-	set_default_vmx_state(state, state_sz);
-	set_revision_id_for_vmcs12(state, 0);
 	test_nested_state_expect_einval(vm, state);
 
 	/*
@@ -220,6 +244,22 @@ void test_vmx_nested_state(struct kvm_vm *vm)
 	free(state);
 }
 
+void disable_vmx(struct kvm_vm *vm)
+{
+	struct kvm_cpuid2 *cpuid = kvm_get_supported_cpuid();
+	int i;
+
+	for (i = 0; i < cpuid->nent; ++i)
+		if (cpuid->entries[i].function == 1 &&
+		    cpuid->entries[i].index == 0)
+			break;
+	TEST_ASSERT(i != cpuid->nent, "CPUID function 1 not found");
+
+	cpuid->entries[i].ecx &= ~CPUID_VMX;
+	vcpu_set_cpuid(vm, VCPU_ID, cpuid);
+	cpuid->entries[i].ecx |= CPUID_VMX;
+}
+
 int main(int argc, char *argv[])
 {
 	struct kvm_vm *vm;
@@ -239,6 +279,11 @@ int main(int argc, char *argv[])
 	nested_vmx_check_supported();
 
 	vm = vm_create_default(VCPU_ID, 0, 0);
+
+	/*
+	 * First run tests with VMX disabled to check error handling.
+	 */
+	disable_vmx(vm);
 
 	/* Passing a NULL kvm_nested_state causes a EFAULT. */
 	test_nested_state_expect_efault(vm, NULL);

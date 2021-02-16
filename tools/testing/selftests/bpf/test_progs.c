@@ -12,6 +12,9 @@
 #include <string.h>
 #include <execinfo.h> /* backtrace */
 
+#define EXIT_NO_TEST		2
+#define EXIT_ERR_SETUP_INFRA	3
+
 /* defined in test_progs.h */
 struct test_env env = {};
 
@@ -111,13 +114,31 @@ static void reset_affinity() {
 	if (err < 0) {
 		stdio_restore();
 		fprintf(stderr, "Failed to reset process affinity: %d!\n", err);
-		exit(-1);
+		exit(EXIT_ERR_SETUP_INFRA);
 	}
 	err = pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
 	if (err < 0) {
 		stdio_restore();
 		fprintf(stderr, "Failed to reset thread affinity: %d!\n", err);
-		exit(-1);
+		exit(EXIT_ERR_SETUP_INFRA);
+	}
+}
+
+static void save_netns(void)
+{
+	env.saved_netns_fd = open("/proc/self/ns/net", O_RDONLY);
+	if (env.saved_netns_fd == -1) {
+		perror("open(/proc/self/ns/net)");
+		exit(EXIT_ERR_SETUP_INFRA);
+	}
+}
+
+static void restore_netns(void)
+{
+	if (setns(env.saved_netns_fd, CLONE_NEWNET) == -1) {
+		stdio_restore();
+		perror("setns(CLONE_NEWNS)");
+		exit(EXIT_ERR_SETUP_INFRA);
 	}
 }
 
@@ -128,17 +149,15 @@ void test__end_subtest()
 
 	if (sub_error_cnt)
 		env.fail_cnt++;
-	else
+	else if (test->skip_cnt == 0)
 		env.sub_succ_cnt++;
 	skip_account();
 
 	dump_test_log(test, sub_error_cnt);
 
 	fprintf(env.stdout, "#%d/%d %s:%s\n",
-	       test->test_num, test->subtest_num,
-	       test->subtest_name, sub_error_cnt ? "FAIL" : "OK");
-
-	reset_affinity();
+	       test->test_num, test->subtest_num, test->subtest_name,
+	       sub_error_cnt ? "FAIL" : (test->skip_cnt ? "SKIP" : "OK"));
 
 	free(test->subtest_name);
 	test->subtest_name = NULL;
@@ -341,6 +360,58 @@ err:
 	return -1;
 }
 
+static int finit_module(int fd, const char *param_values, int flags)
+{
+	return syscall(__NR_finit_module, fd, param_values, flags);
+}
+
+static int delete_module(const char *name, int flags)
+{
+	return syscall(__NR_delete_module, name, flags);
+}
+
+static void unload_bpf_testmod(void)
+{
+	if (delete_module("bpf_testmod", 0)) {
+		if (errno == ENOENT) {
+			if (env.verbosity > VERBOSE_NONE)
+				fprintf(stdout, "bpf_testmod.ko is already unloaded.\n");
+			return;
+		}
+		fprintf(env.stderr, "Failed to unload bpf_testmod.ko from kernel: %d\n", -errno);
+		exit(1);
+	}
+	if (env.verbosity > VERBOSE_NONE)
+		fprintf(stdout, "Successfully unloaded bpf_testmod.ko.\n");
+}
+
+static int load_bpf_testmod(void)
+{
+	int fd;
+
+	/* ensure previous instance of the module is unloaded */
+	unload_bpf_testmod();
+
+	if (env.verbosity > VERBOSE_NONE)
+		fprintf(stdout, "Loading bpf_testmod.ko...\n");
+
+	fd = open("bpf_testmod.ko", O_RDONLY);
+	if (fd < 0) {
+		fprintf(env.stderr, "Can't find bpf_testmod.ko kernel module: %d\n", -errno);
+		return -ENOENT;
+	}
+	if (finit_module(fd, "", 0)) {
+		fprintf(env.stderr, "Failed to load bpf_testmod.ko into the kernel: %d\n", -errno);
+		close(fd);
+		return -EINVAL;
+	}
+	close(fd);
+
+	if (env.verbosity > VERBOSE_NONE)
+		fprintf(stdout, "Successfully loaded bpf_testmod.ko.\n");
+	return 0;
+}
+
 /* extern declarations for test funcs */
 #define DEFINE_TEST(name) extern void test_##name(void);
 #include <prog_tests/tests.h>
@@ -366,6 +437,8 @@ enum ARG_KEYS {
 	ARG_TEST_NAME_BLACKLIST = 'b',
 	ARG_VERIFIER_STATS = 's',
 	ARG_VERBOSE = 'v',
+	ARG_GET_TEST_CNT = 'c',
+	ARG_LIST_TEST_NAMES = 'l',
 };
 
 static const struct argp_option opts[] = {
@@ -379,6 +452,10 @@ static const struct argp_option opts[] = {
 	  "Output verifier statistics", },
 	{ "verbose", ARG_VERBOSE, "LEVEL", OPTION_ARG_OPTIONAL,
 	  "Verbose output (use -vv or -vvv for progressively verbose output)" },
+	{ "count", ARG_GET_TEST_CNT, NULL, 0,
+	  "Get number of selected top-level tests " },
+	{ "list", ARG_LIST_TEST_NAMES, NULL, 0,
+	  "List test names that would run (without running them) " },
 	{},
 };
 
@@ -510,6 +587,22 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 				return -EINVAL;
 			}
 		}
+
+		if (env->verbosity > VERBOSE_NONE) {
+			if (setenv("SELFTESTS_VERBOSE", "1", 1) == -1) {
+				fprintf(stderr,
+					"Unable to setenv SELFTESTS_VERBOSE=1 (errno=%d)",
+					errno);
+				return -1;
+			}
+		}
+
+		break;
+	case ARG_GET_TEST_CNT:
+		env->get_test_cnt = true;
+		break;
+	case ARG_LIST_TEST_NAMES:
+		env->list_test_names = true;
 		break;
 	case ARGP_KEY_ARG:
 		argp_usage(state);
@@ -587,7 +680,9 @@ int cd_flavor_subdir(const char *exec_name)
 	if (!flavor)
 		return 0;
 	flavor++;
-	fprintf(stdout, "Switching to flavor '%s' subdirectory...\n", flavor);
+	if (env.verbosity > VERBOSE_NONE)
+		fprintf(stdout,	"Switching to flavor '%s' subdirectory...\n", flavor);
+
 	return chdir(flavor);
 }
 
@@ -643,7 +738,13 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	save_netns();
 	stdio_hijack();
+	env.has_testmod = true;
+	if (load_bpf_testmod()) {
+		fprintf(env.stderr, "WARNING! Selftests relying on bpf_testmod.ko will be skipped.\n");
+		env.has_testmod = false;
+	}
 	for (i = 0; i < prog_test_cnt; i++) {
 		struct prog_test_def *test = &prog_test_defs[i];
 
@@ -653,6 +754,17 @@ int main(int argc, char **argv)
 		if (!should_run(&env.test_selector,
 				test->test_num, test->test_name))
 			continue;
+
+		if (env.get_test_cnt) {
+			env.succ_cnt++;
+			continue;
+		}
+
+		if (env.list_test_names) {
+			fprintf(env.stdout, "%s\n", test->test_name);
+			env.succ_cnt++;
+			continue;
+		}
 
 		test->run_test();
 		/* ensure last sub-test is finalized properly */
@@ -673,19 +785,36 @@ int main(int argc, char **argv)
 			test->error_cnt ? "FAIL" : "OK");
 
 		reset_affinity();
+		restore_netns();
 		if (test->need_cgroup_cleanup)
 			cleanup_cgroup_environment();
 	}
+	if (env.has_testmod)
+		unload_bpf_testmod();
 	stdio_restore();
+
+	if (env.get_test_cnt) {
+		printf("%d\n", env.succ_cnt);
+		goto out;
+	}
+
+	if (env.list_test_names)
+		goto out;
+
 	fprintf(stdout, "Summary: %d/%d PASSED, %d SKIPPED, %d FAILED\n",
 		env.succ_cnt, env.sub_succ_cnt, env.skip_cnt, env.fail_cnt);
 
+out:
 	free_str_set(&env.test_selector.blacklist);
 	free_str_set(&env.test_selector.whitelist);
 	free(env.test_selector.num_set);
 	free_str_set(&env.subtest_selector.blacklist);
 	free_str_set(&env.subtest_selector.whitelist);
 	free(env.subtest_selector.num_set);
+	close(env.saved_netns_fd);
+
+	if (env.succ_cnt + env.fail_cnt + env.skip_cnt == 0)
+		return EXIT_NO_TEST;
 
 	return env.fail_cnt ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -1792,7 +1792,7 @@ struct kvm_s390_interrupt_info *kvm_s390_get_io_int(struct kvm *kvm,
 		goto out;
 	}
 gisa_out:
-	tmp_inti = kzalloc(sizeof(*inti), GFP_KERNEL);
+	tmp_inti = kzalloc(sizeof(*inti), GFP_KERNEL_ACCOUNT);
 	if (tmp_inti) {
 		tmp_inti->type = KVM_S390_INT_IO(1, 0, 0, 0);
 		tmp_inti->io.io_int_word = isc_to_int_word(isc);
@@ -2015,7 +2015,7 @@ int kvm_s390_inject_vm(struct kvm *kvm,
 	struct kvm_s390_interrupt_info *inti;
 	int rc;
 
-	inti = kzalloc(sizeof(*inti), GFP_KERNEL);
+	inti = kzalloc(sizeof(*inti), GFP_KERNEL_ACCOUNT);
 	if (!inti)
 		return -ENOMEM;
 
@@ -2414,7 +2414,7 @@ static int enqueue_floating_irq(struct kvm_device *dev,
 		return -EINVAL;
 
 	while (len >= sizeof(struct kvm_s390_irq)) {
-		inti = kzalloc(sizeof(*inti), GFP_KERNEL);
+		inti = kzalloc(sizeof(*inti), GFP_KERNEL_ACCOUNT);
 		if (!inti)
 			return -ENOMEM;
 
@@ -2462,7 +2462,7 @@ static int register_io_adapter(struct kvm_device *dev,
 	if (dev->kvm->arch.adapters[adapter_info.id] != NULL)
 		return -EINVAL;
 
-	adapter = kzalloc(sizeof(*adapter), GFP_KERNEL);
+	adapter = kzalloc(sizeof(*adapter), GFP_KERNEL_ACCOUNT);
 	if (!adapter)
 		return -ENOMEM;
 
@@ -2768,7 +2768,7 @@ static struct page *get_map_page(struct kvm *kvm, u64 uaddr)
 	struct page *page = NULL;
 
 	mmap_read_lock(kvm->mm);
-	get_user_pages_remote(NULL, kvm->mm, uaddr, 1, FOLL_WRITE,
+	get_user_pages_remote(kvm->mm, uaddr, 1, FOLL_WRITE,
 			      &page, NULL, NULL);
 	mmap_read_unlock(kvm->mm);
 	return page;
@@ -3290,7 +3290,7 @@ int kvm_s390_gib_init(u8 nisc)
 		goto out;
 	}
 
-	gib = (struct kvm_s390_gib *)get_zeroed_page(GFP_KERNEL | GFP_DMA);
+	gib = (struct kvm_s390_gib *)get_zeroed_page(GFP_KERNEL_ACCOUNT | GFP_DMA);
 	if (!gib) {
 		rc = -ENOMEM;
 		goto out;

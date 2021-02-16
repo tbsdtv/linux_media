@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (c) 2014-2017 Oracle.  All rights reserved.
+ * Copyright (c) 2014-2020, Oracle and/or its affiliates.
  * Copyright (c) 2003-2007 Network Appliance, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -71,7 +71,7 @@ static unsigned int rpcrdma_max_call_header_size(unsigned int maxsegs)
 	size = RPCRDMA_HDRLEN_MIN;
 
 	/* Maximum Read list size */
-	size = maxsegs * rpcrdma_readchunk_maxsz * sizeof(__be32);
+	size += maxsegs * rpcrdma_readchunk_maxsz * sizeof(__be32);
 
 	/* Minimal Read chunk size */
 	size += sizeof(__be32);	/* segment count */
@@ -94,7 +94,7 @@ static unsigned int rpcrdma_max_reply_header_size(unsigned int maxsegs)
 	size = RPCRDMA_HDRLEN_MIN;
 
 	/* Maximum Write list size */
-	size = sizeof(__be32);		/* segment count */
+	size += sizeof(__be32);		/* segment count */
 	size += maxsegs * rpcrdma_segment_maxsz * sizeof(__be32);
 	size += sizeof(__be32);	/* list discriminator */
 
@@ -179,6 +179,31 @@ rpcrdma_nonpayload_inline(const struct rpcrdma_xprt *r_xprt,
 		r_xprt->rx_ep->re_max_inline_recv;
 }
 
+/* ACL likes to be lazy in allocating pages. For TCP, these
+ * pages can be allocated during receive processing. Not true
+ * for RDMA, which must always provision receive buffers
+ * up front.
+ */
+static noinline int
+rpcrdma_alloc_sparse_pages(struct xdr_buf *buf)
+{
+	struct page **ppages;
+	int len;
+
+	len = buf->page_len;
+	ppages = buf->pages + (buf->page_base >> PAGE_SHIFT);
+	while (len > 0) {
+		if (!*ppages)
+			*ppages = alloc_page(GFP_NOWAIT | __GFP_NOWARN);
+		if (!*ppages)
+			return -ENOBUFS;
+		ppages++;
+		len -= PAGE_SIZE;
+	}
+
+	return 0;
+}
+
 /* Split @vec on page boundaries into SGEs. FMR registers pages, not
  * a byte range. Other modes coalesce these SGEs into a single MR
  * when they can.
@@ -233,15 +258,6 @@ rpcrdma_convert_iovs(struct rpcrdma_xprt *r_xprt, struct xdr_buf *xdrbuf,
 	ppages = xdrbuf->pages + (xdrbuf->page_base >> PAGE_SHIFT);
 	page_base = offset_in_page(xdrbuf->page_base);
 	while (len) {
-		/* ACL likes to be lazy in allocating pages - ACLs
-		 * are small by default but can get huge.
-		 */
-		if (unlikely(xdrbuf->flags & XDRBUF_SPARSE_PAGES)) {
-			if (!*ppages)
-				*ppages = alloc_page(GFP_NOWAIT | __GFP_NOWARN);
-			if (!*ppages)
-				return -ENOBUFS;
-		}
 		seg->mr_page = *ppages;
 		seg->mr_offset = (char *)page_base;
 		seg->mr_len = min_t(u32, PAGE_SIZE - page_base, len);
@@ -275,14 +291,6 @@ out:
 	return n;
 }
 
-static void
-xdr_encode_rdma_segment(__be32 *iptr, struct rpcrdma_mr *mr)
-{
-	*iptr++ = cpu_to_be32(mr->mr_handle);
-	*iptr++ = cpu_to_be32(mr->mr_length);
-	xdr_encode_hyper(iptr, mr->mr_offset);
-}
-
 static int
 encode_rdma_segment(struct xdr_stream *xdr, struct rpcrdma_mr *mr)
 {
@@ -292,7 +300,7 @@ encode_rdma_segment(struct xdr_stream *xdr, struct rpcrdma_mr *mr)
 	if (unlikely(!p))
 		return -EMSGSIZE;
 
-	xdr_encode_rdma_segment(p, mr);
+	xdr_encode_rdma_segment(p, mr->mr_handle, mr->mr_length, mr->mr_offset);
 	return 0;
 }
 
@@ -307,8 +315,8 @@ encode_read_segment(struct xdr_stream *xdr, struct rpcrdma_mr *mr,
 		return -EMSGSIZE;
 
 	*p++ = xdr_one;			/* Item present */
-	*p++ = cpu_to_be32(position);
-	xdr_encode_rdma_segment(p, mr);
+	xdr_encode_read_segment(p, position, mr->mr_handle, mr->mr_length,
+				mr->mr_offset);
 	return 0;
 }
 
@@ -323,7 +331,6 @@ static struct rpcrdma_mr_seg *rpcrdma_mr_prepare(struct rpcrdma_xprt *r_xprt,
 		*mr = rpcrdma_mr_get(r_xprt);
 		if (!*mr)
 			goto out_getmr_err;
-		trace_xprtrdma_mr_get(req);
 		(*mr)->mr_req = req;
 	}
 
@@ -331,7 +338,7 @@ static struct rpcrdma_mr_seg *rpcrdma_mr_prepare(struct rpcrdma_xprt *r_xprt,
 	return frwr_map(r_xprt, seg, nsegs, writing, req->rl_slot.rq_xid, *mr);
 
 out_getmr_err:
-	trace_xprtrdma_nomrs(req);
+	trace_xprtrdma_nomrs_err(r_xprt, req);
 	xprt_wait_for_buffer_space(&r_xprt->rx_xprt);
 	rpcrdma_mrs_refresh(r_xprt);
 	return ERR_PTR(-EAGAIN);
@@ -875,6 +882,12 @@ rpcrdma_marshal_req(struct rpcrdma_xprt *r_xprt, struct rpc_rqst *rqst)
 	__be32 *p;
 	int ret;
 
+	if (unlikely(rqst->rq_rcv_buf.flags & XDRBUF_SPARSE_PAGES)) {
+		ret = rpcrdma_alloc_sparse_pages(&rqst->rq_rcv_buf);
+		if (ret)
+			return ret;
+	}
+
 	rpcrdma_set_xdrlen(&req->rl_hdrbuf, 0);
 	xdr_init_encode(xdr, &req->rl_hdrbuf, rdmab_data(req->rl_rdmabuf),
 			rqst);
@@ -1133,11 +1146,11 @@ rpcrdma_is_bcall(struct rpcrdma_xprt *r_xprt, struct rpcrdma_rep *rep)
 	p = xdr_inline_decode(xdr, 0);
 
 	/* Chunk lists */
-	if (*p++ != xdr_zero)
+	if (xdr_item_is_present(p++))
 		return false;
-	if (*p++ != xdr_zero)
+	if (xdr_item_is_present(p++))
 		return false;
-	if (*p++ != xdr_zero)
+	if (xdr_item_is_present(p++))
 		return false;
 
 	/* RPC header */
@@ -1176,10 +1189,7 @@ static int decode_rdma_segment(struct xdr_stream *xdr, u32 *length)
 	if (unlikely(!p))
 		return -EIO;
 
-	handle = be32_to_cpup(p++);
-	*length = be32_to_cpup(p++);
-	xdr_decode_hyper(p, &offset);
-
+	xdr_decode_rdma_segment(p, &handle, length, &offset);
 	trace_xprtrdma_decode_seg(handle, *length, offset);
 	return 0;
 }
@@ -1215,7 +1225,7 @@ static int decode_read_list(struct xdr_stream *xdr)
 	p = xdr_inline_decode(xdr, sizeof(*p));
 	if (unlikely(!p))
 		return -EIO;
-	if (unlikely(*p != xdr_zero))
+	if (unlikely(xdr_item_is_present(p)))
 		return -EIO;
 	return 0;
 }
@@ -1234,7 +1244,7 @@ static int decode_write_list(struct xdr_stream *xdr, u32 *length)
 		p = xdr_inline_decode(xdr, sizeof(*p));
 		if (unlikely(!p))
 			return -EIO;
-		if (*p == xdr_zero)
+		if (xdr_item_is_absent(p))
 			break;
 		if (!first)
 			return -EIO;
@@ -1256,7 +1266,7 @@ static int decode_reply_chunk(struct xdr_stream *xdr, u32 *length)
 		return -EIO;
 
 	*length = 0;
-	if (*p != xdr_zero)
+	if (xdr_item_is_present(p))
 		if (decode_write_chunk(xdr, length))
 			return -EIO;
 	return 0;
@@ -1333,24 +1343,16 @@ rpcrdma_decode_error(struct rpcrdma_xprt *r_xprt, struct rpcrdma_rep *rep,
 		p = xdr_inline_decode(xdr, 2 * sizeof(*p));
 		if (!p)
 			break;
-		dprintk("RPC:       %s: server reports "
-			"version error (%u-%u), xid %08x\n", __func__,
-			be32_to_cpup(p), be32_to_cpu(*(p + 1)),
-			be32_to_cpu(rep->rr_xid));
+		trace_xprtrdma_err_vers(rqst, p, p + 1);
 		break;
 	case err_chunk:
-		dprintk("RPC:       %s: server reports "
-			"header decoding error, xid %08x\n", __func__,
-			be32_to_cpu(rep->rr_xid));
+		trace_xprtrdma_err_chunk(rqst);
 		break;
 	default:
-		dprintk("RPC:       %s: server reports "
-			"unrecognized error %d, xid %08x\n", __func__,
-			be32_to_cpup(p), be32_to_cpu(rep->rr_xid));
+		trace_xprtrdma_err_unrecognized(rqst, p);
 	}
 
-	r_xprt->rx_stats.bad_reply_count++;
-	return -EREMOTEIO;
+	return -EIO;
 }
 
 /* Perform XID lookup, reconstruction of the RPC reply, and
@@ -1387,13 +1389,11 @@ out:
 	spin_unlock(&xprt->queue_lock);
 	return;
 
-/* If the incoming reply terminated a pending RPC, the next
- * RPC call will post a replacement receive buffer as it is
- * being marshaled.
- */
 out_badheader:
-	trace_xprtrdma_reply_hdr(rep);
+	trace_xprtrdma_reply_hdr_err(rep);
 	r_xprt->rx_stats.bad_reply_count++;
+	rqst->rq_task->tk_status = status;
+	status = 0;
 	goto out;
 }
 
@@ -1464,14 +1464,12 @@ void rpcrdma_reply_handler(struct rpcrdma_rep *rep)
 	rpcrdma_post_recvs(r_xprt, false);
 
 	req = rpcr_to_rdmar(rqst);
-	if (req->rl_reply) {
-		trace_xprtrdma_leaked_rep(rqst, req->rl_reply);
+	if (unlikely(req->rl_reply))
 		rpcrdma_recv_buffer_put(req->rl_reply);
-	}
 	req->rl_reply = rep;
 	rep->rr_rqst = rqst;
 
-	trace_xprtrdma_reply(rqst->rq_task, rep, req, credits);
+	trace_xprtrdma_reply(rqst->rq_task, rep, credits);
 
 	if (rep->rr_wc_flags & IB_WC_WITH_INVALIDATE)
 		frwr_reminv(rep, &req->rl_registered);
@@ -1483,16 +1481,16 @@ void rpcrdma_reply_handler(struct rpcrdma_rep *rep)
 	return;
 
 out_badversion:
-	trace_xprtrdma_reply_vers(rep);
+	trace_xprtrdma_reply_vers_err(rep);
 	goto out;
 
 out_norqst:
 	spin_unlock(&xprt->queue_lock);
-	trace_xprtrdma_reply_rqst(rep);
+	trace_xprtrdma_reply_rqst_err(rep);
 	goto out;
 
 out_shortreply:
-	trace_xprtrdma_reply_short(rep);
+	trace_xprtrdma_reply_short_err(rep);
 
 out:
 	rpcrdma_recv_buffer_put(rep);

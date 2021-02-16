@@ -36,8 +36,10 @@ static inline bool pte_user(pte_t pte)
  */
 #ifdef CONFIG_PTE_64BIT
 #define PTE_RPN_MASK	(~((1ULL << PTE_RPN_SHIFT) - 1))
+#define MAX_POSSIBLE_PHYSMEM_BITS 36
 #else
 #define PTE_RPN_MASK	(~((1UL << PTE_RPN_SHIFT) - 1))
+#define MAX_POSSIBLE_PHYSMEM_BITS 32
 #endif
 
 /*
@@ -184,22 +186,17 @@ int map_kernel_page(unsigned long va, phys_addr_t pa, pgprot_t prot);
  */
 #define VMALLOC_OFFSET (0x1000000) /* 16M */
 
-/*
- * With CONFIG_STRICT_KERNEL_RWX, kernel segments are set NX. But when modules
- * are used, NX cannot be set on VMALLOC space. So vmalloc VM space and linear
- * memory shall not share segments.
- */
-#if defined(CONFIG_STRICT_KERNEL_RWX) && defined(CONFIG_MODULES)
-#define VMALLOC_START ((ALIGN((long)high_memory, 256L << 20) + VMALLOC_OFFSET) & \
-		       ~(VMALLOC_OFFSET - 1))
-#else
 #define VMALLOC_START ((((long)high_memory + VMALLOC_OFFSET) & ~(VMALLOC_OFFSET-1)))
-#endif
 
 #ifdef CONFIG_KASAN_VMALLOC
 #define VMALLOC_END	ALIGN_DOWN(ioremap_bot, PAGE_SIZE << KASAN_SHADOW_SCALE_SHIFT)
 #else
 #define VMALLOC_END	ioremap_bot
+#endif
+
+#ifdef CONFIG_STRICT_KERNEL_RWX
+#define MODULES_END	ALIGN_DOWN(PAGE_OFFSET, SZ_256M)
+#define MODULES_VADDR	(MODULES_END - SZ_256M)
 #endif
 
 #ifndef __ASSEMBLY__
@@ -243,8 +240,14 @@ extern void add_hash_page(unsigned context, unsigned long va,
 			  unsigned long pmdval);
 
 /* Flush an entry from the TLB/hash table */
-extern void flush_hash_entry(struct mm_struct *mm, pte_t *ptep,
-			     unsigned long address);
+static inline void flush_hash_entry(struct mm_struct *mm, pte_t *ptep, unsigned long addr)
+{
+	if (mmu_has_feature(MMU_FTR_HPTE_TABLE)) {
+		unsigned long ptephys = __pa(ptep) & PAGE_MASK;
+
+		flush_hash_pages(mm->context.id, addr, ptephys, 1);
+	}
+}
 
 /*
  * PTE updates. This function is called whenever an existing
@@ -296,10 +299,9 @@ static inline int __ptep_test_and_clear_young(struct mm_struct *mm,
 {
 	unsigned long old;
 	old = pte_update(mm, addr, ptep, _PAGE_ACCESSED, 0, 0);
-	if (old & _PAGE_HASHPTE) {
-		unsigned long ptephys = __pa(ptep) & PAGE_MASK;
-		flush_hash_pages(mm->context.id, addr, ptephys, 1);
-	}
+	if (old & _PAGE_HASHPTE)
+		flush_hash_entry(mm, ptep, addr);
+
 	return (old & _PAGE_ACCESSED) != 0;
 }
 #define ptep_test_and_clear_young(__vma, __addr, __ptep) \
@@ -527,9 +529,9 @@ static inline void __set_pte_at(struct mm_struct *mm, unsigned long addr,
 	if (pte_val(*ptep) & _PAGE_HASHPTE)
 		flush_hash_entry(mm, ptep, addr);
 	__asm__ __volatile__("\
-		stw%U0%X0 %2,%0\n\
+		stw%X0 %2,%0\n\
 		eieio\n\
-		stw%U0%X0 %L2,%1"
+		stw%X1 %L2,%1"
 	: "=m" (*ptep), "=m" (*((unsigned char *)ptep+4))
 	: "r" (pte) : "memory");
 

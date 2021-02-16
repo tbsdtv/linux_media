@@ -81,6 +81,7 @@ enum hp_wmi_commandtype {
 	HPWMI_FEATURE2_QUERY		= 0x0d,
 	HPWMI_WIRELESS2_QUERY		= 0x1b,
 	HPWMI_POSTCODEERROR_QUERY	= 0x2a,
+	HPWMI_THERMAL_POLICY_QUERY	= 0x4c,
 };
 
 enum hp_wmi_command {
@@ -246,7 +247,8 @@ static int hp_wmi_perform_query(int query, enum hp_wmi_command command,
 	ret = bios_return->return_code;
 
 	if (ret) {
-		if (ret != HPWMI_RET_UNKNOWN_CMDTYPE)
+		if (ret != HPWMI_RET_UNKNOWN_COMMAND &&
+		    ret != HPWMI_RET_UNKNOWN_CMDTYPE)
 			pr_warn("query 0x%x returned error 0x%x\n", query, ret);
 		goto out_free;
 	}
@@ -861,6 +863,26 @@ fail:
 	return err;
 }
 
+static int thermal_policy_setup(struct platform_device *device)
+{
+	int err, tp;
+
+	tp = hp_wmi_read_int(HPWMI_THERMAL_POLICY_QUERY);
+	if (tp < 0)
+		return tp;
+
+	/*
+	 * call thermal policy write command to ensure that the firmware correctly
+	 * sets the OEM variables for the DPTF
+	 */
+	err = hp_wmi_perform_query(HPWMI_THERMAL_POLICY_QUERY, HPWMI_WRITE, &tp,
+							   sizeof(tp), 0);
+	if (err)
+		return err;
+
+	return 0;
+}
+
 static int __init hp_wmi_bios_setup(struct platform_device *device)
 {
 	/* clear detected rfkill devices */
@@ -871,6 +893,8 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 
 	if (hp_wmi_rfkill_setup(device))
 		hp_wmi_rfkill2_setup(device);
+
+	thermal_policy_setup(device);
 
 	return 0;
 }

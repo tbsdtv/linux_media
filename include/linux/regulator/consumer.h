@@ -32,10 +32,12 @@
 #define __LINUX_REGULATOR_CONSUMER_H_
 
 #include <linux/err.h>
+#include <linux/suspend.h>
 
 struct device;
 struct notifier_block;
 struct regmap;
+struct regulator_dev;
 
 /*
  * Regulator operating modes.
@@ -277,6 +279,14 @@ int regulator_unregister_notifier(struct regulator *regulator,
 void devm_regulator_unregister_notifier(struct regulator *regulator,
 					struct notifier_block *nb);
 
+/* regulator suspend */
+int regulator_suspend_enable(struct regulator_dev *rdev,
+			     suspend_state_t state);
+int regulator_suspend_disable(struct regulator_dev *rdev,
+			      suspend_state_t state);
+int regulator_set_suspend_voltage(struct regulator *regulator, int min_uV,
+				  int max_uV, suspend_state_t state);
+
 /* driver data - core doesn't touch */
 void *regulator_get_drvdata(struct regulator *regulator);
 void regulator_set_drvdata(struct regulator *regulator, void *data);
@@ -317,6 +327,12 @@ devm_regulator_get(struct device *dev, const char *id)
 
 static inline struct regulator *__must_check
 regulator_get_exclusive(struct device *dev, const char *id)
+{
+	return ERR_PTR(-ENODEV);
+}
+
+static inline struct regulator *__must_check
+devm_regulator_get_exclusive(struct device *dev, const char *id)
 {
 	return ERR_PTR(-ENODEV);
 }
@@ -476,6 +492,11 @@ static inline int regulator_get_voltage(struct regulator *regulator)
 	return -EINVAL;
 }
 
+static inline int regulator_sync_voltage(struct regulator *regulator)
+{
+	return -EINVAL;
+}
+
 static inline int regulator_is_supported_voltage(struct regulator *regulator,
 				   int min_uV, int max_uV)
 {
@@ -566,6 +587,25 @@ static inline int devm_regulator_unregister_notifier(struct regulator *regulator
 						     struct notifier_block *nb)
 {
 	return 0;
+}
+
+static inline int regulator_suspend_enable(struct regulator_dev *rdev,
+					   suspend_state_t state)
+{
+	return -EINVAL;
+}
+
+static inline int regulator_suspend_disable(struct regulator_dev *rdev,
+					    suspend_state_t state)
+{
+	return -EINVAL;
+}
+
+static inline int regulator_set_suspend_voltage(struct regulator *regulator,
+						int min_uV, int max_uV,
+						suspend_state_t state)
+{
+	return -EINVAL;
 }
 
 static inline void *regulator_get_drvdata(struct regulator *regulator)

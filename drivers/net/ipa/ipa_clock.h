@@ -9,14 +9,25 @@
 struct device;
 
 struct ipa;
+struct ipa_clock_data;
+
+/**
+ * ipa_clock_rate() - Return the current IPA core clock rate
+ * @ipa:	IPA structure
+ *
+ * Return: The current clock rate (in Hz), or 0.
+ */
+u32 ipa_clock_rate(struct ipa *ipa);
 
 /**
  * ipa_clock_init() - Initialize IPA clocking
  * @dev:	IPA device
+ * @data:	Clock configuration data
  *
- * @Return:	A pointer to an ipa_clock structure, or a pointer-coded error
+ * Return:	A pointer to an ipa_clock structure, or a pointer-coded error
  */
-struct ipa_clock *ipa_clock_init(struct device *dev);
+struct ipa_clock *ipa_clock_init(struct device *dev,
+				 const struct ipa_clock_data *data);
 
 /**
  * ipa_clock_exit() - Inverse of ipa_clock_init()

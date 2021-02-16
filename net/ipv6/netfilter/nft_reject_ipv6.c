@@ -28,7 +28,8 @@ static void nft_reject_ipv6_eval(const struct nft_expr *expr,
 				 nft_hook(pkt));
 		break;
 	case NFT_REJECT_TCP_RST:
-		nf_send_reset6(nft_net(pkt), pkt->skb, nft_hook(pkt));
+		nf_send_reset6(nft_net(pkt), pkt->xt.state->sk, pkt->skb,
+			       nft_hook(pkt));
 		break;
 	default:
 		break;
@@ -72,3 +73,4 @@ module_exit(nft_reject_ipv6_module_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
 MODULE_ALIAS_NFT_AF_EXPR(AF_INET6, "reject");
+MODULE_DESCRIPTION("IPv6 packet rejection for nftables");

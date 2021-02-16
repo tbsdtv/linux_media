@@ -350,7 +350,6 @@ static void stm32_transmit_chars_dma(struct uart_port *port)
 	struct stm32_usart_offsets *ofs = &stm32port->info->ofs;
 	struct circ_buf *xmit = &port->state->xmit;
 	struct dma_async_tx_descriptor *desc = NULL;
-	dma_cookie_t cookie;
 	unsigned int count, i;
 
 	if (stm32port->tx_dma_busy)
@@ -394,7 +393,7 @@ static void stm32_transmit_chars_dma(struct uart_port *port)
 	desc->callback_param = port;
 
 	/* Push current DMA TX transaction in the pending queue */
-	cookie = dmaengine_submit(desc);
+	dmaengine_submit(desc);
 
 	/* Issue pending DMA TX requests */
 	dma_async_issue_pending(stm32port->tx_ch);
@@ -537,16 +536,41 @@ static void stm32_disable_ms(struct uart_port *port)
 /* Transmit stop */
 static void stm32_stop_tx(struct uart_port *port)
 {
+	struct stm32_port *stm32_port = to_stm32_port(port);
+	struct serial_rs485 *rs485conf = &port->rs485;
+
 	stm32_tx_interrupt_disable(port);
+
+	if (rs485conf->flags & SER_RS485_ENABLED) {
+		if (rs485conf->flags & SER_RS485_RTS_ON_SEND) {
+			mctrl_gpio_set(stm32_port->gpios,
+					stm32_port->port.mctrl & ~TIOCM_RTS);
+		} else {
+			mctrl_gpio_set(stm32_port->gpios,
+					stm32_port->port.mctrl | TIOCM_RTS);
+		}
+	}
 }
 
 /* There are probably characters waiting to be transmitted. */
 static void stm32_start_tx(struct uart_port *port)
 {
+	struct stm32_port *stm32_port = to_stm32_port(port);
+	struct serial_rs485 *rs485conf = &port->rs485;
 	struct circ_buf *xmit = &port->state->xmit;
 
 	if (uart_circ_empty(xmit))
 		return;
+
+	if (rs485conf->flags & SER_RS485_ENABLED) {
+		if (rs485conf->flags & SER_RS485_RTS_ON_SEND) {
+			mctrl_gpio_set(stm32_port->gpios,
+					stm32_port->port.mctrl | TIOCM_RTS);
+		} else {
+			mctrl_gpio_set(stm32_port->gpios,
+					stm32_port->port.mctrl & ~TIOCM_RTS);
+		}
+	}
 
 	stm32_transmit_chars(port);
 }
@@ -962,7 +986,7 @@ static int stm32_init_port(struct stm32_port *stm32port,
 		return ret;
 
 	if (stm32port->info->cfg.has_wakeup) {
-		stm32port->wakeirq = platform_get_irq(pdev, 1);
+		stm32port->wakeirq = platform_get_irq_optional(pdev, 1);
 		if (stm32port->wakeirq <= 0 && stm32port->wakeirq != -ENXIO)
 			return stm32port->wakeirq ? : -ENODEV;
 	}
@@ -1033,8 +1057,9 @@ static struct stm32_port *stm32_of_get_stm32_port(struct platform_device *pdev)
 	if (WARN_ON(id >= STM32_MAX_PORTS))
 		return NULL;
 
-	stm32_ports[id].hw_flow_control = of_property_read_bool(np,
-							"st,hw-flow-ctrl");
+	stm32_ports[id].hw_flow_control =
+		of_property_read_bool (np, "st,hw-flow-ctrl") /*deprecated*/ ||
+		of_property_read_bool (np, "uart-has-rtscts");
 	stm32_ports[id].port.line = id;
 	stm32_ports[id].cr1_irq = USART_CR1_RXNEIE;
 	stm32_ports[id].cr3_irq = 0;
@@ -1061,7 +1086,6 @@ static int stm32_of_dma_rx_probe(struct stm32_port *stm32port,
 	struct device *dev = &pdev->dev;
 	struct dma_slave_config config;
 	struct dma_async_tx_descriptor *desc = NULL;
-	dma_cookie_t cookie;
 	int ret;
 
 	/* Request DMA RX channel */
@@ -1106,7 +1130,7 @@ static int stm32_of_dma_rx_probe(struct stm32_port *stm32port,
 	desc->callback_param = NULL;
 
 	/* Push current DMA transaction in the pending queue */
-	cookie = dmaengine_submit(desc);
+	dmaengine_submit(desc);
 
 	/* Issue pending DMA requests */
 	dma_async_issue_pending(stm32port->rx_ch);

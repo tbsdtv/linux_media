@@ -53,6 +53,7 @@ static struct drm_map_list *drm_find_matching_map(struct drm_device *dev,
 						  struct drm_local_map *map)
 {
 	struct drm_map_list *entry;
+
 	list_for_each_entry(entry, &dev->maplist, head) {
 		/*
 		 * Because the kernel-userspace ABI is fixed at a 32-bit offset
@@ -76,6 +77,7 @@ static struct drm_map_list *drm_find_matching_map(struct drm_device *dev,
 			if ((entry->map->offset & 0xffffffff) ==
 			    (map->offset & 0xffffffff))
 				return entry;
+			break;
 		default: /* Make gcc happy */
 			;
 		}
@@ -102,6 +104,7 @@ static int drm_map_handle(struct drm_device *dev, struct drm_hash_item *hash,
 
 	if (!use_hashed_handle) {
 		int ret;
+
 		hash->key = user_token >> PAGE_SHIFT;
 		ret = drm_ht_insert_item(&dev->map_hash, hash);
 		if (ret != -EINVAL)
@@ -391,6 +394,7 @@ struct drm_local_map *drm_legacy_findmap(struct drm_device *dev,
 					 unsigned int token)
 {
 	struct drm_map_list *_entry;
+
 	list_for_each_entry(_entry, &dev->maplist, head)
 		if (_entry->user_token == token)
 			return _entry->map;
@@ -534,7 +538,7 @@ int drm_legacy_rmmap_locked(struct drm_device *dev, struct drm_local_map *map)
 	switch (map->type) {
 	case _DRM_REGISTERS:
 		iounmap(map->handle);
-		/* FALLTHROUGH */
+		fallthrough;
 	case _DRM_FRAME_BUFFER:
 		arch_phys_wc_del(map->mtrr);
 		break;
@@ -1323,6 +1327,7 @@ int __drm_legacy_infobufs(struct drm_device *dev,
 	if (*p >= count) {
 		for (i = 0, count = 0; i < DRM_MAX_ORDER + 1; i++) {
 			struct drm_buf_entry *from = &dma->bufs[i];
+
 			if (from->buf_count) {
 				if (f(data, count, from) < 0)
 					return -EFAULT;
@@ -1359,6 +1364,7 @@ int drm_legacy_infobufs(struct drm_device *dev, void *data,
 			struct drm_file *file_priv)
 {
 	struct drm_buf_info *request = data;
+
 	return __drm_legacy_infobufs(dev, data, &request->count, copy_one_buf);
 }
 
@@ -1570,6 +1576,7 @@ int drm_legacy_mapbufs(struct drm_device *dev, void *data,
 		       struct drm_file *file_priv)
 {
 	struct drm_buf_map *request = data;
+
 	return __drm_legacy_mapbufs(dev, data, &request->count,
 				    &request->virtual, map_one_buf,
 				    file_priv);

@@ -507,7 +507,7 @@ static int es8316_pcm_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-static int es8316_mute(struct snd_soc_dai *dai, int mute)
+static int es8316_mute(struct snd_soc_dai *dai, int mute, int direction)
 {
 	snd_soc_component_update_bits(dai->component, ES8316_DAC_SET1, 0x20,
 			    mute ? 0x20 : 0);
@@ -522,7 +522,8 @@ static const struct snd_soc_dai_ops es8316_ops = {
 	.hw_params = es8316_pcm_hw_params,
 	.set_fmt = es8316_set_dai_fmt,
 	.set_sysclk = es8316_set_dai_sysclk,
-	.digital_mute = es8316_mute,
+	.mute_stream = es8316_mute,
+	.no_capture_mute = 1,
 };
 
 static struct snd_soc_dai_driver es8316_dai = {
@@ -833,17 +834,21 @@ static const struct i2c_device_id es8316_i2c_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, es8316_i2c_id);
 
+#ifdef CONFIG_OF
 static const struct of_device_id es8316_of_match[] = {
 	{ .compatible = "everest,es8316", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, es8316_of_match);
+#endif
 
+#ifdef CONFIG_ACPI
 static const struct acpi_device_id es8316_acpi_match[] = {
 	{"ESSX8316", 0},
 	{},
 };
 MODULE_DEVICE_TABLE(acpi, es8316_acpi_match);
+#endif
 
 static struct i2c_driver es8316_i2c_driver = {
 	.driver = {

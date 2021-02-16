@@ -26,18 +26,18 @@ static struct bin_attribute bin_attr_btf_vmlinux __ro_after_init = {
 	.read = btf_vmlinux_read,
 };
 
-static struct kobject *btf_kobj;
+struct kobject *btf_kobj;
 
 static int __init btf_vmlinux_init(void)
 {
-	if (!__start_BTF)
+	bin_attr_btf_vmlinux.size = __stop_BTF - __start_BTF;
+
+	if (!__start_BTF || bin_attr_btf_vmlinux.size == 0)
 		return 0;
 
 	btf_kobj = kobject_create_and_add("btf", kernel_kobj);
 	if (!btf_kobj)
 		return -ENOMEM;
-
-	bin_attr_btf_vmlinux.size = __stop_BTF - __start_BTF;
 
 	return sysfs_create_bin_file(btf_kobj, &bin_attr_btf_vmlinux);
 }

@@ -28,6 +28,10 @@ EXPORT_SYMBOL(cpu_clock_freq);
 struct efi_memory_map_loongson *loongson_memmap;
 struct loongson_system_configuration loongson_sysconf;
 
+struct board_devices *eboard;
+struct interface_info *einter;
+struct loongson_special_attribute *especial;
+
 u64 loongson_chipcfg[MAX_PACKAGES] = {0xffffffffbfc00180};
 u64 loongson_chiptemp[MAX_PACKAGES];
 u64 loongson_freqctrl[MAX_PACKAGES];
@@ -57,6 +61,12 @@ void __init prom_init_env(void)
 		((u64)loongson_p + loongson_p->system_offset);
 	ecpu = (struct efi_cpuinfo_loongson *)
 		((u64)loongson_p + loongson_p->cpu_offset);
+	eboard = (struct board_devices *)
+		((u64)loongson_p + loongson_p->boarddev_table_offset);
+	einter = (struct interface_info *)
+		((u64)loongson_p + loongson_p->interface_offset);
+	especial = (struct loongson_special_attribute *)
+		((u64)loongson_p + loongson_p->special_offset);
 	eirq_source = (struct irq_source_routing_table *)
 		((u64)loongson_p + loongson_p->irq_offset);
 	loongson_memmap = (struct efi_memory_map_loongson *)
@@ -126,28 +136,6 @@ void __init prom_init_env(void)
 		loongson_sysconf.cores_per_node - 1) /
 		loongson_sysconf.cores_per_node;
 
-	if ((read_c0_prid() & PRID_IMP_MASK) == PRID_IMP_LOONGSON_64C) {
-		switch (read_c0_prid() & PRID_REV_MASK) {
-		case PRID_REV_LOONGSON3A_R1:
-		case PRID_REV_LOONGSON3A_R2_0:
-		case PRID_REV_LOONGSON3A_R2_1:
-		case PRID_REV_LOONGSON3A_R3_0:
-		case PRID_REV_LOONGSON3A_R3_1:
-			loongson_fdt_blob = __dtb_loongson3_4core_rs780e_begin;
-			break;
-		case PRID_REV_LOONGSON3B_R1:
-		case PRID_REV_LOONGSON3B_R2:
-			loongson_fdt_blob = __dtb_loongson3_8core_rs780e_begin;
-			break;
-		default:
-			break;
-		}
-	}
-
-
-	if (!loongson_fdt_blob)
-		pr_err("Failed to determine built-in Loongson64 dtb\n");
-
 	loongson_sysconf.pci_mem_start_addr = eirq_source->pci_mem_start_addr;
 	loongson_sysconf.pci_mem_end_addr = eirq_source->pci_mem_end_addr;
 	loongson_sysconf.pci_io_base = eirq_source->pci_io_start_addr;
@@ -189,13 +177,57 @@ void __init prom_init_env(void)
 	vendor = id & 0xffff;
 	device = (id >> 16) & 0xffff;
 
-	if (vendor == PCI_VENDOR_ID_LOONGSON && device == 0x7a00) {
+	switch (vendor) {
+	case PCI_VENDOR_ID_LOONGSON:
 		pr_info("The bridge chip is LS7A\n");
 		loongson_sysconf.bridgetype = LS7A;
 		loongson_sysconf.early_config = ls7a_early_config;
-	} else {
+		break;
+	case PCI_VENDOR_ID_AMD:
+	case PCI_VENDOR_ID_ATI:
 		pr_info("The bridge chip is RS780E or SR5690\n");
 		loongson_sysconf.bridgetype = RS780E;
 		loongson_sysconf.early_config = rs780e_early_config;
+		break;
+	default:
+		pr_info("The bridge chip is VIRTUAL\n");
+		loongson_sysconf.bridgetype = VIRTUAL;
+		loongson_sysconf.early_config = virtual_early_config;
+		loongson_fdt_blob = __dtb_loongson64v_4core_virtio_begin;
+		break;
 	}
+
+	if ((read_c0_prid() & PRID_IMP_MASK) == PRID_IMP_LOONGSON_64C) {
+		switch (read_c0_prid() & PRID_REV_MASK) {
+		case PRID_REV_LOONGSON3A_R1:
+		case PRID_REV_LOONGSON3A_R2_0:
+		case PRID_REV_LOONGSON3A_R2_1:
+		case PRID_REV_LOONGSON3A_R3_0:
+		case PRID_REV_LOONGSON3A_R3_1:
+			switch (loongson_sysconf.bridgetype) {
+			case LS7A:
+				loongson_fdt_blob = __dtb_loongson64c_4core_ls7a_begin;
+				break;
+			case RS780E:
+				loongson_fdt_blob = __dtb_loongson64c_4core_rs780e_begin;
+				break;
+			default:
+				break;
+			}
+			break;
+		case PRID_REV_LOONGSON3B_R1:
+		case PRID_REV_LOONGSON3B_R2:
+			if (loongson_sysconf.bridgetype == RS780E)
+				loongson_fdt_blob = __dtb_loongson64c_8core_rs780e_begin;
+			break;
+		default:
+			break;
+		}
+	} else if ((read_c0_prid() & PRID_IMP_MASK) == PRID_IMP_LOONGSON_64G) {
+		if (loongson_sysconf.bridgetype == LS7A)
+			loongson_fdt_blob = __dtb_loongson64g_4core_ls7a_begin;
+	}
+
+	if (!loongson_fdt_blob)
+		pr_err("Failed to determine built-in Loongson64 dtb\n");
 }

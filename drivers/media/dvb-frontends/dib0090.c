@@ -1693,7 +1693,7 @@ static int dib0090_dc_offset_calibration(struct dib0090_state *state, enum front
 		if (state->identity.p1g)
 			state->dc = dc_p1g_table;
 
-		/* fall through */
+		fallthrough;
 	case CT_TUNER_STEP_0:
 		dprintk("Start/continue DC calibration for %s path\n",
 			(state->dc->i == 1) ? "I" : "Q");
@@ -1765,6 +1765,8 @@ static int dib0090_dc_offset_calibration(struct dib0090_state *state, enum front
 		dib0090_write_reg(state, 0x1f, 0x7);
 		*tune_state = CT_TUNER_START;	/* reset done -> real tuning can now begin */
 		state->calibrate &= ~DC_CAL;
+		break;
+
 	default:
 		break;
 	}

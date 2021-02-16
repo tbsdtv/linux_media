@@ -471,7 +471,7 @@ static int ncsi_rsp_handler_sma(struct ncsi_request *nr)
 		memcpy(&ncf->addrs[index], cmd->mac, ETH_ALEN);
 	} else {
 		clear_bit(cmd->index - 1, bitmap);
-		memset(&ncf->addrs[index], 0, ETH_ALEN);
+		eth_zero_addr(&ncf->addrs[index]);
 	}
 	spin_unlock_irqrestore(&nc->lock, flags);
 
@@ -1120,7 +1120,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	int payload, i, ret;
 
 	/* Find the NCSI device */
-	nd = ncsi_find_dev(dev);
+	nd = ncsi_find_dev(orig_dev);
 	ndp = nd ? TO_NCSI_DEV_PRIV(nd) : NULL;
 	if (!ndp)
 		return -ENODEV;

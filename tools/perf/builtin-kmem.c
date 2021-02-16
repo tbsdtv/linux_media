@@ -1933,7 +1933,8 @@ int cmd_kmem(int argc, const char **argv)
 		return ret;
 
 	argc = parse_options_subcommand(argc, argv, kmem_options,
-					kmem_subcommands, kmem_usage, 0);
+					kmem_subcommands, kmem_usage,
+					PARSE_OPT_STOP_AT_NON_OPTION);
 
 	if (!argc)
 		usage_with_options(kmem_usage, kmem_options);
@@ -1959,18 +1960,15 @@ int cmd_kmem(int argc, const char **argv)
 	ret = -1;
 
 	if (kmem_slab) {
-		if (!perf_evlist__find_tracepoint_by_name(session->evlist,
-							  "kmem:kmalloc")) {
+		if (!evlist__find_tracepoint_by_name(session->evlist, "kmem:kmalloc")) {
 			pr_err(errmsg, "slab", "slab");
 			goto out_delete;
 		}
 	}
 
 	if (kmem_page) {
-		struct evsel *evsel;
+		struct evsel *evsel = evlist__find_tracepoint_by_name(session->evlist, "kmem:mm_page_alloc");
 
-		evsel = perf_evlist__find_tracepoint_by_name(session->evlist,
-							     "kmem:mm_page_alloc");
 		if (evsel == NULL) {
 			pr_err(errmsg, "page", "page");
 			goto out_delete;

@@ -20,9 +20,11 @@
 #include <linux/i2c.h>
 #include <linux/input/mt.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
 #include <linux/of.h>
 #include <linux/property.h>
 #include <linux/slab.h>
+#include <linux/regulator/consumer.h>
 #include <linux/gpio/consumer.h>
 #include <asm/unaligned.h>
 #include <media/v4l2-device.h>
@@ -129,6 +131,7 @@ struct t9_range {
 /* MXT_SPT_COMMSCONFIG_T18 */
 #define MXT_COMMS_CTRL		0
 #define MXT_COMMS_CMD		1
+#define MXT_COMMS_RETRIGEN	BIT(6)
 
 /* MXT_DEBUG_DIAGNOSTIC_T37 */
 #define MXT_DIAGNOSTIC_PAGEUP	0x01
@@ -307,7 +310,9 @@ struct mxt_data {
 	u8 multitouch;
 	struct t7_config t7_cfg;
 	struct mxt_dbg dbg;
+	struct regulator_bulk_data regulators[2];
 	struct gpio_desc *reset_gpio;
+	bool use_retrigen_workaround;
 
 	/* Cached parameters from object table */
 	u16 T5_address;
@@ -318,6 +323,7 @@ struct mxt_data {
 	u16 T71_address;
 	u8 T9_reportid_min;
 	u8 T9_reportid_max;
+	u16 T18_address;
 	u8 T19_reportid;
 	u16 T44_address;
 	u8 T100_reportid_min;
@@ -473,7 +479,7 @@ static int mxt_lookup_bootloader_address(struct mxt_data *data, bool retry)
 			bootloader = appmode - 0x24;
 			break;
 		}
-		/* Fall through - for normal case */
+		fallthrough;	/* for normal case */
 	case 0x4c:
 	case 0x4d:
 	case 0x5a:
@@ -602,7 +608,6 @@ recheck:
 
 static int mxt_send_bootloader_cmd(struct mxt_data *data, bool unlock)
 {
-	int ret;
 	u8 buf[2];
 
 	if (unlock) {
@@ -613,11 +618,7 @@ static int mxt_send_bootloader_cmd(struct mxt_data *data, bool unlock)
 		buf[1] = 0x01;
 	}
 
-	ret = mxt_bootloader_write(data, buf, 2);
-	if (ret)
-		return ret;
-
-	return 0;
+	return mxt_bootloader_write(data, buf, sizeof(buf));
 }
 
 static int __mxt_read_reg(struct i2c_client *client,
@@ -1190,9 +1191,11 @@ static int mxt_acquire_irq(struct mxt_data *data)
 
 	enable_irq(data->irq);
 
-	error = mxt_process_messages_until_invalid(data);
-	if (error)
-		return error;
+	if (data->use_retrigen_workaround) {
+		error = mxt_process_messages_until_invalid(data);
+		if (error)
+			return error;
+	}
 
 	return 0;
 }
@@ -1280,6 +1283,38 @@ static u32 mxt_calculate_crc(u8 *base, off_t start_off, off_t end_off)
 	crc &= 0x00FFFFFF;
 
 	return crc;
+}
+
+static int mxt_check_retrigen(struct mxt_data *data)
+{
+	struct i2c_client *client = data->client;
+	int error;
+	int val;
+	struct irq_data *irqd;
+
+	data->use_retrigen_workaround = false;
+
+	irqd = irq_get_irq_data(data->irq);
+	if (!irqd)
+		return -EINVAL;
+
+	if (irqd_is_level_type(irqd))
+		return 0;
+
+	if (data->T18_address) {
+		error = __mxt_read_reg(client,
+				       data->T18_address + MXT_COMMS_CTRL,
+				       1, &val);
+		if (error)
+			return error;
+
+		if (val & MXT_COMMS_RETRIGEN)
+			return 0;
+	}
+
+	dev_warn(&client->dev, "Enabling RETRIGEN workaround\n");
+	data->use_retrigen_workaround = true;
+	return 0;
 }
 
 static int mxt_prepare_cfg_mem(struct mxt_data *data, struct mxt_cfg *cfg)
@@ -1561,6 +1596,10 @@ static int mxt_update_cfg(struct mxt_data *data, const struct firmware *fw)
 
 	mxt_update_crc(data, MXT_COMMAND_BACKUPNV, MXT_BACKUP_VALUE);
 
+	ret = mxt_check_retrigen(data);
+	if (ret)
+		goto release_mem;
+
 	ret = mxt_soft_reset(data);
 	if (ret)
 		goto release_mem;
@@ -1604,6 +1643,7 @@ static void mxt_free_object_table(struct mxt_data *data)
 	data->T71_address = 0;
 	data->T9_reportid_min = 0;
 	data->T9_reportid_max = 0;
+	data->T18_address = 0;
 	data->T19_reportid = 0;
 	data->T44_address = 0;
 	data->T100_reportid_min = 0;
@@ -1677,6 +1717,9 @@ static int mxt_parse_object_table(struct mxt_data *data,
 			data->T9_reportid_max = min_id +
 						object->num_report_ids - 1;
 			data->num_touchids = object->num_report_ids;
+			break;
+		case MXT_SPT_COMMSCONFIG_T18:
+			data->T18_address = object->start_address;
 			break;
 		case MXT_SPT_MESSAGECOUNT_T44:
 			data->T44_address = object->start_address;
@@ -2136,6 +2179,10 @@ static int mxt_initialize(struct mxt_data *data)
 		mxt_send_bootloader_cmd(data, false);
 		msleep(MXT_FW_RESET_TIME);
 	}
+
+	error = mxt_check_retrigen(data);
+	if (error)
+		return error;
 
 	error = mxt_acquire_irq(data);
 	if (error)
@@ -3084,8 +3131,24 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	if (error)
 		return error;
 
+	/*
+	 * VDDA is the analog voltage supply 2.57..3.47 V
+	 * VDD  is the digital voltage supply 1.71..3.47 V
+	 */
+	data->regulators[0].supply = "vdda";
+	data->regulators[1].supply = "vdd";
+	error = devm_regulator_bulk_get(&client->dev, ARRAY_SIZE(data->regulators),
+					data->regulators);
+	if (error) {
+		if (error != -EPROBE_DEFER)
+			dev_err(&client->dev, "Failed to get regulators %d\n",
+				error);
+		return error;
+	}
+
+	/* Request the RESET line as asserted so we go into reset */
 	data->reset_gpio = devm_gpiod_get_optional(&client->dev,
-						   "reset", GPIOD_OUT_LOW);
+						   "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(data->reset_gpio)) {
 		error = PTR_ERR(data->reset_gpio);
 		dev_err(&client->dev, "Failed to get reset gpio: %d\n", error);
@@ -3102,15 +3165,29 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	disable_irq(client->irq);
 
+	error = regulator_bulk_enable(ARRAY_SIZE(data->regulators),
+				      data->regulators);
+	if (error) {
+		dev_err(&client->dev, "failed to enable regulators: %d\n",
+			error);
+		return error;
+	}
+	/*
+	 * The device takes 40ms to come up after power-on according
+	 * to the mXT224 datasheet, page 13.
+	 */
+	msleep(MXT_BACKUP_TIME);
+
 	if (data->reset_gpio) {
+		/* Wait a while and then de-assert the RESET GPIO line */
 		msleep(MXT_RESET_GPIO_TIME);
-		gpiod_set_value(data->reset_gpio, 1);
+		gpiod_set_value(data->reset_gpio, 0);
 		msleep(MXT_RESET_INVALID_CHG);
 	}
 
 	error = mxt_initialize(data);
 	if (error)
-		return error;
+		goto err_disable_regulators;
 
 	error = sysfs_create_group(&client->dev.kobj, &mxt_attr_group);
 	if (error) {
@@ -3124,6 +3201,9 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 err_free_object:
 	mxt_free_input_device(data);
 	mxt_free_object_table(data);
+err_disable_regulators:
+	regulator_bulk_disable(ARRAY_SIZE(data->regulators),
+			       data->regulators);
 	return error;
 }
 
@@ -3135,6 +3215,8 @@ static int mxt_remove(struct i2c_client *client)
 	sysfs_remove_group(&client->dev.kobj, &mxt_attr_group);
 	mxt_free_input_device(data);
 	mxt_free_object_table(data);
+	regulator_bulk_disable(ARRAY_SIZE(data->regulators),
+			       data->regulators);
 
 	return 0;
 }
@@ -3150,7 +3232,7 @@ static int __maybe_unused mxt_suspend(struct device *dev)
 
 	mutex_lock(&input_dev->mutex);
 
-	if (input_dev->users)
+	if (input_device_enabled(input_dev))
 		mxt_stop(data);
 
 	mutex_unlock(&input_dev->mutex);
@@ -3173,7 +3255,7 @@ static int __maybe_unused mxt_resume(struct device *dev)
 
 	mutex_lock(&input_dev->mutex);
 
-	if (input_dev->users)
+	if (input_device_enabled(input_dev))
 		mxt_start(data);
 
 	mutex_unlock(&input_dev->mutex);

@@ -159,8 +159,7 @@ enum PS_DENY_REASON {
 };
 
 #ifdef CONFIG_PNO_SUPPORT
-struct pno_nlo_info
-{
+struct pno_nlo_info {
 	u32 fast_scan_period;				/* Fast scan period */
 	u32 ssid_num;				/* number of entry */
 	u32 slow_scan_period;			/* slow scan period */
@@ -179,16 +178,14 @@ struct pno_ssid_list {
 	struct pno_ssid	node[MAX_PNO_LIST_COUNT];
 };
 
-struct pno_scan_channel_info
-{
+struct pno_scan_channel_info {
 	u8 channel;
 	u8 tx_power;
 	u8 timeout;
 	u8 active;				/* set 1 means active scan, or pasivite scan. */
 };
 
-struct pno_scan_info
-{
+struct pno_scan_info {
 	u8 enableRFE;			/* Enable RFE */
 	u8 period_scan_time;		/* exclusive with fast_scan_period and slow_scan_period */
 	u8 periodScan;			/* exclusive with fast_scan_period and slow_scan_period */
@@ -202,8 +199,7 @@ struct pno_scan_info
 };
 #endif /* CONFIG_PNO_SUPPORT */
 
-struct pwrctrl_priv
-{
+struct pwrctrl_priv {
 	struct mutex lock;
 	volatile u8 rpwm; /*  requested power state for fw */
 	volatile u8 cpwm; /*  fw current power state. updated when 1. read from HCPWM 2. driver lowers power level */
@@ -322,7 +318,7 @@ struct pwrctrl_priv
 	_rtw_set_pwr_state_check_timer((pwrctl), (pwrctl)->pwr_state_check_interval)
 
 extern void rtw_init_pwrctrl_priv(struct adapter *adapter);
-extern void rtw_free_pwrctrl_priv(struct adapter * adapter);
+extern void rtw_free_pwrctrl_priv(struct adapter *adapter);
 
 s32 rtw_register_task_alive(struct adapter *, u32 task);
 void rtw_unregister_task_alive(struct adapter *, u32 task);
@@ -333,8 +329,8 @@ extern void rtw_unregister_cmd_alive(struct adapter *padapter);
 extern void cpwm_int_hdl(struct adapter *padapter, struct reportpwrstate_parm *preportpwrstate);
 extern void LPS_Leave_check(struct adapter *padapter);
 
-extern void LeaveAllPowerSaveMode(struct adapter * Adapter);
-extern void LeaveAllPowerSaveModeDirect(struct adapter * Adapter);
+extern void LeaveAllPowerSaveMode(struct adapter *Adapter);
+extern void LeaveAllPowerSaveModeDirect(struct adapter *Adapter);
 void _ips_enter(struct adapter *padapter);
 void ips_enter(struct adapter *padapter);
 int _ips_leave(struct adapter *padapter);

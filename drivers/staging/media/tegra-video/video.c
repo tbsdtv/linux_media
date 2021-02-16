@@ -7,6 +7,8 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 
+#include <media/v4l2-event.h>
+
 #include "video.h"
 
 static void tegra_v4l2_dev_release(struct v4l2_device *v4l2_dev)
@@ -22,6 +24,21 @@ static void tegra_v4l2_dev_release(struct v4l2_device *v4l2_dev)
 	media_device_unregister(&vid->media_dev);
 	media_device_cleanup(&vid->media_dev);
 	kfree(vid);
+}
+
+static void tegra_v4l2_dev_notify(struct v4l2_subdev *sd,
+				  unsigned int notification, void *arg)
+{
+	struct tegra_vi_channel *chan;
+	const struct v4l2_event *ev = arg;
+
+	if (notification != V4L2_DEVICE_NOTIFY_EVENT)
+		return;
+
+	chan = v4l2_get_subdev_hostdata(sd);
+	v4l2_event_queue(&chan->video, arg);
+	if (ev->type == V4L2_EVENT_SOURCE_CHANGE && vb2_is_streaming(&chan->queue))
+		vb2_queue_error(&chan->queue);
 }
 
 static int host1x_video_probe(struct host1x_device *dev)
@@ -49,6 +66,7 @@ static int host1x_video_probe(struct host1x_device *dev)
 
 	vid->v4l2_dev.mdev = &vid->media_dev;
 	vid->v4l2_dev.release = tegra_v4l2_dev_release;
+	vid->v4l2_dev.notify = tegra_v4l2_dev_notify;
 	ret = v4l2_device_register(&dev->dev, &vid->v4l2_dev);
 	if (ret < 0) {
 		dev_err(&dev->dev,
@@ -60,15 +78,17 @@ static int host1x_video_probe(struct host1x_device *dev)
 	if (ret < 0)
 		goto unregister_v4l2;
 
-	/*
-	 * Both vi and csi channels are available now.
-	 * Register v4l2 nodes and create media links for TPG.
-	 */
-	ret = tegra_v4l2_nodes_setup_tpg(vid);
-	if (ret < 0) {
-		dev_err(&dev->dev,
-			"failed to setup tpg graph: %d\n", ret);
-		goto device_exit;
+	if (IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG)) {
+		/*
+		 * Both vi and csi channels are available now.
+		 * Register v4l2 nodes and create media links for TPG.
+		 */
+		ret = tegra_v4l2_nodes_setup_tpg(vid);
+		if (ret < 0) {
+			dev_err(&dev->dev,
+				"failed to setup tpg graph: %d\n", ret);
+			goto device_exit;
+		}
 	}
 
 	return 0;
@@ -91,7 +111,8 @@ static int host1x_video_remove(struct host1x_device *dev)
 {
 	struct tegra_video_device *vid = dev_get_drvdata(&dev->dev);
 
-	tegra_v4l2_nodes_cleanup_tpg(vid);
+	if (IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
+		tegra_v4l2_nodes_cleanup_tpg(vid);
 
 	host1x_device_exit(dev);
 

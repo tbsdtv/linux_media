@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2011 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2011 Texas Instruments Incorporated - https://www.ti.com/
  * Author: Rob Clark <rob@ti.com>
  */
 
@@ -140,7 +140,7 @@ static int omap_fbdev_create(struct drm_fb_helper *helper,
 		/* note: if fb creation failed, we can't rely on fb destroy
 		 * to unref the bo:
 		 */
-		drm_gem_object_put_unlocked(fbdev->bo);
+		drm_gem_object_put(fbdev->bo);
 		ret = PTR_ERR(fb);
 		goto fail;
 	}

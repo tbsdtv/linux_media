@@ -233,7 +233,6 @@ struct btrfsic_stack_frame {
 struct btrfsic_state {
 	u32 print_mask;
 	int include_extent_data;
-	int csum_size;
 	struct list_head all_blocks_list;
 	struct btrfsic_block_hashtable block_hashtable;
 	struct btrfsic_block_link_hashtable block_link_hashtable;
@@ -631,10 +630,8 @@ static int btrfsic_process_superblock(struct btrfsic_state *state,
 	int pass;
 
 	selected_super = kzalloc(sizeof(*selected_super), GFP_NOFS);
-	if (NULL == selected_super) {
-		pr_info("btrfsic: error, kmalloc failed!\n");
+	if (!selected_super)
 		return -ENOMEM;
-	}
 
 	list_for_each_entry(device, dev_head, dev_list) {
 		int i;
@@ -661,8 +658,6 @@ static int btrfsic_process_superblock(struct btrfsic_state *state,
 		kfree(selected_super);
 		return -1;
 	}
-
-	state->csum_size = btrfs_super_csum_size(selected_super);
 
 	for (pass = 0; pass < 3; pass++) {
 		int num_copies;
@@ -795,7 +790,6 @@ static int btrfsic_process_superblock_dev_mirror(
 	if (NULL == superblock_tmp) {
 		superblock_tmp = btrfsic_block_alloc();
 		if (NULL == superblock_tmp) {
-			pr_info("btrfsic: error, kmalloc failed!\n");
 			ret = -1;
 			goto out;
 		}
@@ -921,9 +915,7 @@ static struct btrfsic_stack_frame *btrfsic_stack_frame_alloc(void)
 	struct btrfsic_stack_frame *sf;
 
 	sf = kzalloc(sizeof(*sf), GFP_NOFS);
-	if (NULL == sf)
-		pr_info("btrfsic: alloc memory failed!\n");
-	else
+	if (sf)
 		sf->magic = BTRFSIC_BLOCK_STACK_FRAME_MAGIC_NUMBER;
 	return sf;
 }
@@ -959,7 +951,7 @@ static noinline_for_stack int btrfsic_process_metablock(
 	sf->prev = NULL;
 
 continue_with_new_stack_frame:
-	sf->block->generation = le64_to_cpu(sf->hdr->generation);
+	sf->block->generation = btrfs_stack_header_generation(sf->hdr);
 	if (0 == sf->hdr->level) {
 		struct btrfs_leaf *const leafhdr =
 		    (struct btrfs_leaf *)sf->hdr;
@@ -1313,7 +1305,6 @@ static int btrfsic_create_link_to_next_block(
 	if (NULL == l) {
 		l = btrfsic_block_link_alloc();
 		if (NULL == l) {
-			pr_info("btrfsic: error, kmalloc failed!\n");
 			btrfsic_release_block_ctx(next_block_ctx);
 			*next_blockp = NULL;
 			return -1;
@@ -1470,7 +1461,6 @@ static int btrfsic_handle_extent_data(
 					mirror_num,
 					&block_was_created);
 			if (NULL == next_block) {
-				pr_info("btrfsic: error, kmalloc failed!\n");
 				btrfsic_release_block_ctx(&next_block_ctx);
 				return -1;
 			}
@@ -1730,7 +1720,7 @@ static noinline_for_stack int btrfsic_test_for_metadata(
 		crypto_shash_update(shash, data, sublen);
 	}
 	crypto_shash_final(shash, csum);
-	if (memcmp(csum, h->csum, state->csum_size))
+	if (memcmp(csum, h->csum, fs_info->csum_size))
 		return 1;
 
 	return 0; /* is metadata */
@@ -2013,7 +2003,6 @@ again:
 
 		block = btrfsic_block_alloc();
 		if (NULL == block) {
-			pr_info("btrfsic: error, kmalloc failed!\n");
 			btrfsic_release_block_ctx(&block_ctx);
 			goto continue_loop;
 		}
@@ -2234,7 +2223,6 @@ static int btrfsic_process_written_superblock(
 					mirror_num,
 					&was_created);
 			if (NULL == next_block) {
-				pr_info("btrfsic: error, kmalloc failed!\n");
 				btrfsic_release_block_ctx(&tmp_next_block_ctx);
 				return -1;
 			}
@@ -2542,10 +2530,8 @@ static struct btrfsic_block_link *btrfsic_block_link_lookup_or_add(
 						&state->block_link_hashtable);
 	if (NULL == l) {
 		l = btrfsic_block_link_alloc();
-		if (NULL == l) {
-			pr_info("btrfsic: error, kmalloc failed!\n");
+		if (!l)
 			return NULL;
-		}
 
 		l->block_ref_to = next_block;
 		l->block_ref_from = from_block;
@@ -2589,10 +2575,9 @@ static struct btrfsic_block *btrfsic_block_lookup_or_add(
 		struct btrfsic_dev_state *dev_state;
 
 		block = btrfsic_block_alloc();
-		if (NULL == block) {
-			pr_info("btrfsic: error, kmalloc failed!\n");
+		if (!block)
 			return NULL;
-		}
+
 		dev_state = btrfsic_dev_state_lookup(block_ctx->dev->bdev->bd_dev);
 		if (NULL == dev_state) {
 			pr_info("btrfsic: error, lookup dev_state failed!\n");
@@ -2707,8 +2692,7 @@ static void __btrfsic_submit_bio(struct bio *bio)
 		    BTRFSIC_PRINT_MASK_SUBMIT_BIO_BH)
 			pr_info("submit_bio(rw=%d,0x%x, bi_vcnt=%u, bi_sector=%llu (bytenr %llu), bi_disk=%p)\n",
 			       bio_op(bio), bio->bi_opf, segs,
-			       (unsigned long long)bio->bi_iter.bi_sector,
-			       dev_bytenr, bio->bi_disk);
+			       bio->bi_iter.bi_sector, dev_bytenr, bio->bi_disk);
 
 		mapped_datav = kmalloc_array(segs,
 					     sizeof(*mapped_datav), GFP_NOFS);
@@ -2797,10 +2781,8 @@ int btrfsic_mount(struct btrfs_fs_info *fs_info,
 		return -1;
 	}
 	state = kvzalloc(sizeof(*state), GFP_KERNEL);
-	if (!state) {
-		pr_info("btrfs check-integrity: allocation failed!\n");
+	if (!state)
 		return -ENOMEM;
-	}
 
 	if (!btrfsic_is_initialized) {
 		mutex_init(&btrfsic_mutex);
@@ -2811,7 +2793,6 @@ int btrfsic_mount(struct btrfs_fs_info *fs_info,
 	state->fs_info = fs_info;
 	state->print_mask = print_mask;
 	state->include_extent_data = including_extent_data;
-	state->csum_size = 0;
 	state->metablock_size = fs_info->nodesize;
 	state->datablock_size = fs_info->sectorsize;
 	INIT_LIST_HEAD(&state->all_blocks_list);
@@ -2829,7 +2810,6 @@ int btrfsic_mount(struct btrfs_fs_info *fs_info,
 
 		ds = btrfsic_dev_state_alloc();
 		if (NULL == ds) {
-			pr_info("btrfs check-integrity: kmalloc() failed!\n");
 			mutex_unlock(&btrfsic_mutex);
 			return -ENOMEM;
 		}

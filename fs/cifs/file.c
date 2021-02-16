@@ -44,6 +44,7 @@
 #include "cifs_fs_sb.h"
 #include "fscache.h"
 #include "smbdirect.h"
+#include "fs_context.h"
 
 static inline int cifs_convert_flags(unsigned int flags)
 {
@@ -416,6 +417,8 @@ static void cifsFileInfo_put_work(struct work_struct *work)
  * cifsFileInfo_put - release a reference of file priv data
  *
  * Always potentially wait for oplock handler. See _cifsFileInfo_put().
+ *
+ * @cifs_file:	cifs/smb3 specific info (eg refcounts) for an open file
  */
 void cifsFileInfo_put(struct cifsFileInfo *cifs_file)
 {
@@ -431,8 +434,11 @@ void cifsFileInfo_put(struct cifsFileInfo *cifs_file)
  *
  * If @wait_for_oplock_handler is true and we are releasing the last
  * reference, wait for any running oplock break handler of the file
- * and cancel any pending one. If calling this function from the
- * oplock break handler, you need to pass false.
+ * and cancel any pending one.
+ *
+ * @cifs_file:	cifs/smb3 specific info (eg refcounts) for an open file
+ * @wait_oplock_handler: must be false if called from oplock_break_handler
+ * @offload:	not offloaded on close and oplock breaks
  *
  */
 void _cifsFileInfo_put(struct cifsFileInfo *cifs_file,
@@ -566,7 +572,7 @@ int cifs_open(struct inode *inode, struct file *file)
 				le64_to_cpu(tcon->fsUnixInfo.Capability))) {
 		/* can not refresh inode info since size could be stale */
 		rc = cifs_posix_open(full_path, &inode, inode->i_sb,
-				cifs_sb->mnt_file_mode /* ignored */,
+				cifs_sb->ctx->file_mode /* ignored */,
 				file->f_flags, &oplock, &fid.netfid, xid);
 		if (rc == 0) {
 			cifs_dbg(FYI, "posix open succeeded\n");
@@ -735,7 +741,7 @@ cifs_reopen_file(struct cifsFileInfo *cfile, bool can_flush)
 						~(O_CREAT | O_EXCL | O_TRUNC);
 
 		rc = cifs_posix_open(full_path, NULL, inode->i_sb,
-				     cifs_sb->mnt_file_mode /* ignored */,
+				     cifs_sb->ctx->file_mode /* ignored */,
 				     oflags, &oplock, &cfile->fid.netfid, xid);
 		if (rc == 0) {
 			cifs_dbg(FYI, "posix reopen succeeded\n");
@@ -1149,20 +1155,20 @@ cifs_posix_lock_test(struct file *file, struct file_lock *flock)
 
 /*
  * Set the byte-range lock (posix style). Returns:
- * 1) 0, if we set the lock and don't need to request to the server;
- * 2) 1, if we need to request to the server;
- * 3) <0, if the error occurs while setting the lock.
+ * 1) <0, if the error occurs while setting the lock;
+ * 2) 0, if we set the lock and don't need to request to the server;
+ * 3) FILE_LOCK_DEFERRED, if we will wait for some other file_lock;
+ * 4) FILE_LOCK_DEFERRED + 1, if we need to request to the server.
  */
 static int
 cifs_posix_lock_set(struct file *file, struct file_lock *flock)
 {
 	struct cifsInodeInfo *cinode = CIFS_I(file_inode(file));
-	int rc = 1;
+	int rc = FILE_LOCK_DEFERRED + 1;
 
 	if ((flock->fl_flags & FL_POSIX) == 0)
 		return rc;
 
-try_again:
 	cifs_down_write(&cinode->lock_sem);
 	if (!cinode->can_cache_brlcks) {
 		up_write(&cinode->lock_sem);
@@ -1171,13 +1177,6 @@ try_again:
 
 	rc = posix_lock_file(file, flock, NULL);
 	up_write(&cinode->lock_sem);
-	if (rc == FILE_LOCK_DEFERRED) {
-		rc = wait_event_interruptible(flock->fl_wait,
-					list_empty(&flock->fl_blocked_member));
-		if (!rc)
-			goto try_again;
-		locks_delete_block(flock);
-	}
 	return rc;
 }
 
@@ -1652,7 +1651,7 @@ cifs_setlk(struct file *file, struct file_lock *flock, __u32 type,
 		int posix_lock_type;
 
 		rc = cifs_posix_lock_set(file, flock);
-		if (!rc || rc < 0)
+		if (rc <= FILE_LOCK_DEFERRED)
 			return rc;
 
 		if (type & server->vals->shared_lock_type)
@@ -2337,7 +2336,7 @@ static int cifs_writepages(struct address_space *mapping,
 	 * If wsize is smaller than the page cache size, default to writing
 	 * one page at a time via cifs_writepage
 	 */
-	if (cifs_sb->wsize < PAGE_SIZE)
+	if (cifs_sb->ctx->wsize < PAGE_SIZE)
 		return generic_writepages(mapping, wbc);
 
 	xid = get_xid();
@@ -2370,7 +2369,7 @@ retry:
 		if (rc)
 			get_file_rc = rc;
 
-		rc = server->ops->wait_mtu_credits(server, cifs_sb->wsize,
+		rc = server->ops->wait_mtu_credits(server, cifs_sb->ctx->wsize,
 						   &wsize, credits);
 		if (rc != 0) {
 			done = true;
@@ -2912,7 +2911,7 @@ cifs_write_from_iter(loff_t offset, size_t len, struct iov_iter *from,
 				break;
 		}
 
-		rc = server->ops->wait_mtu_credits(server, cifs_sb->wsize,
+		rc = server->ops->wait_mtu_credits(server, cifs_sb->ctx->wsize,
 						   &wsize, credits);
 		if (rc)
 			break;
@@ -3643,7 +3642,7 @@ cifs_send_async_read(loff_t offset, size_t len, struct cifsFileInfo *open_file,
 				break;
 		}
 
-		rc = server->ops->wait_mtu_credits(server, cifs_sb->rsize,
+		rc = server->ops->wait_mtu_credits(server, cifs_sb->ctx->rsize,
 						   &rsize, credits);
 		if (rc)
 			break;
@@ -4029,7 +4028,7 @@ cifs_read(struct file *file, char *read_data, size_t read_size, loff_t *offset)
 	cifs_sb = CIFS_FILE_SB(file);
 
 	/* FIXME: set up handlers for larger reads and/or convert to async */
-	rsize = min_t(unsigned int, cifs_sb->rsize, CIFSMaxBufSize);
+	rsize = min_t(unsigned int, cifs_sb->ctx->rsize, CIFSMaxBufSize);
 
 	if (file->private_data == NULL) {
 		rc = -EBADF;
@@ -4336,7 +4335,8 @@ readpages_get_pages(struct address_space *mapping, struct list_head *page_list,
 			break;
 
 		__SetPageLocked(page);
-		if (add_to_page_cache_locked(page, mapping, page->index, gfp)) {
+		rc = add_to_page_cache_locked(page, mapping, page->index, gfp);
+		if (rc) {
 			__ClearPageLocked(page);
 			break;
 		}
@@ -4352,6 +4352,7 @@ static int cifs_readpages(struct file *file, struct address_space *mapping,
 	struct list_head *page_list, unsigned num_pages)
 {
 	int rc;
+	int err = 0;
 	struct list_head tmplist;
 	struct cifsFileInfo *open_file = file->private_data;
 	struct cifs_sb_info *cifs_sb = CIFS_FILE_SB(file);
@@ -4396,7 +4397,7 @@ static int cifs_readpages(struct file *file, struct address_space *mapping,
 	 * the order of declining indexes. When we put the pages in
 	 * the rdata->pages, then we want them in increasing order.
 	 */
-	while (!list_empty(page_list)) {
+	while (!list_empty(page_list) && !err) {
 		unsigned int i, nr_pages, bytes, rsize;
 		loff_t offset;
 		struct page *page, *tpage;
@@ -4412,7 +4413,7 @@ static int cifs_readpages(struct file *file, struct address_space *mapping,
 				break;
 		}
 
-		rc = server->ops->wait_mtu_credits(server, cifs_sb->rsize,
+		rc = server->ops->wait_mtu_credits(server, cifs_sb->ctx->rsize,
 						   &rsize, credits);
 		if (rc)
 			break;
@@ -4429,9 +4430,10 @@ static int cifs_readpages(struct file *file, struct address_space *mapping,
 			return 0;
 		}
 
-		rc = readpages_get_pages(mapping, page_list, rsize, &tmplist,
+		nr_pages = 0;
+		err = readpages_get_pages(mapping, page_list, rsize, &tmplist,
 					 &nr_pages, &offset, &bytes);
-		if (rc) {
+		if (!nr_pages) {
 			add_credits_and_wake_if(server, credits, 0);
 			break;
 		}

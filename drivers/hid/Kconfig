@@ -20,7 +20,7 @@ config HID
 	  removed from the HID bus by the transport-layer drivers, such as
 	  usbhid (USB_HID) and hidp (BT_HIDP).
 
-	  For docs and specs, see http://www.usb.org/developers/hidpage/
+	  For docs and specs, see https://www.usb.org/developers/hidpage/
 
 	  If unsure, say Y.
 
@@ -396,6 +396,15 @@ config HID_GOOGLE_HAMMER
 	depends on USB_HID && LEDS_CLASS && CROS_EC
 	help
 	Say Y here if you have a Google Hammer device.
+
+config HID_VIVALDI
+	tristate "Vivaldi Keyboard"
+	depends on HID
+	help
+	  Say Y here if you want to enable support for Vivaldi keyboards.
+
+	  Vivaldi keyboards use a vendor-specific (Google) HID usage to report
+	  how the keys in the top row are physically ordered.
 
 config HID_GT683R
 	tristate "MSI GT68xR LED support"
@@ -890,6 +899,7 @@ config HID_SONY
 	depends on NEW_LEDS
 	depends on LEDS_CLASS
 	select POWER_SUPPLY
+	select CRC32
 	help
 	Support for
 
@@ -898,6 +908,7 @@ config HID_SONY
 	  * Buzz controllers
 	  * Sony PS3 Blue-ray Disk Remote Control (Bluetooth)
 	  * Logitech Harmony adapter for Sony Playstation 3 (Bluetooth)
+	  * Guitar Hero Live PS3 and Wii U guitar dongles
 
 config SONY_FF
 	bool "Sony PS2/3/4 accessories force feedback support" 
@@ -1173,5 +1184,7 @@ source "drivers/hid/usbhid/Kconfig"
 source "drivers/hid/i2c-hid/Kconfig"
 
 source "drivers/hid/intel-ish-hid/Kconfig"
+
+source "drivers/hid/amd-sfh-hid/Kconfig"
 
 endmenu

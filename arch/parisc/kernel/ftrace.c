@@ -21,7 +21,7 @@
 #include <asm/ftrace.h>
 #include <asm/patch.h>
 
-#define __hot __attribute__ ((__section__ (".text.hot")))
+#define __hot __section(".text.hot")
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 /*
@@ -51,7 +51,7 @@ static void __hot prepare_ftrace_return(unsigned long *parent,
 void notrace __hot ftrace_function_trampoline(unsigned long parent,
 				unsigned long self_addr,
 				unsigned long org_sp_gr3,
-				struct pt_regs *regs)
+				struct ftrace_regs *fregs)
 {
 #ifndef CONFIG_DYNAMIC_FTRACE
 	extern ftrace_func_t ftrace_trace_function;
@@ -61,10 +61,11 @@ void notrace __hot ftrace_function_trampoline(unsigned long parent,
 	if (function_trace_op->flags & FTRACE_OPS_FL_ENABLED &&
 	    ftrace_trace_function != ftrace_stub)
 		ftrace_trace_function(self_addr, parent,
-				function_trace_op, regs);
+				function_trace_op, fregs);
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	if (ftrace_graph_return != (trace_func_graph_ret_t) ftrace_stub ||
+	if (dereference_function_descriptor(ftrace_graph_return) !=
+	    dereference_function_descriptor(ftrace_stub) ||
 	    ftrace_graph_entry != ftrace_graph_entry_stub) {
 		unsigned long *parent_rp;
 
@@ -172,7 +173,7 @@ int ftrace_make_call(struct dyn_ftrace *rec, unsigned long addr)
 
 	ip = (void *)(rec->ip + 4 - size);
 
-	ret = probe_kernel_read(insn, ip, size);
+	ret = copy_from_kernel_nofault(insn, ip, size);
 	if (ret)
 		return ret;
 
@@ -203,17 +204,26 @@ int ftrace_make_nop(struct module *mod, struct dyn_ftrace *rec,
 
 #ifdef CONFIG_KPROBES_ON_FTRACE
 void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
-			   struct ftrace_ops *ops, struct pt_regs *regs)
+			   struct ftrace_ops *ops, struct ftrace_regs *fregs)
 {
 	struct kprobe_ctlblk *kcb;
-	struct kprobe *p = get_kprobe((kprobe_opcode_t *)ip);
+	struct pt_regs *regs;
+	struct kprobe *p;
+	int bit;
 
-	if (unlikely(!p) || kprobe_disabled(p))
+	bit = ftrace_test_recursion_trylock(ip, parent_ip);
+	if (bit < 0)
 		return;
+
+	regs = ftrace_get_regs(fregs);
+	preempt_disable_notrace();
+	p = get_kprobe((kprobe_opcode_t *)ip);
+	if (unlikely(!p) || kprobe_disabled(p))
+		goto out;
 
 	if (kprobe_running()) {
 		kprobes_inc_nmissed_count(p);
-		return;
+		goto out;
 	}
 
 	__this_cpu_write(current_kprobe, p);
@@ -234,6 +244,9 @@ void kprobe_ftrace_handler(unsigned long ip, unsigned long parent_ip,
 		}
 	}
 	__this_cpu_write(current_kprobe, NULL);
+out:
+	preempt_enable_notrace();
+	ftrace_test_recursion_unlock(bit);
 }
 NOKPROBE_SYMBOL(kprobe_ftrace_handler);
 

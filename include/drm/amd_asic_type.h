@@ -54,6 +54,10 @@ enum amd_asic_type {
 	CHIP_NAVI10,	/* 25 */
 	CHIP_NAVI14,	/* 26 */
 	CHIP_NAVI12,	/* 27 */
+	CHIP_SIENNA_CICHLID,	/* 28 */
+	CHIP_NAVY_FLOUNDER,	/* 29 */
+	CHIP_VANGOGH,	/* 30 */
+	CHIP_DIMGREY_CAVEFISH,	/* 31 */
 	CHIP_LAST,
 };
 

@@ -77,7 +77,8 @@ static void snd_malloc_dev_iram(struct snd_dma_buffer *dmab, size_t size)
 	/* Assign the pool into private_data field */
 	dmab->private_data = pool;
 
-	dmab->area = gen_pool_dma_alloc(pool, size, &dmab->addr);
+	dmab->area = gen_pool_dma_alloc_align(pool, size, &dmab->addr,
+					PAGE_SIZE);
 }
 
 /**
@@ -132,19 +133,21 @@ int snd_dma_alloc_pages(int type, struct device *device, size_t size,
 	if (WARN_ON(!dmab))
 		return -ENXIO;
 
+	size = PAGE_ALIGN(size);
 	dmab->dev.type = type;
 	dmab->dev.dev = device;
 	dmab->bytes = 0;
+	dmab->area = NULL;
+	dmab->addr = 0;
+	dmab->private_data = NULL;
 	switch (type) {
 	case SNDRV_DMA_TYPE_CONTINUOUS:
 		gfp = snd_mem_get_gfp_flags(device, GFP_KERNEL);
 		dmab->area = alloc_pages_exact(size, gfp);
-		dmab->addr = 0;
 		break;
 	case SNDRV_DMA_TYPE_VMALLOC:
 		gfp = snd_mem_get_gfp_flags(device, GFP_KERNEL | __GFP_HIGHMEM);
 		dmab->area = __vmalloc(size, gfp);
-		dmab->addr = 0;
 		break;
 #ifdef CONFIG_HAS_DMA
 #ifdef CONFIG_GENERIC_ALLOCATOR
@@ -156,8 +159,8 @@ int snd_dma_alloc_pages(int type, struct device *device, size_t size,
 		 * so if we fail to malloc, try to fetch memory traditionally.
 		 */
 		dmab->dev.type = SNDRV_DMA_TYPE_DEV;
+		fallthrough;
 #endif /* CONFIG_GENERIC_ALLOCATOR */
-		/* fall through */
 	case SNDRV_DMA_TYPE_DEV:
 	case SNDRV_DMA_TYPE_DEV_UC:
 		snd_malloc_dev_pages(dmab, size);
@@ -171,8 +174,6 @@ int snd_dma_alloc_pages(int type, struct device *device, size_t size,
 #endif
 	default:
 		pr_err("snd-malloc: invalid device type %d\n", type);
-		dmab->area = NULL;
-		dmab->addr = 0;
 		return -ENXIO;
 	}
 	if (! dmab->area)

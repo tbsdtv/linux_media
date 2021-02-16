@@ -134,23 +134,14 @@ static irqreturn_t fsl_dcu_drm_irq(int irq, void *arg)
 
 DEFINE_DRM_GEM_CMA_FOPS(fsl_dcu_drm_fops);
 
-static struct drm_driver fsl_dcu_drm_driver = {
+static const struct drm_driver fsl_dcu_drm_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.load			= fsl_dcu_load,
 	.unload			= fsl_dcu_unload,
 	.irq_handler		= fsl_dcu_drm_irq,
 	.irq_preinstall		= fsl_dcu_irq_uninstall,
 	.irq_uninstall		= fsl_dcu_irq_uninstall,
-	.gem_free_object_unlocked = drm_gem_cma_free_object,
-	.gem_vm_ops		= &drm_gem_cma_vm_ops,
-	.prime_handle_to_fd	= drm_gem_prime_handle_to_fd,
-	.prime_fd_to_handle	= drm_gem_prime_fd_to_handle,
-	.gem_prime_get_sg_table	= drm_gem_cma_prime_get_sg_table,
-	.gem_prime_import_sg_table = drm_gem_cma_prime_import_sg_table,
-	.gem_prime_vmap		= drm_gem_cma_prime_vmap,
-	.gem_prime_vunmap	= drm_gem_cma_prime_vunmap,
-	.gem_prime_mmap		= drm_gem_cma_prime_mmap,
-	.dumb_create		= drm_gem_cma_dumb_create,
+	DRM_GEM_CMA_DRIVER_OPS,
 	.fops			= &fsl_dcu_drm_fops,
 	.name			= "fsl-dcu-drm",
 	.desc			= "Freescale DCU DRM",
@@ -243,7 +234,6 @@ static int fsl_dcu_drm_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct resource *res;
 	void __iomem *base;
-	struct drm_driver *driver = &fsl_dcu_drm_driver;
 	struct clk *pix_clk_in;
 	char pix_clk_name[32];
 	const char *pix_clk_in_name;
@@ -313,7 +303,7 @@ static int fsl_dcu_drm_probe(struct platform_device *pdev)
 
 	fsl_dev->tcon = fsl_tcon_init(dev);
 
-	drm = drm_dev_alloc(driver, dev);
+	drm = drm_dev_alloc(&fsl_dcu_drm_driver, dev);
 	if (IS_ERR(drm)) {
 		ret = PTR_ERR(drm);
 		goto unregister_pix_clk;

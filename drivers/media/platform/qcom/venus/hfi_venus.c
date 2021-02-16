@@ -130,7 +130,7 @@ struct venus_hfi_device {
 };
 
 static bool venus_pkt_debug;
-static int venus_fw_debug = HFI_DEBUG_MSG_ERROR | HFI_DEBUG_MSG_FATAL;
+int venus_fw_debug = HFI_DEBUG_MSG_ERROR | HFI_DEBUG_MSG_FATAL;
 static bool venus_sys_idle_indicator;
 static bool venus_fw_low_power_mode = true;
 static int venus_hw_rsp_timeout = 1000;
@@ -372,7 +372,7 @@ static void venus_soft_int(struct venus_hfi_device *hdev)
 }
 
 static int venus_iface_cmdq_write_nolock(struct venus_hfi_device *hdev,
-					 void *pkt)
+					 void *pkt, bool sync)
 {
 	struct device *dev = hdev->core->dev;
 	struct hfi_pkt_hdr *cmd_packet;
@@ -394,18 +394,29 @@ static int venus_iface_cmdq_write_nolock(struct venus_hfi_device *hdev,
 		return ret;
 	}
 
+	if (sync) {
+		/*
+		 * Inform video hardware to raise interrupt for synchronous
+		 * commands
+		 */
+		queue = &hdev->queues[IFACEQ_MSG_IDX];
+		queue->qhdr->rx_req = 1;
+		/* ensure rx_req is updated in memory */
+		wmb();
+	}
+
 	if (rx_req)
 		venus_soft_int(hdev);
 
 	return 0;
 }
 
-static int venus_iface_cmdq_write(struct venus_hfi_device *hdev, void *pkt)
+static int venus_iface_cmdq_write(struct venus_hfi_device *hdev, void *pkt, bool sync)
 {
 	int ret;
 
 	mutex_lock(&hdev->lock);
-	ret = venus_iface_cmdq_write_nolock(hdev, pkt);
+	ret = venus_iface_cmdq_write_nolock(hdev, pkt, sync);
 	mutex_unlock(&hdev->lock);
 
 	return ret;
@@ -428,7 +439,7 @@ static int venus_hfi_core_set_resource(struct venus_core *core, u32 id,
 	if (ret)
 		return ret;
 
-	ret = venus_iface_cmdq_write(hdev, pkt);
+	ret = venus_iface_cmdq_write(hdev, pkt, false);
 	if (ret)
 		return ret;
 
@@ -477,7 +488,7 @@ static u32 venus_hwversion(struct venus_hfi_device *hdev)
 	minor = minor >> WRAPPER_HW_VERSION_MINOR_VERSION_SHIFT;
 	step = ver & WRAPPER_HW_VERSION_STEP_VERSION_MASK;
 
-	dev_dbg(dev, "venus hw version %x.%x.%x\n", major, minor, step);
+	dev_dbg(dev, VDBGL "venus hw version %x.%x.%x\n", major, minor, step);
 
 	return major;
 }
@@ -778,7 +789,7 @@ static int venus_sys_set_debug(struct venus_hfi_device *hdev, u32 debug)
 
 	pkt_sys_debug_config(pkt, HFI_DEBUG_MODE_QUEUE, debug);
 
-	ret = venus_iface_cmdq_write(hdev, pkt);
+	ret = venus_iface_cmdq_write(hdev, pkt, false);
 	if (ret)
 		return ret;
 
@@ -795,7 +806,7 @@ static int venus_sys_set_coverage(struct venus_hfi_device *hdev, u32 mode)
 
 	pkt_sys_coverage_config(pkt, mode);
 
-	ret = venus_iface_cmdq_write(hdev, pkt);
+	ret = venus_iface_cmdq_write(hdev, pkt, false);
 	if (ret)
 		return ret;
 
@@ -816,7 +827,7 @@ static int venus_sys_set_idle_message(struct venus_hfi_device *hdev,
 
 	pkt_sys_idle_indicator(pkt, enable);
 
-	ret = venus_iface_cmdq_write(hdev, pkt);
+	ret = venus_iface_cmdq_write(hdev, pkt, false);
 	if (ret)
 		return ret;
 
@@ -834,7 +845,7 @@ static int venus_sys_set_power_control(struct venus_hfi_device *hdev,
 
 	pkt_sys_power_control(pkt, enable);
 
-	ret = venus_iface_cmdq_write(hdev, pkt);
+	ret = venus_iface_cmdq_write(hdev, pkt, false);
 	if (ret)
 		return ret;
 
@@ -885,14 +896,14 @@ static int venus_sys_set_default_properties(struct venus_hfi_device *hdev)
 	return ret;
 }
 
-static int venus_session_cmd(struct venus_inst *inst, u32 pkt_type)
+static int venus_session_cmd(struct venus_inst *inst, u32 pkt_type, bool sync)
 {
 	struct venus_hfi_device *hdev = to_hfi_priv(inst->core);
 	struct hfi_session_pkt pkt;
 
 	pkt_session_cmd(&pkt, pkt_type, inst);
 
-	return venus_iface_cmdq_write(hdev, &pkt);
+	return venus_iface_cmdq_write(hdev, &pkt, sync);
 }
 
 static void venus_flush_debug_queue(struct venus_hfi_device *hdev)
@@ -906,7 +917,7 @@ static void venus_flush_debug_queue(struct venus_hfi_device *hdev)
 		if (pkt->hdr.pkt_type != HFI_MSG_SYS_COV) {
 			struct hfi_msg_sys_debug_pkt *pkt = packet;
 
-			dev_dbg(dev, "%s", pkt->msg_data);
+			dev_dbg(dev, VDBGFW "%s", pkt->msg_data);
 		}
 	}
 }
@@ -922,7 +933,7 @@ static int venus_prepare_power_collapse(struct venus_hfi_device *hdev,
 
 	pkt_sys_pc_prep(&pkt);
 
-	ret = venus_iface_cmdq_write(hdev, &pkt);
+	ret = venus_iface_cmdq_write(hdev, &pkt, false);
 	if (ret)
 		return ret;
 
@@ -986,13 +997,6 @@ static void venus_process_msg_sys_error(struct venus_hfi_device *hdev,
 
 	venus_set_state(hdev, VENUS_STATE_DEINIT);
 
-	/*
-	 * Once SYS_ERROR received from HW, it is safe to halt the AXI.
-	 * With SYS_ERROR, Venus FW may have crashed and HW might be
-	 * active and causing unnecessary transactions. Hence it is
-	 * safe to stop all AXI transactions from venus subsystem.
-	 */
-	venus_halt_axi(hdev);
 	venus_sfr_print(hdev);
 }
 
@@ -1009,10 +1013,6 @@ static irqreturn_t venus_isr_thread(struct venus_core *core)
 	res = hdev->core->res;
 	pkt = hdev->pkt_buf;
 
-	if (hdev->irq_status & WRAPPER_INTR_STATUS_A2HWD_MASK) {
-		venus_sfr_print(hdev);
-		hfi_process_watchdog_timeout(core);
-	}
 
 	while (!venus_iface_msgq_read(hdev, pkt)) {
 		msg_ret = hfi_process_msg_packet(core, pkt);
@@ -1075,13 +1075,13 @@ static int venus_core_init(struct venus_core *core)
 
 	venus_set_state(hdev, VENUS_STATE_INIT);
 
-	ret = venus_iface_cmdq_write(hdev, &pkt);
+	ret = venus_iface_cmdq_write(hdev, &pkt, false);
 	if (ret)
 		return ret;
 
 	pkt_sys_image_version(&version_pkt);
 
-	ret = venus_iface_cmdq_write(hdev, &version_pkt);
+	ret = venus_iface_cmdq_write(hdev, &version_pkt, false);
 	if (ret)
 		dev_warn(dev, "failed to send image version pkt to fw\n");
 
@@ -1110,7 +1110,7 @@ static int venus_core_ping(struct venus_core *core, u32 cookie)
 
 	pkt_sys_ping(&pkt, cookie);
 
-	return venus_iface_cmdq_write(hdev, &pkt);
+	return venus_iface_cmdq_write(hdev, &pkt, false);
 }
 
 static int venus_core_trigger_ssr(struct venus_core *core, u32 trigger_type)
@@ -1123,7 +1123,7 @@ static int venus_core_trigger_ssr(struct venus_core *core, u32 trigger_type)
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, &pkt);
+	return venus_iface_cmdq_write(hdev, &pkt, false);
 }
 
 static int venus_session_init(struct venus_inst *inst, u32 session_type,
@@ -1133,11 +1133,15 @@ static int venus_session_init(struct venus_inst *inst, u32 session_type,
 	struct hfi_session_init_pkt pkt;
 	int ret;
 
+	ret = venus_sys_set_debug(hdev, venus_fw_debug);
+	if (ret)
+		goto err;
+
 	ret = pkt_session_init(&pkt, inst, session_type, codec);
 	if (ret)
 		goto err;
 
-	ret = venus_iface_cmdq_write(hdev, &pkt);
+	ret = venus_iface_cmdq_write(hdev, &pkt, true);
 	if (ret)
 		goto err;
 
@@ -1158,7 +1162,7 @@ static int venus_session_end(struct venus_inst *inst)
 			dev_warn(dev, "fw coverage msg ON failed\n");
 	}
 
-	return venus_session_cmd(inst, HFI_CMD_SYS_SESSION_END);
+	return venus_session_cmd(inst, HFI_CMD_SYS_SESSION_END, true);
 }
 
 static int venus_session_abort(struct venus_inst *inst)
@@ -1167,7 +1171,7 @@ static int venus_session_abort(struct venus_inst *inst)
 
 	venus_flush_debug_queue(hdev);
 
-	return venus_session_cmd(inst, HFI_CMD_SYS_SESSION_ABORT);
+	return venus_session_cmd(inst, HFI_CMD_SYS_SESSION_ABORT, true);
 }
 
 static int venus_session_flush(struct venus_inst *inst, u32 flush_mode)
@@ -1180,22 +1184,22 @@ static int venus_session_flush(struct venus_inst *inst, u32 flush_mode)
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, &pkt);
+	return venus_iface_cmdq_write(hdev, &pkt, true);
 }
 
 static int venus_session_start(struct venus_inst *inst)
 {
-	return venus_session_cmd(inst, HFI_CMD_SESSION_START);
+	return venus_session_cmd(inst, HFI_CMD_SESSION_START, true);
 }
 
 static int venus_session_stop(struct venus_inst *inst)
 {
-	return venus_session_cmd(inst, HFI_CMD_SESSION_STOP);
+	return venus_session_cmd(inst, HFI_CMD_SESSION_STOP, true);
 }
 
 static int venus_session_continue(struct venus_inst *inst)
 {
-	return venus_session_cmd(inst, HFI_CMD_SESSION_CONTINUE);
+	return venus_session_cmd(inst, HFI_CMD_SESSION_CONTINUE, false);
 }
 
 static int venus_session_etb(struct venus_inst *inst,
@@ -1212,7 +1216,7 @@ static int venus_session_etb(struct venus_inst *inst,
 		if (ret)
 			return ret;
 
-		ret = venus_iface_cmdq_write(hdev, &pkt);
+		ret = venus_iface_cmdq_write(hdev, &pkt, false);
 	} else if (session_type == VIDC_SESSION_TYPE_ENC) {
 		struct hfi_session_empty_buffer_uncompressed_plane0_pkt pkt;
 
@@ -1220,7 +1224,7 @@ static int venus_session_etb(struct venus_inst *inst,
 		if (ret)
 			return ret;
 
-		ret = venus_iface_cmdq_write(hdev, &pkt);
+		ret = venus_iface_cmdq_write(hdev, &pkt, false);
 	} else {
 		ret = -EINVAL;
 	}
@@ -1239,7 +1243,7 @@ static int venus_session_ftb(struct venus_inst *inst,
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, &pkt);
+	return venus_iface_cmdq_write(hdev, &pkt, false);
 }
 
 static int venus_session_set_buffers(struct venus_inst *inst,
@@ -1259,7 +1263,7 @@ static int venus_session_set_buffers(struct venus_inst *inst,
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, pkt);
+	return venus_iface_cmdq_write(hdev, pkt, false);
 }
 
 static int venus_session_unset_buffers(struct venus_inst *inst,
@@ -1279,17 +1283,17 @@ static int venus_session_unset_buffers(struct venus_inst *inst,
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, pkt);
+	return venus_iface_cmdq_write(hdev, pkt, true);
 }
 
 static int venus_session_load_res(struct venus_inst *inst)
 {
-	return venus_session_cmd(inst, HFI_CMD_SESSION_LOAD_RESOURCES);
+	return venus_session_cmd(inst, HFI_CMD_SESSION_LOAD_RESOURCES, true);
 }
 
 static int venus_session_release_res(struct venus_inst *inst)
 {
-	return venus_session_cmd(inst, HFI_CMD_SESSION_RELEASE_RESOURCES);
+	return venus_session_cmd(inst, HFI_CMD_SESSION_RELEASE_RESOURCES, true);
 }
 
 static int venus_session_parse_seq_hdr(struct venus_inst *inst, u32 seq_hdr,
@@ -1306,7 +1310,7 @@ static int venus_session_parse_seq_hdr(struct venus_inst *inst, u32 seq_hdr,
 	if (ret)
 		return ret;
 
-	ret = venus_iface_cmdq_write(hdev, pkt);
+	ret = venus_iface_cmdq_write(hdev, pkt, false);
 	if (ret)
 		return ret;
 
@@ -1327,7 +1331,7 @@ static int venus_session_get_seq_hdr(struct venus_inst *inst, u32 seq_hdr,
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, pkt);
+	return venus_iface_cmdq_write(hdev, pkt, false);
 }
 
 static int venus_session_set_property(struct venus_inst *inst, u32 ptype,
@@ -1346,7 +1350,7 @@ static int venus_session_set_property(struct venus_inst *inst, u32 ptype,
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, pkt);
+	return venus_iface_cmdq_write(hdev, pkt, false);
 }
 
 static int venus_session_get_property(struct venus_inst *inst, u32 ptype)
@@ -1359,7 +1363,7 @@ static int venus_session_get_property(struct venus_inst *inst, u32 ptype)
 	if (ret)
 		return ret;
 
-	return venus_iface_cmdq_write(hdev, &pkt);
+	return venus_iface_cmdq_write(hdev, &pkt, true);
 }
 
 static int venus_resume(struct venus_core *core)
@@ -1598,9 +1602,6 @@ int venus_hfi_create(struct venus_core *core)
 	hdev->suspended = true;
 	core->priv = hdev;
 	core->ops = &venus_hfi_ops;
-	core->core_caps = ENC_ROTATION_CAPABILITY | ENC_SCALING_CAPABILITY |
-			  ENC_DEINTERLACE_CAPABILITY |
-			  DEC_MULTI_STREAM_CAPABILITY;
 
 	ret = venus_interface_queues_init(hdev);
 	if (ret)
@@ -1613,4 +1614,55 @@ err_kfree:
 	core->priv = NULL;
 	core->ops = NULL;
 	return ret;
+}
+
+void venus_hfi_queues_reinit(struct venus_core *core)
+{
+	struct venus_hfi_device *hdev = to_hfi_priv(core);
+	struct hfi_queue_table_header *tbl_hdr;
+	struct iface_queue *queue;
+	struct hfi_sfr *sfr;
+	unsigned int i;
+
+	mutex_lock(&hdev->lock);
+
+	for (i = 0; i < IFACEQ_NUM; i++) {
+		queue = &hdev->queues[i];
+		queue->qhdr =
+			IFACEQ_GET_QHDR_START_ADDR(hdev->ifaceq_table.kva, i);
+
+		venus_set_qhdr_defaults(queue->qhdr);
+
+		queue->qhdr->start_addr = queue->qmem.da;
+
+		if (i == IFACEQ_CMD_IDX)
+			queue->qhdr->type |= HFI_HOST_TO_CTRL_CMD_Q;
+		else if (i == IFACEQ_MSG_IDX)
+			queue->qhdr->type |= HFI_CTRL_TO_HOST_MSG_Q;
+		else if (i == IFACEQ_DBG_IDX)
+			queue->qhdr->type |= HFI_CTRL_TO_HOST_DBG_Q;
+	}
+
+	tbl_hdr = hdev->ifaceq_table.kva;
+	tbl_hdr->version = 0;
+	tbl_hdr->size = IFACEQ_TABLE_SIZE;
+	tbl_hdr->qhdr0_offset = sizeof(struct hfi_queue_table_header);
+	tbl_hdr->qhdr_size = sizeof(struct hfi_queue_header);
+	tbl_hdr->num_q = IFACEQ_NUM;
+	tbl_hdr->num_active_q = IFACEQ_NUM;
+
+	/*
+	 * Set receive request to zero on debug queue as there is no
+	 * need of interrupt from video hardware for debug messages
+	 */
+	queue = &hdev->queues[IFACEQ_DBG_IDX];
+	queue->qhdr->rx_req = 0;
+
+	sfr = hdev->sfr.kva;
+	sfr->buf_size = ALIGNED_SFR_SIZE;
+
+	/* ensure table and queue header structs are settled in memory */
+	wmb();
+
+	mutex_unlock(&hdev->lock);
 }

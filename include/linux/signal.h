@@ -137,11 +137,11 @@ static inline void name(sigset_t *r, const sigset_t *a, const sigset_t *b) \
 		b3 = b->sig[3]; b2 = b->sig[2];				\
 		r->sig[3] = op(a3, b3);					\
 		r->sig[2] = op(a2, b2);					\
-		/* fall through */					\
+		fallthrough;						\
 	case 2:								\
 		a1 = a->sig[1]; b1 = b->sig[1];				\
 		r->sig[1] = op(a1, b1);					\
-		/* fall through */					\
+		fallthrough;						\
 	case 1:								\
 		a0 = a->sig[0]; b0 = b->sig[0];				\
 		r->sig[0] = op(a0, b0);					\
@@ -171,9 +171,9 @@ static inline void name(sigset_t *set)					\
 	switch (_NSIG_WORDS) {						\
 	case 4:	set->sig[3] = op(set->sig[3]);				\
 		set->sig[2] = op(set->sig[2]);				\
-		/* fall through */					\
+		fallthrough;						\
 	case 2:	set->sig[1] = op(set->sig[1]);				\
-		/* fall through */					\
+		fallthrough;						\
 	case 1:	set->sig[0] = op(set->sig[0]);				\
 		    break;						\
 	default:							\
@@ -194,7 +194,7 @@ static inline void sigemptyset(sigset_t *set)
 		memset(set, 0, sizeof(sigset_t));
 		break;
 	case 2: set->sig[1] = 0;
-		/* fall through */
+		fallthrough;
 	case 1:	set->sig[0] = 0;
 		break;
 	}
@@ -207,7 +207,7 @@ static inline void sigfillset(sigset_t *set)
 		memset(set, -1, sizeof(sigset_t));
 		break;
 	case 2: set->sig[1] = -1;
-		/* fall through */
+		fallthrough;
 	case 1:	set->sig[0] = -1;
 		break;
 	}
@@ -238,6 +238,7 @@ static inline void siginitset(sigset_t *set, unsigned long mask)
 		memset(&set->sig[1], 0, sizeof(long)*(_NSIG_WORDS-1));
 		break;
 	case 2: set->sig[1] = 0;
+		break;
 	case 1: ;
 	}
 }
@@ -250,6 +251,7 @@ static inline void siginitsetinv(sigset_t *set, unsigned long mask)
 		memset(&set->sig[1], -1, sizeof(long)*(_NSIG_WORDS-1));
 		break;
 	case 2: set->sig[1] = -1;
+		break;
 	case 1: ;
 	}
 }
@@ -465,6 +467,20 @@ int __save_altstack(stack_t __user *, unsigned long);
 #ifdef CONFIG_PROC_FS
 struct seq_file;
 extern void render_sigset_t(struct seq_file *, const char *, sigset_t *);
+#endif
+
+#ifndef arch_untagged_si_addr
+/*
+ * Given a fault address and a signal and si_code which correspond to the
+ * _sigfault union member, returns the address that must appear in si_addr if
+ * the signal handler does not have SA_EXPOSE_TAGBITS enabled in sa_flags.
+ */
+static inline void __user *arch_untagged_si_addr(void __user *addr,
+						 unsigned long sig,
+						 unsigned long si_code)
+{
+	return addr;
+}
 #endif
 
 #endif /* _LINUX_SIGNAL_H */

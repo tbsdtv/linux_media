@@ -194,8 +194,7 @@ static struct vb2_buffer *get_free_buffer(struct mtk_vcodec_ctx *ctx)
 				vb->vb2_buf.index,
 				dstbuf->queued_in_vb2);
 			v4l2_m2m_buf_queue(ctx->m2m_ctx, vb);
-		} else if ((dstbuf->queued_in_vb2 == false) &&
-			   (dstbuf->queued_in_v4l2 == true)) {
+		} else if (!dstbuf->queued_in_vb2 && dstbuf->queued_in_v4l2) {
 			/*
 			 * If buffer in v4l2 driver but not in vb2 queue yet,
 			 * and we get this buffer from free_list, it means
@@ -448,7 +447,7 @@ static void mtk_vdec_worker(struct work_struct *work)
 			mutex_unlock(&ctx->lock);
 		}
 		v4l2_m2m_buf_done(src_buf, VB2_BUF_STATE_ERROR);
-	} else if (res_chg == false) {
+	} else if (!res_chg) {
 		/*
 		 * we only return src buffer with VB2_BUF_STATE_DONE
 		 * when decode success without resolution change
@@ -658,7 +657,6 @@ static int vidioc_try_fmt(struct v4l2_format *f,
 			  const struct mtk_video_fmt *fmt)
 {
 	struct v4l2_pix_format_mplane *pix_fmt_mp = &f->fmt.pix_mp;
-	int i;
 
 	pix_fmt_mp->field = V4L2_FIELD_NONE;
 
@@ -716,12 +714,7 @@ static int vidioc_try_fmt(struct v4l2_format *f,
 		}
 	}
 
-	for (i = 0; i < pix_fmt_mp->num_planes; i++)
-		memset(&(pix_fmt_mp->plane_fmt[i].reserved[0]), 0x0,
-			   sizeof(pix_fmt_mp->plane_fmt[0].reserved));
-
 	pix_fmt_mp->flags = 0;
-	memset(&pix_fmt_mp->reserved, 0x0, sizeof(pix_fmt_mp->reserved));
 	return 0;
 }
 
@@ -1156,7 +1149,7 @@ static void vb2ops_vdec_buf_queue(struct vb2_buffer *vb)
 		buf = container_of(vb2_v4l2, struct mtk_video_dec_buf,
 				   m2m_buf.vb);
 		mutex_lock(&ctx->lock);
-		if (buf->used == false) {
+		if (!buf->used) {
 			v4l2_m2m_buf_queue(ctx->m2m_ctx, vb2_v4l2);
 			buf->queued_in_vb2 = true;
 			buf->queued_in_v4l2 = true;
@@ -1525,10 +1518,8 @@ int mtk_vcodec_dec_queue_init(void *priv, struct vb2_queue *src_vq,
 	dst_vq->dev             = &ctx->dev->plat_dev->dev;
 
 	ret = vb2_queue_init(dst_vq);
-	if (ret) {
-		vb2_queue_release(src_vq);
+	if (ret)
 		mtk_v4l2_err("Failed to initialize videobuf2 queue(capture)");
-	}
 
 	return ret;
 }

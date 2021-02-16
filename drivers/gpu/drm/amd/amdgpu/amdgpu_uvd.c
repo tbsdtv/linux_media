@@ -54,6 +54,12 @@
 #define FW_1_66_16	((1 << 24) | (66 << 16) | (16 << 8))
 
 /* Firmware Names */
+#ifdef CONFIG_DRM_AMDGPU_SI
+#define FIRMWARE_TAHITI		"amdgpu/tahiti_uvd.bin"
+#define FIRMWARE_VERDE		"amdgpu/verde_uvd.bin"
+#define FIRMWARE_PITCAIRN	"amdgpu/pitcairn_uvd.bin"
+#define FIRMWARE_OLAND		"amdgpu/oland_uvd.bin"
+#endif
 #ifdef CONFIG_DRM_AMDGPU_CIK
 #define FIRMWARE_BONAIRE	"amdgpu/bonaire_uvd.bin"
 #define FIRMWARE_KABINI	"amdgpu/kabini_uvd.bin"
@@ -81,7 +87,7 @@
 #define UVD_NO_OP				0x03ff
 #define UVD_BASE_SI				0x3800
 
-/**
+/*
  * amdgpu_uvd_cs_ctx - Command submission parser context
  *
  * Used for emulating virtual memory support on UVD 4.2.
@@ -100,6 +106,12 @@ struct amdgpu_uvd_cs_ctx {
 	unsigned *buf_sizes;
 };
 
+#ifdef CONFIG_DRM_AMDGPU_SI
+MODULE_FIRMWARE(FIRMWARE_TAHITI);
+MODULE_FIRMWARE(FIRMWARE_VERDE);
+MODULE_FIRMWARE(FIRMWARE_PITCAIRN);
+MODULE_FIRMWARE(FIRMWARE_OLAND);
+#endif
 #ifdef CONFIG_DRM_AMDGPU_CIK
 MODULE_FIRMWARE(FIRMWARE_BONAIRE);
 MODULE_FIRMWARE(FIRMWARE_KABINI);
@@ -133,6 +145,20 @@ int amdgpu_uvd_sw_init(struct amdgpu_device *adev)
 	INIT_DELAYED_WORK(&adev->uvd.idle_work, amdgpu_uvd_idle_work_handler);
 
 	switch (adev->asic_type) {
+#ifdef CONFIG_DRM_AMDGPU_SI
+	case CHIP_TAHITI:
+		fw_name = FIRMWARE_TAHITI;
+		break;
+	case CHIP_VERDE:
+		fw_name = FIRMWARE_VERDE;
+		break;
+	case CHIP_PITCAIRN:
+		fw_name = FIRMWARE_PITCAIRN;
+		break;
+	case CHIP_OLAND:
+		fw_name = FIRMWARE_OLAND;
+		break;
+#endif
 #ifdef CONFIG_DRM_AMDGPU_CIK
 	case CHIP_BONAIRE:
 		fw_name = FIRMWARE_BONAIRE;
@@ -214,7 +240,7 @@ int amdgpu_uvd_sw_init(struct amdgpu_device *adev)
 
 		version_major = (le32_to_cpu(hdr->ucode_version) >> 24) & 0xff;
 		version_minor = (le32_to_cpu(hdr->ucode_version) >> 8) & 0xff;
-		DRM_INFO("Found UVD firmware Version: %hu.%hu Family ID: %hu\n",
+		DRM_INFO("Found UVD firmware Version: %u.%u Family ID: %u\n",
 			version_major, version_minor, family_id);
 
 		/*
@@ -241,7 +267,7 @@ int amdgpu_uvd_sw_init(struct amdgpu_device *adev)
 		dec_minor = (le32_to_cpu(hdr->ucode_version) >> 8) & 0xff;
 		enc_minor = (le32_to_cpu(hdr->ucode_version) >> 24) & 0x3f;
 		enc_major = (le32_to_cpu(hdr->ucode_version) >> 30) & 0x3;
-		DRM_INFO("Found UVD firmware ENC: %hu.%hu DEC: .%hu Family ID: %hu\n",
+		DRM_INFO("Found UVD firmware ENC: %u.%u DEC: .%u Family ID: %u\n",
 			enc_major, enc_minor, dec_minor, family_id);
 
 		adev->uvd.max_handles = AMDGPU_MAX_UVD_HANDLES;
@@ -519,8 +545,9 @@ static int amdgpu_uvd_cs_pass1(struct amdgpu_uvd_cs_ctx *ctx)
 /**
  * amdgpu_uvd_cs_msg_decode - handle UVD decode message
  *
+ * @adev: amdgpu_device pointer
  * @msg: pointer to message structure
- * @buf_sizes: returned buffer sizes
+ * @buf_sizes: placeholder to put the different buffer lengths
  *
  * Peek into the decode message and calculate the necessary buffer sizes.
  */
@@ -979,6 +1006,7 @@ static int amdgpu_uvd_cs_packets(struct amdgpu_uvd_cs_ctx *ctx,
  * amdgpu_uvd_ring_parse_cs - UVD command submission parser
  *
  * @parser: Command submission parser context
+ * @ib_idx: Which indirect buffer to use
  *
  * Parse the command stream, patch in addresses as necessary.
  */
@@ -1253,6 +1281,7 @@ void amdgpu_uvd_ring_end_use(struct amdgpu_ring *ring)
  * amdgpu_uvd_ring_test_ib - test ib execution
  *
  * @ring: amdgpu_ring pointer
+ * @timeout: timeout value in jiffies, or MAX_SCHEDULE_TIMEOUT
  *
  * Test if we can successfully execute an IB
  */

@@ -149,10 +149,10 @@ static const struct drm_display_mode yx240qv29_mode = {
 
 DEFINE_DRM_GEM_CMA_FOPS(ili9341_fops);
 
-static struct drm_driver ili9341_driver = {
+static const struct drm_driver ili9341_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.fops			= &ili9341_fops,
-	DRM_GEM_CMA_VMAP_DRIVER_OPS,
+	DRM_GEM_CMA_DRIVER_OPS_VMAP,
 	.debugfs_init		= mipi_dbi_debugfs_init,
 	.name			= "ili9341",
 	.desc			= "Ilitek ILI9341",

@@ -350,7 +350,7 @@ static void dw_mipi_dsi_phy_write(struct dw_mipi_dsi_rockchip *dsi,
 	dsi_write(dsi, DSI_PHY_TST_CTRL0, PHY_TESTCLK | PHY_UNTESTCLR);
 }
 
-/**
+/*
  * ns2bc - Nanoseconds to byte clock cycles
  */
 static inline unsigned int ns2bc(struct dw_mipi_dsi_rockchip *dsi, int ns)
@@ -358,7 +358,7 @@ static inline unsigned int ns2bc(struct dw_mipi_dsi_rockchip *dsi, int ns)
 	return DIV_ROUND_UP(ns * dsi->lane_mbps / 8, 1000);
 }
 
-/**
+/*
  * ns2ui - Nanoseconds to UI time periods
  */
 static inline unsigned int ns2ui(struct dw_mipi_dsi_rockchip *dsi, int ns)
@@ -517,8 +517,8 @@ dw_mipi_dsi_get_lane_mbps(void *priv_data, const struct drm_display_mode *mode,
 	unsigned long best_freq = 0;
 	unsigned long fvco_min, fvco_max, fin, fout;
 	unsigned int min_prediv, max_prediv;
-	unsigned int _prediv, uninitialized_var(best_prediv);
-	unsigned long _fbdiv, uninitialized_var(best_fbdiv);
+	unsigned int _prediv, best_prediv;
+	unsigned long _fbdiv, best_fbdiv;
 	unsigned long min_delta = ULONG_MAX;
 
 	dsi->format = format;

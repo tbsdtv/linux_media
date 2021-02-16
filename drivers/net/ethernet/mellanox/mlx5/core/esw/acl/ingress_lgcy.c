@@ -180,7 +180,7 @@ int esw_acl_ingress_lgcy_setup(struct mlx5_eswitch *esw,
 		vport->ingress.acl = esw_acl_table_create(esw, vport->vport,
 							  MLX5_FLOW_NAMESPACE_ESW_INGRESS,
 							  table_size);
-		if (IS_ERR_OR_NULL(vport->ingress.acl)) {
+		if (IS_ERR(vport->ingress.acl)) {
 			err = PTR_ERR(vport->ingress.acl);
 			vport->ingress.acl = NULL;
 			return err;
@@ -217,7 +217,6 @@ int esw_acl_ingress_lgcy_setup(struct mlx5_eswitch *esw,
 	}
 
 	/* Create ingress allow rule */
-	memset(spec, 0, sizeof(*spec));
 	spec->match_criteria_enable = MLX5_MATCH_OUTER_HEADERS;
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_ALLOW;
 	vport->ingress.allow_rule = mlx5_add_flow_rules(vport->ingress.acl, spec,

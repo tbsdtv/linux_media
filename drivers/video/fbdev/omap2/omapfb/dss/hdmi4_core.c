@@ -3,7 +3,7 @@
  * ti_hdmi_4xxx_ip.c
  *
  * HDMI TI81xx, TI38xx, TI OMAP4 etc IP driver Library
- * Copyright (C) 2010-2011 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2010-2011 Texas Instruments Incorporated - https://www.ti.com/
  * Authors: Yong Zhi
  *	Mythri pk <mythripk@ti.com>
  */
@@ -875,15 +875,7 @@ void hdmi4_audio_stop(struct hdmi_core_data *core, struct hdmi_wp_data *wp)
 
 int hdmi4_core_init(struct platform_device *pdev, struct hdmi_core_data *core)
 {
-	struct resource *res;
-
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "core");
-	if (!res) {
-		DSSERR("can't get CORE mem resource\n");
-		return -EINVAL;
-	}
-
-	core->base = devm_ioremap_resource(&pdev->dev, res);
+	core->base = devm_platform_ioremap_resource_byname(pdev, "core");
 	if (IS_ERR(core->base)) {
 		DSSERR("can't ioremap CORE\n");
 		return PTR_ERR(core->base);

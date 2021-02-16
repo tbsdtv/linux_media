@@ -10,8 +10,6 @@
 
 char e1000_driver_name[] = "e1000";
 static char e1000_driver_string[] = "Intel(R) PRO/1000 Network Driver";
-#define DRV_VERSION "7.3.21-k8-NAPI"
-const char e1000_driver_version[] = DRV_VERSION;
 static const char e1000_copyright[] = "Copyright (c) 1999-2006 Intel Corporation.";
 
 /* e1000_pci_tbl - PCI Device ID Table
@@ -151,10 +149,8 @@ static int e1000_vlan_rx_kill_vid(struct net_device *netdev,
 				  __be16 proto, u16 vid);
 static void e1000_restore_vlan(struct e1000_adapter *adapter);
 
-#ifdef CONFIG_PM
-static int e1000_suspend(struct pci_dev *pdev, pm_message_t state);
-static int e1000_resume(struct pci_dev *pdev);
-#endif
+static int __maybe_unused e1000_suspend(struct device *dev);
+static int __maybe_unused e1000_resume(struct device *dev);
 static void e1000_shutdown(struct pci_dev *pdev);
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -179,16 +175,16 @@ static const struct pci_error_handlers e1000_err_handler = {
 	.resume = e1000_io_resume,
 };
 
+static SIMPLE_DEV_PM_OPS(e1000_pm_ops, e1000_suspend, e1000_resume);
+
 static struct pci_driver e1000_driver = {
 	.name     = e1000_driver_name,
 	.id_table = e1000_pci_tbl,
 	.probe    = e1000_probe,
 	.remove   = e1000_remove,
-#ifdef CONFIG_PM
-	/* Power Management Hooks */
-	.suspend  = e1000_suspend,
-	.resume   = e1000_resume,
-#endif
+	.driver = {
+		.pm = &e1000_pm_ops,
+	},
 	.shutdown = e1000_shutdown,
 	.err_handler = &e1000_err_handler
 };
@@ -196,7 +192,6 @@ static struct pci_driver e1000_driver = {
 MODULE_AUTHOR("Intel Corporation, <linux.nics@intel.com>");
 MODULE_DESCRIPTION("Intel(R) PRO/1000 Network Driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION(DRV_VERSION);
 
 #define DEFAULT_MSG_ENABLE (NETIF_MSG_DRV|NETIF_MSG_PROBE|NETIF_MSG_LINK)
 static int debug = -1;
@@ -204,8 +199,10 @@ module_param(debug, int, 0);
 MODULE_PARM_DESC(debug, "Debug level (0=none,...,16=all)");
 
 /**
- * e1000_get_hw_dev - return device
- * used by hardware layer to print debugging information
+ * e1000_get_hw_dev - helper function for getting netdev
+ * @hw: pointer to HW struct
+ *
+ * return device used by hardware layer to print debugging information
  *
  **/
 struct net_device *e1000_get_hw_dev(struct e1000_hw *hw)
@@ -223,7 +220,7 @@ struct net_device *e1000_get_hw_dev(struct e1000_hw *hw)
 static int __init e1000_init_module(void)
 {
 	int ret;
-	pr_info("%s - version %s\n", e1000_driver_string, e1000_driver_version);
+	pr_info("%s\n", e1000_driver_string);
 
 	pr_info("%s\n", e1000_copyright);
 
@@ -359,7 +356,7 @@ static void e1000_release_manageability(struct e1000_adapter *adapter)
 
 /**
  * e1000_configure - configure the hardware for RX and TX
- * @adapter = private board structure
+ * @adapter: private board structure
  **/
 static void e1000_configure(struct e1000_adapter *adapter)
 {
@@ -539,7 +536,6 @@ void e1000_down(struct e1000_adapter *adapter)
 
 void e1000_reinit_locked(struct e1000_adapter *adapter)
 {
-	WARN_ON(in_interrupt());
 	while (test_and_set_bit(__E1000_RESETTING, &adapter->flags))
 		msleep(1);
 
@@ -1143,7 +1139,7 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 				EEPROM_INIT_CONTROL3_PORT_B, 1, &eeprom_data);
 			break;
 		}
-		/* Fall Through */
+		fallthrough;
 	default:
 		e1000_read_eeprom(hw,
 			EEPROM_INIT_CONTROL3_PORT_A, 1, &eeprom_data);
@@ -3159,7 +3155,6 @@ static netdev_tx_t e1000_xmit_frame(struct sk_buff *skb,
 				if ((unsigned long)(skb_tail_pointer(skb) - 1)
 				    & 4)
 					break;
-				/* fall through */
 				pull_size = min((unsigned int)4, skb->data_len);
 				if (!__pskb_pull_tail(skb, pull_size)) {
 					e_err(drv, "__pskb_pull_tail "
@@ -3495,8 +3490,9 @@ exit:
 /**
  * e1000_tx_timeout - Respond to a Tx Hang
  * @netdev: network interface device structure
+ * @txqueue: number of the Tx queue that hung (unused)
  **/
-static void e1000_tx_timeout(struct net_device *netdev, unsigned int txqueue)
+static void e1000_tx_timeout(struct net_device *netdev, unsigned int __always_unused txqueue)
 {
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 
@@ -3793,7 +3789,8 @@ static irqreturn_t e1000_intr(int irq, void *data)
 
 /**
  * e1000_clean - NAPI Rx polling callback
- * @adapter: board private structure
+ * @napi: napi struct containing references to driver info
+ * @budget: budget given to driver for receive packets
  **/
 static int e1000_clean(struct napi_struct *napi, int budget)
 {
@@ -3824,6 +3821,7 @@ static int e1000_clean(struct napi_struct *napi, int budget)
 /**
  * e1000_clean_tx_irq - Reclaim resources after transmit completes
  * @adapter: board private structure
+ * @tx_ring: ring to clean
  **/
 static bool e1000_clean_tx_irq(struct e1000_adapter *adapter,
 			       struct e1000_tx_ring *tx_ring)
@@ -3939,7 +3937,7 @@ static bool e1000_clean_tx_irq(struct e1000_adapter *adapter,
  * @adapter:     board private structure
  * @status_err:  receive descriptor status and error fields
  * @csum:        receive descriptor csum field
- * @sk_buff:     socket buffer with received data
+ * @skb:         socket buffer with received data
  **/
 static void e1000_rx_checksum(struct e1000_adapter *adapter, u32 status_err,
 			      u32 csum, struct sk_buff *skb)
@@ -3976,6 +3974,9 @@ static void e1000_rx_checksum(struct e1000_adapter *adapter, u32 status_err,
 
 /**
  * e1000_consume_page - helper function for jumbo Rx path
+ * @bi: software descriptor shadow data
+ * @skb: skb being modified
+ * @length: length of data being added
  **/
 static void e1000_consume_page(struct e1000_rx_buffer *bi, struct sk_buff *skb,
 			       u16 length)
@@ -4009,6 +4010,7 @@ static void e1000_receive_skb(struct e1000_adapter *adapter, u8 status,
 /**
  * e1000_tbi_adjust_stats
  * @hw: Struct containing variables accessed by shared code
+ * @stats: point to stats struct
  * @frame_len: The length of the frame in question
  * @mac_addr: The Ethernet destination address of the frame in question
  *
@@ -4554,6 +4556,8 @@ e1000_alloc_jumbo_rx_buffers(struct e1000_adapter *adapter,
 /**
  * e1000_alloc_rx_buffers - Replace used receive buffers; legacy & extended
  * @adapter: address of board private structure
+ * @rx_ring: pointer to ring struct
+ * @cleaned_count: number of new Rx buffers to try to allocate
  **/
 static void e1000_alloc_rx_buffers(struct e1000_adapter *adapter,
 				   struct e1000_rx_ring *rx_ring,
@@ -4668,7 +4672,7 @@ static void e1000_alloc_rx_buffers(struct e1000_adapter *adapter,
 
 /**
  * e1000_smartspeed - Workaround for SmartSpeed on 82541 and 82547 controllers.
- * @adapter:
+ * @adapter: address of board private structure
  **/
 static void e1000_smartspeed(struct e1000_adapter *adapter)
 {
@@ -4724,10 +4728,10 @@ static void e1000_smartspeed(struct e1000_adapter *adapter)
 }
 
 /**
- * e1000_ioctl -
- * @netdev:
- * @ifreq:
- * @cmd:
+ * e1000_ioctl - handle ioctl calls
+ * @netdev: pointer to our netdev
+ * @ifr: pointer to interface request structure
+ * @cmd: ioctl data
  **/
 static int e1000_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 {
@@ -4743,9 +4747,9 @@ static int e1000_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
 
 /**
  * e1000_mii_ioctl -
- * @netdev:
- * @ifreq:
- * @cmd:
+ * @netdev: pointer to our netdev
+ * @ifr: pointer to interface request structure
+ * @cmd: ioctl data
  **/
 static int e1000_mii_ioctl(struct net_device *netdev, struct ifreq *ifr,
 			   int cmd)
@@ -5060,9 +5064,6 @@ static int __e1000_shutdown(struct pci_dev *pdev, bool *enable_wake)
 	struct e1000_hw *hw = &adapter->hw;
 	u32 ctrl, ctrl_ext, rctl, status;
 	u32 wufc = adapter->wol;
-#ifdef CONFIG_PM
-	int retval = 0;
-#endif
 
 	netif_device_detach(netdev);
 
@@ -5075,12 +5076,6 @@ static int __e1000_shutdown(struct pci_dev *pdev, bool *enable_wake)
 		WARN_ON(test_bit(__E1000_RESETTING, &adapter->flags));
 		e1000_down(adapter);
 	}
-
-#ifdef CONFIG_PM
-	retval = pci_save_state(pdev);
-	if (retval)
-		return retval;
-#endif
 
 	status = er32(STATUS);
 	if (status & E1000_STATUS_LU)
@@ -5142,36 +5137,25 @@ static int __e1000_shutdown(struct pci_dev *pdev, bool *enable_wake)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-static int e1000_suspend(struct pci_dev *pdev, pm_message_t state)
+static int __maybe_unused e1000_suspend(struct device *dev)
 {
 	int retval;
+	struct pci_dev *pdev = to_pci_dev(dev);
 	bool wake;
 
 	retval = __e1000_shutdown(pdev, &wake);
-	if (retval)
-		return retval;
+	device_set_wakeup_enable(dev, wake);
 
-	if (wake) {
-		pci_prepare_to_sleep(pdev);
-	} else {
-		pci_wake_from_d3(pdev, false);
-		pci_set_power_state(pdev, PCI_D3hot);
-	}
-
-	return 0;
+	return retval;
 }
 
-static int e1000_resume(struct pci_dev *pdev)
+static int __maybe_unused e1000_resume(struct device *dev)
 {
+	struct pci_dev *pdev = to_pci_dev(dev);
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct e1000_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
 	u32 err;
-
-	pci_set_power_state(pdev, PCI_D0);
-	pci_restore_state(pdev);
-	pci_save_state(pdev);
 
 	if (adapter->need_ioport)
 		err = pci_enable_device(pdev);
@@ -5209,7 +5193,6 @@ static int e1000_resume(struct pci_dev *pdev)
 
 	return 0;
 }
-#endif
 
 static void e1000_shutdown(struct pci_dev *pdev)
 {

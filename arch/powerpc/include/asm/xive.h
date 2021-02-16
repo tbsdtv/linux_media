@@ -60,13 +60,13 @@ struct xive_irq_data {
 };
 #define XIVE_IRQ_FLAG_STORE_EOI	0x01
 #define XIVE_IRQ_FLAG_LSI	0x02
-#define XIVE_IRQ_FLAG_SHIFT_BUG	0x04
-#define XIVE_IRQ_FLAG_MASK_FW	0x08
-#define XIVE_IRQ_FLAG_EOI_FW	0x10
+/* #define XIVE_IRQ_FLAG_SHIFT_BUG	0x04 */ /* P9 DD1.0 workaround */
+/* #define XIVE_IRQ_FLAG_MASK_FW	0x08 */ /* P9 DD1.0 workaround */
+/* #define XIVE_IRQ_FLAG_EOI_FW	0x10 */ /* P9 DD1.0 workaround */
 #define XIVE_IRQ_FLAG_H_INT_ESB	0x20
 
 /* Special flag set by KVM for excalation interrupts */
-#define XIVE_IRQ_NO_EOI		0x80
+#define XIVE_IRQ_FLAG_NO_EOI	0x80
 
 #define XIVE_INVALID_CHIP_ID	-1
 
@@ -155,7 +155,6 @@ static inline void xive_smp_probe(void) { }
 static inline int  xive_smp_prepare_cpu(unsigned int cpu) { return -EINVAL; }
 static inline void xive_smp_setup_cpu(void) { }
 static inline void xive_smp_disable_cpu(void) { }
-static inline void xive_kexec_teardown_cpu(int secondary) { }
 static inline void xive_shutdown(void) { }
 static inline void xive_flush_interrupt(void) { }
 

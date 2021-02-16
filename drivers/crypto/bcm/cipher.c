@@ -26,11 +26,12 @@
 #include <crypto/aes.h>
 #include <crypto/internal/des.h>
 #include <crypto/hmac.h>
-#include <crypto/sha.h>
 #include <crypto/md5.h>
 #include <crypto/authenc.h>
 #include <crypto/skcipher.h>
 #include <crypto/hash.h>
+#include <crypto/sha1.h>
+#include <crypto/sha2.h>
 #include <crypto/sha3.h>
 
 #include "util.h"
@@ -164,10 +165,6 @@ spu_skcipher_rx_sg_create(struct brcm_message *mssg,
 		       __func__, chunksize, datalen);
 		return -EFAULT;
 	}
-
-	if (ctx->cipher.alg == CIPHER_ALG_RC4)
-		/* Add buffer to catch 260-byte SUPDT field for RC4 */
-		sg_set_buf(sg++, rctx->msg_buf.c.supdt_tweak, SPU_SUPDT_LEN);
 
 	if (stat_pad_len)
 		sg_set_buf(sg++, rctx->msg_buf.rx_stat_pad, stat_pad_len);
@@ -317,7 +314,6 @@ static int handle_skcipher_req(struct iproc_reqctx_s *rctx)
 	u8 local_iv_ctr[MAX_IV_SIZE];
 	u32 stat_pad_len;	/* num bytes to align status field */
 	u32 pad_len;		/* total length of all padding */
-	bool update_key = false;
 	struct brcm_message *mssg;	/* mailbox message */
 
 	/* number of entries in src and dst sg in mailbox message. */
@@ -391,28 +387,6 @@ static int handle_skcipher_req(struct iproc_reqctx_s *rctx)
 		}
 	}
 
-	if (ctx->cipher.alg == CIPHER_ALG_RC4) {
-		rx_frag_num++;
-		if (chunk_start) {
-			/*
-			 * for non-first RC4 chunks, use SUPDT from previous
-			 * response as key for this chunk.
-			 */
-			cipher_parms.key_buf = rctx->msg_buf.c.supdt_tweak;
-			update_key = true;
-			cipher_parms.type = CIPHER_TYPE_UPDT;
-		} else if (!rctx->is_encrypt) {
-			/*
-			 * First RC4 chunk. For decrypt, key in pre-built msg
-			 * header may have been changed if encrypt required
-			 * multiple chunks. So revert the key to the
-			 * ctx->enckey value.
-			 */
-			update_key = true;
-			cipher_parms.type = CIPHER_TYPE_INIT;
-		}
-	}
-
 	if (ctx->max_payload == SPU_MAX_PAYLOAD_INF)
 		flow_log("max_payload infinite\n");
 	else
@@ -425,14 +399,9 @@ static int handle_skcipher_req(struct iproc_reqctx_s *rctx)
 	memcpy(rctx->msg_buf.bcm_spu_req_hdr, ctx->bcm_spu_req_hdr,
 	       sizeof(rctx->msg_buf.bcm_spu_req_hdr));
 
-	/*
-	 * Pass SUPDT field as key. Key field in finish() call is only used
-	 * when update_key has been set above for RC4. Will be ignored in
-	 * all other cases.
-	 */
 	spu->spu_cipher_req_finish(rctx->msg_buf.bcm_spu_req_hdr + BCM_HDR_LEN,
 				   ctx->spu_req_hdr_len, !(rctx->is_encrypt),
-				   &cipher_parms, update_key, chunksize);
+				   &cipher_parms, chunksize);
 
 	atomic64_add(chunksize, &iproc_priv.bytes_out);
 
@@ -527,9 +496,6 @@ static void handle_skcipher_resp(struct iproc_reqctx_s *rctx)
 		 __func__, rctx->total_received, payload_len);
 
 	dump_sg(req->dst, rctx->total_received, payload_len);
-	if (ctx->cipher.alg == CIPHER_ALG_RC4)
-		packet_dump("  supdt ", rctx->msg_buf.c.supdt_tweak,
-			    SPU_SUPDT_LEN);
 
 	rctx->total_received += payload_len;
 	if (rctx->total_received == rctx->total_todo) {
@@ -1853,26 +1819,6 @@ static int aes_setkey(struct crypto_skcipher *cipher, const u8 *key,
 	return 0;
 }
 
-static int rc4_setkey(struct crypto_skcipher *cipher, const u8 *key,
-		      unsigned int keylen)
-{
-	struct iproc_ctx_s *ctx = crypto_skcipher_ctx(cipher);
-	int i;
-
-	ctx->enckeylen = ARC4_MAX_KEY_SIZE + ARC4_STATE_SIZE;
-
-	ctx->enckey[0] = 0x00;	/* 0x00 */
-	ctx->enckey[1] = 0x00;	/* i    */
-	ctx->enckey[2] = 0x00;	/* 0x00 */
-	ctx->enckey[3] = 0x00;	/* j    */
-	for (i = 0; i < ARC4_MAX_KEY_SIZE; i++)
-		ctx->enckey[i + ARC4_STATE_SIZE] = key[i % keylen];
-
-	ctx->cipher_type = CIPHER_TYPE_INIT;
-
-	return 0;
-}
-
 static int skcipher_setkey(struct crypto_skcipher *cipher, const u8 *key,
 			     unsigned int keylen)
 {
@@ -1895,9 +1841,6 @@ static int skcipher_setkey(struct crypto_skcipher *cipher, const u8 *key,
 	case CIPHER_ALG_AES:
 		err = aes_setkey(cipher, key, keylen);
 		break;
-	case CIPHER_ALG_RC4:
-		err = rc4_setkey(cipher, key, keylen);
-		break;
 	default:
 		pr_err("%s() Error: unknown cipher alg\n", __func__);
 		err = -EINVAL;
@@ -1905,11 +1848,9 @@ static int skcipher_setkey(struct crypto_skcipher *cipher, const u8 *key,
 	if (err)
 		return err;
 
-	/* RC4 already populated ctx->enkey */
-	if (ctx->cipher.alg != CIPHER_ALG_RC4) {
-		memcpy(ctx->enckey, key, keylen);
-		ctx->enckeylen = keylen;
-	}
+	memcpy(ctx->enckey, key, keylen);
+	ctx->enckeylen = keylen;
+
 	/* SPU needs XTS keys in the reverse order the crypto API presents */
 	if ((ctx->cipher.alg == CIPHER_ALG_AES) &&
 	    (ctx->cipher.mode == CIPHER_MODE_XTS)) {
@@ -2872,9 +2813,6 @@ static int aead_authenc_setkey(struct crypto_aead *cipher,
 			goto badkey;
 		}
 		break;
-	case CIPHER_ALG_RC4:
-		ctx->cipher_type = CIPHER_TYPE_INIT;
-		break;
 	default:
 		pr_err("%s() Error: Unknown cipher alg\n", __func__);
 		return -EINVAL;
@@ -2930,7 +2868,6 @@ static int aead_gcm_ccm_setkey(struct crypto_aead *cipher,
 
 	ctx->enckeylen = keylen;
 	ctx->authkeylen = 0;
-	memcpy(ctx->enckey, key, ctx->enckeylen);
 
 	switch (ctx->enckeylen) {
 	case AES_KEYSIZE_128:
@@ -2945,6 +2882,8 @@ static int aead_gcm_ccm_setkey(struct crypto_aead *cipher,
 	default:
 		goto badkey;
 	}
+
+	memcpy(ctx->enckey, key, ctx->enckeylen);
 
 	flow_log("  enckeylen:%u authkeylen:%u\n", ctx->enckeylen,
 		 ctx->authkeylen);
@@ -3000,6 +2939,10 @@ static int aead_gcm_esp_setkey(struct crypto_aead *cipher,
 	struct iproc_ctx_s *ctx = crypto_aead_ctx(cipher);
 
 	flow_log("%s\n", __func__);
+
+	if (keylen < GCM_ESP_SALT_SIZE)
+		return -EINVAL;
+
 	ctx->salt_len = GCM_ESP_SALT_SIZE;
 	ctx->salt_offset = GCM_ESP_SALT_OFFSET;
 	memcpy(ctx->salt, key + keylen - GCM_ESP_SALT_SIZE, GCM_ESP_SALT_SIZE);
@@ -3028,6 +2971,10 @@ static int rfc4543_gcm_esp_setkey(struct crypto_aead *cipher,
 	struct iproc_ctx_s *ctx = crypto_aead_ctx(cipher);
 
 	flow_log("%s\n", __func__);
+
+	if (keylen < GCM_ESP_SALT_SIZE)
+		return -EINVAL;
+
 	ctx->salt_len = GCM_ESP_SALT_SIZE;
 	ctx->salt_offset = GCM_ESP_SALT_OFFSET;
 	memcpy(ctx->salt, key + keylen - GCM_ESP_SALT_SIZE, GCM_ESP_SALT_SIZE);
@@ -3057,6 +3004,10 @@ static int aead_ccm_esp_setkey(struct crypto_aead *cipher,
 	struct iproc_ctx_s *ctx = crypto_aead_ctx(cipher);
 
 	flow_log("%s\n", __func__);
+
+	if (keylen < CCM_ESP_SALT_SIZE)
+		return -EINVAL;
+
 	ctx->salt_len = CCM_ESP_SALT_SIZE;
 	ctx->salt_offset = CCM_ESP_SALT_OFFSET;
 	memcpy(ctx->salt, key + keylen - CCM_ESP_SALT_SIZE, CCM_ESP_SALT_SIZE);
@@ -3233,7 +3184,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(md5),cbc(aes))",
 			.cra_driver_name = "authenc-hmac-md5-cbc-aes-iproc",
 			.cra_blocksize = AES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		.ivsize = AES_BLOCK_SIZE,
@@ -3256,7 +3209,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha1),cbc(aes))",
 			.cra_driver_name = "authenc-hmac-sha1-cbc-aes-iproc",
 			.cra_blocksize = AES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = AES_BLOCK_SIZE,
@@ -3279,7 +3234,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha256),cbc(aes))",
 			.cra_driver_name = "authenc-hmac-sha256-cbc-aes-iproc",
 			.cra_blocksize = AES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = AES_BLOCK_SIZE,
@@ -3302,7 +3259,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(md5),cbc(des))",
 			.cra_driver_name = "authenc-hmac-md5-cbc-des-iproc",
 			.cra_blocksize = DES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES_BLOCK_SIZE,
@@ -3325,7 +3284,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha1),cbc(des))",
 			.cra_driver_name = "authenc-hmac-sha1-cbc-des-iproc",
 			.cra_blocksize = DES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES_BLOCK_SIZE,
@@ -3348,7 +3309,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha224),cbc(des))",
 			.cra_driver_name = "authenc-hmac-sha224-cbc-des-iproc",
 			.cra_blocksize = DES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES_BLOCK_SIZE,
@@ -3371,7 +3334,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha256),cbc(des))",
 			.cra_driver_name = "authenc-hmac-sha256-cbc-des-iproc",
 			.cra_blocksize = DES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES_BLOCK_SIZE,
@@ -3394,7 +3359,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha384),cbc(des))",
 			.cra_driver_name = "authenc-hmac-sha384-cbc-des-iproc",
 			.cra_blocksize = DES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES_BLOCK_SIZE,
@@ -3417,7 +3384,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha512),cbc(des))",
 			.cra_driver_name = "authenc-hmac-sha512-cbc-des-iproc",
 			.cra_blocksize = DES_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES_BLOCK_SIZE,
@@ -3440,7 +3409,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(md5),cbc(des3_ede))",
 			.cra_driver_name = "authenc-hmac-md5-cbc-des3-iproc",
 			.cra_blocksize = DES3_EDE_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES3_EDE_BLOCK_SIZE,
@@ -3463,7 +3434,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha1),cbc(des3_ede))",
 			.cra_driver_name = "authenc-hmac-sha1-cbc-des3-iproc",
 			.cra_blocksize = DES3_EDE_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES3_EDE_BLOCK_SIZE,
@@ -3486,7 +3459,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha224),cbc(des3_ede))",
 			.cra_driver_name = "authenc-hmac-sha224-cbc-des3-iproc",
 			.cra_blocksize = DES3_EDE_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES3_EDE_BLOCK_SIZE,
@@ -3509,7 +3484,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha256),cbc(des3_ede))",
 			.cra_driver_name = "authenc-hmac-sha256-cbc-des3-iproc",
 			.cra_blocksize = DES3_EDE_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES3_EDE_BLOCK_SIZE,
@@ -3532,7 +3509,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha384),cbc(des3_ede))",
 			.cra_driver_name = "authenc-hmac-sha384-cbc-des3-iproc",
 			.cra_blocksize = DES3_EDE_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES3_EDE_BLOCK_SIZE,
@@ -3555,7 +3534,9 @@ static struct iproc_alg_s driver_algs[] = {
 			.cra_name = "authenc(hmac(sha512),cbc(des3_ede))",
 			.cra_driver_name = "authenc-hmac-sha512-cbc-des3-iproc",
 			.cra_blocksize = DES3_EDE_BLOCK_SIZE,
-			.cra_flags = CRYPTO_ALG_NEED_FALLBACK | CRYPTO_ALG_ASYNC
+			.cra_flags = CRYPTO_ALG_NEED_FALLBACK |
+				     CRYPTO_ALG_ASYNC |
+				     CRYPTO_ALG_ALLOCATES_MEMORY
 		 },
 		 .setkey = aead_authenc_setkey,
 		 .ivsize = DES3_EDE_BLOCK_SIZE,
@@ -3573,25 +3554,6 @@ static struct iproc_alg_s driver_algs[] = {
 	 },
 
 /* SKCIPHER algorithms. */
-	{
-	 .type = CRYPTO_ALG_TYPE_SKCIPHER,
-	 .alg.skcipher = {
-			.base.cra_name = "ecb(arc4)",
-			.base.cra_driver_name = "ecb-arc4-iproc",
-			.base.cra_blocksize = ARC4_BLOCK_SIZE,
-			.min_keysize = ARC4_MIN_KEY_SIZE,
-			.max_keysize = ARC4_MAX_KEY_SIZE,
-			.ivsize = 0,
-			},
-	 .cipher_info = {
-			 .alg = CIPHER_ALG_RC4,
-			 .mode = CIPHER_MODE_NONE,
-			 },
-	 .auth_info = {
-		       .alg = HASH_ALG_NONE,
-		       .mode = HASH_MODE_NONE,
-		       },
-	 },
 	{
 	 .type = CRYPTO_ALG_TYPE_SKCIPHER,
 	 .alg.skcipher = {
@@ -3811,7 +3773,8 @@ static struct iproc_alg_s driver_algs[] = {
 				    .cra_name = "md5",
 				    .cra_driver_name = "md5-iproc",
 				    .cra_blocksize = MD5_BLOCK_WORDS * 4,
-				    .cra_flags = CRYPTO_ALG_ASYNC,
+				    .cra_flags = CRYPTO_ALG_ASYNC |
+						 CRYPTO_ALG_ALLOCATES_MEMORY,
 				}
 		      },
 	 .cipher_info = {
@@ -4495,20 +4458,16 @@ static void spu_counters_init(void)
 
 static int spu_register_skcipher(struct iproc_alg_s *driver_alg)
 {
-	struct spu_hw *spu = &iproc_priv.spu;
 	struct skcipher_alg *crypto = &driver_alg->alg.skcipher;
 	int err;
-
-	/* SPU2 does not support RC4 */
-	if ((driver_alg->cipher_info.alg == CIPHER_ALG_RC4) &&
-	    (spu->spu_type == SPU_TYPE_SPU2))
-		return 0;
 
 	crypto->base.cra_module = THIS_MODULE;
 	crypto->base.cra_priority = cipher_pri;
 	crypto->base.cra_alignmask = 0;
 	crypto->base.cra_ctxsize = sizeof(struct iproc_ctx_s);
-	crypto->base.cra_flags = CRYPTO_ALG_ASYNC | CRYPTO_ALG_KERN_DRIVER_ONLY;
+	crypto->base.cra_flags = CRYPTO_ALG_ASYNC |
+				 CRYPTO_ALG_ALLOCATES_MEMORY |
+				 CRYPTO_ALG_KERN_DRIVER_ONLY;
 
 	crypto->init = skcipher_init_tfm;
 	crypto->exit = skcipher_exit_tfm;
@@ -4547,7 +4506,8 @@ static int spu_register_ahash(struct iproc_alg_s *driver_alg)
 	hash->halg.base.cra_ctxsize = sizeof(struct iproc_ctx_s);
 	hash->halg.base.cra_init = ahash_cra_init;
 	hash->halg.base.cra_exit = generic_cra_exit;
-	hash->halg.base.cra_flags = CRYPTO_ALG_ASYNC;
+	hash->halg.base.cra_flags = CRYPTO_ALG_ASYNC |
+				    CRYPTO_ALG_ALLOCATES_MEMORY;
 	hash->halg.statesize = sizeof(struct spu_hash_export_s);
 
 	if (driver_alg->auth_info.mode != HASH_MODE_HMAC) {
@@ -4591,7 +4551,7 @@ static int spu_register_aead(struct iproc_alg_s *driver_alg)
 	aead->base.cra_alignmask = 0;
 	aead->base.cra_ctxsize = sizeof(struct iproc_ctx_s);
 
-	aead->base.cra_flags |= CRYPTO_ALG_ASYNC;
+	aead->base.cra_flags |= CRYPTO_ALG_ASYNC | CRYPTO_ALG_ALLOCATES_MEMORY;
 	/* setkey set in alg initialization */
 	aead->setauthsize = aead_setauthsize;
 	aead->encrypt = aead_encrypt;

@@ -86,7 +86,7 @@ static int __ebs_rw_bvec(struct ebs_c *ec, int rw, struct bio_vec *bv, struct bv
 		else
 			ba = dm_bufio_new(ec->bufio, block, &b);
 
-		if (unlikely(IS_ERR(ba))) {
+		if (IS_ERR(ba)) {
 			/*
 			 * Carry on with next buffer, if any, to issue all possible
 			 * data but return error.
@@ -363,7 +363,7 @@ static int ebs_map(struct dm_target *ti, struct bio *bio)
 	bio_set_dev(bio, ec->dev->bdev);
 	bio->bi_iter.bi_sector = ec->start + dm_target_offset(ti, bio->bi_iter.bi_sector);
 
-	if (unlikely(bio->bi_opf & REQ_OP_FLUSH))
+	if (unlikely(bio_op(bio) == REQ_OP_FLUSH))
 		return DM_MAPIO_REMAPPED;
 	/*
 	 * Only queue for bufio processing in case of partial or overlapping buffers

@@ -801,7 +801,7 @@ static int intel_load_vbt_firmware(struct drm_i915_private *dev_priv)
 {
 	struct intel_opregion *opregion = &dev_priv->opregion;
 	const struct firmware *fw = NULL;
-	const char *name = i915_modparams.vbt_firmware;
+	const char *name = dev_priv->params.vbt_firmware;
 	int ret;
 
 	if (!name || !*name)
@@ -1007,12 +1007,8 @@ intel_opregion_get_panel_type(struct drm_i915_private *dev_priv)
 	int ret;
 
 	ret = swsci(dev_priv, SWSCI_GBDA_PANEL_DETAILS, 0x0, &panel_details);
-	if (ret) {
-		drm_dbg_kms(&dev_priv->drm,
-			    "Failed to get panel details from OpRegion (%d)\n",
-			    ret);
+	if (ret)
 		return ret;
-	}
 
 	ret = (panel_details >> 8) & 0xff;
 	if (ret > 0x10) {

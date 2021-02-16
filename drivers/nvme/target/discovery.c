@@ -69,6 +69,7 @@ void nvmet_subsys_disc_changed(struct nvmet_subsys *subsys,
 	struct nvmet_port *port;
 	struct nvmet_subsys_link *s;
 
+	lockdep_assert_held(&nvmet_config_sem);
 	nvmet_genctr++;
 
 	list_for_each_entry(port, nvmet_ports, global_entry)
@@ -277,7 +278,7 @@ static void nvmet_execute_disc_identify(struct nvmet_req *req)
 	id->maxcmd = cpu_to_le16(NVMET_MAX_CMD);
 
 	id->sgls = cpu_to_le32(1 << 0);	/* we always support SGLs */
-	if (ctrl->ops->has_keyed_sgls)
+	if (ctrl->ops->flags & NVMF_KEYED_SGLS)
 		id->sgls |= cpu_to_le32(1 << 2);
 	if (req->port->inline_data_size)
 		id->sgls |= cpu_to_le32(1 << 20);

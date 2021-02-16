@@ -77,8 +77,16 @@ properties:
       - const: vp3
       - const: vp4
 
+  assigned-clocks:
+    minItems: 1
+    maxItems: 5
+
+  assigned-clock-parents:
+    minItems: 1
+    maxItems: 5
+
   interrupts:
-     items:
+    items:
       - description: common_m DSS Master common
       - description: common_s0 DSS Shared common 0
       - description: common_s1 DSS Shared common 1
@@ -94,6 +102,9 @@ properties:
   power-domains:
     maxItems: 1
     description: phandle to the associated power domain
+
+  dma-coherent:
+    type: boolean
 
   ports:
     type: object

@@ -158,10 +158,14 @@ const char * const edac_mem_types[] = {
 	[MEM_DDR3]	= "Unbuffered-DDR3",
 	[MEM_RDDR3]	= "Registered-DDR3",
 	[MEM_LRDDR3]	= "Load-Reduced-DDR3-RAM",
+	[MEM_LPDDR3]	= "Low-Power-DDR3-RAM",
 	[MEM_DDR4]	= "Unbuffered-DDR4",
 	[MEM_RDDR4]	= "Registered-DDR4",
+	[MEM_LPDDR4]	= "Low-Power-DDR4-RAM",
 	[MEM_LRDDR4]	= "Load-Reduced-DDR4-RAM",
+	[MEM_DDR5]	= "Unbuffered-DDR5",
 	[MEM_NVDIMM]	= "Non-volatile-RAM",
+	[MEM_WIO2]	= "Wide-IO-2",
 };
 EXPORT_SYMBOL_GPL(edac_mem_types);
 
@@ -950,6 +954,8 @@ static void edac_ue_error(struct edac_raw_error_desc *e)
 			e->other_detail);
 	}
 
+	edac_inc_ue_error(e);
+
 	if (edac_mc_get_panic_on_ue()) {
 		panic("UE %s%son %s (%s page:0x%lx offset:0x%lx grain:%ld%s%s)\n",
 			e->msg,
@@ -959,8 +965,6 @@ static void edac_ue_error(struct edac_raw_error_desc *e)
 			*e->other_detail ? " - " : "",
 			e->other_detail);
 	}
-
-	edac_inc_ue_error(e);
 }
 
 static void edac_inc_csrow(struct edac_raw_error_desc *e, int row, int chan)

@@ -267,7 +267,8 @@ static struct Qdisc *qdisc_match_from_root(struct Qdisc *root, u32 handle)
 	    root->handle == handle)
 		return root;
 
-	hash_for_each_possible_rcu(qdisc_dev(root)->qdisc_hash, q, hash, handle) {
+	hash_for_each_possible_rcu(qdisc_dev(root)->qdisc_hash, q, hash, handle,
+				   lockdep_rtnl_is_held()) {
 		if (q->handle == handle)
 			return q;
 	}
@@ -411,7 +412,8 @@ struct qdisc_rate_table *qdisc_get_rtab(struct tc_ratespec *r,
 {
 	struct qdisc_rate_table *rtab;
 
-	if (tab == NULL || r->rate == 0 || r->cell_log == 0 ||
+	if (tab == NULL || r->rate == 0 ||
+	    r->cell_log == 0 || r->cell_log >= 32 ||
 	    nla_len(tab) != TC_RTAB_SIZE) {
 		NL_SET_ERR_MSG(extack, "Invalid rate table parameters for searching");
 		return NULL;
@@ -1093,8 +1095,7 @@ skip:
 		int err;
 
 		/* Only support running class lockless if parent is lockless */
-		if (new && (new->flags & TCQ_F_NOLOCK) &&
-		    parent && !(parent->flags & TCQ_F_NOLOCK))
+		if (new && (new->flags & TCQ_F_NOLOCK) && !(parent->flags & TCQ_F_NOLOCK))
 			qdisc_clear_nolock(new);
 
 		if (!cops || !cops->graft)
@@ -1170,7 +1171,7 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 #ifdef CONFIG_MODULES
 	if (ops == NULL && kind != NULL) {
 		char name[IFNAMSIZ];
-		if (nla_strlcpy(name, kind, IFNAMSIZ) < IFNAMSIZ) {
+		if (nla_strscpy(name, kind, IFNAMSIZ) >= 0) {
 			/* We dropped the RTNL semaphore in order to
 			 * perform the module load.  So, even if we
 			 * succeeded in loading the module we have to
@@ -1943,8 +1944,8 @@ static int tc_bind_class_walker(struct Qdisc *q, unsigned long cl,
 	     chain = tcf_get_next_chain(block, chain)) {
 		struct tcf_proto *tp;
 
-		for (tp = tcf_get_next_proto(chain, NULL, true);
-		     tp; tp = tcf_get_next_proto(chain, tp, true)) {
+		for (tp = tcf_get_next_proto(chain, NULL);
+		     tp; tp = tcf_get_next_proto(chain, tp)) {
 			struct tcf_bind_args arg = {};
 
 			arg.w.fn = tcf_node_bind;

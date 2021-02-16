@@ -164,8 +164,8 @@ mlxsw_m_port_create(struct mlxsw_m *mlxsw_m, u8 local_port, u8 module)
 	int err;
 
 	err = mlxsw_core_port_init(mlxsw_m->core, local_port,
-				   module + 1, false, 0,
-				   mlxsw_m->base_mac,
+				   module + 1, false, 0, false,
+				   0, mlxsw_m->base_mac,
 				   sizeof(mlxsw_m->base_mac));
 	if (err) {
 		dev_err(mlxsw_m->bus_info->dev, "Port %d: Failed to init core port\n",
@@ -291,7 +291,8 @@ static int mlxsw_m_ports_create(struct mlxsw_m *mlxsw_m)
 
 	/* Create port objects for each valid entry */
 	for (i = 0; i < mlxsw_m->max_ports; i++) {
-		if (mlxsw_m->module_to_port[i] > 0) {
+		if (mlxsw_m->module_to_port[i] > 0 &&
+		    !mlxsw_core_port_is_xm(mlxsw_m->core, i)) {
 			err = mlxsw_m_port_create(mlxsw_m,
 						  mlxsw_m->module_to_port[i],
 						  i);

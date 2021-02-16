@@ -334,8 +334,7 @@ unsigned long ftrace_graph_ret_addr(struct task_struct *task, int *idx,
 
 static struct ftrace_ops graph_ops = {
 	.func			= ftrace_stub,
-	.flags			= FTRACE_OPS_FL_RECURSION_SAFE |
-				   FTRACE_OPS_FL_INITIALIZED |
+	.flags			= FTRACE_OPS_FL_INITIALIZED |
 				   FTRACE_OPS_FL_PID |
 				   FTRACE_OPS_FL_STUB,
 #ifdef FTRACE_GRAPH_TRAMP_ADDR
@@ -387,8 +386,8 @@ static int alloc_retstack_tasklist(struct ftrace_ret_stack **ret_stack_list)
 		}
 	}
 
-	read_lock(&tasklist_lock);
-	do_each_thread(g, t) {
+	rcu_read_lock();
+	for_each_process_thread(g, t) {
 		if (start == end) {
 			ret = -EAGAIN;
 			goto unlock;
@@ -403,10 +402,10 @@ static int alloc_retstack_tasklist(struct ftrace_ret_stack **ret_stack_list)
 			smp_wmb();
 			t->ret_stack = ret_stack_list[start++];
 		}
-	} while_each_thread(g, t);
+	}
 
 unlock:
-	read_unlock(&tasklist_lock);
+	rcu_read_unlock();
 free:
 	for (i = start; i < end; i++)
 		kfree(ret_stack_list[i]);

@@ -82,6 +82,7 @@
 #define   MS_OC_INT_EN			(1 << 23)
 #define   SD_OC_INT_EN			(1 << 22)
 
+#define RTSX_DUM_REG			0x1C
 
 /*
  * macros for easy use
@@ -98,18 +99,6 @@
 	iowrite8(value, (pcr)->remap_addr + reg)
 #define rtsx_pci_readb(pcr, reg) \
 	ioread8((pcr)->remap_addr + reg)
-
-#define rtsx_pci_read_config_byte(pcr, where, val) \
-	pci_read_config_byte((pcr)->pci, where, val)
-
-#define rtsx_pci_write_config_byte(pcr, where, val) \
-	pci_write_config_byte((pcr)->pci, where, val)
-
-#define rtsx_pci_read_config_dword(pcr, where, val) \
-	pci_read_config_dword((pcr)->pci, where, val)
-
-#define rtsx_pci_write_config_dword(pcr, where, val) \
-	pci_write_config_dword((pcr)->pci, where, val)
 
 #define STATE_TRANS_NONE		0
 #define STATE_TRANS_CMD			1
@@ -305,6 +294,8 @@
 #define   SD30_CLK_STOP_CFG0		0x01
 #define REG_PRE_RW_MODE			0xFD70
 #define EN_INFINITE_MODE		0x01
+#define REG_CRC_DUMMY_0		0xFD71
+#define CFG_SD_POW_AUTO_PD		(1<<0)
 
 #define SRCTL				0xFC13
 
@@ -599,6 +590,7 @@
 
 #define ASPM_FORCE_CTL			0xFE57
 #define   FORCE_ASPM_CTL0		0x10
+#define   FORCE_ASPM_CTL1		0x20
 #define   FORCE_ASPM_VAL_MASK		0x03
 #define   FORCE_ASPM_L1_EN		0x02
 #define   FORCE_ASPM_L0_EN		0x01
@@ -667,6 +659,28 @@
 #define   PM_WAKE_EN			0x01
 #define PM_CTRL4			0xFF47
 
+/* FW config info register */
+#define RTS5261_FW_CFG_INFO0		0xFF50
+#define   RTS5261_FW_EXPRESS_TEST_MASK	(0x01 << 0)
+#define   RTS5261_FW_EA_MODE_MASK	(0x01 << 5)
+#define RTS5261_FW_CFG0			0xFF54
+#define   RTS5261_FW_ENTER_EXPRESS	(0x01 << 0)
+
+#define RTS5261_FW_CFG1			0xFF55
+#define   RTS5261_SYS_CLK_SEL_MCU_CLK	(0x01 << 7)
+#define   RTS5261_CRC_CLK_SEL_MCU_CLK	(0x01 << 6)
+#define   RTS5261_FAKE_MCU_CLOCK_GATING	(0x01 << 5)
+#define   RTS5261_MCU_BUS_SEL_MASK	(0x01 << 4)
+#define   RTS5261_MCU_CLOCK_SEL_MASK	(0x03 << 2)
+#define   RTS5261_MCU_CLOCK_SEL_16M	(0x01 << 2)
+#define   RTS5261_MCU_CLOCK_GATING	(0x01 << 1)
+#define   RTS5261_DRIVER_ENABLE_FW	(0x01 << 0)
+
+#define REG_CFG_OOBS_OFF_TIMER 0xFEA6
+#define REG_CFG_OOBS_ON_TIMER 0xFEA7
+#define REG_CFG_VCM_ON_TIMER 0xFEA8
+#define REG_CFG_OOBS_POLLING 0xFEA9
+
 /* Memory mapping */
 #define SRAM_BASE			0xE600
 #define RBUF_BASE			0xF400
@@ -704,6 +718,13 @@
 /*RTS5260*/
 #define   RTS5260_DVCC_TUNE_MASK	0x70
 #define   RTS5260_DVCC_33		0x70
+
+/*RTS5261*/
+#define RTS5261_LDO1_CFG0		0xFF72
+#define   RTS5261_LDO1_OCP_THD_MASK	(0x07 << 5)
+#define   RTS5261_LDO1_OCP_EN		(0x01 << 4)
+#define   RTS5261_LDO1_OCP_LMT_THD_MASK	(0x03 << 2)
+#define   RTS5261_LDO1_OCP_LMT_EN	(0x01 << 1)
 
 #define LDO_VCC_CFG1			0xFF73
 #define   LDO_VCC_REF_TUNE_MASK		0x30
@@ -745,6 +766,8 @@
 
 #define RTS5260_AUTOLOAD_CFG4		0xFF7F
 #define   RTS5260_MIMO_DISABLE		0x8A
+/*RTS5261*/
+#define   RTS5261_AUX_CLK_16M_EN		(1 << 5)
 
 #define RTS5260_REG_GPIO_CTL0		0xFC1A
 #define   RTS5260_REG_GPIO_MASK		0x01
@@ -1041,10 +1064,6 @@
 #define   PHY_DIG1E_RX_EN_KEEP		0x0001
 #define PHY_DUM_REG			0x1F
 
-#define PCR_ASPM_SETTING_REG1		0x160
-#define PCR_ASPM_SETTING_REG2		0x168
-#define PCR_ASPM_SETTING_5260		0x178
-
 #define PCR_SETTING_REG1		0x724
 #define PCR_SETTING_REG2		0x814
 #define PCR_SETTING_REG3		0x747
@@ -1090,11 +1109,6 @@ struct pcr_ops {
 };
 
 enum PDEV_STAT  {PDEV_STAT_IDLE, PDEV_STAT_RUN};
-
-#define ASPM_L1_1_EN_MASK		BIT(3)
-#define ASPM_L1_2_EN_MASK		BIT(2)
-#define PM_L1_1_EN_MASK		BIT(1)
-#define PM_L1_2_EN_MASK		BIT(0)
 
 #define ASPM_L1_1_EN			BIT(0)
 #define ASPM_L1_2_EN			BIT(1)
@@ -1158,7 +1172,6 @@ struct rtsx_hw_param {
 struct rtsx_pcr {
 	struct pci_dev			*pci;
 	unsigned int			id;
-	int				pcie_cap;
 	struct rtsx_cr_option	option;
 	struct rtsx_hw_param hw_param;
 
@@ -1188,6 +1201,7 @@ struct rtsx_pcr {
 
 	struct delayed_work		carddet_work;
 	struct delayed_work		idle_work;
+	struct delayed_work		rtd3_work;
 
 	spinlock_t			lock;
 	struct mutex			pcr_mutex;
@@ -1197,6 +1211,7 @@ struct rtsx_pcr {
 	unsigned int			cur_clock;
 	bool				remove_pci;
 	bool				msi_en;
+	bool				is_runtime_suspended;
 
 #define EXTRA_CAPS_SD_SDR50		(1 << 0)
 #define EXTRA_CAPS_SD_SDR104		(1 << 1)
@@ -1204,6 +1219,8 @@ struct rtsx_pcr {
 #define EXTRA_CAPS_MMC_HSDDR		(1 << 3)
 #define EXTRA_CAPS_MMC_HS200		(1 << 4)
 #define EXTRA_CAPS_MMC_8BIT		(1 << 5)
+#define EXTRA_CAPS_NO_MMC		(1 << 7)
+#define EXTRA_CAPS_SD_EXPRESS		(1 << 8)
 	u32				extra_caps;
 
 #define IC_VER_A			0
@@ -1242,6 +1259,7 @@ struct rtsx_pcr {
 	u8				dma_error_count;
 	u8			ocp_stat;
 	u8			ocp_stat2;
+	u8			rtd3_en;
 };
 
 #define PID_524A	0x524A
@@ -1250,12 +1268,15 @@ struct rtsx_pcr {
 #define PID_525A	0x525A
 #define PID_5260	0x5260
 #define PID_5261	0x5261
+#define PID_5228	0x5228
 
 #define CHK_PCI_PID(pcr, pid)		((pcr)->pci->device == (pid))
 #define PCI_VID(pcr)			((pcr)->pci->vendor)
 #define PCI_PID(pcr)			((pcr)->pci->device)
 #define is_version(pcr, pid, ver)				\
 	(CHK_PCI_PID(pcr, pid) && (pcr)->ic_version == (ver))
+#define is_version_higher_than(pcr, pid, ver)			\
+	(CHK_PCI_PID(pcr, pid) && (pcr)->ic_version > (ver))
 #define pcr_dbg(pcr, fmt, arg...)				\
 	dev_dbg(&(pcr)->pci->dev, fmt, ##arg)
 

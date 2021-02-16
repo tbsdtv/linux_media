@@ -97,6 +97,7 @@ unsigned int mgmt_vendor_specific_fw_cmd(struct be_ctrl_info *ctrl,
 
 /**
  * mgmt_open_connection()- Establish a TCP CXN
+ * @phba: driver priv structure
  * @dst_addr: Destination Address
  * @beiscsi_ep: ptr to device endpoint struct
  * @nonemb_cmd: ptr to memory allocated for command
@@ -209,7 +210,7 @@ int mgmt_open_connection(struct beiscsi_hba *phba,
 	return tag;
 }
 
-/*
+/**
  * beiscsi_exec_nemb_cmd()- execute non-embedded MBX cmd
  * @phba: driver priv structure
  * @nonemb_cmd: DMA address of the MBX command to be issued
@@ -1243,18 +1244,14 @@ beiscsi_adap_family_disp(struct device *dev, struct device_attribute *attr,
 	case OC_DEVICE_ID2:
 		return snprintf(buf, PAGE_SIZE,
 				"Obsolete/Unsupported BE2 Adapter Family\n");
-		break;
 	case BE_DEVICE_ID2:
 	case OC_DEVICE_ID3:
 		return snprintf(buf, PAGE_SIZE, "BE3-R Adapter Family\n");
-		break;
 	case OC_SKH_ID1:
 		return snprintf(buf, PAGE_SIZE, "Skyhawk-R Adapter Family\n");
-		break;
 	default:
 		return snprintf(buf, PAGE_SIZE,
 				"Unknown Adapter Family: 0x%x\n", dev_id);
-		break;
 	}
 }
 

@@ -21,7 +21,8 @@
 #define ALT_ORIG_PTR(a)		__ALT_PTR(a, orig_offset)
 #define ALT_REPL_PTR(a)		__ALT_PTR(a, alt_offset)
 
-static int all_alternatives_applied;
+/* Volatile, as we may be patching the guts of READ_ONCE() */
+static volatile int all_alternatives_applied;
 
 static DECLARE_BITMAP(applied_alternatives, ARM64_NCAPS);
 
@@ -43,20 +44,8 @@ bool alternative_is_applied(u16 cpufeature)
  */
 static bool branch_insn_requires_update(struct alt_instr *alt, unsigned long pc)
 {
-	unsigned long replptr;
-
-	if (kernel_text_address(pc))
-		return true;
-
-	replptr = (unsigned long)ALT_REPL_PTR(alt);
-	if (pc >= replptr && pc <= (replptr + alt->alt_len))
-		return false;
-
-	/*
-	 * Branching into *another* alternate sequence is doomed, and
-	 * we're not even trying to fix it up.
-	 */
-	BUG();
+	unsigned long replptr = (unsigned long)ALT_REPL_PTR(alt);
+	return !(pc >= replptr && pc <= (replptr + alt->alt_len));
 }
 
 #define align_down(x, a)	((unsigned long)(x) & ~(((unsigned long)(a)) - 1))
@@ -217,7 +206,7 @@ static int __apply_alternatives_multi_stop(void *unused)
 
 	/* We always have a CPU 0 at this point (__init) */
 	if (smp_processor_id()) {
-		while (!READ_ONCE(all_alternatives_applied))
+		while (!all_alternatives_applied)
 			cpu_relax();
 		isb();
 	} else {
@@ -229,7 +218,7 @@ static int __apply_alternatives_multi_stop(void *unused)
 		BUG_ON(all_alternatives_applied);
 		__apply_alternatives(&region, false, remaining_capabilities);
 		/* Barriers provided by the cache flushing */
-		WRITE_ONCE(all_alternatives_applied, 1);
+		all_alternatives_applied = 1;
 	}
 
 	return 0;

@@ -142,6 +142,7 @@ static struct test generic_tests[] = {
 			.skip_if_fail	= false,
 			.get_nr		= test__wp_subtest_get_nr,
 			.get_desc	= test__wp_subtest_get_desc,
+			.skip_reason    = test__wp_subtest_skip_reason,
 		},
 	},
 	{
@@ -336,6 +337,23 @@ static struct test generic_tests[] = {
 	{
 		.desc = "Demangle Java",
 		.func = test__demangle_java,
+	},
+	{
+		.desc = "Parse and process metrics",
+		.func = test__parse_metric,
+	},
+	{
+		.desc = "PE file support",
+		.func = test__pe_file_parsing,
+	},
+	{
+		.desc = "Event expansion for cgroups",
+		.func = test__expand_cgroup_events,
+	},
+	{
+		.desc = "Convert perf time to TSC",
+		.func = test__perf_time_to_tsc,
+		.is_supported = test__tsc_is_supported,
 	},
 	{
 		.func = NULL,

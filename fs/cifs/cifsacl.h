@@ -30,6 +30,10 @@
 #define WRITE_BIT       0x2
 #define EXEC_BIT        0x1
 
+#define ACL_OWNER_MASK 0700
+#define ACL_GROUP_MASK 0770
+#define ACL_EVERYONE_MASK 0777
+
 #define UBITSHIFT	6
 #define GBITSHIFT	3
 
@@ -132,7 +136,7 @@ struct cifs_ace {
 /*
  * The current SMB3 form of security descriptor is similar to what was used for
  * cifs (see above) but some fields are split, and fields in the struct below
- * matches names of fields to the the spec, MS-DTYP (see sections 2.4.5 and
+ * matches names of fields to the spec, MS-DTYP (see sections 2.4.5 and
  * 2.4.6). Note that "CamelCase" fields are used in this struct in order to
  * match the MS-DTYP and MS-SMB2 specs which define the wire format.
  */
@@ -178,7 +182,7 @@ struct smb3_acl {
 
 /*
  * Used to store the special 'NFS SIDs' used to persist the POSIX uid and gid
- * See See http://technet.microsoft.com/en-us/library/hh509017(v=ws.10).aspx
+ * See http://technet.microsoft.com/en-us/library/hh509017(v=ws.10).aspx
  */
 struct owner_sid {
 	u8 Revision;

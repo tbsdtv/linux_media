@@ -10,7 +10,7 @@
 #include <crypto/internal/aead.h>
 #include <crypto/internal/hash.h>
 #include <crypto/aes.h>
-#include <crypto/sha.h>
+#include <crypto/sha2.h>
 #include <crypto/algapi.h>
 #include <crypto/scatterwalk.h>
 #include <linux/module.h>
@@ -746,7 +746,7 @@ void nx_crypto_ctx_exit(struct crypto_tfm *tfm)
 {
 	struct nx_crypto_ctx *nx_ctx = crypto_tfm_ctx(tfm);
 
-	kzfree(nx_ctx->kmem);
+	kfree_sensitive(nx_ctx->kmem);
 	nx_ctx->csbcpb = NULL;
 	nx_ctx->csbcpb_aead = NULL;
 	nx_ctx->in_sg = NULL;
@@ -762,7 +762,7 @@ void nx_crypto_ctx_aead_exit(struct crypto_aead *tfm)
 {
 	struct nx_crypto_ctx *nx_ctx = crypto_aead_ctx(tfm);
 
-	kzfree(nx_ctx->kmem);
+	kfree_sensitive(nx_ctx->kmem);
 }
 
 static int nx_probe(struct vio_dev *viodev, const struct vio_device_id *id)

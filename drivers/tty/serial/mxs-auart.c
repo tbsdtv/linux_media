@@ -443,24 +443,16 @@ struct mxs_auart_port {
 	bool			ms_irq_enabled;
 };
 
-static const struct platform_device_id mxs_auart_devtype[] = {
-	{ .name = "mxs-auart-imx23", .driver_data = IMX23_AUART },
-	{ .name = "mxs-auart-imx28", .driver_data = IMX28_AUART },
-	{ .name = "as-auart-asm9260", .driver_data = ASM9260_AUART },
-	{ /* sentinel */ }
-};
-MODULE_DEVICE_TABLE(platform, mxs_auart_devtype);
-
 static const struct of_device_id mxs_auart_dt_ids[] = {
 	{
 		.compatible = "fsl,imx28-auart",
-		.data = &mxs_auart_devtype[IMX28_AUART]
+		.data = (const void *)IMX28_AUART
 	}, {
 		.compatible = "fsl,imx23-auart",
-		.data = &mxs_auart_devtype[IMX23_AUART]
+		.data = (const void *)IMX23_AUART
 	}, {
 		.compatible = "alphascale,asm9260-auart",
-		.data = &mxs_auart_devtype[ASM9260_AUART]
+		.data = (const void *)ASM9260_AUART
 	}, { /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, mxs_auart_dt_ids);
@@ -1639,8 +1631,6 @@ static int mxs_auart_request_gpio_irq(struct mxs_auart_port *s)
 
 static int mxs_auart_probe(struct platform_device *pdev)
 {
-	const struct of_device_id *of_id =
-			of_match_device(mxs_auart_dt_ids, &pdev->dev);
 	struct mxs_auart_port *s;
 	u32 version;
 	int ret, irq;
@@ -1663,10 +1653,7 @@ static int mxs_auart_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	if (of_id) {
-		pdev->id_entry = of_id->data;
-		s->devtype = pdev->id_entry->driver_data;
-	}
+	s->devtype = (enum mxs_auart_type)of_device_get_match_data(&pdev->dev);
 
 	ret = mxs_get_clks(s, pdev);
 	if (ret)
@@ -1698,21 +1685,21 @@ static int mxs_auart_probe(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		ret = irq;
-		goto out_disable_clks;
+		goto out_iounmap;
 	}
 
 	s->port.irq = irq;
 	ret = devm_request_irq(&pdev->dev, irq, mxs_auart_irq_handle, 0,
 			       dev_name(&pdev->dev), s);
 	if (ret)
-		goto out_disable_clks;
+		goto out_iounmap;
 
 	platform_set_drvdata(pdev, s);
 
 	ret = mxs_auart_init_gpios(s, &pdev->dev);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to initialize GPIOs.\n");
-		goto out_disable_clks;
+		goto out_iounmap;
 	}
 
 	/*
@@ -1720,7 +1707,7 @@ static int mxs_auart_probe(struct platform_device *pdev)
 	 */
 	ret = mxs_auart_request_gpio_irq(s);
 	if (ret)
-		goto out_disable_clks;
+		goto out_iounmap;
 
 	auart_port[s->port.line] = s;
 
@@ -1746,6 +1733,9 @@ out_free_qpio_irq:
 	mxs_auart_free_gpio_irq(s);
 	auart_port[pdev->id] = NULL;
 
+out_iounmap:
+	iounmap(s->port.membase);
+
 out_disable_clks:
 	if (is_asm9260_auart(s)) {
 		clk_disable_unprepare(s->clk);
@@ -1761,6 +1751,7 @@ static int mxs_auart_remove(struct platform_device *pdev)
 	uart_remove_one_port(&auart_driver, &s->port);
 	auart_port[pdev->id] = NULL;
 	mxs_auart_free_gpio_irq(s);
+	iounmap(s->port.membase);
 	if (is_asm9260_auart(s)) {
 		clk_disable_unprepare(s->clk);
 		clk_disable_unprepare(s->clk_ahb);
