@@ -45,10 +45,11 @@
 	#ifdef HOST_PC
 		#include <linux/kernel.h>
 		#include <linux/delay.h>
+		#include <linux/slab.h>
 
 		#define WAIT_N_MS(X) msleep(X)
-		#define calloc(n,s) kzalloc(n*s,GFP_KERNEL)
-		#define free(p) kfree(p)
+		#define calloc(n,s) kvzalloc(n*s,GFP_KERNEL)
+		#define free(p) kvfree(p)
 	#endif
 
 	#include "gen_macros.h"

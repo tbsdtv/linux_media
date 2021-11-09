@@ -11,6 +11,7 @@
 #include "at91-sama5d27_som1.dtsi"
 #include <dt-bindings/mfd/atmel-flexcom.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
 
 / {
 	model = "Atmel SAMA5D27 SOM1 EK";
@@ -137,12 +138,11 @@
 			};
 
 			shdwc@f8048010 {
-				atmel,shdwc-debouncer = <976>;
+				debounce-delay-us = <976>;
 				atmel,wakeup-rtc-timer;
 
 				input@0 {
 					reg = <0>;
-					atmel,wakeup-type = "low";
 				};
 			};
 
@@ -224,8 +224,10 @@
 			adc: adc@fc030000 {
 				vddana-supply = <&vddana>;
 				vref-supply = <&advref>;
+				pinctrl-names = "default";
+				pinctrl-0 = <&pinctrl_mikrobus1_an &pinctrl_mikrobus2_an>;
 
-				status = "disabled";
+				status = "okay";
 			};
 
 			pinctrl@fc038000 {
@@ -467,7 +469,7 @@
 		pb4 {
 			label = "USER";
 			gpios = <&pioA PIN_PA29 GPIO_ACTIVE_LOW>;
-			linux,code = <0x104>;
+			linux,code = <KEY_PROG1>;
 			wakeup-source;
 		};
 	};

@@ -12,8 +12,8 @@
 
 	aliases {
 		serial0 = &blsp1_uart1;
-		sdhc1 = &sdhc_1; /* SDC1 eMMC slot */
-		sdhc2 = &sdhc_2; /* SDC2 SD card slot */
+		mmc0 = &sdhc_1; /* SDC1 eMMC slot */
+		mmc1 = &sdhc_2; /* SDC2 SD card slot */
 	};
 
 	chosen {
@@ -30,6 +30,7 @@
 					pma8084_s1: s1 {
 						regulator-min-microvolt = <675000>;
 						regulator-max-microvolt = <1050000>;
+						regulator-always-on;
 					};
 
 					pma8084_s2: s2 {
@@ -115,6 +116,7 @@
 					pma8084_l12: l12 {
 						regulator-min-microvolt = <1800000>;
 						regulator-max-microvolt = <1800000>;
+						regulator-always-on;
 					};
 
 					pma8084_l13: l13 {
@@ -298,12 +300,51 @@
 		enable-active-high;
 	};
 
+	vreg_panel: panel-regulator {
+		compatible = "regulator-fixed";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&panel_en_pin>;
+
+		regulator-name = "panel-vddr-reg";
+		regulator-min-microvolt = <1500000>;
+		regulator-max-microvolt = <1500000>;
+
+		gpio = <&pma8084_gpios 14 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
 	/delete-node/ vreg-boost;
+
+	adsp-pil {
+		cx-supply = <&pma8084_s2>;
+	};
 };
 
 &soc {
 	serial@f991e000 {
-		status = "ok";
+		status = "okay";
+	};
+
+	/* blsp2_uart8 */
+	serial@f995e000 {
+		status = "okay";
+
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&blsp2_uart8_pins_active>;
+		pinctrl-1 = <&blsp2_uart8_pins_sleep>;
+
+		bluetooth {
+			compatible = "brcm,bcm43540-bt";
+			max-speed = <3000000>;
+			pinctrl-names = "default";
+			pinctrl-0 = <&bt_pins>;
+			device-wakeup-gpios = <&msmgpio 91 GPIO_ACTIVE_HIGH>;
+			shutdown-gpios = <&gpio_expander 9 GPIO_ACTIVE_HIGH>;
+			interrupt-parent = <&msmgpio>;
+			interrupts = <75 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "host-wakeup";
+		};
 	};
 
 	gpio-keys {
@@ -340,6 +381,35 @@
 	};
 
 	pinctrl@fd510000 {
+		blsp2_uart8_pins_active: blsp2-uart8-pins-active {
+			pins = "gpio45", "gpio46", "gpio47", "gpio48";
+			function = "blsp_uart8";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		blsp2_uart8_pins_sleep: blsp2-uart8-pins-sleep {
+			pins = "gpio45", "gpio46", "gpio47", "gpio48";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		bt_pins: bt-pins {
+			hostwake {
+				pins = "gpio75";
+				function = "gpio";
+				drive-strength = <16>;
+				input-enable;
+			};
+
+			devwake {
+				pins = "gpio91";
+				function = "gpio";
+				drive-strength = <2>;
+			};
+		};
+
 		sdhc1_pin_a: sdhc1-pin-active {
 			clk {
 				pins = "sdc1_clk";
@@ -453,10 +523,20 @@
 				bias-pull-down;
 			};
 		};
+
+		panel_te_pin: panel {
+			te {
+				pins = "gpio12";
+				function = "mdp_vsync";
+
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
 	};
 
 	sdhc_1: sdhci@f9824900 {
-		status = "ok";
+		status = "okay";
 
 		vmmc-supply = <&pma8084_l20>;
 		vqmmc-supply = <&pma8084_s4>;
@@ -469,7 +549,7 @@
 	};
 
 	sdhc_2: sdhci@f9864900 {
-		status = "ok";
+		status = "okay";
 
 		max-frequency = <100000000>;
 
@@ -518,7 +598,7 @@
 	};
 
 	usb@f9a55000 {
-		status = "ok";
+		status = "okay";
 
 		phys = <&usb_hs1_phy>;
 		phy-select = <&tcsr 0xb000 0>;
@@ -531,7 +611,7 @@
 
 		ulpi {
 			phy@a {
-				status = "ok";
+				status = "okay";
 
 				v1p8-supply = <&pma8084_l6>;
 				v3p3-supply = <&pma8084_l24>;
@@ -691,11 +771,76 @@
 			maxim,rcomp = /bits/ 8 <0x56>;
 
 			interrupt-parent = <&pma8084_gpios>;
-			interrupts = <21 IRQ_TYPE_EDGE_FALLING>;
+			interrupts = <21 IRQ_TYPE_LEVEL_LOW>;
 
 			pinctrl-names = "default";
 			pinctrl-0 = <&fuelgauge_pin>;
 		};
+	};
+
+	adreno@fdb00000 {
+		status = "ok";
+	};
+
+	mdss@fd900000 {
+		status = "ok";
+
+		mdp@fd900000 {
+			status = "ok";
+		};
+
+		dsi@fd922800 {
+			status = "ok";
+
+			vdda-supply = <&pma8084_l2>;
+			vdd-supply = <&pma8084_l22>;
+			vddio-supply = <&pma8084_l12>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			ports {
+				port@1 {
+					endpoint {
+						remote-endpoint = <&panel_in>;
+						data-lanes = <0 1 2 3>;
+					};
+				};
+			};
+
+			panel: panel@0 {
+				reg = <0>;
+				compatible = "samsung,s6e3fa2";
+
+				pinctrl-names = "default";
+				pinctrl-0 = <&panel_te_pin &panel_rst_pin>;
+
+				iovdd-supply = <&pma8084_lvs4>;
+				vddr-supply = <&vreg_panel>;
+
+				reset-gpios = <&pma8084_gpios 17 GPIO_ACTIVE_LOW>;
+				te-gpios = <&msmgpio 12 GPIO_ACTIVE_HIGH>;
+
+				port {
+					panel_in: endpoint {
+						remote-endpoint = <&dsi0_out>;
+					};
+				};
+			};
+		};
+
+		dsi-phy@fd922a00 {
+			status = "ok";
+
+			vddio-supply = <&pma8084_l12>;
+		};
+	};
+
+	remoteproc@fc880000 {
+		cx-supply = <&pma8084_s2>;
+		mss-supply = <&pma8084_s6>;
+		mx-supply = <&pma8084_s1>;
+		pll-supply = <&pma8084_l12>;
 	};
 };
 
@@ -726,6 +871,14 @@
 				power-source = <PMA8084_GPIO_S4>;
 			};
 
+			panel_en_pin: panel-en-pin {
+				pins = "gpio14";
+				function = "normal";
+				bias-pull-up;
+				power-source = <PMA8084_GPIO_S4>;
+				qcom,drive-strength = <PMIC_GPIO_STRENGTH_LOW>;
+			};
+
 			wlan_sleep_clk_pin: wlan-sleep-clk-pin {
 				pins = "gpio16";
 				function = "func2";
@@ -734,6 +887,15 @@
 				power-source = <PMA8084_GPIO_S4>;
 				qcom,drive-strength = <PMIC_GPIO_STRENGTH_HIGH>;
 			};
+
+			panel_rst_pin: panel-rst-pin {
+				pins = "gpio17";
+				function = "normal";
+				bias-disable;
+				power-source = <PMA8084_GPIO_S4>;
+				qcom,drive-strength = <PMIC_GPIO_STRENGTH_LOW>;
+			};
+
 
 			fuelgauge_pin: fuelgauge-int-pin {
 				pins = "gpio21";

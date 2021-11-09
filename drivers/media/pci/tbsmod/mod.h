@@ -35,4 +35,6 @@ struct dvb_mod_channel_params {
 #define MODULATOR_OUTPUT_ARI     64
 #define MODULATOR_INTERLEAVE     65
 
+#define MODULATOR_BANDWIDTH     68
+
 #endif /*_UAPI_DVBMOD_H_*/

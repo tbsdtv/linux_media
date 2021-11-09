@@ -5,6 +5,7 @@
 
 #include "i915_drv.h"
 #include "intel_dram.h"
+#include "intel_sideband.h"
 
 struct dram_dimm_info {
 	u16 size;
@@ -76,21 +77,21 @@ static int skl_get_dimm_ranks(u16 val)
 }
 
 /* Returns total Gb for the whole DIMM */
-static int cnl_get_dimm_size(u16 val)
+static int icl_get_dimm_size(u16 val)
 {
-	return (val & CNL_DRAM_SIZE_MASK) * 8 / 2;
+	return (val & ICL_DRAM_SIZE_MASK) * 8 / 2;
 }
 
-static int cnl_get_dimm_width(u16 val)
+static int icl_get_dimm_width(u16 val)
 {
-	if (cnl_get_dimm_size(val) == 0)
+	if (icl_get_dimm_size(val) == 0)
 		return 0;
 
-	switch (val & CNL_DRAM_WIDTH_MASK) {
-	case CNL_DRAM_WIDTH_X8:
-	case CNL_DRAM_WIDTH_X16:
-	case CNL_DRAM_WIDTH_X32:
-		val = (val & CNL_DRAM_WIDTH_MASK) >> CNL_DRAM_WIDTH_SHIFT;
+	switch (val & ICL_DRAM_WIDTH_MASK) {
+	case ICL_DRAM_WIDTH_X8:
+	case ICL_DRAM_WIDTH_X16:
+	case ICL_DRAM_WIDTH_X32:
+		val = (val & ICL_DRAM_WIDTH_MASK) >> ICL_DRAM_WIDTH_SHIFT;
 		return 8 << val;
 	default:
 		MISSING_CASE(val);
@@ -98,12 +99,12 @@ static int cnl_get_dimm_width(u16 val)
 	}
 }
 
-static int cnl_get_dimm_ranks(u16 val)
+static int icl_get_dimm_ranks(u16 val)
 {
-	if (cnl_get_dimm_size(val) == 0)
+	if (icl_get_dimm_size(val) == 0)
 		return 0;
 
-	val = (val & CNL_DRAM_RANK_MASK) >> CNL_DRAM_RANK_SHIFT;
+	val = (val & ICL_DRAM_RANK_MASK) >> ICL_DRAM_RANK_SHIFT;
 
 	return val + 1;
 }
@@ -120,10 +121,10 @@ skl_dram_get_dimm_info(struct drm_i915_private *i915,
 		       struct dram_dimm_info *dimm,
 		       int channel, char dimm_name, u16 val)
 {
-	if (INTEL_GEN(i915) >= 10) {
-		dimm->size = cnl_get_dimm_size(val);
-		dimm->width = cnl_get_dimm_width(val);
-		dimm->ranks = cnl_get_dimm_ranks(val);
+	if (GRAPHICS_VER(i915) >= 11) {
+		dimm->size = icl_get_dimm_size(val);
+		dimm->width = icl_get_dimm_width(val);
+		dimm->ranks = icl_get_dimm_ranks(val);
 	} else {
 		dimm->size = skl_get_dimm_size(val);
 		dimm->width = skl_get_dimm_width(val);
@@ -201,22 +202,12 @@ skl_dram_get_channels_info(struct drm_i915_private *i915)
 		return -EINVAL;
 	}
 
-	/*
-	 * If any of the channel is single rank channel, worst case output
-	 * will be same as if single rank memory, so consider single rank
-	 * memory.
-	 */
-	if (ch0.ranks == 1 || ch1.ranks == 1)
-		dram_info->ranks = 1;
-	else
-		dram_info->ranks = max(ch0.ranks, ch1.ranks);
-
-	if (dram_info->ranks == 0) {
+	if (ch0.ranks == 0 && ch1.ranks == 0) {
 		drm_info(&i915->drm, "couldn't get memory rank information\n");
 		return -EINVAL;
 	}
 
-	dram_info->is_16gb_dimm = ch0.is_16gb_dimm || ch1.is_16gb_dimm;
+	dram_info->wm_lv_0_adjust_needed = ch0.is_16gb_dimm || ch1.is_16gb_dimm;
 
 	dram_info->symmetric_memory = intel_is_dram_symmetric(&ch0, &ch1);
 
@@ -269,16 +260,12 @@ skl_get_dram_info(struct drm_i915_private *i915)
 	mem_freq_khz = DIV_ROUND_UP((val & SKL_REQ_DATA_MASK) *
 				    SKL_MEMORY_FREQ_MULTIPLIER_HZ, 1000);
 
-	dram_info->bandwidth_kbps = dram_info->num_channels *
-		mem_freq_khz * 8;
-
-	if (dram_info->bandwidth_kbps == 0) {
+	if (dram_info->num_channels * mem_freq_khz == 0) {
 		drm_info(&i915->drm,
 			 "Couldn't get system memory bandwidth\n");
 		return -EINVAL;
 	}
 
-	dram_info->valid = true;
 	return 0;
 }
 
@@ -365,7 +352,7 @@ static int bxt_get_dram_info(struct drm_i915_private *i915)
 	struct dram_info *dram_info = &i915->dram_info;
 	u32 dram_channels;
 	u32 mem_freq_khz, val;
-	u8 num_active_channels;
+	u8 num_active_channels, valid_ranks = 0;
 	int i;
 
 	val = intel_uncore_read(&i915->uncore, BXT_P_CR_MC_BIOS_REQ_0_0_0);
@@ -375,10 +362,7 @@ static int bxt_get_dram_info(struct drm_i915_private *i915)
 	dram_channels = val & BXT_DRAM_CHANNEL_ACTIVE_MASK;
 	num_active_channels = hweight32(dram_channels);
 
-	/* Each active bit represents 4-byte channel */
-	dram_info->bandwidth_kbps = (mem_freq_khz * num_active_channels * 4);
-
-	if (dram_info->bandwidth_kbps == 0) {
+	if (mem_freq_khz * num_active_channels == 0) {
 		drm_info(&i915->drm,
 			 "Couldn't get system memory bandwidth\n");
 		return -EINVAL;
@@ -410,28 +394,100 @@ static int bxt_get_dram_info(struct drm_i915_private *i915)
 			    dimm.size, dimm.width, dimm.ranks,
 			    intel_dram_type_str(type));
 
-		/*
-		 * If any of the channel is single rank channel,
-		 * worst case output will be same as if single rank
-		 * memory, so consider single rank memory.
-		 */
-		if (dram_info->ranks == 0)
-			dram_info->ranks = dimm.ranks;
-		else if (dimm.ranks == 1)
-			dram_info->ranks = 1;
+		if (valid_ranks == 0)
+			valid_ranks = dimm.ranks;
 
 		if (type != INTEL_DRAM_UNKNOWN)
 			dram_info->type = type;
 	}
 
-	if (dram_info->type == INTEL_DRAM_UNKNOWN || dram_info->ranks == 0) {
+	if (dram_info->type == INTEL_DRAM_UNKNOWN || valid_ranks == 0) {
 		drm_info(&i915->drm, "couldn't get memory information\n");
 		return -EINVAL;
 	}
 
-	dram_info->valid = true;
+	return 0;
+}
+
+static int icl_pcode_read_mem_global_info(struct drm_i915_private *dev_priv)
+{
+	struct dram_info *dram_info = &dev_priv->dram_info;
+	u32 val = 0;
+	int ret;
+
+	ret = sandybridge_pcode_read(dev_priv,
+				     ICL_PCODE_MEM_SUBSYSYSTEM_INFO |
+				     ICL_PCODE_MEM_SS_READ_GLOBAL_INFO,
+				     &val, NULL);
+	if (ret)
+		return ret;
+
+	if (GRAPHICS_VER(dev_priv) == 12) {
+		switch (val & 0xf) {
+		case 0:
+			dram_info->type = INTEL_DRAM_DDR4;
+			break;
+		case 1:
+			dram_info->type = INTEL_DRAM_DDR5;
+			break;
+		case 2:
+			dram_info->type = INTEL_DRAM_LPDDR5;
+			break;
+		case 3:
+			dram_info->type = INTEL_DRAM_LPDDR4;
+			break;
+		case 4:
+			dram_info->type = INTEL_DRAM_DDR3;
+			break;
+		case 5:
+			dram_info->type = INTEL_DRAM_LPDDR3;
+			break;
+		default:
+			MISSING_CASE(val & 0xf);
+			return -1;
+		}
+	} else {
+		switch (val & 0xf) {
+		case 0:
+			dram_info->type = INTEL_DRAM_DDR4;
+			break;
+		case 1:
+			dram_info->type = INTEL_DRAM_DDR3;
+			break;
+		case 2:
+			dram_info->type = INTEL_DRAM_LPDDR3;
+			break;
+		case 3:
+			dram_info->type = INTEL_DRAM_LPDDR4;
+			break;
+		default:
+			MISSING_CASE(val & 0xf);
+			return -1;
+		}
+	}
+
+	dram_info->num_channels = (val & 0xf0) >> 4;
+	dram_info->num_qgv_points = (val & 0xf00) >> 8;
+	dram_info->num_psf_gv_points = (val & 0x3000) >> 12;
 
 	return 0;
+}
+
+static int gen11_get_dram_info(struct drm_i915_private *i915)
+{
+	int ret = skl_get_dram_info(i915);
+
+	if (ret)
+		return ret;
+
+	return icl_pcode_read_mem_global_info(i915);
+}
+
+static int gen12_get_dram_info(struct drm_i915_private *i915)
+{
+	i915->dram_info.wm_lv_0_adjust_needed = false;
+
+	return icl_pcode_read_mem_global_info(i915);
 }
 
 void intel_dram_detect(struct drm_i915_private *i915)
@@ -439,28 +495,30 @@ void intel_dram_detect(struct drm_i915_private *i915)
 	struct dram_info *dram_info = &i915->dram_info;
 	int ret;
 
-	/*
-	 * Assume 16Gb DIMMs are present until proven otherwise.
-	 * This is only used for the level 0 watermark latency
-	 * w/a which does not apply to bxt/glk.
-	 */
-	dram_info->is_16gb_dimm = !IS_GEN9_LP(i915);
-
-	if (INTEL_GEN(i915) < 9 || !HAS_DISPLAY(i915))
+	if (GRAPHICS_VER(i915) < 9 || IS_DG2(i915) || !HAS_DISPLAY(i915))
 		return;
 
-	if (IS_GEN9_LP(i915))
+	/*
+	 * Assume level 0 watermark latency adjustment is needed until proven
+	 * otherwise, this w/a is not needed by bxt/glk.
+	 */
+	dram_info->wm_lv_0_adjust_needed = !IS_GEN9_LP(i915);
+
+	if (GRAPHICS_VER(i915) >= 12)
+		ret = gen12_get_dram_info(i915);
+	else if (GRAPHICS_VER(i915) >= 11)
+		ret = gen11_get_dram_info(i915);
+	else if (IS_GEN9_LP(i915))
 		ret = bxt_get_dram_info(i915);
 	else
 		ret = skl_get_dram_info(i915);
 	if (ret)
 		return;
 
-	drm_dbg_kms(&i915->drm, "DRAM bandwidth: %u kBps, channels: %u\n",
-		    dram_info->bandwidth_kbps, dram_info->num_channels);
+	drm_dbg_kms(&i915->drm, "DRAM channels: %u\n", dram_info->num_channels);
 
-	drm_dbg_kms(&i915->drm, "DRAM ranks: %u, 16Gb DIMMs: %s\n",
-		    dram_info->ranks, yesno(dram_info->is_16gb_dimm));
+	drm_dbg_kms(&i915->drm, "Watermark level 0 adjustment needed: %s\n",
+		    yesno(dram_info->wm_lv_0_adjust_needed));
 }
 
 static u32 gen9_edram_size_mb(struct drm_i915_private *i915, u32 cap)
@@ -477,7 +535,7 @@ void intel_dram_edram_detect(struct drm_i915_private *i915)
 {
 	u32 edram_cap = 0;
 
-	if (!(IS_HASWELL(i915) || IS_BROADWELL(i915) || INTEL_GEN(i915) >= 9))
+	if (!(IS_HASWELL(i915) || IS_BROADWELL(i915) || GRAPHICS_VER(i915) >= 9))
 		return;
 
 	edram_cap = __raw_uncore_read32(&i915->uncore, HSW_EDRAM_CAP);
@@ -491,7 +549,7 @@ void intel_dram_edram_detect(struct drm_i915_private *i915)
 	 * The needed capability bits for size calculation are not there with
 	 * pre gen9 so return 128MB always.
 	 */
-	if (INTEL_GEN(i915) < 9)
+	if (GRAPHICS_VER(i915) < 9)
 		i915->edram_size_mb = 128;
 	else
 		i915->edram_size_mb = gen9_edram_size_mb(i915, edram_cap);

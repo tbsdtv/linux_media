@@ -367,7 +367,7 @@ static void __tb_path_deallocate_nfc(struct tb_path *path, int first_hop)
 	int i, res;
 	for (i = first_hop; i < path->path_length; i++) {
 		res = tb_port_add_nfc_credits(path->hops[i].in_port,
-					      -path->nfc_credits);
+					      -path->hops[i].nfc_credits);
 		if (res)
 			tb_port_warn(path->hops[i].in_port,
 				     "nfc credits deallocation failed for hop %d\n",
@@ -466,6 +466,7 @@ void tb_path_deactivate(struct tb_path *path)
 
 /**
  * tb_path_activate() - activate a path
+ * @path: Path to activate
  *
  * Activate a path starting with the last hop and iterating backwards. The
  * caller must fill path->hops before calling tb_path_activate().
@@ -501,7 +502,7 @@ int tb_path_activate(struct tb_path *path)
 	/* Add non flow controlled credits. */
 	for (i = path->path_length - 1; i >= 0; i--) {
 		res = tb_port_add_nfc_credits(path->hops[i].in_port,
-					      path->nfc_credits);
+					      path->hops[i].nfc_credits);
 		if (res) {
 			__tb_path_deallocate_nfc(path, i);
 			goto err;
@@ -561,6 +562,7 @@ err:
 
 /**
  * tb_path_is_invalid() - check whether any ports on the path are invalid
+ * @path: Path to check
  *
  * Return: Returns true if the path is invalid, false otherwise.
  */

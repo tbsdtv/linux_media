@@ -33,18 +33,20 @@
 #include <asm/switch_to.h>
 #include "entry.h"
 
+int __bootdata(is_full_image);
+
 static void __init reset_tod_clock(void)
 {
-	u64 time;
+	union tod_clock clk;
 
-	if (store_tod_clock(&time) == 0)
+	if (store_tod_clock_ext_cc(&clk) == 0)
 		return;
 	/* TOD clock not running. Set the clock to Unix Epoch. */
-	if (set_tod_clock(TOD_UNIX_EPOCH) != 0 || store_tod_clock(&time) != 0)
+	if (set_tod_clock(TOD_UNIX_EPOCH) || store_tod_clock_ext_cc(&clk))
 		disabled_wait();
 
-	memset(tod_clock_base, 0, 16);
-	*(__u64 *) &tod_clock_base[1] = TOD_UNIX_EPOCH;
+	memset(&tod_clock_base, 0, sizeof(tod_clock_base));
+	tod_clock_base.tod = TOD_UNIX_EPOCH;
 	S390_lowcore.last_update_clock = TOD_UNIX_EPOCH;
 }
 
@@ -180,11 +182,9 @@ static noinline __init void setup_lowcore_early(void)
 
 static noinline __init void setup_facility_list(void)
 {
-	memcpy(S390_lowcore.alt_stfle_fac_list,
-	       S390_lowcore.stfle_fac_list,
-	       sizeof(S390_lowcore.alt_stfle_fac_list));
+	memcpy(alt_stfle_fac_list, stfle_fac_list, sizeof(alt_stfle_fac_list));
 	if (!IS_ENABLED(CONFIG_KERNEL_NOBP))
-		__clear_facility(82, S390_lowcore.alt_stfle_fac_list);
+		__clear_facility(82, alt_stfle_fac_list);
 }
 
 static __init void detect_diag9c(void)
@@ -230,11 +230,15 @@ static __init void detect_machine_facilities(void)
 	}
 	if (test_facility(133))
 		S390_lowcore.machine_flags |= MACHINE_FLAG_GS;
-	if (test_facility(139) && (tod_clock_base[1] & 0x80)) {
+	if (test_facility(139) && (tod_clock_base.tod >> 63)) {
 		/* Enabled signed clock comparator comparisons */
 		S390_lowcore.machine_flags |= MACHINE_FLAG_SCC;
 		clock_comparator_max = -1ULL >> 1;
 		__ctl_set_bit(0, 53);
+	}
+	if (IS_ENABLED(CONFIG_PCI) && test_facility(153)) {
+		S390_lowcore.machine_flags |= MACHINE_FLAG_PCI_MIO;
+		/* the control bit is set during PCI initialization */
 	}
 }
 
@@ -281,7 +285,7 @@ static void __init setup_boot_command_line(void)
 
 static void __init check_image_bootable(void)
 {
-	if (!memcmp(EP_STRING, (void *)EP_OFFSET, strlen(EP_STRING)))
+	if (is_full_image)
 		return;
 
 	sclp_early_printk("Linux kernel boot failure: An attempt to boot a vmlinux ELF image failed.\n");

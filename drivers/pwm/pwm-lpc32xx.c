@@ -116,33 +116,19 @@ static int lpc32xx_pwm_probe(struct platform_device *pdev)
 	lpc32xx->chip.dev = &pdev->dev;
 	lpc32xx->chip.ops = &lpc32xx_pwm_ops;
 	lpc32xx->chip.npwm = 1;
-	lpc32xx->chip.base = -1;
 
-	ret = pwmchip_add(&lpc32xx->chip);
+	/* If PWM is disabled, configure the output to the default value */
+	val = readl(lpc32xx->base + (lpc32xx->chip.pwms[0].hwpwm << 2));
+	val &= ~PWM_PIN_LEVEL;
+	writel(val, lpc32xx->base + (lpc32xx->chip.pwms[0].hwpwm << 2));
+
+	ret = devm_pwmchip_add(&pdev->dev, &lpc32xx->chip);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed to add PWM chip, error %d\n", ret);
 		return ret;
 	}
 
-	/* When PWM is disable, configure the output to the default value */
-	val = readl(lpc32xx->base + (lpc32xx->chip.pwms[0].hwpwm << 2));
-	val &= ~PWM_PIN_LEVEL;
-	writel(val, lpc32xx->base + (lpc32xx->chip.pwms[0].hwpwm << 2));
-
-	platform_set_drvdata(pdev, lpc32xx);
-
 	return 0;
-}
-
-static int lpc32xx_pwm_remove(struct platform_device *pdev)
-{
-	struct lpc32xx_pwm_chip *lpc32xx = platform_get_drvdata(pdev);
-	unsigned int i;
-
-	for (i = 0; i < lpc32xx->chip.npwm; i++)
-		pwm_disable(&lpc32xx->chip.pwms[i]);
-
-	return pwmchip_remove(&lpc32xx->chip);
 }
 
 static const struct of_device_id lpc32xx_pwm_dt_ids[] = {
@@ -157,7 +143,6 @@ static struct platform_driver lpc32xx_pwm_driver = {
 		.of_match_table = lpc32xx_pwm_dt_ids,
 	},
 	.probe = lpc32xx_pwm_probe,
-	.remove = lpc32xx_pwm_remove,
 };
 module_platform_driver(lpc32xx_pwm_driver);
 

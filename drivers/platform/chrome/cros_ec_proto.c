@@ -279,6 +279,15 @@ static int cros_ec_host_command_proto_query(struct cros_ec_device *ec_dev,
 	msg->insize = sizeof(struct ec_response_get_protocol_info);
 
 	ret = send_command(ec_dev, msg);
+	/*
+	 * Send command once again when timeout occurred.
+	 * Fingerprint MCU (FPMCU) is restarted during system boot which
+	 * introduces small window in which FPMCU won't respond for any
+	 * messages sent by kernel. There is no need to wait before next
+	 * attempt because we waited at least EC_MSG_DEADLINE_MS.
+	 */
+	if (ret == -ETIMEDOUT)
+		ret = send_command(ec_dev, msg);
 
 	if (ret < 0) {
 		dev_dbg(ec_dev->dev,
@@ -526,11 +535,13 @@ int cros_ec_query_all(struct cros_ec_device *ec_dev)
 		 * power), not wake up.
 		 */
 		ec_dev->host_event_wake_mask = U32_MAX &
-			~(BIT(EC_HOST_EVENT_AC_DISCONNECTED) |
-			  BIT(EC_HOST_EVENT_BATTERY_LOW) |
-			  BIT(EC_HOST_EVENT_BATTERY_CRITICAL) |
-			  BIT(EC_HOST_EVENT_PD_MCU) |
-			  BIT(EC_HOST_EVENT_BATTERY_STATUS));
+			~(EC_HOST_EVENT_MASK(EC_HOST_EVENT_LID_CLOSED) |
+			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_AC_DISCONNECTED) |
+			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_LOW) |
+			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_CRITICAL) |
+			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY) |
+			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_PD_MCU) |
+			  EC_HOST_EVENT_MASK(EC_HOST_EVENT_BATTERY_STATUS));
 		/*
 		 * Old ECs may not support this command. Complain about all
 		 * other errors.

@@ -252,7 +252,7 @@ static bool linear_make_request(struct mddev *mddev, struct bio *bio)
 		start_sector + data_offset;
 
 	if (unlikely((bio_op(bio) == REQ_OP_DISCARD) &&
-		     !blk_queue_discard(bio->bi_disk->queue))) {
+		     !blk_queue_discard(bio->bi_bdev->bd_disk->queue))) {
 		/* Just ignore it */
 		bio_endio(bio);
 	} else {
@@ -312,7 +312,7 @@ static void linear_exit (void)
 module_init(linear_init);
 module_exit(linear_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Linear device concatenation personality for MD");
+MODULE_DESCRIPTION("Linear device concatenation personality for MD (deprecated)");
 MODULE_ALIAS("md-personality-1"); /* LINEAR - deprecated*/
 MODULE_ALIAS("md-linear");
 MODULE_ALIAS("md-level--1");

@@ -4,7 +4,7 @@
 struct rda5816_priv{
 	struct i2c_adapter*i2c;
 	struct rda5816_config*cfg;
-
+	bool init_done;
 };
 
 /* write multiple (continuous) registers */
@@ -71,6 +71,8 @@ static int rda5816_init(struct dvb_frontend *fe)
 	dev_dbg(&priv->i2c->dev,"%s()\n",__func__);
 	u8 buffer;
 
+	if(priv->init_done)
+		return 0;
 	 msleep(1);  //Wait 1ms. 
 
 	 // Chip register soft reset	 
@@ -282,7 +284,8 @@ static int rda5816_init(struct dvb_frontend *fe)
 	  rda5816_wr(priv,0x65,(buffer&0xF9)); 
 	  priv->cfg->i2c_adr=0x8;
 	}
-
+	priv->init_done = 1;
+	
 	return 0;
 
 }
@@ -476,7 +479,7 @@ struct dvb_frontend *rda5816_attach(struct dvb_frontend *fe,
 
 	priv->cfg = cfg;
 	priv->i2c = i2c;
-
+	priv->init_done = 0;
 	dev_info(&priv->i2c->dev,
 		"%s: RDA5816 successfully attached\n",
 		KBUILD_MODNAME);

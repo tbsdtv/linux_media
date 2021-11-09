@@ -78,7 +78,6 @@ properties:
 
   clock-frequency:
     description: for audio_clkout0/1/2/3
-    $ref: /schemas/types.yaml#/definitions/uint32-array
 
   clkout-lr-asynchronous:
     description: audio_clkoutn is asynchronizes with lr-clock.
@@ -87,9 +86,11 @@ properties:
   power-domains: true
 
   resets:
+    minItems: 1
     maxItems: 11
 
   reset-names:
+    minItems: 1
     maxItems: 11
 
   clocks:
@@ -111,7 +112,16 @@ properties:
         - pattern: '^dvc\.[0-1]$'
         - pattern: '^clk_(a|b|c|i)$'
 
-  port: true
+  ports:
+    $ref: /schemas/graph.yaml#/properties/ports
+    patternProperties:
+      port(@[0-9a-f]+)?:
+        $ref: audio-graph-port.yaml#
+        unevaluatedProperties: false
+
+  port:
+    $ref: audio-graph-port.yaml#
+    unevaluatedProperties: false
 
 # use patternProperties to avoid naming "xxx,yyy" issue
 patternProperties:
@@ -256,8 +266,6 @@ required:
   - "#sound-dai-cells"
 
 allOf:
-  - $ref: audio-graph.yaml#
-  - $ref: audio-graph-port.yaml#
   - if:
       properties:
         compatible:
@@ -404,7 +412,7 @@ examples:
         /* DAI base */
         rcar_sound,dai {
             dai0 {
-                playback = <&ssi5 &src5>;
+                playback = <&ssi5>, <&src5>;
                 capture  = <&ssi6>;
             };
             dai1 {
@@ -430,8 +438,8 @@ examples:
                 bitclock-master = <&rsnd_endpoint0>;
                 frame-master = <&rsnd_endpoint0>;
 
-                playback = <&ssi0 &src0 &dvc0>;
-                capture  = <&ssi1 &src1 &dvc1>;
+                playback = <&ssi0>, <&src0>, <&dvc0>;
+                capture  = <&ssi1>, <&src1>, <&dvc1>;
             };
         };
     };

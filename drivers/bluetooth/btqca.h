@@ -11,6 +11,7 @@
 #define EDL_PATCH_CMD_LEN		(1)
 #define EDL_PATCH_VER_REQ_CMD		(0x19)
 #define EDL_PATCH_TLV_REQ_CMD		(0x1E)
+#define EDL_GET_BUILD_INFO_CMD		(0x20)
 #define EDL_NVM_ACCESS_SET_REQ_CMD	(0x01)
 #define MAX_SIZE_PER_TLV_SEGMENT	(243)
 #define QCA_PRE_SHUTDOWN_CMD		(0xFC08)
@@ -79,7 +80,8 @@ enum qca_tlv_dnld_mode {
 
 enum qca_tlv_type {
 	TLV_TYPE_PATCH = 1,
-	TLV_TYPE_NVM
+	TLV_TYPE_NVM,
+	ELF_TYPE_PATCH,
 };
 
 struct qca_fw_config {
@@ -142,6 +144,7 @@ enum qca_btsoc_type {
 	QCA_WCN3998,
 	QCA_WCN3991,
 	QCA_QCA6390,
+	QCA_WCN6750,
 };
 
 #if IS_ENABLED(CONFIG_BT_QCA)
@@ -159,6 +162,11 @@ static inline bool qca_is_wcn399x(enum qca_btsoc_type soc_type)
 	return soc_type == QCA_WCN3990 || soc_type == QCA_WCN3991 ||
 	       soc_type == QCA_WCN3998;
 }
+static inline bool qca_is_wcn6750(enum qca_btsoc_type soc_type)
+{
+	return soc_type == QCA_WCN6750;
+}
+
 #else
 
 static inline int qca_set_bdaddr_rome(struct hci_dev *hdev, const bdaddr_t *bdaddr)
@@ -187,6 +195,11 @@ static inline int qca_set_bdaddr(struct hci_dev *hdev, const bdaddr_t *bdaddr)
 }
 
 static inline bool qca_is_wcn399x(enum qca_btsoc_type soc_type)
+{
+	return false;
+}
+
+static inline bool qca_is_wcn6750(enum qca_btsoc_type soc_type)
 {
 	return false;
 }

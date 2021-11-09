@@ -31,6 +31,7 @@
 #define JZ_REG_LCD_SA1				0x54
 #define JZ_REG_LCD_FID1				0x58
 #define JZ_REG_LCD_CMD1				0x5C
+#define JZ_REG_LCD_RGBC				0x90
 #define JZ_REG_LCD_OSDC				0x100
 #define JZ_REG_LCD_OSDCTRL			0x104
 #define JZ_REG_LCD_OSDS				0x108
@@ -138,6 +139,19 @@
 #define JZ_LCD_STATE_SOF_IRQ			BIT(4)
 #define JZ_LCD_STATE_DISABLED			BIT(0)
 
+#define JZ_LCD_RGBC_ODD_RGB			(0x0 << 4)
+#define JZ_LCD_RGBC_ODD_RBG			(0x1 << 4)
+#define JZ_LCD_RGBC_ODD_GRB			(0x2 << 4)
+#define JZ_LCD_RGBC_ODD_GBR			(0x3 << 4)
+#define JZ_LCD_RGBC_ODD_BRG			(0x4 << 4)
+#define JZ_LCD_RGBC_ODD_BGR			(0x5 << 4)
+#define JZ_LCD_RGBC_EVEN_RGB			(0x0 << 0)
+#define JZ_LCD_RGBC_EVEN_RBG			(0x1 << 0)
+#define JZ_LCD_RGBC_EVEN_GRB			(0x2 << 0)
+#define JZ_LCD_RGBC_EVEN_GBR			(0x3 << 0)
+#define JZ_LCD_RGBC_EVEN_BRG			(0x4 << 0)
+#define JZ_LCD_RGBC_EVEN_BGR			(0x5 << 0)
+
 #define JZ_LCD_OSDC_OSDEN			BIT(0)
 #define JZ_LCD_OSDC_F0EN			BIT(3)
 #define JZ_LCD_OSDC_F1EN			BIT(4)
@@ -170,6 +184,7 @@ struct platform_driver;
 void ingenic_drm_plane_config(struct device *dev,
 			      struct drm_plane *plane, u32 fourcc);
 void ingenic_drm_plane_disable(struct device *dev, struct drm_plane *plane);
+bool ingenic_drm_map_noncoherent(const struct device *dev);
 
 extern struct platform_driver *ingenic_ipu_driver_ptr;
 

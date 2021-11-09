@@ -2064,7 +2064,8 @@ MXL_STATUS MxLWare603_API_CfgTunerChanTune(struct dvb_frontend *fe, MXL603_CHAN_
 
 				/* Calculate RF Channel = DIV(64*RF(Hz), 1E6) */
 				frequency *= 64;
-				freq = (UINT32)(frequency / 1000000); 
+				do_div(frequency,1000000); 
+                freq = frequency;
 
 				// Set RF  
 				status |= MxLWare603_OEM_WriteRegister(fe, CHAN_TUNE_LOW_REG, (UINT8)(freq & 0xFF));

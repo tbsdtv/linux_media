@@ -2180,8 +2180,10 @@ static int dpaa_a050385_wa_xdpf(struct dpaa_priv *priv,
 				struct xdp_frame **init_xdpf)
 {
 	struct xdp_frame *new_xdpf, *xdpf = *init_xdpf;
-	void *new_buff;
+	void *new_buff, *aligned_data;
 	struct page *p;
+	u32 data_shift;
+	int headroom;
 
 	/* Check the data alignment and make sure the headroom is large
 	 * enough to store the xdpf backpointer. Use an aligned headroom
@@ -2191,11 +2193,43 @@ static int dpaa_a050385_wa_xdpf(struct dpaa_priv *priv,
 	 * byte frame headroom. If the XDP program uses all of it, copy the
 	 * data to a new buffer and make room for storing the backpointer.
 	 */
-	if (PTR_IS_ALIGNED(xdpf->data, DPAA_A050385_ALIGN) &&
+	if (PTR_IS_ALIGNED(xdpf->data, DPAA_FD_DATA_ALIGNMENT) &&
 	    xdpf->headroom >= priv->tx_headroom) {
 		xdpf->headroom = priv->tx_headroom;
 		return 0;
 	}
+
+	/* Try to move the data inside the buffer just enough to align it and
+	 * store the xdpf backpointer. If the available headroom isn't large
+	 * enough, resort to allocating a new buffer and copying the data.
+	 */
+	aligned_data = PTR_ALIGN_DOWN(xdpf->data, DPAA_FD_DATA_ALIGNMENT);
+	data_shift = xdpf->data - aligned_data;
+
+	/* The XDP frame's headroom needs to be large enough to accommodate
+	 * shifting the data as well as storing the xdpf backpointer.
+	 */
+	if (xdpf->headroom  >= data_shift + priv->tx_headroom) {
+		memmove(aligned_data, xdpf->data, xdpf->len);
+		xdpf->data = aligned_data;
+		xdpf->headroom = priv->tx_headroom;
+		return 0;
+	}
+
+	/* The new xdp_frame is stored in the new buffer. Reserve enough space
+	 * in the headroom for storing it along with the driver's private
+	 * info. The headroom needs to be aligned to DPAA_FD_DATA_ALIGNMENT to
+	 * guarantee the data's alignment in the buffer.
+	 */
+	headroom = ALIGN(sizeof(*new_xdpf) + priv->tx_headroom,
+			 DPAA_FD_DATA_ALIGNMENT);
+
+	/* Assure the extended headroom and data don't overflow the buffer,
+	 * while maintaining the mandatory tailroom.
+	 */
+	if (headroom + xdpf->len > DPAA_BP_RAW_SIZE -
+			SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
+		return -ENOMEM;
 
 	p = dev_alloc_pages(0);
 	if (unlikely(!p))
@@ -2203,13 +2237,13 @@ static int dpaa_a050385_wa_xdpf(struct dpaa_priv *priv,
 
 	/* Copy the data to the new buffer at a properly aligned offset */
 	new_buff = page_address(p);
-	memcpy(new_buff + priv->tx_headroom, xdpf->data, xdpf->len);
+	memcpy(new_buff + headroom, xdpf->data, xdpf->len);
 
 	/* Create an XDP frame around the new buffer in a similar fashion
 	 * to xdp_convert_buff_to_frame.
 	 */
 	new_xdpf = new_buff;
-	new_xdpf->data = new_buff + priv->tx_headroom;
+	new_xdpf->data = new_buff + headroom;
 	new_xdpf->len = xdpf->len;
 	new_xdpf->headroom = priv->tx_headroom;
 	new_xdpf->frame_sz = DPAA_BP_RAW_SIZE;
@@ -2524,20 +2558,14 @@ static u32 dpaa_run_xdp(struct dpaa_priv *priv, struct qm_fd *fd, void *vaddr,
 	u32 xdp_act;
 	int err;
 
-	rcu_read_lock();
-
 	xdp_prog = READ_ONCE(priv->xdp_prog);
-	if (!xdp_prog) {
-		rcu_read_unlock();
+	if (!xdp_prog)
 		return XDP_PASS;
-	}
 
-	xdp.data = vaddr + fd_off;
-	xdp.data_meta = xdp.data;
-	xdp.data_hard_start = xdp.data - XDP_PACKET_HEADROOM;
-	xdp.data_end = xdp.data + qm_fd_get_length(fd);
-	xdp.frame_sz = DPAA_BP_RAW_SIZE - DPAA_TX_PRIV_DATA_SIZE;
-	xdp.rxq = &dpaa_fq->xdp_rxq;
+	xdp_init_buff(&xdp, DPAA_BP_RAW_SIZE - DPAA_TX_PRIV_DATA_SIZE,
+		      &dpaa_fq->xdp_rxq);
+	xdp_prepare_buff(&xdp, vaddr + fd_off - XDP_PACKET_HEADROOM,
+			 XDP_PACKET_HEADROOM, qm_fd_get_length(fd), true);
 
 	/* We reserve a fixed headroom of 256 bytes under the erratum and we
 	 * offer it all to XDP programs to use. If no room is left for the
@@ -2606,8 +2634,6 @@ static u32 dpaa_run_xdp(struct dpaa_priv *priv, struct qm_fd *fd, void *vaddr,
 		break;
 	}
 
-	rcu_read_unlock();
-
 	return xdp_act;
 }
 
@@ -2638,7 +2664,6 @@ static enum qman_cb_dqrr_result rx_default_dqrr(struct qman_portal *portal,
 	u32 hash;
 	u64 ns;
 
-	np = container_of(&portal, struct dpaa_napi_portal, p);
 	dpaa_fq = container_of(fq, struct dpaa_fq, fq_base);
 	fd_status = be32_to_cpu(fd->status);
 	fd_format = qm_fd_get_format(fd);
@@ -2653,6 +2678,7 @@ static enum qman_cb_dqrr_result rx_default_dqrr(struct qman_portal *portal,
 
 	percpu_priv = this_cpu_ptr(priv->percpu_priv);
 	percpu_stats = &percpu_priv->stats;
+	np = &percpu_priv->np;
 
 	if (unlikely(dpaa_eth_napi_schedule(percpu_priv, portal, sched_napi)))
 		return qman_cb_dqrr_stop;
@@ -3049,7 +3075,7 @@ static int dpaa_xdp_xmit(struct net_device *net_dev, int n,
 			 struct xdp_frame **frames, u32 flags)
 {
 	struct xdp_frame *xdpf;
-	int i, err, drops = 0;
+	int i, nxmit = 0;
 
 	if (unlikely(flags & ~XDP_XMIT_FLAGS_MASK))
 		return -EINVAL;
@@ -3059,14 +3085,12 @@ static int dpaa_xdp_xmit(struct net_device *net_dev, int n,
 
 	for (i = 0; i < n; i++) {
 		xdpf = frames[i];
-		err = dpaa_xdp_xmit_frame(net_dev, xdpf);
-		if (err) {
-			xdp_return_frame_rx_napi(xdpf);
-			drops++;
-		}
+		if (dpaa_xdp_xmit_frame(net_dev, xdpf))
+			break;
+		nxmit++;
 	}
 
-	return n - drops;
+	return nxmit;
 }
 
 static int dpaa_ts_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
@@ -3133,7 +3157,7 @@ static const struct net_device_ops dpaa_ops = {
 	.ndo_set_mac_address = dpaa_set_mac_address,
 	.ndo_validate_addr = eth_validate_addr,
 	.ndo_set_rx_mode = dpaa_set_rx_mode,
-	.ndo_do_ioctl = dpaa_ioctl,
+	.ndo_eth_ioctl = dpaa_ioctl,
 	.ndo_setup_tc = dpaa_setup_tc,
 	.ndo_change_mtu = dpaa_change_mtu,
 	.ndo_bpf = dpaa_xdp,

@@ -74,6 +74,7 @@
 	SRI(DCSURF_SURFACE_EARLIEST_INUSE_C, HUBPREQ, id),\
 	SRI(DCSURF_SURFACE_EARLIEST_INUSE_HIGH_C, HUBPREQ, id),\
 	SRI(DCSURF_SURFACE_CONTROL, HUBPREQ, id),\
+	SRI(DCSURF_SURFACE_FLIP_INTERRUPT, HUBPREQ, id),\
 	SRI(HUBPRET_CONTROL, HUBPRET, id),\
 	SRI(DCN_EXPANSION_MODE, HUBPREQ, id),\
 	SRI(DCHUBP_REQ_SIZE_CONFIG, HUBP, id),\
@@ -183,6 +184,7 @@
 	uint32_t DCSURF_SURFACE_EARLIEST_INUSE_C; \
 	uint32_t DCSURF_SURFACE_EARLIEST_INUSE_HIGH_C; \
 	uint32_t DCSURF_SURFACE_CONTROL; \
+	uint32_t DCSURF_SURFACE_FLIP_INTERRUPT; \
 	uint32_t HUBPRET_CONTROL; \
 	uint32_t DCN_EXPANSION_MODE; \
 	uint32_t DCHUBP_REQ_SIZE_CONFIG; \
@@ -332,6 +334,7 @@
 	HUBP_SF(HUBPREQ0_DCSURF_SURFACE_CONTROL, SECONDARY_META_SURFACE_TMZ_C, mask_sh),\
 	HUBP_SF(HUBPREQ0_DCSURF_SURFACE_CONTROL, SECONDARY_SURFACE_DCC_EN, mask_sh),\
 	HUBP_SF(HUBPREQ0_DCSURF_SURFACE_CONTROL, SECONDARY_SURFACE_DCC_IND_64B_BLK, mask_sh),\
+	HUBP_SF(HUBPREQ0_DCSURF_SURFACE_FLIP_INTERRUPT, SURFACE_FLIP_INT_MASK, mask_sh),\
 	HUBP_SF(HUBPRET0_HUBPRET_CONTROL, DET_BUF_PLANE1_BASE_ADDRESS, mask_sh),\
 	HUBP_SF(HUBPRET0_HUBPRET_CONTROL, CROSSBAR_SRC_CB_B, mask_sh),\
 	HUBP_SF(HUBPRET0_HUBPRET_CONTROL, CROSSBAR_SRC_CR_R, mask_sh),\
@@ -531,6 +534,7 @@
 	type PRIMARY_SURFACE_DCC_IND_64B_BLK;\
 	type SECONDARY_SURFACE_DCC_EN;\
 	type SECONDARY_SURFACE_DCC_IND_64B_BLK;\
+	type SURFACE_FLIP_INT_MASK;\
 	type DET_BUF_PLANE1_BASE_ADDRESS;\
 	type CROSSBAR_SRC_CB_B;\
 	type CROSSBAR_SRC_CR_R;\
@@ -678,6 +682,10 @@ struct dcn_hubp_state {
 	uint32_t min_ttu_vblank;
 	uint32_t qos_level_low_wm;
 	uint32_t qos_level_high_wm;
+	uint32_t primary_surface_addr_lo;
+	uint32_t primary_surface_addr_hi;
+	uint32_t primary_meta_addr_lo;
+	uint32_t primary_meta_addr_hi;
 };
 
 struct dcn10_hubp {
@@ -776,5 +784,7 @@ void hubp1_init(struct hubp *hubp);
 void hubp1_read_state_common(struct hubp *hubp);
 bool hubp1_in_blank(struct hubp *hubp);
 void hubp1_soft_reset(struct hubp *hubp, bool reset);
+
+void hubp1_set_flip_int(struct hubp *hubp);
 
 #endif

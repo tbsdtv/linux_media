@@ -203,25 +203,15 @@ static int keembay_pwm_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	priv->chip.base = -1;
 	priv->chip.dev = dev;
 	priv->chip.ops = &keembay_pwm_ops;
 	priv->chip.npwm = KMB_TOTAL_PWM_CHANNELS;
 
-	ret = pwmchip_add(&priv->chip);
+	ret = devm_pwmchip_add(dev, &priv->chip);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to add PWM chip\n");
 
-	platform_set_drvdata(pdev, priv);
-
 	return 0;
-}
-
-static int keembay_pwm_remove(struct platform_device *pdev)
-{
-	struct keembay_pwm *priv = platform_get_drvdata(pdev);
-
-	return pwmchip_remove(&priv->chip);
 }
 
 static const struct of_device_id keembay_pwm_of_match[] = {
@@ -232,7 +222,6 @@ MODULE_DEVICE_TABLE(of, keembay_pwm_of_match);
 
 static struct platform_driver keembay_pwm_driver = {
 	.probe	= keembay_pwm_probe,
-	.remove	= keembay_pwm_remove,
 	.driver	= {
 		.name = "pwm-keembay",
 		.of_match_table = keembay_pwm_of_match,

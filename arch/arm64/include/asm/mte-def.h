@@ -7,8 +7,11 @@
 
 #define MTE_GRANULE_SIZE	UL(16)
 #define MTE_GRANULE_MASK	(~(MTE_GRANULE_SIZE - 1))
+#define MTE_GRANULES_PER_PAGE	(PAGE_SIZE / MTE_GRANULE_SIZE)
 #define MTE_TAG_SHIFT		56
 #define MTE_TAG_SIZE		4
 #define MTE_TAG_MASK		GENMASK((MTE_TAG_SHIFT + (MTE_TAG_SIZE - 1)), MTE_TAG_SHIFT)
+
+#define __MTE_PREAMBLE		ARM64_ASM_PREAMBLE ".arch_extension memtag\n"
 
 #endif /* __ASM_MTE_DEF_H  */

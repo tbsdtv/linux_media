@@ -780,11 +780,11 @@ int v4l2_fwnode_device_parse(struct device *dev,
 EXPORT_SYMBOL_GPL(v4l2_fwnode_device_parse);
 
 static int
-v4l2_async_notifier_fwnode_parse_endpoint(struct device *dev,
-					  struct v4l2_async_notifier *notifier,
-					  struct fwnode_handle *endpoint,
-					  unsigned int asd_struct_size,
-					  parse_endpoint_func parse_endpoint)
+v4l2_async_nf_fwnode_parse_endpoint(struct device *dev,
+				    struct v4l2_async_notifier *notifier,
+				    struct fwnode_handle *endpoint,
+				    unsigned int asd_struct_size,
+				    parse_endpoint_func parse_endpoint)
 {
 	struct v4l2_fwnode_endpoint vep = { .bus_type = 0 };
 	struct v4l2_async_subdev *asd;
@@ -822,7 +822,7 @@ v4l2_async_notifier_fwnode_parse_endpoint(struct device *dev,
 	if (ret < 0)
 		goto out_err;
 
-	ret = v4l2_async_notifier_add_subdev(notifier, asd);
+	ret = __v4l2_async_nf_add_subdev(notifier, asd);
 	if (ret < 0) {
 		/* not an error if asd already exists */
 		if (ret == -EEXIST)
@@ -839,13 +839,11 @@ out_err:
 	return ret == -ENOTCONN ? 0 : ret;
 }
 
-static int
-__v4l2_async_notifier_parse_fwnode_ep(struct device *dev,
-				      struct v4l2_async_notifier *notifier,
-				      size_t asd_struct_size,
-				      unsigned int port,
-				      bool has_port,
-				      parse_endpoint_func parse_endpoint)
+int
+v4l2_async_nf_parse_fwnode_endpoints(struct device *dev,
+				     struct v4l2_async_notifier *notifier,
+				     size_t asd_struct_size,
+				     parse_endpoint_func parse_endpoint)
 {
 	struct fwnode_handle *fwnode;
 	int ret = 0;
@@ -863,22 +861,11 @@ __v4l2_async_notifier_parse_fwnode_ep(struct device *dev,
 		if (!is_available)
 			continue;
 
-		if (has_port) {
-			struct fwnode_endpoint ep;
 
-			ret = fwnode_graph_parse_endpoint(fwnode, &ep);
-			if (ret)
-				break;
-
-			if (ep.port != port)
-				continue;
-		}
-
-		ret = v4l2_async_notifier_fwnode_parse_endpoint(dev,
-								notifier,
-								fwnode,
-								asd_struct_size,
-								parse_endpoint);
+		ret = v4l2_async_nf_fwnode_parse_endpoint(dev, notifier,
+							  fwnode,
+							  asd_struct_size,
+							  parse_endpoint);
 		if (ret < 0)
 			break;
 	}
@@ -887,18 +874,7 @@ __v4l2_async_notifier_parse_fwnode_ep(struct device *dev,
 
 	return ret;
 }
-
-int
-v4l2_async_notifier_parse_fwnode_endpoints(struct device *dev,
-					   struct v4l2_async_notifier *notifier,
-					   size_t asd_struct_size,
-					   parse_endpoint_func parse_endpoint)
-{
-	return __v4l2_async_notifier_parse_fwnode_ep(dev, notifier,
-						     asd_struct_size, 0,
-						     false, parse_endpoint);
-}
-EXPORT_SYMBOL_GPL(v4l2_async_notifier_parse_fwnode_endpoints);
+EXPORT_SYMBOL_GPL(v4l2_async_nf_parse_fwnode_endpoints);
 
 /*
  * v4l2_fwnode_reference_parse - parse references for async sub-devices
@@ -942,9 +918,8 @@ static int v4l2_fwnode_reference_parse(struct device *dev,
 	     index++) {
 		struct v4l2_async_subdev *asd;
 
-		asd = v4l2_async_notifier_add_fwnode_subdev(notifier,
-							    args.fwnode,
-							    sizeof(*asd));
+		asd = v4l2_async_nf_add_fwnode(notifier, args.fwnode,
+					       struct v4l2_async_subdev);
 		fwnode_handle_put(args.fwnode);
 		if (IS_ERR(asd)) {
 			/* not an error if asd already exists */
@@ -1243,8 +1218,8 @@ v4l2_fwnode_reference_parse_int_props(struct device *dev,
 	     index++) {
 		struct v4l2_async_subdev *asd;
 
-		asd = v4l2_async_notifier_add_fwnode_subdev(notifier, fwnode,
-							    sizeof(*asd));
+		asd = v4l2_async_nf_add_fwnode(notifier, fwnode,
+					       struct v4l2_async_subdev);
 		fwnode_handle_put(fwnode);
 		if (IS_ERR(asd)) {
 			ret = PTR_ERR(asd);
@@ -1259,8 +1234,27 @@ v4l2_fwnode_reference_parse_int_props(struct device *dev,
 	return !fwnode || PTR_ERR(fwnode) == -ENOENT ? 0 : PTR_ERR(fwnode);
 }
 
-int v4l2_async_notifier_parse_fwnode_sensor_common(struct device *dev,
-						   struct v4l2_async_notifier *notifier)
+/**
+ * v4l2_async_nf_parse_fwnode_sensor - parse common references on
+ *					     sensors for async sub-devices
+ * @dev: the device node the properties of which are parsed for references
+ * @notifier: the async notifier where the async subdevs will be added
+ *
+ * Parse common sensor properties for remote devices related to the
+ * sensor and set up async sub-devices for them.
+ *
+ * Any notifier populated using this function must be released with a call to
+ * v4l2_async_nf_release() after it has been unregistered and the async
+ * sub-devices are no longer in use, even in the case the function returned an
+ * error.
+ *
+ * Return: 0 on success
+ *	   -ENOMEM if memory allocation failed
+ *	   -EINVAL if property parsing failed
+ */
+static int
+v4l2_async_nf_parse_fwnode_sensor(struct device *dev,
+				  struct v4l2_async_notifier *notifier)
 {
 	static const char * const led_props[] = { "led" };
 	static const struct v4l2_fwnode_int_props props[] = {
@@ -1288,9 +1282,8 @@ int v4l2_async_notifier_parse_fwnode_sensor_common(struct device *dev,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(v4l2_async_notifier_parse_fwnode_sensor_common);
 
-int v4l2_async_register_subdev_sensor_common(struct v4l2_subdev *sd)
+int v4l2_async_register_subdev_sensor(struct v4l2_subdev *sd)
 {
 	struct v4l2_async_notifier *notifier;
 	int ret;
@@ -1302,14 +1295,13 @@ int v4l2_async_register_subdev_sensor_common(struct v4l2_subdev *sd)
 	if (!notifier)
 		return -ENOMEM;
 
-	v4l2_async_notifier_init(notifier);
+	v4l2_async_nf_init(notifier);
 
-	ret = v4l2_async_notifier_parse_fwnode_sensor_common(sd->dev,
-							     notifier);
+	ret = v4l2_async_nf_parse_fwnode_sensor(sd->dev, notifier);
 	if (ret < 0)
 		goto out_cleanup;
 
-	ret = v4l2_async_subdev_notifier_register(sd, notifier);
+	ret = v4l2_async_subdev_nf_register(sd, notifier);
 	if (ret < 0)
 		goto out_cleanup;
 
@@ -1322,15 +1314,15 @@ int v4l2_async_register_subdev_sensor_common(struct v4l2_subdev *sd)
 	return 0;
 
 out_unregister:
-	v4l2_async_notifier_unregister(notifier);
+	v4l2_async_nf_unregister(notifier);
 
 out_cleanup:
-	v4l2_async_notifier_cleanup(notifier);
+	v4l2_async_nf_cleanup(notifier);
 	kfree(notifier);
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(v4l2_async_register_subdev_sensor_common);
+EXPORT_SYMBOL_GPL(v4l2_async_register_subdev_sensor);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Sakari Ailus <sakari.ailus@linux.intel.com>");

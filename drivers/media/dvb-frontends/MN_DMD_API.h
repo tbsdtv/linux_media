@@ -10,18 +10,11 @@
 
 
 
-typedef unsigned char DMD_u8_t;
-typedef signed char DMD_s8_t;
-typedef	unsigned int  DMD_u32_t;
-typedef	int			  DMD_s32_t;
-typedef	char*		  DMD_text_t;
-
-typedef unsigned char u8;
-typedef signed char s8;
-typedef unsigned short int u16;
-typedef signed short int s16;
-typedef unsigned int u32;
-typedef signed int s32;
+typedef u8	DMD_u8_t;
+typedef s8	DMD_s8_t;
+typedef	u32	DMD_u32_t;
+typedef	s32	 DMD_s32_t;
+typedef	char*	  DMD_text_t;
 
 #define	DMD_API
 

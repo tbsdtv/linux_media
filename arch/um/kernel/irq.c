@@ -20,7 +20,7 @@
 #include <os.h>
 #include <irq_user.h>
 #include <irq_kern.h>
-#include <as-layout.h>
+#include <linux/time-internal.h>
 
 
 extern void free_irqs(void);
@@ -38,6 +38,12 @@ struct irq_reg {
 	bool active;
 	bool pending;
 	bool wakeup;
+#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+	bool pending_on_resume;
+	void (*timetravel_handler)(int, int, void *,
+				   struct time_travel_event *);
+	struct time_travel_event event;
+#endif
 };
 
 struct irq_entry {
@@ -50,7 +56,8 @@ struct irq_entry {
 
 static DEFINE_SPINLOCK(irq_lock);
 static LIST_HEAD(active_fds);
-static DECLARE_BITMAP(irqs_allocated, NR_IRQS);
+static DECLARE_BITMAP(irqs_allocated, UM_LAST_SIGNAL_IRQ);
+static bool irqs_suspended;
 
 static void irq_io_loop(struct irq_reg *irq, struct uml_pt_regs *regs)
 {
@@ -74,15 +81,88 @@ static void irq_io_loop(struct irq_reg *irq, struct uml_pt_regs *regs)
 	}
 }
 
-void sigio_handler_suspend(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs)
+#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+static void irq_event_handler(struct time_travel_event *ev)
 {
-	/* nothing */
+	struct irq_reg *reg = container_of(ev, struct irq_reg, event);
+
+	/* do nothing if suspended - just to cause a wakeup */
+	if (irqs_suspended)
+		return;
+
+	generic_handle_irq(reg->irq);
 }
 
-void sigio_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs)
+static bool irq_do_timetravel_handler(struct irq_entry *entry,
+				      enum um_irq_type t)
+{
+	struct irq_reg *reg = &entry->reg[t];
+
+	if (!reg->timetravel_handler)
+		return false;
+
+	/*
+	 * Handle all messages - we might get multiple even while
+	 * interrupts are already suspended, due to suspend order
+	 * etc. Note that time_travel_add_irq_event() will not add
+	 * an event twice, if it's pending already "first wins".
+	 */
+	reg->timetravel_handler(reg->irq, entry->fd, reg->id, &reg->event);
+
+	if (!reg->event.pending)
+		return false;
+
+	if (irqs_suspended)
+		reg->pending_on_resume = true;
+	return true;
+}
+#else
+static bool irq_do_timetravel_handler(struct irq_entry *entry,
+				      enum um_irq_type t)
+{
+	return false;
+}
+#endif
+
+static void sigio_reg_handler(int idx, struct irq_entry *entry, enum um_irq_type t,
+			      struct uml_pt_regs *regs,
+			      bool timetravel_handlers_only)
+{
+	struct irq_reg *reg = &entry->reg[t];
+
+	if (!reg->events)
+		return;
+
+	if (os_epoll_triggered(idx, reg->events) <= 0)
+		return;
+
+	if (irq_do_timetravel_handler(entry, t))
+		return;
+
+	/*
+	 * If we're called to only run time-travel handlers then don't
+	 * actually proceed but mark sigio as pending (if applicable).
+	 * For suspend/resume, timetravel_handlers_only may be true
+	 * despite time-travel not being configured and used.
+	 */
+	if (timetravel_handlers_only) {
+#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+		mark_sigio_pending();
+#endif
+		return;
+	}
+
+	irq_io_loop(reg, regs);
+}
+
+static void _sigio_handler(struct uml_pt_regs *regs,
+			   bool timetravel_handlers_only)
 {
 	struct irq_entry *irq_entry;
 	int n, i;
+
+	if (timetravel_handlers_only && !um_irq_timetravel_handler_used())
+		return;
 
 	while (1) {
 		/* This is now lockless - epoll keeps back-referencesto the irqs
@@ -105,19 +185,19 @@ void sigio_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs)
 
 			irq_entry = os_epoll_get_data_pointer(i);
 
-			for (t = 0; t < NUM_IRQ_TYPES; t++) {
-				int events = irq_entry->reg[t].events;
-
-				if (!events)
-					continue;
-
-				if (os_epoll_triggered(i, events) > 0)
-					irq_io_loop(&irq_entry->reg[t], regs);
-			}
+			for (t = 0; t < NUM_IRQ_TYPES; t++)
+				sigio_reg_handler(i, irq_entry, t, regs,
+						  timetravel_handlers_only);
 		}
 	}
 
-	free_irqs();
+	if (!timetravel_handlers_only)
+		free_irqs();
+}
+
+void sigio_handler(int sig, struct siginfo *unused_si, struct uml_pt_regs *regs)
+{
+	_sigio_handler(regs, irqs_suspended);
 }
 
 static struct irq_entry *get_irq_entry_by_fd(int fd)
@@ -169,7 +249,9 @@ static void update_or_free_irq_entry(struct irq_entry *entry)
 		free_irq_entry(entry, false);
 }
 
-static int activate_fd(int irq, int fd, enum um_irq_type type, void *dev_id)
+static int activate_fd(int irq, int fd, enum um_irq_type type, void *dev_id,
+		       void (*timetravel_handler)(int, int, void *,
+						  struct time_travel_event *))
 {
 	struct irq_entry *irq_entry;
 	int err, events = os_event_mask(type);
@@ -205,6 +287,13 @@ static int activate_fd(int irq, int fd, enum um_irq_type type, void *dev_id)
 	irq_entry->reg[type].irq = irq;
 	irq_entry->reg[type].active = true;
 	irq_entry->reg[type].events = events;
+
+#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+	if (um_irq_timetravel_handler_used()) {
+		irq_entry->reg[type].timetravel_handler = timetravel_handler;
+		irq_entry->reg[type].event.fn = irq_event_handler;
+	}
+#endif
 
 	WARN_ON(!update_irq_entry(irq_entry));
 	spin_unlock_irqrestore(&irq_lock, flags);
@@ -330,7 +419,8 @@ unsigned int do_IRQ(int irq, struct uml_pt_regs *regs)
 
 void um_free_irq(int irq, void *dev)
 {
-	if (WARN(irq < 0 || irq > NR_IRQS, "freeing invalid irq %d", irq))
+	if (WARN(irq < 0 || irq > UM_LAST_SIGNAL_IRQ,
+		 "freeing invalid irq %d", irq))
 		return;
 
 	free_irq_by_irq_and_dev(irq, dev);
@@ -339,9 +429,12 @@ void um_free_irq(int irq, void *dev)
 }
 EXPORT_SYMBOL(um_free_irq);
 
-int um_request_irq(int irq, int fd, enum um_irq_type type,
-		   irq_handler_t handler, unsigned long irqflags,
-		   const char *devname, void *dev_id)
+static int
+_um_request_irq(int irq, int fd, enum um_irq_type type,
+		irq_handler_t handler, unsigned long irqflags,
+		const char *devname, void *dev_id,
+		void (*timetravel_handler)(int, int, void *,
+					   struct time_travel_event *))
 {
 	int err;
 
@@ -360,7 +453,7 @@ int um_request_irq(int irq, int fd, enum um_irq_type type,
 		return -ENOSPC;
 
 	if (fd != -1) {
-		err = activate_fd(irq, fd, type, dev_id);
+		err = activate_fd(irq, fd, type, dev_id, timetravel_handler);
 		if (err)
 			goto error;
 	}
@@ -374,7 +467,33 @@ error:
 	clear_bit(irq, irqs_allocated);
 	return err;
 }
+
+int um_request_irq(int irq, int fd, enum um_irq_type type,
+		   irq_handler_t handler, unsigned long irqflags,
+		   const char *devname, void *dev_id)
+{
+	return _um_request_irq(irq, fd, type, handler, irqflags,
+			       devname, dev_id, NULL);
+}
 EXPORT_SYMBOL(um_request_irq);
+
+#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+int um_request_irq_tt(int irq, int fd, enum um_irq_type type,
+		      irq_handler_t handler, unsigned long irqflags,
+		      const char *devname, void *dev_id,
+		      void (*timetravel_handler)(int, int, void *,
+						 struct time_travel_event *))
+{
+	return _um_request_irq(irq, fd, type, handler, irqflags,
+			       devname, dev_id, timetravel_handler);
+}
+EXPORT_SYMBOL(um_request_irq_tt);
+
+void sigio_run_timetravel_handlers(void)
+{
+	_sigio_handler(NULL, true);
+}
+#endif
 
 #ifdef CONFIG_PM_SLEEP
 void um_irqs_suspend(void)
@@ -382,12 +501,12 @@ void um_irqs_suspend(void)
 	struct irq_entry *entry;
 	unsigned long flags;
 
-	sig_info[SIGIO] = sigio_handler_suspend;
+	irqs_suspended = true;
 
 	spin_lock_irqsave(&irq_lock, flags);
 	list_for_each_entry(entry, &active_fds, list) {
 		enum um_irq_type t;
-		bool wake = false;
+		bool clear = true;
 
 		for (t = 0; t < NUM_IRQ_TYPES; t++) {
 			if (!entry->reg[t].events)
@@ -400,13 +519,17 @@ void um_irqs_suspend(void)
 			 * any FDs that should be suspended.
 			 */
 			if (entry->reg[t].wakeup ||
-			    entry->reg[t].irq == SIGIO_WRITE_IRQ) {
-				wake = true;
+			    entry->reg[t].irq == SIGIO_WRITE_IRQ
+#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+			    || entry->reg[t].timetravel_handler
+#endif
+			    ) {
+				clear = false;
 				break;
 			}
 		}
 
-		if (!wake) {
+		if (clear) {
 			entry->suspended = true;
 			os_clear_fd_async(entry->fd);
 			entry->sigio_workaround =
@@ -421,7 +544,31 @@ void um_irqs_resume(void)
 	struct irq_entry *entry;
 	unsigned long flags;
 
-	spin_lock_irqsave(&irq_lock, flags);
+
+	local_irq_save(flags);
+#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
+	/*
+	 * We don't need to lock anything here since we're in resume
+	 * and nothing else is running, but have disabled IRQs so we
+	 * don't try anything else with the interrupt list from there.
+	 */
+	list_for_each_entry(entry, &active_fds, list) {
+		enum um_irq_type t;
+
+		for (t = 0; t < NUM_IRQ_TYPES; t++) {
+			struct irq_reg *reg = &entry->reg[t];
+
+			if (reg->pending_on_resume) {
+				irq_enter();
+				generic_handle_irq(reg->irq);
+				irq_exit();
+				reg->pending_on_resume = false;
+			}
+		}
+	}
+#endif
+
+	spin_lock(&irq_lock);
 	list_for_each_entry(entry, &active_fds, list) {
 		if (entry->suspended) {
 			int err = os_set_fd_async(entry->fd);
@@ -437,7 +584,7 @@ void um_irqs_resume(void)
 	}
 	spin_unlock_irqrestore(&irq_lock, flags);
 
-	sig_info[SIGIO] = sigio_handler;
+	irqs_suspended = false;
 	send_sigio_to_self();
 }
 
@@ -502,7 +649,7 @@ void __init init_IRQ(void)
 
 	irq_set_chip_and_handler(TIMER_IRQ, &alarm_irq_type, handle_edge_irq);
 
-	for (i = 1; i < NR_IRQS; i++)
+	for (i = 1; i < UM_LAST_SIGNAL_IRQ; i++)
 		irq_set_chip_and_handler(i, &normal_irq_type, handle_edge_irq);
 	/* Initialize EPOLL Loop */
 	os_setup_epoll();

@@ -17,7 +17,7 @@ endif
 
 # Build rules
 
-targets := $(obj-vdso64) vdso64.so.dbg
+targets := $(obj-vdso64) vdso64.so.dbg vgettimeofday.o
 obj-vdso64 := $(addprefix $(obj)/, $(obj-vdso64))
 
 GCOV_PROFILE := n
@@ -27,16 +27,17 @@ KASAN_SANITIZE := n
 
 ccflags-y := -shared -fno-common -fno-builtin -nostdlib \
 	-Wl,-soname=linux-vdso64.so.1 -Wl,--hash-style=both
+
+# Go prior to 1.16.x assumes r30 is not clobbered by any VDSO code. That used to be true
+# by accident when the VDSO was hand-written asm code, but may not be now that the VDSO is
+# compiler generated. To avoid breaking Go tell GCC not to use r30. Impact on code
+# generation is minimal, it will just use r29 instead.
+ccflags-y += $(call cc-option, -ffixed-r30)
+
 asflags-y := -D__VDSO64__ -s
 
-obj-y += vdso64_wrapper.o
 targets += vdso64.lds
 CPPFLAGS_vdso64.lds += -P -C -U$(ARCH)
-
-$(obj)/vgettimeofday.o: %.o: %.c FORCE
-
-# Force dependency (incbin is bad)
-$(obj)/vdso64_wrapper.o : $(obj)/vdso64.so.dbg
 
 # link rule for the .so file, .lds has to be first
 $(obj)/vdso64.so.dbg: $(src)/vdso64.lds $(obj-vdso64) $(obj)/vgettimeofday.o FORCE

@@ -31,6 +31,7 @@ static u32 initial_allocation_mask __ro_after_init;
 u64 default_amr __ro_after_init  = ~0x0UL;
 u64 default_iamr __ro_after_init = 0x5555555555555555UL;
 u64 default_uamor __ro_after_init;
+EXPORT_SYMBOL(default_amr);
 /*
  * Key used to implement PROT_EXEC mmap. Denies READ/WRITE
  * We pick key 2 because 0 is special key and 1 is reserved as per ISA.
@@ -300,19 +301,6 @@ void setup_kuap(bool disabled)
 }
 #endif
 
-static inline void update_current_thread_amr(u64 value)
-{
-	current->thread.regs->amr = value;
-}
-
-static inline void update_current_thread_iamr(u64 value)
-{
-	if (!likely(pkey_execute_disable_supported))
-		return;
-
-	current->thread.regs->iamr = value;
-}
-
 #ifdef CONFIG_PPC_MEM_KEYS
 void pkey_mm_init(struct mm_struct *mm)
 {
@@ -327,7 +315,7 @@ static inline void init_amr(int pkey, u8 init_bits)
 	u64 new_amr_bits = (((u64)init_bits & 0x3UL) << pkeyshift(pkey));
 	u64 old_amr = current_thread_amr() & ~((u64)(0x3ul) << pkeyshift(pkey));
 
-	update_current_thread_amr(old_amr | new_amr_bits);
+	current->thread.regs->amr = old_amr | new_amr_bits;
 }
 
 static inline void init_iamr(int pkey, u8 init_bits)
@@ -335,7 +323,10 @@ static inline void init_iamr(int pkey, u8 init_bits)
 	u64 new_iamr_bits = (((u64)init_bits & 0x1UL) << pkeyshift(pkey));
 	u64 old_iamr = current_thread_iamr() & ~((u64)(0x1ul) << pkeyshift(pkey));
 
-	update_current_thread_iamr(old_iamr | new_iamr_bits);
+	if (!likely(pkey_execute_disable_supported))
+		return;
+
+	current->thread.regs->iamr = old_iamr | new_iamr_bits;
 }
 
 /*

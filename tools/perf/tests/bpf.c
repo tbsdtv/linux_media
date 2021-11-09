@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -86,7 +87,7 @@ static struct {
 		.msg_load_fail	  = "check your vmlinux setting?",
 		.target_func	  = &epoll_pwait_loop,
 		.expect_result	  = (NR_ITERS + 1) / 2,
-		.pin 		  = true,
+		.pin		  = true,
 	},
 #ifdef HAVE_BPF_PROLOGUE
 	{
@@ -99,13 +100,6 @@ static struct {
 		.expect_result	  = (NR_ITERS + 1) / 4,
 	},
 #endif
-	{
-		.prog_id	  = LLVM_TESTCASE_BPF_RELOCATION,
-		.desc		  = "BPF relocation checker",
-		.name		  = "[bpf_relocation_test]",
-		.msg_compile_fail = "fix 'perf test LLVM' first",
-		.msg_load_fail	  = "libbpf error when dealing with relocation",
-	},
 };
 
 static int do_test(struct bpf_object *obj, int (*func)(void),
@@ -158,7 +152,7 @@ static int do_test(struct bpf_object *obj, int (*func)(void),
 	}
 
 	evlist__splice_list_tail(evlist, &parse_state.list);
-	evlist->nr_groups = parse_state.nr_groups;
+	evlist->core.nr_groups = parse_state.nr_groups;
 
 	evlist__config(evlist, &opts, NULL);
 
@@ -198,7 +192,7 @@ static int do_test(struct bpf_object *obj, int (*func)(void),
 	}
 
 	if (count != expect * evlist->core.nr_entries) {
-		pr_debug("BPF filter result incorrect, expected %d, got %d samples\n", expect, count);
+		pr_debug("BPF filter result incorrect, expected %d, got %d samples\n", expect * evlist->core.nr_entries, count);
 		goto out_delete_evlist;
 	}
 
@@ -283,6 +277,7 @@ static int __test__bpf(int idx)
 	}
 
 out:
+	free(obj_buf);
 	bpf__clear();
 	return ret;
 }

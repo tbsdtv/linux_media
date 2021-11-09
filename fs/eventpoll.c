@@ -366,8 +366,8 @@ static inline struct epitem *ep_item_from_wait(wait_queue_entry_t *p)
  *
  * @ep: Pointer to the eventpoll context.
  *
- * Returns: Returns a value different than zero if ready events are available,
- *          or zero otherwise.
+ * Return: a value different than %zero if ready events are available,
+ *          or %zero otherwise.
  */
 static inline int ep_events_available(struct eventpoll *ep)
 {
@@ -657,6 +657,12 @@ static void ep_done_scan(struct eventpoll *ep,
 	 */
 	list_splice(txlist, &ep->rdllist);
 	__pm_relax(ep->ws);
+
+	if (!list_empty(&ep->rdllist)) {
+		if (waitqueue_active(&ep->wq))
+			wake_up(&ep->wq);
+	}
+
 	write_unlock_irq(&ep->lock);
 }
 
@@ -717,7 +723,7 @@ static int ep_remove(struct eventpoll *ep, struct epitem *epi)
 	 */
 	call_rcu(&epi->rcu, epi_rcu_free);
 
-	atomic_long_dec(&ep->user->epoll_watches);
+	percpu_counter_dec(&ep->user->epoll_watches);
 
 	return 0;
 }
@@ -979,7 +985,7 @@ static struct epitem *ep_find(struct eventpoll *ep, struct file *file, int fd)
 	return epir;
 }
 
-#ifdef CONFIG_CHECKPOINT_RESTORE
+#ifdef CONFIG_KCMP
 static struct epitem *ep_find_tfd(struct eventpoll *ep, int tfd, unsigned long toff)
 {
 	struct rb_node *rbp;
@@ -1021,9 +1027,9 @@ struct file *get_epoll_tfile_raw_ptr(struct file *file, int tfd,
 
 	return file_raw;
 }
-#endif /* CONFIG_CHECKPOINT_RESTORE */
+#endif /* CONFIG_KCMP */
 
-/**
+/*
  * Adds a new entry to the tail of the list in a lockless way, i.e.
  * multiple CPUs are allowed to call this function concurrently.
  *
@@ -1035,10 +1041,10 @@ struct file *get_epoll_tfile_raw_ptr(struct file *file, int tfd,
  *         completed.
  *
  *        Also an element can be locklessly added to the list only in one
- *        direction i.e. either to the tail either to the head, otherwise
+ *        direction i.e. either to the tail or to the head, otherwise
  *        concurrent access will corrupt the list.
  *
- * Returns %false if element has been already added to the list, %true
+ * Return: %false if element has been already added to the list, %true
  * otherwise.
  */
 static inline bool list_add_tail_lockless(struct list_head *new,
@@ -1076,11 +1082,11 @@ static inline bool list_add_tail_lockless(struct list_head *new,
 	return true;
 }
 
-/**
+/*
  * Chains a new epi entry to the tail of the ep->ovflist in a lockless way,
  * i.e. multiple CPUs are allowed to call this function concurrently.
  *
- * Returns %false if epi element has been already chained, %true otherwise.
+ * Return: %false if epi element has been already chained, %true otherwise.
  */
 static inline bool chain_epi_lockless(struct epitem *epi)
 {
@@ -1105,8 +1111,8 @@ static inline bool chain_epi_lockless(struct epitem *epi)
  * mechanism. It is called by the stored file descriptors when they
  * have events to report.
  *
- * This callback takes a read lock in order not to content with concurrent
- * events from another file descriptors, thus all modifications to ->rdllist
+ * This callback takes a read lock in order not to contend with concurrent
+ * events from another file descriptor, thus all modifications to ->rdllist
  * or ->ovflist are lockless.  Read lock is paired with the write lock from
  * ep_scan_ready_list(), which stops all list modifications and guarantees
  * that lists state is seen correctly.
@@ -1335,8 +1341,8 @@ static int reverse_path_check_proc(struct hlist_head *refs, int depth)
  *                      paths such that we will spend all our time waking up
  *                      eventpoll objects.
  *
- * Returns: Returns zero if the proposed links don't create too many paths,
- *	    -1 otherwise.
+ * Return: %zero if the proposed links don't create too many paths,
+ *	    %-1 otherwise.
  */
 static int reverse_path_check(void)
 {
@@ -1433,7 +1439,6 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 {
 	int error, pwake = 0;
 	__poll_t revents;
-	long user_watches;
 	struct epitem *epi;
 	struct ep_pqueue epq;
 	struct eventpoll *tep = NULL;
@@ -1443,11 +1448,15 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 
 	lockdep_assert_irqs_enabled();
 
-	user_watches = atomic_long_read(&ep->user->epoll_watches);
-	if (unlikely(user_watches >= max_user_watches))
+	if (unlikely(percpu_counter_compare(&ep->user->epoll_watches,
+					    max_user_watches) >= 0))
 		return -ENOSPC;
-	if (!(epi = kmem_cache_zalloc(epi_cache, GFP_KERNEL)))
+	percpu_counter_inc(&ep->user->epoll_watches);
+
+	if (!(epi = kmem_cache_zalloc(epi_cache, GFP_KERNEL))) {
+		percpu_counter_dec(&ep->user->epoll_watches);
 		return -ENOMEM;
+	}
 
 	/* Item initialization follow here ... */
 	INIT_LIST_HEAD(&epi->rdllink);
@@ -1460,16 +1469,15 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 		mutex_lock_nested(&tep->mtx, 1);
 	/* Add the current item to the list of active epoll hook for this file */
 	if (unlikely(attach_epitem(tfile, epi) < 0)) {
-		kmem_cache_free(epi_cache, epi);
 		if (tep)
 			mutex_unlock(&tep->mtx);
+		kmem_cache_free(epi_cache, epi);
+		percpu_counter_dec(&ep->user->epoll_watches);
 		return -ENOMEM;
 	}
 
 	if (full_check && !tep)
 		list_file(tfile);
-
-	atomic_long_inc(&ep->user->epoll_watches);
 
 	/*
 	 * Add the current item to the RB tree. All RB tree operations are
@@ -1678,8 +1686,8 @@ static int ep_send_events(struct eventpoll *ep,
 		if (!revents)
 			continue;
 
-		if (__put_user(revents, &events->events) ||
-		    __put_user(epi->event.data, &events->data)) {
+		events = epoll_put_uevent(revents, epi->event.data, events);
+		if (!events) {
 			list_add(&epi->rdllink, &txlist);
 			ep_pm_stay_awake(epi);
 			if (!res)
@@ -1687,7 +1695,6 @@ static int ep_send_events(struct eventpoll *ep,
 			break;
 		}
 		res++;
-		events++;
 		if (epi->event.events & EPOLLONESHOT)
 			epi->event.events &= EP_PRIVATE_BITS;
 		else if (!(epi->event.events & EPOLLET)) {
@@ -1734,7 +1741,7 @@ static struct timespec64 *ep_timeout_to_timespec(struct timespec64 *to, long ms)
 }
 
 /**
- * ep_poll - Retrieves ready events, and delivers them to the caller supplied
+ * ep_poll - Retrieves ready events, and delivers them to the caller-supplied
  *           event buffer.
  *
  * @ep: Pointer to the eventpoll context.
@@ -1747,7 +1754,7 @@ static struct timespec64 *ep_timeout_to_timespec(struct timespec64 *to, long ms)
  *           until at least one event has been retrieved (or an error
  *           occurred).
  *
- * Returns: Returns the number of ready events which have been fetched, or an
+ * Return: the number of ready events which have been fetched, or an
  *          error code, in case of error.
  */
 static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
@@ -1774,9 +1781,9 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
 
 	/*
 	 * This call is racy: We may or may not see events that are being added
-	 * to the ready list under the lock (e.g., in IRQ callbacks). For, cases
+	 * to the ready list under the lock (e.g., in IRQ callbacks). For cases
 	 * with a non-zero timeout, this thread will check the ready list under
-	 * lock and will added to the wait queue.  For, cases with a zero
+	 * lock and will add to the wait queue.  For cases with a zero
 	 * timeout, the user by definition should not care and will have to
 	 * recheck again.
 	 */
@@ -1869,15 +1876,15 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
 
 /**
  * ep_loop_check_proc - verify that adding an epoll file inside another
- *                      epoll structure, does not violate the constraints, in
+ *                      epoll structure does not violate the constraints, in
  *                      terms of closed loops, or too deep chains (which can
  *                      result in excessive stack usage).
  *
- * @priv: Pointer to the epoll file to be currently checked.
+ * @ep: the &struct eventpoll to be currently checked.
  * @depth: Current depth of the path being checked.
  *
- * Returns: Returns zero if adding the epoll @file inside current epoll
- *          structure @ep does not violate the constraints, or -1 otherwise.
+ * Return: %zero if adding the epoll @file inside current epoll
+ *          structure @ep does not violate the constraints, or %-1 otherwise.
  */
 static int ep_loop_check_proc(struct eventpoll *ep, int depth)
 {
@@ -1919,14 +1926,14 @@ static int ep_loop_check_proc(struct eventpoll *ep, int depth)
 
 /**
  * ep_loop_check - Performs a check to verify that adding an epoll file (@to)
- *                 into another epoll file (represented by @from) does not create
+ *                 into another epoll file (represented by @ep) does not create
  *                 closed loops or too deep chains.
  *
- * @from: Pointer to the epoll we are inserting into.
+ * @ep: Pointer to the epoll we are inserting into.
  * @to: Pointer to the epoll to be inserted.
  *
- * Returns: Returns zero if adding the epoll @to inside the epoll @from
- * does not violate the constraints, or -1 otherwise.
+ * Return: %zero if adding the epoll @to inside the epoll @from
+ * does not violate the constraints, or %-1 otherwise.
  */
 static int ep_loop_check(struct eventpoll *ep, struct eventpoll *to)
 {
@@ -2074,8 +2081,8 @@ int do_epoll_ctl(int epfd, int op, int fd, struct epoll_event *epds,
 	ep = f.file->private_data;
 
 	/*
-	 * When we insert an epoll file descriptor, inside another epoll file
-	 * descriptor, there is the change of creating closed loops, which are
+	 * When we insert an epoll file descriptor inside another epoll file
+	 * descriptor, there is the chance of creating closed loops, which are
 	 * better be handled here, than in more critical paths. While we are
 	 * checking for loops we also determine the list of files reachable
 	 * and hang them on the tfile_check_list, so we can check that we
@@ -2113,7 +2120,7 @@ int do_epoll_ctl(int epfd, int op, int fd, struct epoll_event *epds,
 	}
 
 	/*
-	 * Try to lookup the file inside our RB tree, Since we grabbed "mtx"
+	 * Try to lookup the file inside our RB tree. Since we grabbed "mtx"
 	 * above, we can be sure to be able to use the item looked up by
 	 * ep_find() till we release the mutex.
 	 */

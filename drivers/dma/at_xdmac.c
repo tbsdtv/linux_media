@@ -344,17 +344,6 @@ static inline int at_xdmac_chan_is_paused(struct at_xdmac_chan *atchan)
 	return test_bit(AT_XDMAC_CHAN_IS_PAUSED, &atchan->status);
 }
 
-static inline int at_xdmac_csize(u32 maxburst)
-{
-	int csize;
-
-	csize = ffs(maxburst) - 1;
-	if (csize > 4)
-		csize = -EINVAL;
-
-	return csize;
-};
-
 static inline bool at_xdmac_chan_is_peripheral_xfer(u32 cfg)
 {
 	return cfg & AT_XDMAC_CC_TYPE_PER_TRAN;
@@ -2251,9 +2240,15 @@ static struct platform_driver at_xdmac_driver = {
 
 static int __init at_xdmac_init(void)
 {
-	return platform_driver_probe(&at_xdmac_driver, at_xdmac_probe);
+	return platform_driver_register(&at_xdmac_driver);
 }
 subsys_initcall(at_xdmac_init);
+
+static void __exit at_xdmac_exit(void)
+{
+	platform_driver_unregister(&at_xdmac_driver);
+}
+module_exit(at_xdmac_exit);
 
 MODULE_DESCRIPTION("Atmel Extended DMA Controller driver");
 MODULE_AUTHOR("Ludovic Desroches <ludovic.desroches@atmel.com>");

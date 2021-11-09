@@ -64,8 +64,8 @@ static noinline int test_unwind(struct task_struct *task, struct pt_regs *regs,
 			break;
 		if (state.reliable && !addr) {
 			pr_err("unwind state reliable but addr is 0\n");
-			kfree(bt);
-			return -EINVAL;
+			ret = -EINVAL;
+			break;
 		}
 		sprint_symbol(sym, addr);
 		if (bt_pos < BT_BUF_SIZE) {
@@ -120,7 +120,7 @@ static struct unwindme *unwindme;
 #define UWM_REGS		0x2	/* Pass regs to test_unwind(). */
 #define UWM_SP			0x4	/* Pass sp to test_unwind(). */
 #define UWM_CALLER		0x8	/* Unwind starting from caller. */
-#define UWM_SWITCH_STACK	0x10	/* Use CALL_ON_STACK. */
+#define UWM_SWITCH_STACK	0x10	/* Use call_on_stack. */
 #define UWM_IRQ			0x20	/* Unwind from irq context. */
 #define UWM_PGM			0x40	/* Unwind from program check handler. */
 
@@ -211,7 +211,8 @@ static noinline int unwindme_func2(struct unwindme *u)
 	if (u->flags & UWM_SWITCH_STACK) {
 		local_irq_save(flags);
 		local_mcck_disable();
-		rc = CALL_ON_STACK(unwindme_func3, S390_lowcore.nodat_stack, 1, u);
+		rc = call_on_stack(1, S390_lowcore.nodat_stack,
+				   int, unwindme_func3, struct unwindme *, u);
 		local_mcck_enable();
 		local_irq_restore(flags);
 		return rc;
@@ -296,19 +297,22 @@ static int test_unwind_flags(int flags)
 
 static int test_unwind_init(void)
 {
-	int ret = 0;
+	int failed = 0;
+	int total = 0;
 
 #define TEST(flags)							\
 do {									\
 	pr_info("[ RUN      ] " #flags "\n");				\
+	total++;							\
 	if (!test_unwind_flags((flags))) {				\
 		pr_info("[       OK ] " #flags "\n");			\
 	} else {							\
 		pr_err("[  FAILED  ] " #flags "\n");			\
-		ret = -EINVAL;						\
+		failed++;						\
 	}								\
 } while (0)
 
+	pr_info("running stack unwinder tests");
 	TEST(UWM_DEFAULT);
 	TEST(UWM_SP);
 	TEST(UWM_REGS);
@@ -335,8 +339,14 @@ do {									\
 	TEST(UWM_PGM | UWM_SP | UWM_REGS);
 #endif
 #undef TEST
+	if (failed) {
+		pr_err("%d of %d stack unwinder tests failed", failed, total);
+		WARN(1, "%d of %d stack unwinder tests failed", failed, total);
+	} else {
+		pr_info("all %d stack unwinder tests passed", total);
+	}
 
-	return ret;
+	return failed ? -EINVAL : 0;
 }
 
 static void test_unwind_exit(void)

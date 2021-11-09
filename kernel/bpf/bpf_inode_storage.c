@@ -72,7 +72,7 @@ void bpf_inode_storage_free(struct inode *inode)
 		return;
 	}
 
-	/* Netiher the bpf_prog nor the bpf-map's syscall
+	/* Neither the bpf_prog nor the bpf-map's syscall
 	 * could be modifying the local_storage->list now.
 	 * Thus, no elem can be added-to or deleted-from the
 	 * local_storage->list by the bpf_prog or by the bpf-map's syscall.
@@ -109,7 +109,7 @@ static void *bpf_fd_inode_storage_lookup_elem(struct bpf_map *map, void *key)
 	fd = *(int *)key;
 	f = fget_raw(fd);
 	if (!f)
-		return NULL;
+		return ERR_PTR(-EBADF);
 
 	sdata = inode_storage_lookup(f->f_inode, map, true);
 	fput(f);
@@ -125,8 +125,12 @@ static int bpf_fd_inode_storage_update_elem(struct bpf_map *map, void *key,
 
 	fd = *(int *)key;
 	f = fget_raw(fd);
-	if (!f || !inode_storage_ptr(f->f_inode))
+	if (!f)
 		return -EBADF;
+	if (!inode_storage_ptr(f->f_inode)) {
+		fput(f);
+		return -EBADF;
+	}
 
 	sdata = bpf_local_storage_update(f->f_inode,
 					 (struct bpf_local_storage_map *)map,
@@ -233,7 +237,7 @@ static void inode_storage_map_free(struct bpf_map *map)
 
 	smap = (struct bpf_local_storage_map *)map;
 	bpf_local_storage_cache_idx_free(&inode_cache, smap->cache_idx);
-	bpf_local_storage_map_free(smap);
+	bpf_local_storage_map_free(smap, NULL);
 }
 
 static int inode_storage_map_btf_id;

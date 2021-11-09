@@ -1356,7 +1356,7 @@
 #define RT5682_SAR_SOUR_TYPE			(0x0)
 
 /* soundwire timeout */
-#define RT5682_PROBE_TIMEOUT			2000
+#define RT5682_PROBE_TIMEOUT			5000
 
 
 #define RT5682_STEREO_RATES SNDRV_PCM_RATE_8000_192000
@@ -1415,6 +1415,8 @@ struct rt5682_priv {
 	struct regulator_bulk_data supplies[RT5682_NUM_SUPPLIES];
 	struct delayed_work jack_detect_work;
 	struct delayed_work jd_check_work;
+	struct mutex disable_irq_lock; /* imp-def irq lock protection */
+	bool disable_irq;
 	struct mutex calibrate_mutex;
 	struct sdw_slave *slave;
 	enum sdw_slave_status status;
@@ -1439,6 +1441,7 @@ struct rt5682_priv {
 	int pll_out[RT5682_PLLS];
 
 	int jack_type;
+	int irq_work_delay_time;
 };
 
 extern const char *rt5682_supply_names[RT5682_NUM_SUPPLIES];

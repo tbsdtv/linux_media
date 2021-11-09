@@ -51,6 +51,8 @@ static ssize_t rtrs_srv_disconnect_store(struct kobject *kobj,
 	sockaddr_to_str((struct sockaddr *)&sess->s.dst_addr, str, sizeof(str));
 
 	rtrs_info(s, "disconnect for path %s requested\n", str);
+	/* first remove sysfs itself to avoid deadlock */
+	sysfs_remove_file_self(&sess->kobj, &attr->attr);
 	close_sess(sess);
 
 	return count;
@@ -174,21 +176,19 @@ static int rtrs_srv_create_once_sysfs_root_folders(struct rtrs_srv_sess *sess)
 	err = device_add(&srv->dev);
 	if (err) {
 		pr_err("device_add(): %d\n", err);
-		goto put;
+		put_device(&srv->dev);
+		goto unlock;
 	}
 	srv->kobj_paths = kobject_create_and_add("paths", &srv->dev.kobj);
 	if (!srv->kobj_paths) {
 		err = -ENOMEM;
 		pr_err("kobject_create_and_add(): %d\n", err);
 		device_del(&srv->dev);
+		put_device(&srv->dev);
 		goto unlock;
 	}
 	dev_set_uevent_suppress(&srv->dev, false);
 	kobject_uevent(&srv->dev.kobj, KOBJ_ADD);
-	goto unlock;
-
-put:
-	put_device(&srv->dev);
 unlock:
 	mutex_unlock(&srv->paths_mutex);
 
@@ -206,7 +206,9 @@ rtrs_srv_destroy_once_sysfs_root_folders(struct rtrs_srv_sess *sess)
 		kobject_put(srv->kobj_paths);
 		mutex_unlock(&srv->paths_mutex);
 		device_del(&srv->dev);
+		put_device(&srv->dev);
 	} else {
+		put_device(&srv->dev);
 		mutex_unlock(&srv->paths_mutex);
 	}
 }
@@ -234,6 +236,7 @@ static int rtrs_srv_create_stats_files(struct rtrs_srv_sess *sess)
 				   &sess->kobj, "stats");
 	if (err) {
 		rtrs_err(s, "kobject_init_and_add(): %d\n", err);
+		kobject_put(&sess->stats->kobj_stats);
 		return err;
 	}
 	err = sysfs_create_group(&sess->stats->kobj_stats,
@@ -257,14 +260,13 @@ int rtrs_srv_create_sess_files(struct rtrs_srv_sess *sess)
 	struct rtrs_srv *srv = sess->srv;
 	struct rtrs_sess *s = &sess->s;
 	char str[NAME_MAX];
-	int err, cnt;
+	int err;
+	struct rtrs_addr path = {
+		.src = &sess->s.dst_addr,
+		.dst = &sess->s.src_addr,
+	};
 
-	cnt = sockaddr_to_str((struct sockaddr *)&sess->s.dst_addr,
-			      str, sizeof(str));
-	cnt += scnprintf(str + cnt, sizeof(str) - cnt, "@");
-	sockaddr_to_str((struct sockaddr *)&sess->s.src_addr,
-			str + cnt, sizeof(str) - cnt);
-
+	rtrs_addr_to_str(&path, str, sizeof(str));
 	err = rtrs_srv_create_once_sysfs_root_folders(sess);
 	if (err)
 		return err;
@@ -290,8 +292,8 @@ remove_group:
 	sysfs_remove_group(&sess->kobj, &rtrs_srv_sess_attr_group);
 put_kobj:
 	kobject_del(&sess->kobj);
-	kobject_put(&sess->kobj);
 destroy_root:
+	kobject_put(&sess->kobj);
 	rtrs_srv_destroy_once_sysfs_root_folders(sess);
 
 	return err;
@@ -302,7 +304,7 @@ void rtrs_srv_destroy_sess_files(struct rtrs_srv_sess *sess)
 	if (sess->kobj.state_in_sysfs) {
 		kobject_del(&sess->stats->kobj_stats);
 		kobject_put(&sess->stats->kobj_stats);
-		kobject_del(&sess->kobj);
+		sysfs_remove_group(&sess->kobj, &rtrs_srv_sess_attr_group);
 		kobject_put(&sess->kobj);
 
 		rtrs_srv_destroy_once_sysfs_root_folders(sess);

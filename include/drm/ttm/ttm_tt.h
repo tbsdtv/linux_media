@@ -27,9 +27,12 @@
 #ifndef _TTM_TT_H_
 #define _TTM_TT_H_
 
+#include <linux/pagemap.h>
 #include <linux/types.h>
 #include <drm/ttm/ttm_caching.h>
+#include <drm/ttm/ttm_kmap_iter.h>
 
+struct ttm_device;
 struct ttm_tt;
 struct ttm_resource;
 struct ttm_buffer_object;
@@ -68,6 +71,18 @@ struct ttm_tt {
 	enum ttm_caching caching;
 };
 
+/**
+ * struct ttm_kmap_iter_tt - Specialization of a mappig iterator for a tt.
+ * @base: Embedded struct ttm_kmap_iter providing the usage interface
+ * @tt: Cached struct ttm_tt.
+ * @prot: Cached page protection for mapping.
+ */
+struct ttm_kmap_iter_tt {
+	struct ttm_kmap_iter base;
+	struct ttm_tt *tt;
+	pgprot_t prot;
+};
+
 static inline bool ttm_tt_is_populated(struct ttm_tt *tt)
 {
 	return tt->page_flags & TTM_PAGE_FLAG_PRIV_POPULATED;
@@ -99,8 +114,6 @@ int ttm_tt_create(struct ttm_buffer_object *bo, bool zero_alloc);
  */
 int ttm_tt_init(struct ttm_tt *ttm, struct ttm_buffer_object *bo,
 		uint32_t page_flags, enum ttm_caching caching);
-int ttm_dma_tt_init(struct ttm_tt *ttm_dma, struct ttm_buffer_object *bo,
-		    uint32_t page_flags, enum ttm_caching caching);
 int ttm_sg_tt_init(struct ttm_tt *ttm_dma, struct ttm_buffer_object *bo,
 		   uint32_t page_flags, enum ttm_caching caching);
 
@@ -120,14 +133,14 @@ void ttm_tt_fini(struct ttm_tt *ttm);
  *
  * Unbind, unpopulate and destroy common struct ttm_tt.
  */
-void ttm_tt_destroy(struct ttm_bo_device *bdev, struct ttm_tt *ttm);
+void ttm_tt_destroy(struct ttm_device *bdev, struct ttm_tt *ttm);
 
 /**
  * ttm_tt_destroy_common:
  *
  * Called from driver to destroy common path.
  */
-void ttm_tt_destroy_common(struct ttm_bo_device *bdev, struct ttm_tt *ttm);
+void ttm_tt_destroy_common(struct ttm_device *bdev, struct ttm_tt *ttm);
 
 /**
  * ttm_tt_swapin:
@@ -137,7 +150,8 @@ void ttm_tt_destroy_common(struct ttm_bo_device *bdev, struct ttm_tt *ttm);
  * Swap in a previously swap out ttm_tt.
  */
 int ttm_tt_swapin(struct ttm_tt *ttm);
-int ttm_tt_swapout(struct ttm_bo_device *bdev, struct ttm_tt *ttm);
+int ttm_tt_swapout(struct ttm_device *bdev, struct ttm_tt *ttm,
+		   gfp_t gfp_flags);
 
 /**
  * ttm_tt_populate - allocate pages for a ttm
@@ -146,7 +160,7 @@ int ttm_tt_swapout(struct ttm_bo_device *bdev, struct ttm_tt *ttm);
  *
  * Calls the driver method to allocate pages for a ttm
  */
-int ttm_tt_populate(struct ttm_bo_device *bdev, struct ttm_tt *ttm, struct ttm_operation_ctx *ctx);
+int ttm_tt_populate(struct ttm_device *bdev, struct ttm_tt *ttm, struct ttm_operation_ctx *ctx);
 
 /**
  * ttm_tt_unpopulate - free pages from a ttm
@@ -155,7 +169,25 @@ int ttm_tt_populate(struct ttm_bo_device *bdev, struct ttm_tt *ttm, struct ttm_o
  *
  * Calls the driver method to free all pages from a ttm
  */
-void ttm_tt_unpopulate(struct ttm_bo_device *bdev, struct ttm_tt *ttm);
+void ttm_tt_unpopulate(struct ttm_device *bdev, struct ttm_tt *ttm);
+
+/**
+ * ttm_tt_mark_for_clear - Mark pages for clearing on populate.
+ *
+ * @ttm: Pointer to the ttm_tt structure
+ *
+ * Marks pages for clearing so that the next time the page vector is
+ * populated, the pages will be cleared.
+ */
+static inline void ttm_tt_mark_for_clear(struct ttm_tt *ttm)
+{
+	ttm->page_flags |= TTM_PAGE_FLAG_ZERO_ALLOC;
+}
+
+void ttm_tt_mgr_init(unsigned long num_pages, unsigned long num_dma32_pages);
+
+struct ttm_kmap_iter *ttm_kmap_iter_tt_init(struct ttm_kmap_iter_tt *iter_tt,
+					    struct ttm_tt *tt);
 
 #if IS_ENABLED(CONFIG_AGP)
 #include <linux/agp_backend.h>

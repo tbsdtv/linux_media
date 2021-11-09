@@ -134,7 +134,6 @@ setup_rt_frame(struct ksignal *ksig, sigset_t *set, struct pt_regs *regs)
 {
 	struct rt_sigframe *frame;
 	int err = 0;
-	struct csky_vdso *vdso = current->mm->context.vdso;
 
 	frame = get_sigframe(ksig, regs, sizeof(*frame));
 	if (!access_ok(frame, sizeof(*frame)))
@@ -152,7 +151,8 @@ setup_rt_frame(struct ksignal *ksig, sigset_t *set, struct pt_regs *regs)
 		return -EFAULT;
 
 	/* Set up to return from userspace. */
-	regs->lr = (unsigned long)(vdso->rt_signal_retcode);
+	regs->lr = (unsigned long)VDSO_SYMBOL(
+		current->mm->context.vdso, rt_sigreturn);
 
 	/*
 	 * Set up registers for signal handler.
@@ -260,8 +260,6 @@ asmlinkage void do_notify_resume(struct pt_regs *regs,
 	if (thread_info_flags & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
 		do_signal(regs);
 
-	if (thread_info_flags & _TIF_NOTIFY_RESUME) {
+	if (thread_info_flags & _TIF_NOTIFY_RESUME)
 		tracehook_notify_resume(regs);
-		rseq_handle_notify_resume(NULL, regs);
-	}
 }

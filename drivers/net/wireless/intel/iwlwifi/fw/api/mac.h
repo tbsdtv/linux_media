@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2012-2014, 2018-2020 Intel Corporation
+ * Copyright (C) 2012-2014, 2018-2021 Intel Corporation
  * Copyright (C) 2017 Intel Deutschland GmbH
  */
 #ifndef __iwl_fw_api_mac_h__
@@ -137,12 +137,14 @@ struct iwl_mac_data_ibss {
  *	early termination detection.
  * @FLEXIBLE_TWT_SUPPORTED: AP supports flexible TWT schedule
  * @PROTECTED_TWT_SUPPORTED: AP supports protected TWT frames (with 11w)
+ * @BROADCAST_TWT_SUPPORTED: AP and STA support broadcast TWT
  */
 enum iwl_mac_data_policy {
 	TWT_SUPPORTED = BIT(0),
 	MORE_DATA_ACK_SUPPORTED = BIT(1),
 	FLEXIBLE_TWT_SUPPORTED = BIT(2),
 	PROTECTED_TWT_SUPPORTED = BIT(3),
+	BROADCAST_TWT_SUPPORTED = BIT(4),
 };
 
 /**
@@ -452,6 +454,10 @@ struct iwl_he_pkt_ext {
  *	enabled AGG, i.e. both BACK and non-BACK frames in a single AGG
  * @STA_CTXT_HE_MU_EDCA_CW: indicates that there is an element of MU EDCA
  *	parameter set, i.e. the backoff counters for trig-based ACs
+ * @STA_CTXT_HE_NIC_NOT_ACK_ENABLED: mark that the NIC doesn't support receiving
+ *	ACK-enabled AGG, (i.e. both BACK and non-BACK frames in single AGG).
+ *	If the NIC is not ACK_ENABLED it may use the EOF-bit in first non-0
+ *	len delim to determine if AGG or single.
  * @STA_CTXT_HE_RU_2MHZ_BLOCK: indicates that 26-tone RU OFDMA transmission are
  *      not allowed (as there are OBSS that might classify such transmissions as
  *      radar pulses).
@@ -466,6 +472,7 @@ enum iwl_he_sta_ctxt_flags {
 	STA_CTXT_HE_CONST_TRIG_RND_ALLOC	= BIT(10),
 	STA_CTXT_HE_ACK_ENABLED			= BIT(11),
 	STA_CTXT_HE_MU_EDCA_CW			= BIT(12),
+	STA_CTXT_HE_NIC_NOT_ACK_ENABLED		= BIT(13),
 	STA_CTXT_HE_RU_2MHZ_BLOCK		= BIT(14),
 };
 

@@ -19,7 +19,7 @@ static struct adf_fw_config adf_4xxx_fw_config[] = {
 };
 
 /* Worker thread to service arbiter mappings */
-static u32 thrd_to_arb_map[] = {
+static const u32 thrd_to_arb_map[ADF_4XXX_MAX_ACCELENGINES] = {
 	0x5555555, 0x5555555, 0x5555555, 0x5555555,
 	0xAAAAAAA, 0xAAAAAAA, 0xAAAAAAA, 0xAAAAAAA,
 	0x0
@@ -119,17 +119,9 @@ static enum dev_sku_info get_sku(struct adf_hw_device_data *self)
 	return DEV_SKU_1;
 }
 
-static void adf_get_arbiter_mapping(struct adf_accel_dev *accel_dev,
-				    u32 const **arb_map_config)
+static const u32 *adf_get_arbiter_mapping(void)
 {
-	struct adf_hw_device_data *hw_device = accel_dev->hw_device;
-	unsigned long ae_mask = hw_device->ae_mask;
-	int i;
-
-	for_each_clear_bit(i, &ae_mask, ADF_4XXX_MAX_ACCELENGINES)
-		thrd_to_arb_map[i] = 0;
-
-	*arb_map_config = thrd_to_arb_map;
+	return thrd_to_arb_map;
 }
 
 static void get_arb_info(struct arb_info *arb_info)
@@ -169,7 +161,7 @@ static void adf_enable_ints(struct adf_accel_dev *accel_dev)
 	ADF_CSR_WR(addr, ADF_4XXX_SMIAPF_MASK_OFFSET, 0);
 }
 
-static int adf_pf_enable_vf2pf_comms(struct adf_accel_dev *accel_dev)
+static int adf_enable_pf2vf_comms(struct adf_accel_dev *accel_dev)
 {
 	return 0;
 }
@@ -218,20 +210,21 @@ void adf_init_hw_data_4xxx(struct adf_hw_device_data *hw_data)
 	hw_data->fw_mmp_name = ADF_4XXX_MMP;
 	hw_data->init_admin_comms = adf_init_admin_comms;
 	hw_data->exit_admin_comms = adf_exit_admin_comms;
-	hw_data->disable_iov = adf_disable_sriov;
 	hw_data->send_admin_init = adf_send_admin_init;
 	hw_data->init_arb = adf_init_arb;
 	hw_data->exit_arb = adf_exit_arb;
 	hw_data->get_arb_mapping = adf_get_arbiter_mapping;
 	hw_data->enable_ints = adf_enable_ints;
-	hw_data->enable_vf2pf_comms = adf_pf_enable_vf2pf_comms;
 	hw_data->reset_device = adf_reset_flr;
-	hw_data->min_iov_compat_ver = ADF_PFVF_COMPATIBILITY_VERSION;
 	hw_data->admin_ae_mask = ADF_4XXX_ADMIN_AE_MASK;
 	hw_data->uof_get_num_objs = uof_get_num_objs;
 	hw_data->uof_get_name = uof_get_name;
 	hw_data->uof_get_ae_mask = uof_get_ae_mask;
 	hw_data->set_msix_rttable = set_msix_default_rttable;
+	hw_data->set_ssm_wdtimer = adf_gen4_set_ssm_wdtimer;
+	hw_data->enable_pfvf_comms = adf_enable_pf2vf_comms;
+	hw_data->disable_iov = adf_disable_sriov;
+	hw_data->min_iov_compat_ver = ADF_PFVF_COMPAT_THIS_VERSION;
 
 	adf_gen4_init_hw_csr_ops(&hw_data->csr_ops);
 }

@@ -20,6 +20,13 @@ struct bio_vec;
 struct rpc_rqst;
 
 /*
+ * Size of an XDR encoding unit in bytes, i.e. 32 bits,
+ * as defined in Section 3 of RFC 4506. All encoded
+ * XDR data items are aligned on a boundary of 32 bits.
+ */
+#define XDR_UNIT		sizeof(__be32)
+
+/*
  * Buffer adjustment
  */
 #define XDR_QUADLEN(l)		(((l) + 3) >> 2)
@@ -88,6 +95,7 @@ xdr_buf_init(struct xdr_buf *buf, void *start, size_t len)
 #define	rpc_auth_unix	cpu_to_be32(RPC_AUTH_UNIX)
 #define	rpc_auth_short	cpu_to_be32(RPC_AUTH_SHORT)
 #define	rpc_auth_gss	cpu_to_be32(RPC_AUTH_GSS)
+#define	rpc_auth_tls	cpu_to_be32(RPC_AUTH_TLS)
 
 #define	rpc_call	cpu_to_be32(RPC_CALL)
 #define	rpc_reply	cpu_to_be32(RPC_REPLY)
@@ -329,7 +337,7 @@ ssize_t xdr_stream_decode_string_dup(struct xdr_stream *xdr, char **str,
 static inline size_t
 xdr_align_size(size_t n)
 {
-	const size_t mask = sizeof(__u32) - 1;
+	const size_t mask = XDR_UNIT - 1;
 
 	return (n + mask) & ~mask;
 }
@@ -359,7 +367,7 @@ static inline size_t xdr_pad_size(size_t n)
  */
 static inline ssize_t xdr_stream_encode_item_present(struct xdr_stream *xdr)
 {
-	const size_t len = sizeof(__be32);
+	const size_t len = XDR_UNIT;
 	__be32 *p = xdr_reserve_space(xdr, len);
 
 	if (unlikely(!p))
@@ -378,12 +386,46 @@ static inline ssize_t xdr_stream_encode_item_present(struct xdr_stream *xdr)
  */
 static inline int xdr_stream_encode_item_absent(struct xdr_stream *xdr)
 {
-	const size_t len = sizeof(__be32);
+	const size_t len = XDR_UNIT;
 	__be32 *p = xdr_reserve_space(xdr, len);
 
 	if (unlikely(!p))
 		return -EMSGSIZE;
 	*p = xdr_zero;
+	return len;
+}
+
+/**
+ * xdr_encode_bool - Encode a boolean item
+ * @p: address in a buffer into which to encode
+ * @n: boolean value to encode
+ *
+ * Return value:
+ *   Address of item following the encoded boolean
+ */
+static inline __be32 *xdr_encode_bool(__be32 *p, u32 n)
+{
+	*p = n ? xdr_one : xdr_zero;
+	return p++;
+}
+
+/**
+ * xdr_stream_encode_bool - Encode a boolean item
+ * @xdr: pointer to xdr_stream
+ * @n: boolean value to encode
+ *
+ * Return values:
+ *   On success, returns length in bytes of XDR buffer consumed
+ *   %-EMSGSIZE on XDR buffer overflow
+ */
+static inline int xdr_stream_encode_bool(struct xdr_stream *xdr, __u32 n)
+{
+	const size_t len = XDR_UNIT;
+	__be32 *p = xdr_reserve_space(xdr, len);
+
+	if (unlikely(!p))
+		return -EMSGSIZE;
+	xdr_encode_bool(p, n);
 	return len;
 }
 

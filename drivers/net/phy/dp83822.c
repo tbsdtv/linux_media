@@ -290,6 +290,7 @@ static int dp83822_config_intr(struct phy_device *phydev)
 
 static irqreturn_t dp83822_handle_interrupt(struct phy_device *phydev)
 {
+	bool trigger_machine = false;
 	int irq_status;
 
 	/* The MISR1 and MISR2 registers are holding the interrupt status in
@@ -305,7 +306,7 @@ static irqreturn_t dp83822_handle_interrupt(struct phy_device *phydev)
 		return IRQ_NONE;
 	}
 	if (irq_status & ((irq_status & GENMASK(7, 0)) << 8))
-		goto trigger_machine;
+		trigger_machine = true;
 
 	irq_status = phy_read(phydev, MII_DP83822_MISR2);
 	if (irq_status < 0) {
@@ -313,11 +314,11 @@ static irqreturn_t dp83822_handle_interrupt(struct phy_device *phydev)
 		return IRQ_NONE;
 	}
 	if (irq_status & ((irq_status & GENMASK(7, 0)) << 8))
-		goto trigger_machine;
+		trigger_machine = true;
 
-	return IRQ_NONE;
+	if (!trigger_machine)
+		return IRQ_NONE;
 
-trigger_machine:
 	phy_trigger_machine(phydev);
 
 	return IRQ_HANDLED;
@@ -325,11 +326,9 @@ trigger_machine:
 
 static int dp8382x_disable_wol(struct phy_device *phydev)
 {
-	int value = DP83822_WOL_EN | DP83822_WOL_MAGIC_EN |
-		    DP83822_WOL_SECURE_ON;
-
-	return phy_clear_bits_mmd(phydev, DP83822_DEVADDR,
-				  MII_DP83822_WOL_CFG, value);
+	return phy_clear_bits_mmd(phydev, DP83822_DEVADDR, MII_DP83822_WOL_CFG,
+				  DP83822_WOL_EN | DP83822_WOL_MAGIC_EN |
+				  DP83822_WOL_SECURE_ON);
 }
 
 static int dp83822_read_status(struct phy_device *phydev)
@@ -553,6 +552,9 @@ static int dp83822_probe(struct phy_device *phydev)
 		return ret;
 
 	dp83822_of_init(phydev);
+
+	if (dp83822->fx_enabled)
+		phydev->port = PORT_FIBRE;
 
 	return 0;
 }

@@ -101,10 +101,6 @@ DECLARE_PER_CPU(struct cpuinfo_parisc, cpu_data);
 
 #define CPU_HVERSION ((boot_cpu_data.hversion >> 4) & 0x0FFF)
 
-typedef struct {
-	int seg;  
-} mm_segment_t;
-
 #define ARCH_MIN_TASKALIGN	8
 
 struct thread_struct {
@@ -272,7 +268,6 @@ on downward growing arches, it looks like this:
 	regs->gr[23] = 0;				\
 } while(0)
 
-struct task_struct;
 struct mm_struct;
 
 /* Free all resources held by a thread. */

@@ -22,6 +22,13 @@ extern int debug_data_convert;
 	eprintf(0, verbose, pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_warning(fmt, ...) \
 	eprintf(0, verbose, pr_fmt(fmt), ##__VA_ARGS__)
+#define pr_warning_once(fmt, ...) ({		\
+	static int __warned;			\
+	if (unlikely(!__warned)) {		\
+		pr_warning(fmt, ##__VA_ARGS__); \
+		__warned = 1;			\
+	}					\
+})
 #define pr_info(fmt, ...) \
 	eprintf(0, verbose, pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_debug(fmt, ...) \
@@ -55,6 +62,13 @@ void trace_event(union perf_event *event);
 
 int ui__error(const char *format, ...) __printf(1, 2);
 int ui__warning(const char *format, ...) __printf(1, 2);
+#define ui__warning_once(format, ...) ({		\
+	static int __warned;				\
+	if (unlikely(!__warned)) {			\
+		ui__warning(format, ##__VA_ARGS__);	\
+		__warned = 1;				\
+	}						\
+})
 
 void pr_stat(const char *fmt, ...);
 
@@ -64,6 +78,7 @@ int veprintf(int level, int var, const char *fmt, va_list args);
 
 int perf_debug_option(const char *str);
 void debug_set_file(FILE *file);
+void debug_set_display_time(bool set);
 void perf_debug_setup(void);
 int perf_quiet_option(void);
 

@@ -94,15 +94,9 @@ primitives, but I'll pretend they don't exist.
 Locking in the Linux Kernel
 ===========================
 
-If I could give you one piece of advice: never sleep with anyone crazier
-than yourself. But if I had to give you advice on locking: **keep it
-simple**.
+If I could give you one piece of advice on locking: **keep it simple**.
 
 Be reluctant to introduce new locks.
-
-Strangely enough, this last one is the exact reverse of my advice when
-you **have** slept with someone crazier than yourself. And you should
-think about getting a big dog.
 
 Two Main Types of Kernel Locks: Spinlocks and Mutexes
 -----------------------------------------------------
@@ -958,7 +952,7 @@ grabs a read lock, searches a list, fails to find what it wants, drops
 the read lock, grabs a write lock and inserts the object has a race
 condition.
 
-If you don't see why, please stay the fuck away from my code.
+If you don't see why, please stay away from my code.
 
 Racing Timers: A Kernel Pastime
 -------------------------------
@@ -1406,7 +1400,7 @@ bh
   half will be running at any time.
 
 Hardware Interrupt / Hardware IRQ
-  Hardware interrupt request. in_irq() returns true in a
+  Hardware interrupt request. in_hardirq() returns true in a
   hardware interrupt handler.
 
 Interrupt Context
@@ -1418,7 +1412,7 @@ SMP
   (``CONFIG_SMP=y``).
 
 Software Interrupt / softirq
-  Software interrupt handler. in_irq() returns false;
+  Software interrupt handler. in_hardirq() returns false;
   in_softirq() returns true. Tasklets and softirqs both
   fall into the category of 'software interrupts'.
 

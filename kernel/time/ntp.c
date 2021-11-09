@@ -502,7 +502,7 @@ static struct hrtimer sync_hrtimer;
 
 static enum hrtimer_restart sync_timer_callback(struct hrtimer *timer)
 {
-	queue_work(system_power_efficient_wq, &sync_work);
+	queue_work(system_freezable_power_efficient_wq, &sync_work);
 
 	return HRTIMER_NORESTART;
 }
@@ -544,7 +544,7 @@ static inline bool rtc_tv_nsec_ok(unsigned long set_offset_nsec,
 				  struct timespec64 *to_set,
 				  const struct timespec64 *now)
 {
-	/* Allowed error in tv_nsec, arbitarily set to 5 jiffies in ns. */
+	/* Allowed error in tv_nsec, arbitrarily set to 5 jiffies in ns. */
 	const unsigned long TIME_SET_NSEC_FUZZ = TICK_NSEC * 5;
 	struct timespec64 delay = {.tv_sec = -1,
 				   .tv_nsec = set_offset_nsec};
@@ -668,7 +668,7 @@ void ntp_notify_cmos_timer(void)
 	 * just a pointless work scheduled.
 	 */
 	if (ntp_synced() && !hrtimer_is_queued(&sync_hrtimer))
-		queue_work(system_power_efficient_wq, &sync_work);
+		queue_work(system_freezable_power_efficient_wq, &sync_work);
 }
 
 static void __init ntp_init_cmos_sync(void)

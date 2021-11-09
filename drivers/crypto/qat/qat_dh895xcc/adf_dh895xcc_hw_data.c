@@ -7,14 +7,8 @@
 #include "adf_dh895xcc_hw_data.h"
 #include "icp_qat_hw.h"
 
-/* Worker thread to service arbiter mappings based on dev SKUs */
-static const u32 thrd_to_arb_map_sku4[] = {
-	0x12222AAA, 0x11666666, 0x12222AAA, 0x11666666,
-	0x12222AAA, 0x11222222, 0x12222AAA, 0x11222222,
-	0x00000000, 0x00000000, 0x00000000, 0x00000000
-};
-
-static const u32 thrd_to_arb_map_sku6[] = {
+/* Worker thread to service arbiter mappings */
+static const u32 thrd_to_arb_map[ADF_DH895XCC_MAX_ACCELENGINES] = {
 	0x12222AAA, 0x11666666, 0x12222AAA, 0x11666666,
 	0x12222AAA, 0x11222222, 0x12222AAA, 0x11222222,
 	0x12222AAA, 0x11222222, 0x12222AAA, 0x11222222
@@ -127,33 +121,14 @@ static enum dev_sku_info get_sku(struct adf_hw_device_data *self)
 	return DEV_SKU_UNKNOWN;
 }
 
-static void adf_get_arbiter_mapping(struct adf_accel_dev *accel_dev,
-				    u32 const **arb_map_config)
+static const u32 *adf_get_arbiter_mapping(void)
 {
-	switch (accel_dev->accel_pci_dev.sku) {
-	case DEV_SKU_1:
-		*arb_map_config = thrd_to_arb_map_sku4;
-		break;
-
-	case DEV_SKU_2:
-	case DEV_SKU_4:
-		*arb_map_config = thrd_to_arb_map_sku6;
-		break;
-	default:
-		dev_err(&GET_DEV(accel_dev),
-			"The configuration doesn't match any SKU");
-		*arb_map_config = NULL;
-	}
+	return thrd_to_arb_map;
 }
 
 static u32 get_pf2vf_offset(u32 i)
 {
 	return ADF_DH895XCC_PF2VF_OFFSET(i);
-}
-
-static u32 get_vintmsk_offset(u32 i)
-{
-	return ADF_DH895XCC_VINTMSK_OFFSET(i);
 }
 
 static void adf_enable_error_correction(struct adf_accel_dev *accel_dev)
@@ -200,8 +175,10 @@ static void adf_enable_ints(struct adf_accel_dev *accel_dev)
 		   ADF_DH895XCC_SMIA1_MASK);
 }
 
-static int adf_pf_enable_vf2pf_comms(struct adf_accel_dev *accel_dev)
+static int adf_enable_pf2vf_comms(struct adf_accel_dev *accel_dev)
 {
+	spin_lock_init(&accel_dev->pf.vf2pf_ints_lock);
+
 	return 0;
 }
 
@@ -233,8 +210,6 @@ void adf_init_hw_data_dh895xcc(struct adf_hw_device_data *hw_data)
 	hw_data->get_num_aes = get_num_aes;
 	hw_data->get_etr_bar_id = get_etr_bar_id;
 	hw_data->get_misc_bar_id = get_misc_bar_id;
-	hw_data->get_pf2vf_offset = get_pf2vf_offset;
-	hw_data->get_vintmsk_offset = get_vintmsk_offset;
 	hw_data->get_admin_info = adf_gen2_get_admin_info;
 	hw_data->get_arb_info = adf_gen2_get_arb_info;
 	hw_data->get_sram_bar_id = get_sram_bar_id;
@@ -244,15 +219,17 @@ void adf_init_hw_data_dh895xcc(struct adf_hw_device_data *hw_data)
 	hw_data->init_admin_comms = adf_init_admin_comms;
 	hw_data->exit_admin_comms = adf_exit_admin_comms;
 	hw_data->configure_iov_threads = configure_iov_threads;
-	hw_data->disable_iov = adf_disable_sriov;
 	hw_data->send_admin_init = adf_send_admin_init;
 	hw_data->init_arb = adf_init_arb;
 	hw_data->exit_arb = adf_exit_arb;
 	hw_data->get_arb_mapping = adf_get_arbiter_mapping;
 	hw_data->enable_ints = adf_enable_ints;
-	hw_data->enable_vf2pf_comms = adf_pf_enable_vf2pf_comms;
 	hw_data->reset_device = adf_reset_sbr;
-	hw_data->min_iov_compat_ver = ADF_PFVF_COMPATIBILITY_VERSION;
+	hw_data->get_pf2vf_offset = get_pf2vf_offset;
+	hw_data->enable_pfvf_comms = adf_enable_pf2vf_comms;
+	hw_data->disable_iov = adf_disable_sriov;
+	hw_data->min_iov_compat_ver = ADF_PFVF_COMPAT_THIS_VERSION;
+
 	adf_gen2_init_hw_csr_ops(&hw_data->csr_ops);
 }
 

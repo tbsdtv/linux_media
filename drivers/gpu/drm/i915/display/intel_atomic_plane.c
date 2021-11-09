@@ -102,7 +102,8 @@ intel_plane_duplicate_state(struct drm_plane *plane)
 
 	__drm_atomic_helper_plane_duplicate_state(plane, &intel_state->uapi);
 
-	intel_state->vma = NULL;
+	intel_state->ggtt_vma = NULL;
+	intel_state->dpt_vma = NULL;
 	intel_state->flags = 0;
 
 	/* add reference to fb */
@@ -125,7 +126,9 @@ intel_plane_destroy_state(struct drm_plane *plane,
 			  struct drm_plane_state *state)
 {
 	struct intel_plane_state *plane_state = to_intel_plane_state(state);
-	drm_WARN_ON(plane->dev, plane_state->vma);
+
+	drm_WARN_ON(plane->dev, plane_state->ggtt_vma);
+	drm_WARN_ON(plane->dev, plane_state->dpt_vma);
 
 	__drm_atomic_helper_plane_destroy_state(&plane_state->uapi);
 	if (plane_state->hw.fb)
@@ -133,23 +136,43 @@ intel_plane_destroy_state(struct drm_plane *plane,
 	kfree(plane_state);
 }
 
-unsigned int intel_plane_pixel_rate(const struct intel_crtc_state *crtc_state,
-				    const struct intel_plane_state *plane_state)
+unsigned int intel_adjusted_rate(const struct drm_rect *src,
+				 const struct drm_rect *dst,
+				 unsigned int rate)
 {
 	unsigned int src_w, src_h, dst_w, dst_h;
-	unsigned int pixel_rate = crtc_state->pixel_rate;
 
-	src_w = drm_rect_width(&plane_state->uapi.src) >> 16;
-	src_h = drm_rect_height(&plane_state->uapi.src) >> 16;
-	dst_w = drm_rect_width(&plane_state->uapi.dst);
-	dst_h = drm_rect_height(&plane_state->uapi.dst);
+	src_w = drm_rect_width(src) >> 16;
+	src_h = drm_rect_height(src) >> 16;
+	dst_w = drm_rect_width(dst);
+	dst_h = drm_rect_height(dst);
 
 	/* Downscaling limits the maximum pixel rate */
 	dst_w = min(src_w, dst_w);
 	dst_h = min(src_h, dst_h);
 
-	return DIV_ROUND_UP_ULL(mul_u32_u32(pixel_rate, src_w * src_h),
+	return DIV_ROUND_UP_ULL(mul_u32_u32(rate, src_w * src_h),
 				dst_w * dst_h);
+}
+
+unsigned int intel_plane_pixel_rate(const struct intel_crtc_state *crtc_state,
+				    const struct intel_plane_state *plane_state)
+{
+	/*
+	 * Note we don't check for plane visibility here as
+	 * we want to use this when calculating the cursor
+	 * watermarks even if the cursor is fully offscreen.
+	 * That depends on the src/dst rectangles being
+	 * correctly populated whenever the watermark code
+	 * considers the cursor to be visible, whether or not
+	 * it is actually visible.
+	 *
+	 * See: intel_wm_plane_visible() and intel_check_cursor()
+	 */
+
+	return intel_adjusted_rate(&plane_state->uapi.src,
+				   &plane_state->uapi.dst,
+				   crtc_state->pixel_rate);
 }
 
 unsigned int intel_plane_data_rate(const struct intel_crtc_state *crtc_state,
@@ -312,6 +335,7 @@ int intel_plane_atomic_check_with_state(const struct intel_crtc_state *old_crtc_
 	int ret;
 
 	intel_plane_set_invisible(new_crtc_state, new_plane_state);
+	new_crtc_state->enabled_planes &= ~BIT(plane->id);
 
 	if (!new_plane_state->hw.crtc && !old_plane_state->hw.crtc)
 		return 0;
@@ -319,6 +343,9 @@ int intel_plane_atomic_check_with_state(const struct intel_crtc_state *old_crtc_
 	ret = plane->check_plane(new_crtc_state, new_plane_state);
 	if (ret)
 		return ret;
+
+	if (fb)
+		new_crtc_state->enabled_planes |= BIT(plane->id);
 
 	/* FIXME pre-g4x don't work like this */
 	if (new_plane_state->uapi.visible)
@@ -449,7 +476,7 @@ void intel_update_plane(struct intel_plane *plane,
 	trace_intel_update_plane(&plane->base, crtc);
 
 	if (crtc_state->uapi.async_flip && plane->async_flip)
-		plane->async_flip(plane, crtc_state, plane_state);
+		plane->async_flip(plane, crtc_state, plane_state, true);
 	else
 		plane->update_plane(plane, crtc_state, plane_state);
 }
@@ -574,7 +601,12 @@ int intel_atomic_plane_check_clipping(struct intel_plane_state *plane_state,
 	return 0;
 }
 
-const struct drm_plane_helper_funcs intel_plane_helper_funcs = {
+static const struct drm_plane_helper_funcs intel_plane_helper_funcs = {
 	.prepare_fb = intel_prepare_plane_fb,
 	.cleanup_fb = intel_cleanup_plane_fb,
 };
+
+void intel_plane_helper_add(struct intel_plane *plane)
+{
+	drm_plane_helper_add(&plane->base, &intel_plane_helper_funcs);
+}

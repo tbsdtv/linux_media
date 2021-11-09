@@ -54,22 +54,9 @@ void drm_lastclose(struct drm_device *dev);
 #ifdef CONFIG_PCI
 
 /* drm_pci.c */
-int drm_legacy_irq_by_busid(struct drm_device *dev, void *data,
-			    struct drm_file *file_priv);
-void drm_pci_agp_destroy(struct drm_device *dev);
 int drm_pci_set_busid(struct drm_device *dev, struct drm_master *master);
 
 #else
-
-static inline int drm_legacy_irq_by_busid(struct drm_device *dev, void *data,
-					  struct drm_file *file_priv)
-{
-	return -EINVAL;
-}
-
-static inline void drm_pci_agp_destroy(struct drm_device *dev)
-{
-}
 
 static inline int drm_pci_set_busid(struct drm_device *dev,
 				    struct drm_master *master)
@@ -170,7 +157,6 @@ void drm_sysfs_connector_remove(struct drm_connector *connector);
 void drm_sysfs_lease_event(struct drm_device *dev);
 
 /* drm_gem.c */
-struct drm_gem_object;
 int drm_gem_init(struct drm_device *dev);
 int drm_gem_handle_create_tail(struct drm_file *file_priv,
 			       struct drm_gem_object *obj,
@@ -190,6 +176,9 @@ int drm_gem_pin(struct drm_gem_object *obj);
 void drm_gem_unpin(struct drm_gem_object *obj);
 int drm_gem_vmap(struct drm_gem_object *obj, struct dma_buf_map *map);
 void drm_gem_vunmap(struct drm_gem_object *obj, struct dma_buf_map *map);
+
+int drm_gem_dumb_destroy(struct drm_file *file, struct drm_device *dev,
+			 u32 handle);
 
 /* drm_debugfs.c drm_debugfs_crc.c */
 #if defined(CONFIG_DEBUG_FS)

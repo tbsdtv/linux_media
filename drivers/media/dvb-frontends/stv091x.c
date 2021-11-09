@@ -929,6 +929,46 @@ static int SetMIS(struct stv *state, int mis)
 	return 0;
 }
 
+static int SetModcode(struct stv *state, int modcode)
+{
+	int i;
+	u8 tmp;
+	dev_dbg(&state->base->i2c->dev, "%s: 0x%X\n", __func__, modcode);
+
+	/* disable automatic filter vs. SR */
+	read_reg(state, RSTV0910_P2_MODCODLST1 + state->regoff, &tmp);
+	tmp &= 0x3;
+	write_reg(state, RSTV0910_P2_MODCODLST1 + state->regoff, tmp);
+
+	for (i = 1; i < 29; i++) {
+		modcode = modcode>>1;
+		read_reg(state, RSTV0910_P2_MODCODLSTF + state->regoff - i/2, &tmp);
+		switch(i) {
+		case FE_QPSK_910: /* QPSK 9/10 */
+		case FE_8PSK_910: /* 8PSK 9/10 */
+		case FE_16APSK_910: /* 16PSK 9/10 */
+			if (modcode&1)
+				tmp &= 0xcf;
+			else
+				tmp |= 0x30;
+			break;
+		case FE_32APSK_910: /* 32PSK 9/10 */
+			if (modcode&1)
+				tmp &= 0xfc;
+			else
+				tmp |= 3;
+			break;
+		default:
+			if (modcode&1)
+				tmp &= i%2 ? 0xf : 0xf0;
+			else
+				tmp |= i%2 ? 0xf0 : 0xf;
+		}
+		write_reg(state, RSTV0910_P2_MODCODLSTF + state->regoff - i/2, tmp);
+	}
+	return 0;
+}
+
 static int Start(struct stv *state, struct dtv_frontend_properties *p)
 {
 	s32 Freq;
@@ -964,12 +1004,14 @@ static int Start(struct stv *state, struct dtv_frontend_properties *p)
 		state->DemodTimeout = 300;
 		state->FecTimeout = 200;
 	}
-	
+
 	SetMIS(state, p->stream_id);
 
 	/* Set Gold code > 0 */
 	if (p->scrambling_sequence_index)
-	      SetPLS(state, 1, p->scrambling_sequence_index);
+		SetPLS(state, 1, p->scrambling_sequence_index);
+
+	SetModcode(state, p->modcode);
 
 	/* Set the Init Symbol rate*/
 	symb = MulDiv32(p->symbol_rate, 65536, state->base->mclk);

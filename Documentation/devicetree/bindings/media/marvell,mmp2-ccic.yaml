@@ -23,6 +23,9 @@ properties:
   interrupts:
     maxItems: 1
 
+  power-domains:
+    maxItems: 1
+
   port:
     $ref: /schemas/graph.yaml#/$defs/port-base
     additionalProperties: false
@@ -40,7 +43,6 @@ properties:
 
   clocks:
     minItems: 1
-    maxItems: 3
     items:
       - description: AXI bus interface clock
       - description: Peripheral clock
@@ -66,6 +68,7 @@ additionalProperties: false
 examples:
   - |
     #include <dt-bindings/clock/marvell,mmp2.h>
+    #include <dt-bindings/power/marvell,mmp2.h>
 
     camera@d420a000 {
       compatible = "marvell,mmp2-ccic";
@@ -75,6 +78,7 @@ examples:
       clock-names = "axi";
       #clock-cells = <0>;
       clock-output-names = "mclk";
+      power-domains = <&soc_clocks MMP3_POWER_DOMAIN_CAMERA>;
 
       port {
         camera0_0: endpoint {

@@ -13,6 +13,7 @@
 #include "evlist.h"
 #include "evsel.h"
 #include "thread_map.h"
+#include "hashmap.h"
 #include <linux/zalloc.h>
 
 void update_stats(struct stats *stats, u64 val)
@@ -75,8 +76,7 @@ double rel_stddev_stats(double stddev, double avg)
 	return pct;
 }
 
-bool __perf_evsel_stat__is(struct evsel *evsel,
-			   enum perf_stat_evsel_id id)
+bool __perf_stat_evsel__is(struct evsel *evsel, enum perf_stat_evsel_id id)
 {
 	struct perf_stat_evsel *ps = evsel->stats;
 
@@ -99,6 +99,10 @@ static const char *id_str[PERF_STAT_EVSEL_ID__MAX] = {
 	ID(TOPDOWN_BAD_SPEC, topdown-bad-spec),
 	ID(TOPDOWN_FE_BOUND, topdown-fe-bound),
 	ID(TOPDOWN_BE_BOUND, topdown-be-bound),
+	ID(TOPDOWN_HEAVY_OPS, topdown-heavy-ops),
+	ID(TOPDOWN_BR_MISPREDICT, topdown-br-mispredict),
+	ID(TOPDOWN_FETCH_LAT, topdown-fetch-lat),
+	ID(TOPDOWN_MEM_BOUND, topdown-mem-bound),
 	ID(SMI_NUM, msr/smi/),
 	ID(APERF, msr/aperf/),
 };
@@ -273,18 +277,29 @@ void evlist__save_aggr_prev_raw_counts(struct evlist *evlist)
 	}
 }
 
-static void zero_per_pkg(struct evsel *counter)
+static size_t pkg_id_hash(const void *__key, void *ctx __maybe_unused)
 {
-	if (counter->per_pkg_mask)
-		memset(counter->per_pkg_mask, 0, cpu__max_cpu());
+	uint64_t *key = (uint64_t *) __key;
+
+	return *key & 0xffffffff;
+}
+
+static bool pkg_id_equal(const void *__key1, const void *__key2,
+			 void *ctx __maybe_unused)
+{
+	uint64_t *key1 = (uint64_t *) __key1;
+	uint64_t *key2 = (uint64_t *) __key2;
+
+	return *key1 == *key2;
 }
 
 static int check_per_pkg(struct evsel *counter,
 			 struct perf_counts_values *vals, int cpu, bool *skip)
 {
-	unsigned long *mask = counter->per_pkg_mask;
+	struct hashmap *mask = counter->per_pkg_mask;
 	struct perf_cpu_map *cpus = evsel__cpus(counter);
-	int s;
+	int s, d, ret = 0;
+	uint64_t *key;
 
 	*skip = false;
 
@@ -295,7 +310,7 @@ static int check_per_pkg(struct evsel *counter,
 		return 0;
 
 	if (!mask) {
-		mask = zalloc(cpu__max_cpu());
+		mask = hashmap__new(pkg_id_hash, pkg_id_equal, NULL);
 		if (!mask)
 			return -ENOMEM;
 
@@ -317,8 +332,25 @@ static int check_per_pkg(struct evsel *counter,
 	if (s < 0)
 		return -1;
 
-	*skip = test_and_set_bit(s, mask) == 1;
-	return 0;
+	/*
+	 * On multi-die system, die_id > 0. On no-die system, die_id = 0.
+	 * We use hashmap(socket, die) to check the used socket+die pair.
+	 */
+	d = cpu_map__get_die(cpus, cpu, NULL).die;
+	if (d < 0)
+		return -1;
+
+	key = malloc(sizeof(*key));
+	if (!key)
+		return -ENOMEM;
+
+	*key = (uint64_t)d << 32 | s;
+	if (hashmap__find(mask, (void *)key, NULL))
+		*skip = true;
+	else
+		ret = hashmap__add(mask, (void *)key, (void *)1);
+
+	return ret;
 }
 
 static int
@@ -405,20 +437,8 @@ int perf_stat_process_counter(struct perf_stat_config *config,
 
 	aggr->val = aggr->ena = aggr->run = 0;
 
-	/*
-	 * We calculate counter's data every interval,
-	 * and the display code shows ps->res_stats
-	 * avg value. We need to zero the stats for
-	 * interval mode, otherwise overall avg running
-	 * averages will be shown for each interval.
-	 */
-	if (config->interval || config->summary) {
-		for (i = 0; i < 3; i++)
-			init_stats(&ps->res_stats[i]);
-	}
-
 	if (counter->per_pkg)
-		zero_per_pkg(counter);
+		evsel__zero_per_pkg(counter);
 
 	ret = process_counter_maps(config, counter);
 	if (ret)
@@ -514,7 +534,7 @@ int create_perf_stat_counter(struct evsel *evsel,
 			     int cpu)
 {
 	struct perf_event_attr *attr = &evsel->core.attr;
-	struct evsel *leader = evsel->leader;
+	struct evsel *leader = evsel__leader(evsel);
 
 	attr->read_format = PERF_FORMAT_TOTAL_TIME_ENABLED |
 			    PERF_FORMAT_TOTAL_TIME_RUNNING;
@@ -527,7 +547,7 @@ int create_perf_stat_counter(struct evsel *evsel,
 	if (leader->core.nr_members > 1)
 		attr->read_format |= PERF_FORMAT_ID|PERF_FORMAT_GROUP;
 
-	attr->inherit = !config->no_inherit;
+	attr->inherit = !config->no_inherit && list_empty(&evsel->bpf_counter_list);
 
 	/*
 	 * Some events get initialized with sample_(period/type) set,

@@ -91,8 +91,8 @@ static inline int sgx_encl_find(struct mm_struct *mm, unsigned long addr,
 {
 	struct vm_area_struct *result;
 
-	result = find_vma(mm, addr);
-	if (!result || result->vm_ops != &sgx_vm_ops || addr < result->vm_start)
+	result = vma_lookup(mm, addr);
+	if (!result || result->vm_ops != &sgx_vm_ops)
 		return -EINVAL;
 
 	*vma = result;
@@ -115,5 +115,6 @@ struct sgx_epc_page *sgx_alloc_va_page(void);
 unsigned int sgx_alloc_va_slot(struct sgx_va_page *va_page);
 void sgx_free_va_slot(struct sgx_va_page *va_page, unsigned int offset);
 bool sgx_va_page_full(struct sgx_va_page *va_page);
+void sgx_encl_free_epc_page(struct sgx_epc_page *page);
 
 #endif /* _X86_ENCL_H */

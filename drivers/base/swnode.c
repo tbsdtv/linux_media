@@ -11,11 +11,13 @@
 #include <linux/property.h>
 #include <linux/slab.h>
 
+#include "base.h"
+
 struct swnode {
-	int id;
 	struct kobject kobj;
 	struct fwnode_handle fwnode;
 	const struct software_node *node;
+	int id;
 
 	/* hierarchy */
 	struct ida child_ids;
@@ -24,6 +26,7 @@ struct swnode {
 	struct swnode *parent;
 
 	unsigned int allocated:1;
+	unsigned int managed:1;
 };
 
 static DEFINE_IDA(swnode_root_ids);
@@ -47,6 +50,19 @@ EXPORT_SYMBOL_GPL(is_software_node);
 			container_of(__to_swnode_fwnode,		\
 				     struct swnode, fwnode) : NULL;	\
 	})
+
+static inline struct swnode *dev_to_swnode(struct device *dev)
+{
+	struct fwnode_handle *fwnode = dev_fwnode(dev);
+
+	if (!fwnode)
+		return NULL;
+
+	if (!is_software_node(fwnode))
+		fwnode = fwnode->secondary;
+
+	return to_swnode(fwnode);
+}
 
 static struct swnode *
 software_node_to_swnode(const struct software_node *node)
@@ -706,19 +722,30 @@ software_node_find_by_name(const struct software_node *parent, const char *name)
 }
 EXPORT_SYMBOL_GPL(software_node_find_by_name);
 
-static int
-software_node_register_properties(struct software_node *node,
-				  const struct property_entry *properties)
+static struct software_node *software_node_alloc(const struct property_entry *properties)
 {
 	struct property_entry *props;
+	struct software_node *node;
 
 	props = property_entries_dup(properties);
 	if (IS_ERR(props))
-		return PTR_ERR(props);
+		return ERR_CAST(props);
+
+	node = kzalloc(sizeof(*node), GFP_KERNEL);
+	if (!node) {
+		property_entries_free(props);
+		return ERR_PTR(-ENOMEM);
+	}
 
 	node->properties = props;
 
-	return 0;
+	return node;
+}
+
+static void software_node_free(const struct software_node *node)
+{
+	property_entries_free(node->properties);
+	kfree(node);
 }
 
 static void software_node_release(struct kobject *kobj)
@@ -732,10 +759,9 @@ static void software_node_release(struct kobject *kobj)
 		ida_simple_remove(&swnode_root_ids, swnode->id);
 	}
 
-	if (swnode->allocated) {
-		property_entries_free(swnode->node->properties);
-		kfree(swnode->node);
-	}
+	if (swnode->allocated)
+		software_node_free(swnode->node);
+
 	ida_destroy(&swnode->child_ids);
 	kfree(swnode);
 }
@@ -753,22 +779,19 @@ swnode_register(const struct software_node *node, struct swnode *parent,
 	int ret;
 
 	swnode = kzalloc(sizeof(*swnode), GFP_KERNEL);
-	if (!swnode) {
-		ret = -ENOMEM;
-		goto out_err;
-	}
+	if (!swnode)
+		return ERR_PTR(-ENOMEM);
 
 	ret = ida_simple_get(parent ? &parent->child_ids : &swnode_root_ids,
 			     0, 0, GFP_KERNEL);
 	if (ret < 0) {
 		kfree(swnode);
-		goto out_err;
+		return ERR_PTR(ret);
 	}
 
 	swnode->id = ret;
 	swnode->node = node;
 	swnode->parent = parent;
-	swnode->allocated = allocated;
 	swnode->kobj.kset = swnode_kset;
 	fwnode_init(&swnode->fwnode, &software_node_ops);
 
@@ -789,16 +812,17 @@ swnode_register(const struct software_node *node, struct swnode *parent,
 		return ERR_PTR(ret);
 	}
 
+	/*
+	 * Assign the flag only in the successful case, so
+	 * the above kobject_put() won't mess up with properties.
+	 */
+	swnode->allocated = allocated;
+
 	if (parent)
 		list_add_tail(&swnode->entry, &parent->children);
 
 	kobject_uevent(&swnode->kobj, KOBJ_ADD);
 	return &swnode->fwnode;
-
-out_err:
-	if (allocated)
-		property_entries_free(node->properties);
-	return ERR_PTR(ret);
 }
 
 /**
@@ -866,7 +890,11 @@ EXPORT_SYMBOL_GPL(software_node_unregister_nodes);
  * software_node_register_node_group - Register a group of software nodes
  * @node_group: NULL terminated array of software node pointers to be registered
  *
- * Register multiple software nodes at once.
+ * Register multiple software nodes at once. If any node in the array
+ * has its .parent pointer set (which can only be to another software_node),
+ * then its parent **must** have been registered before it is; either outside
+ * of this function or by ordering the array such that parent comes before
+ * child.
  */
 int software_node_register_node_group(const struct software_node **node_group)
 {
@@ -892,10 +920,14 @@ EXPORT_SYMBOL_GPL(software_node_register_node_group);
  * software_node_unregister_node_group - Unregister a group of software nodes
  * @node_group: NULL terminated array of software node pointers to be unregistered
  *
- * Unregister multiple software nodes at once. The array will be unwound in
- * reverse order (i.e. last entry first) and thus if any members of the array are
- * children of another member then the children must appear later in the list such
- * that they are unregistered first.
+ * Unregister multiple software nodes at once. If parent pointers are set up
+ * in any of the software nodes then the array **must** be ordered such that
+ * parents come before their children.
+ *
+ * NOTE: If you are uncertain whether the array is ordered such that
+ * parents will be unregistered before their children, it is wiser to
+ * remove the nodes individually, in the correct order (child before
+ * parent).
  */
 void software_node_unregister_node_group(
 		const struct software_node **node_group)
@@ -924,6 +956,9 @@ int software_node_register(const struct software_node *node)
 	if (software_node_to_swnode(node))
 		return -EEXIST;
 
+	if (node->parent && !parent)
+		return -EINVAL;
+
 	return PTR_ERR_OR_ZERO(swnode_register(node, parent, 0));
 }
 EXPORT_SYMBOL_GPL(software_node_register);
@@ -946,31 +981,28 @@ struct fwnode_handle *
 fwnode_create_software_node(const struct property_entry *properties,
 			    const struct fwnode_handle *parent)
 {
+	struct fwnode_handle *fwnode;
 	struct software_node *node;
-	struct swnode *p = NULL;
-	int ret;
+	struct swnode *p;
 
-	if (parent) {
-		if (IS_ERR(parent))
-			return ERR_CAST(parent);
-		if (!is_software_node(parent))
-			return ERR_PTR(-EINVAL);
-		p = to_swnode(parent);
-	}
+	if (IS_ERR(parent))
+		return ERR_CAST(parent);
 
-	node = kzalloc(sizeof(*node), GFP_KERNEL);
-	if (!node)
-		return ERR_PTR(-ENOMEM);
+	p = to_swnode(parent);
+	if (parent && !p)
+		return ERR_PTR(-EINVAL);
 
-	ret = software_node_register_properties(node, properties);
-	if (ret) {
-		kfree(node);
-		return ERR_PTR(ret);
-	}
+	node = software_node_alloc(properties);
+	if (IS_ERR(node))
+		return ERR_CAST(node);
 
 	node->parent = p ? p->node : NULL;
 
-	return swnode_register(node, p, 1);
+	fwnode = swnode_register(node, p, 1);
+	if (IS_ERR(fwnode))
+		software_node_free(node);
+
+	return fwnode;
 }
 EXPORT_SYMBOL_GPL(fwnode_create_software_node);
 
@@ -985,47 +1017,150 @@ void fwnode_remove_software_node(struct fwnode_handle *fwnode)
 }
 EXPORT_SYMBOL_GPL(fwnode_remove_software_node);
 
-int software_node_notify(struct device *dev, unsigned long action)
+/**
+ * device_add_software_node - Assign software node to a device
+ * @dev: The device the software node is meant for.
+ * @node: The software node.
+ *
+ * This function will make @node the secondary firmware node pointer of @dev. If
+ * @dev has no primary node, then @node will become the primary node. The
+ * function will register @node automatically if it wasn't already registered.
+ */
+int device_add_software_node(struct device *dev, const struct software_node *node)
 {
-	struct fwnode_handle *fwnode = dev_fwnode(dev);
 	struct swnode *swnode;
 	int ret;
 
-	if (!fwnode)
-		return 0;
+	/* Only one software node per device. */
+	if (dev_to_swnode(dev))
+		return -EBUSY;
 
-	if (!is_software_node(fwnode))
-		fwnode = fwnode->secondary;
-	if (!is_software_node(fwnode))
-		return 0;
-
-	swnode = to_swnode(fwnode);
-
-	switch (action) {
-	case KOBJ_ADD:
-		ret = sysfs_create_link(&dev->kobj, &swnode->kobj,
-					"software_node");
-		if (ret)
-			break;
-
-		ret = sysfs_create_link(&swnode->kobj, &dev->kobj,
-					dev_name(dev));
-		if (ret) {
-			sysfs_remove_link(&dev->kobj, "software_node");
-			break;
-		}
+	swnode = software_node_to_swnode(node);
+	if (swnode) {
 		kobject_get(&swnode->kobj);
-		break;
-	case KOBJ_REMOVE:
-		sysfs_remove_link(&swnode->kobj, dev_name(dev));
-		sysfs_remove_link(&dev->kobj, "software_node");
-		kobject_put(&swnode->kobj);
-		break;
-	default:
-		break;
+	} else {
+		ret = software_node_register(node);
+		if (ret)
+			return ret;
+
+		swnode = software_node_to_swnode(node);
 	}
 
+	set_secondary_fwnode(dev, &swnode->fwnode);
+
+	/*
+	 * If the device has been fully registered by the time this function is
+	 * called, software_node_notify() must be called separately so that the
+	 * symlinks get created and the reference count of the node is kept in
+	 * balance.
+	 */
+	if (device_is_registered(dev))
+		software_node_notify(dev);
+
 	return 0;
+}
+EXPORT_SYMBOL_GPL(device_add_software_node);
+
+/**
+ * device_remove_software_node - Remove device's software node
+ * @dev: The device with the software node.
+ *
+ * This function will unregister the software node of @dev.
+ */
+void device_remove_software_node(struct device *dev)
+{
+	struct swnode *swnode;
+
+	swnode = dev_to_swnode(dev);
+	if (!swnode)
+		return;
+
+	if (device_is_registered(dev))
+		software_node_notify_remove(dev);
+
+	set_secondary_fwnode(dev, NULL);
+	kobject_put(&swnode->kobj);
+}
+EXPORT_SYMBOL_GPL(device_remove_software_node);
+
+/**
+ * device_create_managed_software_node - Create a software node for a device
+ * @dev: The device the software node is assigned to.
+ * @properties: Device properties for the software node.
+ * @parent: Parent of the software node.
+ *
+ * Creates a software node as a managed resource for @dev, which means the
+ * lifetime of the newly created software node is tied to the lifetime of @dev.
+ * Software nodes created with this function should not be reused or shared
+ * because of that. The function takes a deep copy of @properties for the
+ * software node.
+ *
+ * Since the new software node is assigned directly to @dev, and since it should
+ * not be shared, it is not returned to the caller. The function returns 0 on
+ * success, and errno in case of an error.
+ */
+int device_create_managed_software_node(struct device *dev,
+					const struct property_entry *properties,
+					const struct software_node *parent)
+{
+	struct fwnode_handle *p = software_node_fwnode(parent);
+	struct fwnode_handle *fwnode;
+
+	if (parent && !p)
+		return -EINVAL;
+
+	fwnode = fwnode_create_software_node(properties, p);
+	if (IS_ERR(fwnode))
+		return PTR_ERR(fwnode);
+
+	to_swnode(fwnode)->managed = true;
+	set_secondary_fwnode(dev, fwnode);
+
+	if (device_is_registered(dev))
+		software_node_notify(dev);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(device_create_managed_software_node);
+
+void software_node_notify(struct device *dev)
+{
+	struct swnode *swnode;
+	int ret;
+
+	swnode = dev_to_swnode(dev);
+	if (!swnode)
+		return;
+
+	ret = sysfs_create_link(&dev->kobj, &swnode->kobj, "software_node");
+	if (ret)
+		return;
+
+	ret = sysfs_create_link(&swnode->kobj, &dev->kobj, dev_name(dev));
+	if (ret) {
+		sysfs_remove_link(&dev->kobj, "software_node");
+		return;
+	}
+
+	kobject_get(&swnode->kobj);
+}
+
+void software_node_notify_remove(struct device *dev)
+{
+	struct swnode *swnode;
+
+	swnode = dev_to_swnode(dev);
+	if (!swnode)
+		return;
+
+	sysfs_remove_link(&swnode->kobj, dev_name(dev));
+	sysfs_remove_link(&dev->kobj, "software_node");
+	kobject_put(&swnode->kobj);
+
+	if (swnode->managed) {
+		set_secondary_fwnode(dev, NULL);
+		kobject_put(&swnode->kobj);
+	}
 }
 
 static int __init software_node_init(void)

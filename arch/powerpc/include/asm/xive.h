@@ -102,6 +102,7 @@ void xive_flush_interrupt(void);
 /* xmon hook */
 void xmon_xive_do_dump(int cpu);
 int xmon_xive_get_irq_config(u32 hw_irq, struct irq_data *d);
+void xmon_xive_get_irq_all(void);
 
 /* APIs used by KVM */
 u32 xive_native_default_eq_shift(void);
@@ -110,6 +111,7 @@ void xive_native_free_vp_block(u32 vp_base);
 int xive_native_populate_irq_data(u32 hw_irq,
 				  struct xive_irq_data *data);
 void xive_cleanup_irq_data(struct xive_irq_data *xd);
+void xive_irq_free_data(unsigned int virq);
 void xive_native_free_irq(u32 irq);
 int xive_native_configure_irq(u32 hw_irq, u32 target, u8 prio, u32 sw_irq);
 
@@ -124,6 +126,7 @@ int xive_native_enable_vp(u32 vp_id, bool single_escalation);
 int xive_native_disable_vp(u32 vp_id);
 int xive_native_get_vp_info(u32 vp_id, u32 *out_cam_id, u32 *out_chip_id);
 bool xive_native_has_single_escalation(void);
+bool xive_native_has_save_restore(void);
 
 int xive_native_get_queue_info(u32 vp_id, uint32_t prio,
 			       u64 *out_qpage,

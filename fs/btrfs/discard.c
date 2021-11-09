@@ -185,10 +185,12 @@ static struct btrfs_block_group *find_next_block_group(
 }
 
 /**
- * peek_discard_list - wrap find_next_block_group()
- * @discard_ctl: discard control
+ * Wrap find_next_block_group()
+ *
+ * @discard_ctl:   discard control
  * @discard_state: the discard_state of the block_group after state management
  * @discard_index: the discard_index of the block_group after state management
+ * @now:           time when discard was invoked, in ns
  *
  * This wraps find_next_block_group() and sets the block_group to be in use.
  * discard_state's control flow is managed here.  Variables related to
@@ -622,7 +624,7 @@ void btrfs_discard_update_discardable(struct btrfs_block_group *block_group)
  * @fs_info: fs_info of interest
  *
  * The unused_bgs list needs to be punted to the discard lists because the
- * order of operations is changed.  In the normal sychronous discard path, the
+ * order of operations is changed.  In the normal synchronous discard path, the
  * block groups are trimmed via a single large trim in transaction commit.  This
  * is ultimately what we are trying to avoid with asynchronous discard.  Thus,
  * it must be done before going down the unused_bgs path.

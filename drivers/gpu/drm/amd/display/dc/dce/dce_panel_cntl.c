@@ -49,17 +49,16 @@
 static unsigned int dce_get_16_bit_backlight_from_pwm(struct panel_cntl *panel_cntl)
 {
 	uint64_t current_backlight;
-	uint32_t round_result;
-	uint32_t pwm_period_cntl, bl_period, bl_int_count;
-	uint32_t bl_pwm_cntl, bl_pwm, fractional_duty_cycle_en;
+	uint32_t bl_period, bl_int_count;
+	uint32_t bl_pwm, fractional_duty_cycle_en;
 	uint32_t bl_period_mask, bl_pwm_mask;
 	struct dce_panel_cntl *dce_panel_cntl = TO_DCE_PANEL_CNTL(panel_cntl);
 
-	pwm_period_cntl = REG_READ(BL_PWM_PERIOD_CNTL);
+	REG_READ(BL_PWM_PERIOD_CNTL);
 	REG_GET(BL_PWM_PERIOD_CNTL, BL_PWM_PERIOD, &bl_period);
 	REG_GET(BL_PWM_PERIOD_CNTL, BL_PWM_PERIOD_BITCNT, &bl_int_count);
 
-	bl_pwm_cntl = REG_READ(BL_PWM_CNTL);
+	REG_READ(BL_PWM_CNTL);
 	REG_GET(BL_PWM_CNTL, BL_ACTIVE_INT_FRAC_CNT, (uint32_t *)(&bl_pwm));
 	REG_GET(BL_PWM_CNTL, BL_PWM_FRACTIONAL_EN, &fractional_duty_cycle_en);
 
@@ -83,15 +82,6 @@ static unsigned int dce_get_16_bit_backlight_from_pwm(struct panel_cntl *panel_c
 
 	current_backlight = div_u64(current_backlight, bl_period);
 	current_backlight = (current_backlight + 1) >> 1;
-
-	current_backlight = (uint64_t)(current_backlight) * bl_period;
-
-	round_result = (uint32_t)(current_backlight & 0xFFFFFFFF);
-
-	round_result = (round_result >> (bl_int_count-1)) & 1;
-
-	current_backlight >>= bl_int_count;
-	current_backlight += round_result;
 
 	return (uint32_t)(current_backlight);
 }

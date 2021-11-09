@@ -29,7 +29,7 @@
 DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 struct workqueue_struct *wq;
 
-static int write_block_cell = 96;
+static int write_block_cell = 64;
 module_param(write_block_cell, int, 0444);
 MODULE_PARM_DESC(
 	write_block_cell,

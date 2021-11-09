@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (C) 2005-2014, 2018-2020 Intel Corporation
+ * Copyright (C) 2005-2014, 2018-2021 Intel Corporation
  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016-2017 Intel Deutschland GmbH
  */
@@ -78,7 +78,7 @@ enum {
 };
 
 /* Protects the table contents, i.e. the ops pointer & drv list */
-static struct mutex iwlwifi_opmode_table_mtx;
+static DEFINE_MUTEX(iwlwifi_opmode_table_mtx);
 static struct iwlwifi_opmode_table {
 	const char *name;			/* name: iwldvm, iwlmvm, etc */
 	const struct iwl_op_mode_ops *ops;	/* pointer to op_mode ops */
@@ -127,6 +127,7 @@ static void iwl_dealloc_ucode(struct iwl_drv *drv)
 	kfree(drv->fw.dbg.mem_tlv);
 	kfree(drv->fw.iml);
 	kfree(drv->fw.ucode_capa.cmd_versions);
+	kfree(drv->fw.phy_integration_ver);
 
 	for (i = 0; i < IWL_UCODE_TYPE_MAX; i++)
 		iwl_free_fw_img(drv, drv->fw.img + i);
@@ -549,8 +550,6 @@ static int iwl_parse_v1_v2_firmware(struct iwl_drv *drv,
 	return 0;
 }
 
-#define FW_ADDR_CACHE_CONTROL 0xC0000000
-
 static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 				const struct firmware *ucode_raw,
 				struct iwl_firmware_pieces *pieces,
@@ -558,7 +557,7 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 				bool *usniffer_images)
 {
 	struct iwl_tlv_ucode_header *ucode = (void *)ucode_raw->data;
-	struct iwl_ucode_tlv *tlv;
+	const struct iwl_ucode_tlv *tlv;
 	size_t len = ucode_raw->size;
 	const u8 *data;
 	u32 tlv_len;
@@ -1118,6 +1117,17 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 				IWL_ERROR_EVENT_TABLE_LMAC1;
 			break;
 			}
+		case IWL_UCODE_TLV_TCM_DEBUG_ADDRS: {
+			struct iwl_fw_tcm_error_addr *ptr = (void *)tlv_data;
+
+			if (tlv_len != sizeof(*ptr))
+				goto invalid_tlv_len;
+			drv->trans->dbg.tcm_error_event_table =
+				le32_to_cpu(ptr->addr) & ~FW_ADDR_CACHE_CONTROL;
+			drv->trans->dbg.error_event_table_tlv_status |=
+				IWL_ERROR_EVENT_TABLE_TCM;
+			break;
+			}
 		case IWL_UCODE_TLV_TYPE_DEBUG_INFO:
 		case IWL_UCODE_TLV_TYPE_BUFFER_ALLOCATION:
 		case IWL_UCODE_TLV_TYPE_HCMD:
@@ -1142,6 +1152,19 @@ static int iwl_parse_tlv_firmware(struct iwl_drv *drv,
 				return -ENOMEM;
 			capa->n_cmd_versions =
 				tlv_len / sizeof(struct iwl_fw_cmd_version);
+			break;
+		case IWL_UCODE_TLV_PHY_INTEGRATION_VERSION:
+			if (drv->fw.phy_integration_ver) {
+				IWL_ERR(drv,
+					"phy integration str ignored, already exists\n");
+				break;
+			}
+
+			drv->fw.phy_integration_ver =
+				kmemdup(tlv_data, tlv_len, GFP_KERNEL);
+			if (!drv->fw.phy_integration_ver)
+				return -ENOMEM;
+			drv->fw.phy_integration_ver_len = tlv_len;
 			break;
 		default:
 			IWL_DEBUG_INFO(drv, "unknown TLV: %d\n", tlv_type);
@@ -1730,8 +1753,6 @@ IWL_EXPORT_SYMBOL(iwl_opmode_deregister);
 static int __init iwl_drv_init(void)
 {
 	int i, err;
-
-	mutex_init(&iwlwifi_opmode_table_mtx);
 
 	for (i = 0; i < ARRAY_SIZE(iwlwifi_opmode_table); i++)
 		INIT_LIST_HEAD(&iwlwifi_opmode_table[i].drv);

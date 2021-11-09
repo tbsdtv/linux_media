@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2012-2014, 2018-2019 Intel Corporation
+ * Copyright (C) 2012-2014, 2018-2020 Intel Corporation
  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016-2017 Intel Deutschland GmbH
  */
@@ -53,9 +53,21 @@ enum iwl_data_path_subcmd_ids {
 	CHEST_COLLECTOR_FILTER_CONFIG_CMD = 0x14,
 
 	/**
+	 * @MONITOR_NOTIF: Datapath monitoring notification, using
+	 *	&struct iwl_datapath_monitor_notif
+	 */
+	MONITOR_NOTIF = 0xF4,
+
+	/**
 	 * @RX_NO_DATA_NOTIF: &struct iwl_rx_no_data
 	 */
 	RX_NO_DATA_NOTIF = 0xF5,
+
+	/**
+	 * @THERMAL_DUAL_CHAIN_DISABLE_REQ: firmware request for SMPS mode,
+	 *	&struct iwl_thermal_dual_chain_request
+	 */
+	THERMAL_DUAL_CHAIN_REQUEST = 0xF6,
 
 	/**
 	 * @TLC_MNG_UPDATE_NOTIF: &struct iwl_tlc_update_notif
@@ -152,5 +164,35 @@ struct iwl_channel_estimation_cfg {
 	 */
 	__le64 frame_types;
 } __packed; /* CHEST_COLLECTOR_FILTER_CMD_API_S_VER_1 */
+
+enum iwl_datapath_monitor_notif_type {
+	IWL_DP_MON_NOTIF_TYPE_EXT_CCA,
+};
+
+struct iwl_datapath_monitor_notif {
+	__le32 type;
+	u8 mac_id;
+	u8 reserved[3];
+} __packed; /* MONITOR_NTF_API_S_VER_1 */
+
+/**
+ * enum iwl_thermal_dual_chain_req_events - firmware SMPS request event
+ * @THERMAL_DUAL_CHAIN_REQ_ENABLE: (re-)enable dual-chain operation
+ *	(subject to other constraints)
+ * @THERMAL_DUAL_CHAIN_REQ_DISABLE: disable dual-chain operation
+ *	(static SMPS)
+ */
+enum iwl_thermal_dual_chain_req_events {
+	THERMAL_DUAL_CHAIN_REQ_ENABLE,
+	THERMAL_DUAL_CHAIN_REQ_DISABLE,
+}; /* THERMAL_DUAL_CHAIN_DISABLE_STATE_API_E_VER_1 */
+
+/**
+ * struct iwl_thermal_dual_chain_request - SMPS request
+ * @event: the type of request, see &enum iwl_thermal_dual_chain_req_events
+ */
+struct iwl_thermal_dual_chain_request {
+	__le32 event;
+} __packed; /* THERMAL_DUAL_CHAIN_DISABLE_REQ_NTFY_API_S_VER_1 */
 
 #endif /* __iwl_fw_api_datapath_h__ */

@@ -30,7 +30,6 @@ config MICROBLAZE
 	select HAVE_FTRACE_MCOUNT_RECORD
 	select HAVE_FUNCTION_GRAPH_TRACER
 	select HAVE_FUNCTION_TRACER
-	select HAVE_OPROFILE
 	select HAVE_PCI
 	select IRQ_DOMAIN
 	select XILINX_INTC
@@ -39,12 +38,13 @@ config MICROBLAZE
 	select OF_EARLY_FLATTREE
 	select PCI_DOMAINS_GENERIC if PCI
 	select PCI_SYSCALL if PCI
-	select TRACING_SUPPORT
 	select VIRT_TO_BUS
 	select CPU_NO_EFFICIENT_FFS
 	select MMU_GATHER_NO_RANGE
 	select SPARSE_IRQ
 	select SET_FS
+	select ZONE_DMA
+	select TRACE_IRQFLAGS_SUPPORT
 
 # Endianness selection
 choice
@@ -61,9 +61,6 @@ config CPU_LITTLE_ENDIAN
 	bool "Little endian"
 
 endchoice
-
-config ZONE_DMA
-	def_bool y
 
 config ARCH_HAS_ILOG2_U32
 	def_bool n

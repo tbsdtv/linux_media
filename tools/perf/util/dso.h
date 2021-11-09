@@ -170,6 +170,7 @@ struct dso {
 	u8		 has_srcline:1;
 	u8		 hit:1;
 	u8		 annotate_warned:1;
+	u8		 auxtrace_warned:1;
 	u8		 short_name_allocated:1;
 	u8		 long_name_allocated:1;
 	u8		 is_64_bit:1;
@@ -216,7 +217,7 @@ struct dso {
 
 /* dso__for_each_symbol - iterate over the symbols of given type
  *
- * @dso: the 'struct dso *' in which symbols itereated
+ * @dso: the 'struct dso *' in which symbols are iterated
  * @pos: the 'struct symbol *' to use as a loop cursor
  * @n: the 'struct rb_node *' to use as a temporary storage
  */

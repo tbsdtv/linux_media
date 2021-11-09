@@ -66,9 +66,6 @@ extern void __iomem *
 devm_platform_ioremap_resource(struct platform_device *pdev,
 			       unsigned int index);
 extern void __iomem *
-devm_platform_ioremap_resource_wc(struct platform_device *pdev,
-				  unsigned int index);
-extern void __iomem *
 devm_platform_ioremap_resource_byname(struct platform_device *pdev,
 				      const char *name);
 extern int platform_get_irq(struct platform_device *, unsigned int);
@@ -200,8 +197,6 @@ extern int platform_device_add_resources(struct platform_device *pdev,
 					 unsigned int num);
 extern int platform_device_add_data(struct platform_device *pdev,
 				    const void *data, size_t size);
-extern int platform_device_add_properties(struct platform_device *pdev,
-				const struct property_entry *properties);
 extern int platform_device_add(struct platform_device *pdev);
 extern void platform_device_del(struct platform_device *pdev);
 extern void platform_device_put(struct platform_device *pdev);
@@ -358,5 +353,8 @@ static inline int is_sh_early_platform_device(struct platform_device *pdev)
 	return 0;
 }
 #endif /* CONFIG_SUPERH */
+
+/* For now only SuperH uses it */
+void early_platform_cleanup(void);
 
 #endif /* _PLATFORM_DEVICE_H_ */

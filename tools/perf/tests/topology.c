@@ -8,6 +8,7 @@
 #include "session.h"
 #include "evlist.h"
 #include "debug.h"
+#include "pmu.h"
 #include <linux/err.h>
 
 #define TEMPL "/tmp/perf-test-XXXXXX"
@@ -37,11 +38,19 @@ static int session_write_header(char *path)
 		.mode = PERF_DATA_MODE_WRITE,
 	};
 
-	session = perf_session__new(&data, false, NULL);
+	session = perf_session__new(&data, NULL);
 	TEST_ASSERT_VAL("can't get session", !IS_ERR(session));
 
-	session->evlist = evlist__new_default();
-	TEST_ASSERT_VAL("can't get evlist", session->evlist);
+	if (!perf_pmu__has_hybrid()) {
+		session->evlist = evlist__new_default();
+		TEST_ASSERT_VAL("can't get evlist", session->evlist);
+	} else {
+		struct parse_events_error err;
+
+		session->evlist = evlist__new();
+		TEST_ASSERT_VAL("can't get evlist", session->evlist);
+		parse_events(session->evlist, "cpu_core/cycles/", &err);
+	}
 
 	perf_header__set_feat(&session->header, HEADER_CPU_TOPOLOGY);
 	perf_header__set_feat(&session->header, HEADER_NRCPUS);
@@ -52,6 +61,7 @@ static int session_write_header(char *path)
 	TEST_ASSERT_VAL("failed to write header",
 			!perf_session__write_header(session, session->evlist, data.file.fd, true));
 
+	evlist__delete(session->evlist);
 	perf_session__delete(session);
 
 	return 0;
@@ -67,7 +77,7 @@ static int check_cpu_topology(char *path, struct perf_cpu_map *map)
 	int i;
 	struct aggr_cpu_id id;
 
-	session = perf_session__new(&data, false, NULL);
+	session = perf_session__new(&data, NULL);
 	TEST_ASSERT_VAL("can't get session", !IS_ERR(session));
 	cpu__setup_cpunode_map();
 
@@ -80,7 +90,7 @@ static int check_cpu_topology(char *path, struct perf_cpu_map *map)
 	 *   CPU 1 is on core_id 1 and physical_package_id 3
 	 *
 	 *   Core_id and physical_package_id are platform and architecture
-	 *   dependend and might have higher numbers than the CPU id.
+	 *   dependent and might have higher numbers than the CPU id.
 	 *   This actually depends on the configuration.
 	 *
 	 *  In this case process_cpu_topology() prints error message:

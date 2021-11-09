@@ -191,21 +191,51 @@ registered this way are stored in a global list of subdevices, ready to be
 picked up by bridge drivers.
 
 Bridge drivers in turn have to register a notifier object. This is
-performed using the :c:func:`v4l2_async_notifier_register` call. To
+performed using the :c:func:`v4l2_async_nf_register` call. To
 unregister the notifier the driver has to call
-:c:func:`v4l2_async_notifier_unregister`. The former of the two functions
+:c:func:`v4l2_async_nf_unregister`. The former of the two functions
 takes two arguments: a pointer to struct :c:type:`v4l2_device` and a
 pointer to struct :c:type:`v4l2_async_notifier`.
 
-Before registering the notifier, bridge drivers must do two things:
-first, the notifier must be initialized using the
-:c:func:`v4l2_async_notifier_init`. Second, bridge drivers can then
-begin to form a list of subdevice descriptors that the bridge device
-needs for its operation. Subdevice descriptors are added to the notifier
-using the :c:func:`v4l2_async_notifier_add_subdev` call. This function
-takes two arguments: a pointer to struct :c:type:`v4l2_async_notifier`,
-and a pointer to the subdevice descripter, which is of type struct
-:c:type:`v4l2_async_subdev`.
+Before registering the notifier, bridge drivers must do two things: first, the
+notifier must be initialized using the :c:func:`v4l2_async_nf_init`.
+Second, bridge drivers can then begin to form a list of subdevice descriptors
+that the bridge device needs for its operation. Several functions are available
+to add subdevice descriptors to a notifier, depending on the type of device and
+the needs of the driver.
+
+:c:func:`v4l2_async_nf_add_fwnode_remote` and
+:c:func:`v4l2_async_nf_add_i2c` are for bridge and ISP drivers for
+registering their async sub-devices with the notifier.
+
+:c:func:`v4l2_async_register_subdev_sensor` is a helper function for
+sensor drivers registering their own async sub-device, but it also registers a
+notifier and further registers async sub-devices for lens and flash devices
+found in firmware. The notifier for the sub-device is unregistered with the
+async sub-device.
+
+These functions allocate an async sub-device descriptor which is of type struct
+:c:type:`v4l2_async_subdev` embedded in a driver-specific struct. The &struct
+:c:type:`v4l2_async_subdev` shall be the first member of this struct:
+
+.. code-block:: c
+
+	struct my_async_subdev {
+		struct v4l2_async_subdev asd;
+		...
+	};
+
+	struct my_async_subdev *my_asd;
+	struct fwnode_handle *ep;
+
+	...
+
+	my_asd = v4l2_async_nf_add_fwnode_remote(&notifier, ep,
+						 struct my_async_subdev);
+	fwnode_handle_put(ep);
+
+	if (IS_ERR(asd))
+		return PTR_ERR(asd);
 
 The V4L2 core will then use these descriptors to match asynchronously
 registered subdevices to them. If a match is detected the ``.bound()``
@@ -222,7 +252,7 @@ contain several subdevs that use an I2C bus, but also a subdev that is
 controlled through GPIO pins. This distinction is only relevant when setting
 up the device, but once the subdev is registered it is completely transparent.
 
-Once te subdev has been registered you can call an ops function either
+Once the subdev has been registered you can call an ops function either
 directly:
 
 .. code-block:: c

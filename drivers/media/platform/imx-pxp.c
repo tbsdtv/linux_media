@@ -1636,7 +1636,6 @@ static int pxp_soft_reset(struct pxp_dev *dev)
 static int pxp_probe(struct platform_device *pdev)
 {
 	struct pxp_dev *dev;
-	struct resource *res;
 	struct video_device *vfd;
 	int irq;
 	int ret;
@@ -1652,13 +1651,9 @@ static int pxp_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	dev->mmio = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(dev->mmio)) {
-		ret = PTR_ERR(dev->mmio);
-		dev_err(&pdev->dev, "Failed to map register space: %d\n", ret);
-		return ret;
-	}
+	dev->mmio = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(dev->mmio))
+		return PTR_ERR(dev->mmio);
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
@@ -1755,7 +1750,7 @@ static struct platform_driver pxp_driver = {
 	.remove		= pxp_remove,
 	.driver		= {
 		.name	= MEM2MEM_NAME,
-		.of_match_table = of_match_ptr(pxp_dt_ids),
+		.of_match_table = pxp_dt_ids,
 	},
 };
 

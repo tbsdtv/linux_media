@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/msi.h>
 #include <linux/pci.h>
+#include <linux/pci-acpi.h>
 #include <linux/pci-ecam.h>
 #include <linux/srcu.h>
 #include <linux/rculist.h>
@@ -28,6 +29,7 @@
 #define BUS_RESTRICT_CAP(vmcap)	(vmcap & 0x1)
 #define PCI_REG_VMCONFIG	0x44
 #define BUS_RESTRICT_CFG(vmcfg)	((vmcfg >> 8) & 0x3)
+#define VMCONFIG_MSI_REMAP	0x2
 #define PCI_REG_VMLOCK		0x70
 #define MB2_SHADOW_EN(vmlock)	(vmlock & 0x2)
 
@@ -59,6 +61,13 @@ enum vmd_features {
 	 * be used for MSI remapping
 	 */
 	VMD_FEAT_OFFSET_FIRST_VECTOR		= (1 << 3),
+
+	/*
+	 * Device can bypass remapping MSI-X transactions into its MSI-X table,
+	 * avoiding the requirement of a VMD MSI domain for child device
+	 * interrupt handling.
+	 */
+	VMD_FEAT_CAN_BYPASS_MSI_REMAP		= (1 << 4),
 };
 
 /*
@@ -306,6 +315,16 @@ static struct msi_domain_info vmd_msi_domain_info = {
 	.chip		= &vmd_msi_controller,
 };
 
+static void vmd_set_msi_remapping(struct vmd_dev *vmd, bool enable)
+{
+	u16 reg;
+
+	pci_read_config_word(vmd->dev, PCI_REG_VMCONFIG, &reg);
+	reg = enable ? (reg & ~VMCONFIG_MSI_REMAP) :
+		       (reg | VMCONFIG_MSI_REMAP);
+	pci_write_config_word(vmd->dev, PCI_REG_VMCONFIG, reg);
+}
+
 static int vmd_create_irq_domain(struct vmd_dev *vmd)
 {
 	struct fwnode_handle *fn;
@@ -325,6 +344,13 @@ static int vmd_create_irq_domain(struct vmd_dev *vmd)
 
 static void vmd_remove_irq_domain(struct vmd_dev *vmd)
 {
+	/*
+	 * Some production BIOS won't enable remapping between soft reboots.
+	 * Ensure remapping is restored before unloading the driver.
+	 */
+	if (!vmd->msix_count)
+		vmd_set_msi_remapping(vmd, true);
+
 	if (vmd->irq_domain) {
 		struct fwnode_handle *fn = vmd->irq_domain->fwnode;
 
@@ -421,6 +447,56 @@ static struct pci_ops vmd_ops = {
 	.read		= vmd_pci_read,
 	.write		= vmd_pci_write,
 };
+
+#ifdef CONFIG_ACPI
+static struct acpi_device *vmd_acpi_find_companion(struct pci_dev *pci_dev)
+{
+	struct pci_host_bridge *bridge;
+	u32 busnr, addr;
+
+	if (pci_dev->bus->ops != &vmd_ops)
+		return NULL;
+
+	bridge = pci_find_host_bridge(pci_dev->bus);
+	busnr = pci_dev->bus->number - bridge->bus->number;
+	/*
+	 * The address computation below is only applicable to relative bus
+	 * numbers below 32.
+	 */
+	if (busnr > 31)
+		return NULL;
+
+	addr = (busnr << 24) | ((u32)pci_dev->devfn << 16) | 0x8000FFFFU;
+
+	dev_dbg(&pci_dev->dev, "Looking for ACPI companion (address 0x%x)\n",
+		addr);
+
+	return acpi_find_child_device(ACPI_COMPANION(bridge->dev.parent), addr,
+				      false);
+}
+
+static bool hook_installed;
+
+static void vmd_acpi_begin(void)
+{
+	if (pci_acpi_set_companion_lookup_hook(vmd_acpi_find_companion))
+		return;
+
+	hook_installed = true;
+}
+
+static void vmd_acpi_end(void)
+{
+	if (!hook_installed)
+		return;
+
+	pci_acpi_clear_companion_lookup_hook();
+	hook_installed = false;
+}
+#else
+static inline void vmd_acpi_begin(void) { }
+static inline void vmd_acpi_end(void) { }
+#endif /* CONFIG_ACPI */
 
 static void vmd_attach_resources(struct vmd_dev *vmd)
 {
@@ -679,15 +755,32 @@ static int vmd_enable_domain(struct vmd_dev *vmd, unsigned long features)
 
 	sd->node = pcibus_to_node(vmd->dev->bus);
 
-	ret = vmd_create_irq_domain(vmd);
-	if (ret)
-		return ret;
-
 	/*
-	 * Override the irq domain bus token so the domain can be distinguished
-	 * from a regular PCI/MSI domain.
+	 * Currently MSI remapping must be enabled in guest passthrough mode
+	 * due to some missing interrupt remapping plumbing. This is probably
+	 * acceptable because the guest is usually CPU-limited and MSI
+	 * remapping doesn't become a performance bottleneck.
 	 */
-	irq_domain_update_bus_token(vmd->irq_domain, DOMAIN_BUS_VMD_MSI);
+	if (!(features & VMD_FEAT_CAN_BYPASS_MSI_REMAP) ||
+	    offset[0] || offset[1]) {
+		ret = vmd_alloc_irqs(vmd);
+		if (ret)
+			return ret;
+
+		vmd_set_msi_remapping(vmd, true);
+
+		ret = vmd_create_irq_domain(vmd);
+		if (ret)
+			return ret;
+
+		/*
+		 * Override the IRQ domain bus token so the domain can be
+		 * distinguished from a regular PCI/MSI domain.
+		 */
+		irq_domain_update_bus_token(vmd->irq_domain, DOMAIN_BUS_VMD_MSI);
+	} else {
+		vmd_set_msi_remapping(vmd, false);
+	}
 
 	pci_add_resource(&resources, &vmd->resources[0]);
 	pci_add_resource_offset(&resources, &vmd->resources[1], offset[0]);
@@ -705,6 +798,8 @@ static int vmd_enable_domain(struct vmd_dev *vmd, unsigned long features)
 	if (vmd->irq_domain)
 		dev_set_msi_domain(&vmd->bus->dev, vmd->irq_domain);
 
+	vmd_acpi_begin();
+
 	pci_scan_child_bus(vmd->bus);
 	pci_assign_unassigned_bus_resources(vmd->bus);
 
@@ -717,6 +812,8 @@ static int vmd_enable_domain(struct vmd_dev *vmd, unsigned long features)
 		pcie_bus_configure_settings(child);
 
 	pci_bus_add_devices(vmd->bus);
+
+	vmd_acpi_end();
 
 	WARN(sysfs_create_link(&vmd->dev->dev.kobj, &vmd->bus->dev.kobj,
 			       "domain"), "Can't create symlink to domain\n");
@@ -752,10 +849,6 @@ static int vmd_probe(struct pci_dev *dev, const struct pci_device_id *id)
 
 	if (features & VMD_FEAT_OFFSET_FIRST_VECTOR)
 		vmd->first_vec = 1;
-
-	err = vmd_alloc_irqs(vmd);
-	if (err)
-		return err;
 
 	spin_lock_init(&vmd->cfg_lock);
 	pci_set_drvdata(dev, vmd);
@@ -825,7 +918,8 @@ static const struct pci_device_id vmd_ids[] = {
 		.driver_data = VMD_FEAT_HAS_MEMBAR_SHADOW_VSCAP,},
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_VMD_28C0),
 		.driver_data = VMD_FEAT_HAS_MEMBAR_SHADOW |
-				VMD_FEAT_HAS_BUS_RESTRICTIONS,},
+				VMD_FEAT_HAS_BUS_RESTRICTIONS |
+				VMD_FEAT_CAN_BYPASS_MSI_REMAP,},
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, 0x467f),
 		.driver_data = VMD_FEAT_HAS_MEMBAR_SHADOW_VSCAP |
 				VMD_FEAT_HAS_BUS_RESTRICTIONS |

@@ -9,6 +9,7 @@
 #include <linux/zalloc.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,7 @@
 #include <regex.h>
 
 int nr_cgroups;
+bool cgrp_event_expanded;
 
 /* used to match cgroup name with patterns */
 struct cgroup_name {
@@ -43,6 +45,49 @@ static int open_cgroup(const char *name)
 		fprintf(stderr, "no access to cgroup %s\n", path);
 
 	return fd;
+}
+
+#ifdef HAVE_FILE_HANDLE
+int read_cgroup_id(struct cgroup *cgrp)
+{
+	char path[PATH_MAX + 1];
+	char mnt[PATH_MAX + 1];
+	struct {
+		struct file_handle fh;
+		uint64_t cgroup_id;
+	} handle;
+	int mount_id;
+
+	if (cgroupfs_find_mountpoint(mnt, PATH_MAX + 1, "perf_event"))
+		return -1;
+
+	scnprintf(path, PATH_MAX, "%s/%s", mnt, cgrp->name);
+
+	handle.fh.handle_bytes = sizeof(handle.cgroup_id);
+	if (name_to_handle_at(AT_FDCWD, path, &handle.fh, &mount_id, 0) < 0)
+		return -1;
+
+	cgrp->id = handle.cgroup_id;
+	return 0;
+}
+#endif  /* HAVE_FILE_HANDLE */
+
+#ifndef CGROUP2_SUPER_MAGIC
+#define CGROUP2_SUPER_MAGIC  0x63677270
+#endif
+
+int cgroup_is_v2(const char *subsys)
+{
+	char mnt[PATH_MAX + 1];
+	struct statfs stbuf;
+
+	if (cgroupfs_find_mountpoint(mnt, PATH_MAX + 1, subsys))
+		return -1;
+
+	if (statfs(mnt, &stbuf) < 0)
+		return -1;
+
+	return (stbuf.f_type == CGROUP2_SUPER_MAGIC);
 }
 
 static struct cgroup *evlist__find_cgroup(struct evlist *evlist, const char *str)
@@ -161,7 +206,7 @@ void evlist__set_default_cgroup(struct evlist *evlist, struct cgroup *cgroup)
 
 /* helper function for ftw() in match_cgroups and list_cgroups */
 static int add_cgroup_name(const char *fpath, const struct stat *sb __maybe_unused,
-			   int typeflag)
+			   int typeflag, struct FTW *ftwbuf __maybe_unused)
 {
 	struct cgroup_name *cn;
 
@@ -209,12 +254,12 @@ static int list_cgroups(const char *str)
 			if (!s)
 				return -1;
 			/* pretend if it's added by ftw() */
-			ret = add_cgroup_name(s, NULL, FTW_D);
+			ret = add_cgroup_name(s, NULL, FTW_D, NULL);
 			free(s);
 			if (ret)
 				return -1;
 		} else {
-			if (add_cgroup_name("", NULL, FTW_D) < 0)
+			if (add_cgroup_name("", NULL, FTW_D, NULL) < 0)
 				return -1;
 		}
 
@@ -247,7 +292,7 @@ static int match_cgroups(const char *str)
 	prefix_len = strlen(mnt);
 
 	/* collect all cgroups in the cgroup_list */
-	if (ftw(mnt, add_cgroup_name, 20) < 0)
+	if (nftw(mnt, add_cgroup_name, 20, 0) < 0)
 		return -1;
 
 	for (;;) {
@@ -414,7 +459,7 @@ int evlist__expand_cgroup(struct evlist *evlist, const char *str,
 
 			if (evsel__is_group_leader(pos))
 				leader = evsel;
-			evsel->leader = leader;
+			evsel__set_leader(evsel, leader);
 
 			evlist__add(tmp_list, evsel);
 		}
@@ -440,6 +485,7 @@ int evlist__expand_cgroup(struct evlist *evlist, const char *str,
 	}
 
 	ret = 0;
+	cgrp_event_expanded = true;
 
 out_err:
 	evlist__delete(orig_list);

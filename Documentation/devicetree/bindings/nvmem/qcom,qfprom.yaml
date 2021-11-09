@@ -24,6 +24,7 @@ properties:
           - qcom,msm8998-qfprom
           - qcom,qcs404-qfprom
           - qcom,sc7180-qfprom
+          - qcom,sc7280-qfprom
           - qcom,sdm845-qfprom
       - const: qcom,qfprom
 
@@ -49,6 +50,9 @@ properties:
   # Supply reference must be provided if QFPROM is writable from the OS image.
   vcc-supply:
     description: Our power supply.
+
+  power-domains:
+    maxItems: 1
 
   # Needed if any child nodes are present.
   "#address-cells":

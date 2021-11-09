@@ -73,12 +73,10 @@ asmlinkage void secondary_start_kernel(void);
 
 /*
  * Initial data for bringing up a secondary CPU.
- * @stack  - sp for the secondary CPU
  * @status - Result passed back from the secondary CPU to
  *           indicate failure.
  */
 struct secondary_data {
-	void *stack;
 	struct task_struct *task;
 	long status;
 };
@@ -145,6 +143,7 @@ bool cpus_are_stuck_in_kernel(void);
 
 extern void crash_smp_send_stop(void);
 extern bool smp_crash_stop_failed(void);
+extern void panic_smp_self_stop(void);
 
 #endif /* ifndef __ASSEMBLY__ */
 

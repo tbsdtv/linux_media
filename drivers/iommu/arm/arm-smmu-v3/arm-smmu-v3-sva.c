@@ -182,9 +182,13 @@ static void arm_smmu_mm_invalidate_range(struct mmu_notifier *mn,
 					 unsigned long start, unsigned long end)
 {
 	struct arm_smmu_mmu_notifier *smmu_mn = mn_to_smmu(mn);
+	struct arm_smmu_domain *smmu_domain = smmu_mn->domain;
+	size_t size = end - start + 1;
 
-	arm_smmu_atc_inv_domain(smmu_mn->domain, mm->pasid, start,
-				end - start + 1);
+	if (!(smmu_domain->smmu->features & ARM_SMMU_FEAT_BTM))
+		arm_smmu_tlb_inv_range_asid(start, size, smmu_mn->cd->asid,
+					    PAGE_SIZE, false, smmu_domain);
+	arm_smmu_atc_inv_domain(smmu_domain, mm->pasid, start, size);
 }
 
 static void arm_smmu_mm_release(struct mmu_notifier *mn, struct mm_struct *mm)
@@ -391,7 +395,7 @@ bool arm_smmu_sva_supported(struct arm_smmu_device *smmu)
 	unsigned long reg, fld;
 	unsigned long oas;
 	unsigned long asid_bits;
-	u32 feat_mask = ARM_SMMU_FEAT_BTM | ARM_SMMU_FEAT_COHERENCY;
+	u32 feat_mask = ARM_SMMU_FEAT_COHERENCY;
 
 	if (vabits_actual == 52)
 		feat_mask |= ARM_SMMU_FEAT_VAX;
@@ -431,9 +435,13 @@ bool arm_smmu_sva_supported(struct arm_smmu_device *smmu)
 	return true;
 }
 
-static bool arm_smmu_iopf_supported(struct arm_smmu_master *master)
+bool arm_smmu_master_iopf_supported(struct arm_smmu_master *master)
 {
-	return false;
+	/* We're not keeping track of SIDs in fault events */
+	if (master->num_streams != 1)
+		return false;
+
+	return master->stall_enabled;
 }
 
 bool arm_smmu_master_sva_supported(struct arm_smmu_master *master)
@@ -441,8 +449,8 @@ bool arm_smmu_master_sva_supported(struct arm_smmu_master *master)
 	if (!(master->smmu->features & ARM_SMMU_FEAT_SVA))
 		return false;
 
-	/* SSID and IOPF support are mandatory for the moment */
-	return master->ssid_bits && arm_smmu_iopf_supported(master);
+	/* SSID support is mandatory for the moment */
+	return master->ssid_bits;
 }
 
 bool arm_smmu_master_sva_enabled(struct arm_smmu_master *master)
@@ -455,13 +463,55 @@ bool arm_smmu_master_sva_enabled(struct arm_smmu_master *master)
 	return enabled;
 }
 
+static int arm_smmu_master_sva_enable_iopf(struct arm_smmu_master *master)
+{
+	int ret;
+	struct device *dev = master->dev;
+
+	/*
+	 * Drivers for devices supporting PRI or stall should enable IOPF first.
+	 * Others have device-specific fault handlers and don't need IOPF.
+	 */
+	if (!arm_smmu_master_iopf_supported(master))
+		return 0;
+
+	if (!master->iopf_enabled)
+		return -EINVAL;
+
+	ret = iopf_queue_add_device(master->smmu->evtq.iopf, dev);
+	if (ret)
+		return ret;
+
+	ret = iommu_register_device_fault_handler(dev, iommu_queue_iopf, dev);
+	if (ret) {
+		iopf_queue_remove_device(master->smmu->evtq.iopf, dev);
+		return ret;
+	}
+	return 0;
+}
+
+static void arm_smmu_master_sva_disable_iopf(struct arm_smmu_master *master)
+{
+	struct device *dev = master->dev;
+
+	if (!master->iopf_enabled)
+		return;
+
+	iommu_unregister_device_fault_handler(dev);
+	iopf_queue_remove_device(master->smmu->evtq.iopf, dev);
+}
+
 int arm_smmu_master_enable_sva(struct arm_smmu_master *master)
 {
+	int ret;
+
 	mutex_lock(&sva_lock);
-	master->sva_enabled = true;
+	ret = arm_smmu_master_sva_enable_iopf(master);
+	if (!ret)
+		master->sva_enabled = true;
 	mutex_unlock(&sva_lock);
 
-	return 0;
+	return ret;
 }
 
 int arm_smmu_master_disable_sva(struct arm_smmu_master *master)
@@ -472,6 +522,7 @@ int arm_smmu_master_disable_sva(struct arm_smmu_master *master)
 		mutex_unlock(&sva_lock);
 		return -EBUSY;
 	}
+	arm_smmu_master_sva_disable_iopf(master);
 	master->sva_enabled = false;
 	mutex_unlock(&sva_lock);
 

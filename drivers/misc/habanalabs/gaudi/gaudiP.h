@@ -36,6 +36,8 @@
 #define NUMBER_OF_INTERRUPTS		(NUMBER_OF_CMPLT_QUEUES + \
 						NUMBER_OF_CPU_HW_QUEUES)
 
+#define GAUDI_STREAM_MASTER_ARR_SIZE	8
+
 #if (NUMBER_OF_INTERRUPTS > GAUDI_MSI_ENTRIES)
 #error "Number of MSI interrupts must be smaller or equal to GAUDI_MSI_ENTRIES"
 #endif
@@ -46,6 +48,11 @@
 
 #define MAX_POWER_DEFAULT_PCI		200000		/* 200W */
 #define MAX_POWER_DEFAULT_PMC		350000		/* 350W */
+
+#define DC_POWER_DEFAULT_PCI		60000		/* 60W */
+#define DC_POWER_DEFAULT_PMC		60000		/* 60W */
+
+#define DC_POWER_DEFAULT_PMC_SEC	97000		/* 97W */
 
 #define GAUDI_CPU_TIMEOUT_USEC		30000000	/* 30s */
 
@@ -59,7 +66,7 @@
 
 #define DMA_MAX_TRANSFER_SIZE		U32_MAX
 
-#define GAUDI_DEFAULT_CARD_NAME		"HL2000"
+#define GAUDI_DEFAULT_CARD_NAME		"HL205"
 
 #define GAUDI_MAX_PENDING_CS		SZ_16K
 
@@ -79,6 +86,7 @@
 					QMAN_STREAMS)
 
 #define QMAN_STREAMS		4
+#define PQ_FETCHER_CACHE_SIZE	8
 
 #define DMA_QMAN_OFFSET		(mmDMA1_QM_BASE - mmDMA0_QM_BASE)
 #define TPC_QMAN_OFFSET		(mmTPC1_QM_BASE - mmTPC0_QM_BASE)
@@ -113,6 +121,7 @@
 	(((mmSYNC_MNGR_E_N_SYNC_MNGR_OBJS_MON_STATUS_511 - \
 	mmSYNC_MNGR_E_N_SYNC_MNGR_OBJS_MON_STATUS_0) + 4) >> 2)
 
+#define MONITOR_MAX_SOBS	8
 
 /* DRAM Memory Map */
 
@@ -196,6 +205,18 @@
 #define HW_CAP_TPC_MASK		GENMASK(31, 24)
 #define HW_CAP_TPC_SHIFT	24
 
+#define NEXT_SYNC_OBJ_ADDR_INTERVAL \
+	(mmSYNC_MNGR_W_N_SYNC_MNGR_OBJS_SOB_OBJ_0 - \
+	 mmSYNC_MNGR_E_N_SYNC_MNGR_OBJS_SOB_OBJ_0)
+#define NUM_OF_MME_ENGINES			2
+#define NUM_OF_MME_SUB_ENGINES		2
+#define NUM_OF_TPC_ENGINES			8
+#define NUM_OF_DMA_ENGINES			8
+#define NUM_OF_QUEUES				5
+#define NUM_OF_STREAMS				4
+#define NUM_OF_FENCES				4
+
+
 #define GAUDI_CPU_PCI_MSB_ADDR(addr)	(((addr) & GENMASK_ULL(49, 39)) >> 39)
 #define GAUDI_PCI_TO_CPU_ADDR(addr)			\
 	do {						\
@@ -251,11 +272,13 @@ enum gaudi_nic_mask {
  * @hdev: habanalabs device structure.
  * @kref: refcount of this SOB group. group will reset once refcount is zero.
  * @base_sob_id: base sob id of this SOB group.
+ * @queue_id: id of the queue that waits on this sob group
  */
 struct gaudi_hw_sob_group {
 	struct hl_device	*hdev;
 	struct kref		kref;
 	u32			base_sob_id;
+	u32			queue_id;
 };
 
 #define NUM_SOB_GROUPS (HL_RSVD_SOBS * QMAN_STREAMS)
@@ -333,6 +356,7 @@ struct gaudi_device {
 };
 
 void gaudi_init_security(struct hl_device *hdev);
+void gaudi_ack_protection_bits_errors(struct hl_device *hdev);
 void gaudi_add_device_attr(struct hl_device *hdev,
 			struct attribute_group *dev_attr_grp);
 void gaudi_set_pll_profile(struct hl_device *hdev, enum hl_pll_frequency freq);

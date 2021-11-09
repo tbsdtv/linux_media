@@ -297,10 +297,9 @@ static int tegra_channel_start_streaming(struct vb2_queue *vq, u32 count)
 	struct tegra_vi_channel *chan = vb2_get_drv_priv(vq);
 	int ret;
 
-	ret = pm_runtime_get_sync(chan->vi->dev);
+	ret = pm_runtime_resume_and_get(chan->vi->dev);
 	if (ret < 0) {
 		dev_err(chan->vi->dev, "failed to get runtime PM: %d\n", ret);
-		pm_runtime_put_noidle(chan->vi->dev);
 		return ret;
 	}
 
@@ -494,7 +493,7 @@ static int __tegra_channel_try_format(struct tegra_vi_channel *chan,
 	const struct tegra_video_format *fmtinfo;
 	struct v4l2_subdev *subdev;
 	struct v4l2_subdev_format fmt;
-	struct v4l2_subdev_pad_config *pad_cfg;
+	struct v4l2_subdev_state *sd_state;
 	struct v4l2_subdev_frame_size_enum fse = {
 		.which = V4L2_SUBDEV_FORMAT_TRY,
 	};
@@ -508,9 +507,9 @@ static int __tegra_channel_try_format(struct tegra_vi_channel *chan,
 	if (!subdev)
 		return -ENODEV;
 
-	pad_cfg = v4l2_subdev_alloc_pad_config(subdev);
-	if (!pad_cfg)
-		return -ENOMEM;
+	sd_state = v4l2_subdev_alloc_state(subdev);
+	if (IS_ERR(sd_state))
+		return PTR_ERR(sd_state);
 	/*
 	 * Retrieve the format information and if requested format isn't
 	 * supported, keep the current format.
@@ -533,33 +532,33 @@ static int __tegra_channel_try_format(struct tegra_vi_channel *chan,
 	 * If not available, try to get crop boundary from subdev.
 	 */
 	fse.code = fmtinfo->code;
-	ret = v4l2_subdev_call(subdev, pad, enum_frame_size, pad_cfg, &fse);
+	ret = v4l2_subdev_call(subdev, pad, enum_frame_size, sd_state, &fse);
 	if (ret) {
 		if (!v4l2_subdev_has_op(subdev, pad, get_selection)) {
-			pad_cfg->try_crop.width = 0;
-			pad_cfg->try_crop.height = 0;
+			sd_state->pads->try_crop.width = 0;
+			sd_state->pads->try_crop.height = 0;
 		} else {
 			ret = v4l2_subdev_call(subdev, pad, get_selection,
 					       NULL, &sdsel);
 			if (ret)
 				return -EINVAL;
 
-			pad_cfg->try_crop.width = sdsel.r.width;
-			pad_cfg->try_crop.height = sdsel.r.height;
+			sd_state->pads->try_crop.width = sdsel.r.width;
+			sd_state->pads->try_crop.height = sdsel.r.height;
 		}
 	} else {
-		pad_cfg->try_crop.width = fse.max_width;
-		pad_cfg->try_crop.height = fse.max_height;
+		sd_state->pads->try_crop.width = fse.max_width;
+		sd_state->pads->try_crop.height = fse.max_height;
 	}
 
-	ret = v4l2_subdev_call(subdev, pad, set_fmt, pad_cfg, &fmt);
+	ret = v4l2_subdev_call(subdev, pad, set_fmt, sd_state, &fmt);
 	if (ret < 0)
 		return ret;
 
 	v4l2_fill_pix_format(pix, &fmt.format);
 	tegra_channel_fmt_align(chan, pix, fmtinfo->bpp);
 
-	v4l2_subdev_free_pad_config(pad_cfg);
+	v4l2_subdev_free_state(sd_state);
 
 	return 0;
 }
@@ -1131,8 +1130,8 @@ static void tegra_channel_host1x_syncpts_free(struct tegra_vi_channel *chan)
 	int i;
 
 	for (i = 0; i < chan->numgangports; i++) {
-		host1x_syncpt_free(chan->mw_ack_sp[i]);
-		host1x_syncpt_free(chan->frame_start_sp[i]);
+		host1x_syncpt_put(chan->mw_ack_sp[i]);
+		host1x_syncpt_put(chan->frame_start_sp[i]);
 	}
 }
 
@@ -1177,7 +1176,7 @@ static int tegra_channel_host1x_syncpt_init(struct tegra_vi_channel *chan)
 		mw_sp = host1x_syncpt_request(&vi->client, flags);
 		if (!mw_sp) {
 			dev_err(vi->dev, "failed to request memory ack syncpoint\n");
-			host1x_syncpt_free(fs_sp);
+			host1x_syncpt_put(fs_sp);
 			ret = -ENOMEM;
 			goto free_syncpts;
 		}
@@ -1273,7 +1272,7 @@ static int tegra_channel_init(struct tegra_vi_channel *chan)
 	}
 
 	if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
-		v4l2_async_notifier_init(&chan->notifier);
+		v4l2_async_nf_init(&chan->notifier);
 
 	return 0;
 
@@ -1788,7 +1787,7 @@ static int tegra_vi_graph_parse_one(struct tegra_vi_channel *chan,
 	struct tegra_vi *vi = chan->vi;
 	struct fwnode_handle *ep = NULL;
 	struct fwnode_handle *remote = NULL;
-	struct v4l2_async_subdev *asd;
+	struct tegra_vi_graph_entity *tvge;
 	struct device_node *node = NULL;
 	int ret;
 
@@ -1812,10 +1811,10 @@ static int tegra_vi_graph_parse_one(struct tegra_vi_channel *chan,
 			continue;
 		}
 
-		asd = v4l2_async_notifier_add_fwnode_subdev(&chan->notifier,
-				remote, sizeof(struct tegra_vi_graph_entity));
-		if (IS_ERR(asd)) {
-			ret = PTR_ERR(asd);
+		tvge = v4l2_async_nf_add_fwnode(&chan->notifier, remote,
+						struct tegra_vi_graph_entity);
+		if (IS_ERR(tvge)) {
+			ret = PTR_ERR(tvge);
 			dev_err(vi->dev,
 				"failed to add subdev to notifier: %d\n", ret);
 			fwnode_handle_put(remote);
@@ -1835,7 +1834,7 @@ static int tegra_vi_graph_parse_one(struct tegra_vi_channel *chan,
 
 cleanup:
 	dev_err(vi->dev, "failed parsing the graph: %d\n", ret);
-	v4l2_async_notifier_cleanup(&chan->notifier);
+	v4l2_async_nf_cleanup(&chan->notifier);
 	of_node_put(node);
 	return ret;
 }
@@ -1869,13 +1868,12 @@ static int tegra_vi_graph_init(struct tegra_vi *vi)
 			continue;
 
 		chan->notifier.ops = &tegra_vi_async_ops;
-		ret = v4l2_async_notifier_register(&vid->v4l2_dev,
-						   &chan->notifier);
+		ret = v4l2_async_nf_register(&vid->v4l2_dev, &chan->notifier);
 		if (ret < 0) {
 			dev_err(vi->dev,
 				"failed to register channel %d notifier: %d\n",
 				chan->portnos[0], ret);
-			v4l2_async_notifier_cleanup(&chan->notifier);
+			v4l2_async_nf_cleanup(&chan->notifier);
 		}
 	}
 
@@ -1888,8 +1886,8 @@ static void tegra_vi_graph_cleanup(struct tegra_vi *vi)
 
 	list_for_each_entry(chan, &vi->vi_chans, list) {
 		vb2_video_unregister_device(&chan->video);
-		v4l2_async_notifier_unregister(&chan->notifier);
-		v4l2_async_notifier_cleanup(&chan->notifier);
+		v4l2_async_nf_unregister(&chan->notifier);
+		v4l2_async_nf_cleanup(&chan->notifier);
 	}
 }
 

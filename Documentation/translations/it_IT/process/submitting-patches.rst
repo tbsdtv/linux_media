@@ -14,14 +14,15 @@ una certa familiarità col "sistema".  Questo testo è una raccolta di
 suggerimenti che aumenteranno significativamente le probabilità di vedere le
 vostre patch accettate.
 
-Questo documento contiene un vasto numero di suggerimenti concisi.  Per
-maggiori dettagli su come funziona il processo di sviluppo del kernel leggete
-:doc:`development-process`.
-Leggete anche :doc:`submit-checklist` per una lista di punti da
-verificare prima di inviare del codice.  Se state inviando un driver,
-allora leggete anche :doc:`submitting-drivers`; per delle patch
+Questo documento contiene un vasto numero di suggerimenti concisi. Per maggiori
+dettagli su come funziona il processo di sviluppo del kernel leggete
+Documentation/translations/it_IT/process/development-process.rst. Leggete anche
+Documentation/translations/it_IT/process/submit-checklist.rst per una lista di
+punti da verificare prima di inviare del codice. Se state inviando un driver,
+allora leggete anche
+Documentation/translations/it_IT/process/submitting-drivers.rst; per delle patch
 relative alle associazioni per Device Tree leggete
-:doc:`submitting-patches`.
+Documentation/translations/it_IT/process/submitting-patches.rst.
 
 Questa documentazione assume che sappiate usare ``git`` per preparare le patch.
 Se non siete pratici di ``git``, allora è bene che lo impariate;
@@ -193,7 +194,7 @@ ed integrate.
 ---------------------------------------------
 
 Controllate che la vostra patch non violi lo stile del codice, maggiori
-dettagli sono disponibili in :ref:`Documentation/translations/it_IT/process/coding-style.rst <it_codingstyle>`.
+dettagli sono disponibili in Documentation/translations/it_IT/process/coding-style.rst.
 Non farlo porta semplicemente a una perdita di tempo da parte dei revisori e
 voi vedrete la vostra patch rifiutata, probabilmente senza nemmeno essere stata
 letta.
@@ -230,13 +231,13 @@ scripts/get_maintainer.pl può esservi d'aiuto.  Se non riuscite a trovare un
 manutentore per il sottosistema su cui state lavorando, allora Andrew Morton
 (akpm@linux-foundation.org) sarà la vostra ultima possibilità.
 
-Normalmente, dovreste anche scegliere una lista di discussione a cui inviare
-la vostra serie di patch.  La lista di discussione linux-kernel@vger.kernel.org
-è proprio l'ultima spiaggia, il volume di email su questa lista fa si che
-diversi sviluppatori non la seguano.  Guardate nel file MAINTAINERS per trovare
-la lista di discussione dedicata ad un sottosistema; probabilmente lì la vostra
-patch riceverà molta più attenzione.  Tuttavia, per favore, non spammate le
-liste di discussione che non sono interessate al vostro lavoro.
+Normalmente, dovreste anche scegliere una lista di discussione a cui inviare la
+vostra serie di patch. La lista di discussione linux-kernel@vger.kernel.org
+dovrebbe essere usata per inviare tutte le patch, ma il traffico è tale per cui
+diversi sviluppatori la trascurano. Guardate nel file MAINTAINERS per trovare la
+lista di discussione dedicata ad un sottosistema; probabilmente lì la vostra
+patch riceverà molta più attenzione. Tuttavia, per favore, non spammate le liste
+di discussione che non sono interessate al vostro lavoro.
 
 Molte delle liste di discussione relative al kernel vengono ospitate su
 vger.kernel.org; potete trovare un loro elenco alla pagina
@@ -257,7 +258,7 @@ embargo potrebbe essere preso in considerazione per dare il tempo alle
 distribuzioni di prendere la patch e renderla disponibile ai loro utenti;
 in questo caso, ovviamente, la patch non dovrebbe essere inviata su alcuna
 lista di discussione pubblica. Leggete anche
-:doc:`/admin-guide/security-bugs`.
+Documentation/admin-guide/security-bugs.rst.
 
 Patch che correggono bachi importanti su un kernel già rilasciato, dovrebbero
 essere inviate ai manutentori dei kernel stabili aggiungendo la seguente riga::
@@ -266,12 +267,7 @@ essere inviate ai manutentori dei kernel stabili aggiungendo la seguente riga::
 
 nella vostra patch, nell'area dedicata alle firme (notate, NON come destinatario
 delle e-mail).  In aggiunta a questo file, dovreste leggere anche
-:ref:`Documentation/translations/it_IT/process/stable-kernel-rules.rst <it_stable_kernel_rules>`
-
-Tuttavia, notate, che alcuni manutentori di sottosistema preferiscono avere
-l'ultima parola su quali patch dovrebbero essere aggiunte ai kernel stabili.
-La rete di manutentori, in particolare, non vorrebbe vedere i singoli
-sviluppatori aggiungere alle loro patch delle righe come quella sopracitata.
+Documentation/translations/it_IT/process/stable-kernel-rules.rst.
 
 Se le modifiche hanno effetti sull'interfaccia con lo spazio utente, per favore
 inviate una patch per le pagine man ai manutentori di suddette pagine (elencati
@@ -330,7 +326,7 @@ così la possibilità che il vostro allegato-MIME venga accettato.
 Eccezione: se il vostro servizio di posta storpia le patch, allora qualcuno
 potrebbe chiedervi di rinviarle come allegato MIME.
 
-Leggete :doc:`/translations/it_IT/process/email-clients`
+Leggete Documentation/translations/it_IT/process/email-clients.rst
 per dei suggerimenti sulla configurazione del programmi di posta elettronica
 per l'invio di patch intatte.
 
@@ -351,7 +347,7 @@ richiede molto tempo, e a volte i revisori diventano burberi.  Tuttavia, anche
 in questo caso, rispondete con educazione e concentratevi sul problema che
 hanno evidenziato.
 
-Leggete :doc:`/translations/it_IT/process/email-clients` per
+Leggete Documentation/translations/it_IT/process/email-clients.rst per
 le raccomandazioni sui programmi di posta elettronica e l'etichetta da usare
 sulle liste di discussione.
 
@@ -368,6 +364,16 @@ in una settimana o poco più; se questo non dovesse accadere, assicuratevi di
 aver inviato le patch correttamente.  Aspettate almeno una settimana prima di
 rinviare le modifiche o sollecitare i revisori - probabilmente anche di più
 durante la finestra d'integrazione.
+
+Potete anche rinviare la patch, o la serie di patch, dopo un paio di settimane
+aggiungendo la parola "RESEND" nel titolo::
+
+    [PATCH Vx RESEND] sub/sys: Condensed patch summary
+
+Ma non aggiungete "RESEND" quando state sottomettendo una versione modificata
+della vostra patch, o serie di patch - "RESEND" si applica solo alla
+sottomissione di patch, o serie di patch, che non hanno subito modifiche
+dall'ultima volta che sono state inviate.
 
 Aggiungete PATCH nell'oggetto
 -----------------------------
@@ -432,6 +438,14 @@ fatto automaticamente.
 Alcune persone aggiungono delle etichette alla fine.  Per ora queste verranno
 ignorate, ma potete farlo per meglio identificare procedure aziendali interne o
 per aggiungere dettagli circa la firma.
+
+In seguito al SoB (Signed-off-by:) dell'autore ve ne sono altri da
+parte di tutte quelle persone che si sono occupate della gestione e
+del trasporto della patch. Queste però non sono state coinvolte nello
+sviluppo, ma la loro sequenza d'apparizione ci racconta il percorso
+**reale** che una patch a intrapreso dallo sviluppatore, fino al
+manutentore, per poi giungere a Linus.
+
 
 Quando utilizzare Acked-by:, Cc:, e Co-developed-by:
 ----------------------------------------------------
@@ -574,6 +588,10 @@ kernel stabili al fine di capire quale kernel deve ricevere la correzione.
 Questo è il modo suggerito per indicare che un baco è stato corretto nella
 patch. Per maggiori dettagli leggete :ref:`it_describe_changes`
 
+Da notare che aggiungere un tag "Fixes:" non esime dalle regole
+previste per i kernel stabili, e nemmeno dalla necessità di aggiungere
+in copia conoscenza stable@vger.kernel.org su tutte le patch per
+suddetti kernel.
 
 Il formato canonico delle patch
 -------------------------------
@@ -642,16 +660,20 @@ Le etichette non verranno considerate come parte della frase riassuntiva, ma
 indicano come la patch dovrebbe essere trattata.  Fra le etichette più comuni
 ci sono quelle di versione che vengono usate quando una patch è stata inviata
 più volte (per esempio, "v1, v2, v3"); oppure "RFC" per indicare che si
-attendono dei commenti (*Request For Comments*).  Se ci sono quattro patch
-nella serie, queste dovrebbero essere enumerate così: 1/4, 2/4, 3/4, 4/4.
-Questo assicura che gli sviluppatori capiranno l'ordine in cui le patch
-dovrebbero essere applicate, e per tracciare quelle che hanno revisionate o
-che hanno applicato.
+attendono dei commenti (*Request For Comments*).
+
+Se ci sono quattro patch nella serie, queste dovrebbero essere
+enumerate così: 1/4, 2/4, 3/4, 4/4.  Questo assicura che gli
+sviluppatori capiranno l'ordine in cui le patch dovrebbero essere
+applicate, e per tracciare quelle che hanno revisionate o che hanno
+applicato.
 
 Un paio di esempi di oggetti::
 
     Subject: [PATCH 2/5] ext2: improve scalability of bitmap searching
     Subject: [PATCH v2 01/27] x86: fix eflags tracking
+    Subject: [PATCH v2] sub/sys: Condensed patch summary
+    Subject: [PATCH v2 M/N] sub/sys: Condensed patch summary
 
 La riga ``from`` dev'essere la prima nel corpo del messaggio ed è nel
 formato:
@@ -668,29 +690,75 @@ deve aver senso per un lettore esperto che è ha dimenticato i dettagli della
 discussione che hanno portato alla patch.  L'inclusione di informazioni
 sui problemi oggetto dalla patch (messaggi del kernel, messaggi di oops,
 eccetera) è particolarmente utile per le persone che potrebbero cercare fra
-i messaggi di log per la patch che li tratta.  Se la patch corregge un errore
-di compilazione, non sarà necessario includere proprio _tutto_ quello che
-è uscito dal compilatore; aggiungete solo quello che è necessario per far si
-che la vostra patch venga trovata.  Come nella ``summary phrase``, è importante
-essere sia brevi che descrittivi.
+i messaggi di log per la patch che li tratta. Il testo dovrebbe essere scritto
+con abbastanza dettagli da far capire al lettore **perché** quella
+patch fu creata, e questo a distanza di settimane, mesi, o addirittura
+anni.
+
+Se la patch corregge un errore di compilazione, non sarà necessario
+includere proprio _tutto_ quello che è uscito dal compilatore;
+aggiungete solo quello che è necessario per far si che la vostra patch
+venga trovata.  Come nella ``summary phrase``, è importante essere sia
+brevi che descrittivi.
 
 La linea di demarcazione ``---`` serve essenzialmente a segnare dove finisce
 il messaggio di changelog.
 
 Aggiungere il ``diffstat`` dopo ``---`` è un buon uso di questo spazio, per
 mostrare i file che sono cambiati, e il numero di file aggiunto o rimossi.
-Un ``diffstat`` è particolarmente utile per le patch grandi.  Altri commenti
-che sono importanti solo per i manutentori, quindi inadatti al changelog
-permanente, dovrebbero essere messi qui.  Un buon esempio per questo tipo
-di commenti potrebbe essere quello di descrivere le differenze fra le versioni
+Un ``diffstat`` è particolarmente utile per le patch grandi. Se
+includete un ``diffstat`` dopo ``---``, usate le opzioni ``-p 1 -w70``
+cosicché i nomi dei file elencati non occupino troppo spazio
+(facilmente rientreranno negli 80 caratteri, magari con qualche
+indentazione).  (``git`` genera di base dei diffstat adatti).
+
+I commenti che sono importanti solo per i manutentori, quindi
+inadatti al changelog permanente, dovrebbero essere messi qui.  Un
+buon esempio per questo tipo di commenti potrebbe essere il cosiddetto
+``patch changelogs`` che descrivere le differenze fra le versioni
 della patch.
 
-Se includete un ``diffstat`` dopo ``---``, usate le opzioni ``-p 1 -w70``
-cosicché i nomi dei file elencati non occupino troppo spazio (facilmente
-rientreranno negli 80 caratteri, magari con qualche indentazione).
-(``git`` genera di base dei diffstat adatti).
+Queste informazioni devono andare **dopo** la linea ``---`` che separa
+il *changelog* dal resto della patch. Le informazioni riguardanti la
+versione di una patch non sono parte del *chagelog* che viene incluso
+in git. Queste sono informazioni utili solo ai revisori. Se venissero
+messe sopra la riga, qualcuno dovrà fare del lavoro manuale per
+rimuoverle; cosa che invece viene fatta automaticamente quando vengono
+messe correttamente oltre la riga.::
+
+  <commit message>
+  ...
+  Signed-off-by: Author <author@mail>
+  ---
+  V2 -> V3: Removed redundant helper function
+  V1 -> V2: Cleaned up coding style and addressed review comments
+
+  path/to/file | 5+++--
+  ...
 
 Maggiori dettagli sul formato delle patch nei riferimenti qui di seguito.
+
+Aggiungere i *backtrace* nei messaggi di commit
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+I *backtrace* aiutano a documentare la sequenza di chiamate a funzione
+che portano ad un problema. Tuttavia, non tutti i *backtrace* sono
+davvero utili. Per esempio, le sequenze iniziali di avvio sono uniche
+e ovvie. Copiare integralmente l'output di ``dmesg`` aggiunge tante
+informazioni che distraggono dal vero problema (per esempio, i
+marcatori temporali, la lista dei moduli, la lista dei registri, lo
+stato dello stack).
+
+Quindi, per rendere utile un *backtrace* dovreste eliminare le
+informazioni inutili, cosicché ci si possa focalizzare sul
+problema. Ecco un esempio di un *backtrace* essenziale::
+
+  unchecked MSR access error: WRMSR to 0xd51 (tried to write 0x0000000000000064)
+  at rIP: 0xffffffffae059994 (native_write_msr+0x4/0x20)
+  Call Trace:
+  mba_wrmsr
+  update_domains
+  rdtgroup_mkdir
 
 .. _it_explicit_in_reply_to:
 
@@ -731,13 +799,12 @@ Greg Kroah-Hartman, "Come scocciare un manutentore di un sottosistema"
   <http://www.kroah.com/log/linux/maintainer-06.html>
 
 No!!!! Basta gigantesche bombe patch alle persone sulla lista linux-kernel@vger.kernel.org!
-  <https://lkml.org/lkml/2005/7/11/336>
+  <https://lore.kernel.org/r/20050711.125305.08322243.davem@davemloft.net>
 
-Kernel Documentation/translations/it_IT/process/coding-style.rst:
-  :ref:`Documentation/translations/it_IT/process/coding-style.rst <it_codingstyle>`
+Kernel Documentation/translations/it_IT/process/coding-style.rst.
 
 E-mail di Linus Torvalds sul formato canonico di una patch:
-  <http://lkml.org/lkml/2005/4/7/183>
+  <https://lore.kernel.org/r/Pine.LNX.4.58.0504071023190.28951@ppc970.osdl.org>
 
 Andi Kleen, "Su come sottomettere patch del kernel"
   Alcune strategie su come sottomettere modifiche toste o controverse.

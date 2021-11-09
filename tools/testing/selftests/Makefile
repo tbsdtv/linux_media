@@ -25,6 +25,7 @@ TARGETS += ir
 TARGETS += kcmp
 TARGETS += kexec
 TARGETS += kvm
+TARGETS += landlock
 TARGETS += lib
 TARGETS += livepatch
 TARGETS += lkdtm
@@ -33,8 +34,12 @@ TARGETS += memfd
 TARGETS += memory-hotplug
 TARGETS += mincore
 TARGETS += mount
+TARGETS += mount_setattr
+TARGETS += move_mount_set_group
 TARGETS += mqueue
+TARGETS += nci
 TARGETS += net
+TARGETS += net/af_unix
 TARGETS += net/forwarding
 TARGETS += net/mptcp
 TARGETS += netfilter
@@ -46,6 +51,7 @@ TARGETS += proc
 TARGETS += pstore
 TARGETS += ptrace
 TARGETS += openat2
+TARGETS += rlimits
 TARGETS += rseq
 TARGETS += rtc
 TARGETS += seccomp
@@ -124,15 +130,6 @@ include $(top_srcdir)/scripts/subarch.include
 ARCH           ?= $(SUBARCH)
 export KSFT_KHDR_INSTALL_DONE := 1
 export BUILD
-
-# build and run gpio when output directory is the src dir.
-# gpio has dependency on tools/gpio and builds tools/gpio
-# objects in the src directory in all cases making the src
-# repo dirty even when objects are relocated.
-ifneq (1,$(DEFAULT_INSTALL_HDR_PATH))
-	TMP := $(filter-out gpio, $(TARGETS))
-	TARGETS := $(TMP)
-endif
 
 # set default goal to all, so make without a target runs all, even when
 # all isn't the first target in the file.

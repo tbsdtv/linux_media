@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2005-2014, 2018-2020 Intel Corporation
+ * Copyright (C) 2005-2014, 2018-2021 Intel Corporation
  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016 Intel Deutschland GmbH
  */
@@ -116,6 +116,9 @@ struct fw_img {
 #define PAGING_CMD_NUM_OF_PAGES_IN_LAST_GRP_POS	0
 #define PAGING_TLV_SECURE_MASK 1
 
+/* FW MSB Mask for regions/cache_control */
+#define FW_ADDR_CACHE_CONTROL 0xC0000000UL
+
 /**
  * struct iwl_fw_paging
  * @fw_paging_phys: page phy pointer
@@ -219,6 +222,9 @@ struct iwl_fw {
 	u8 human_readable[FW_VER_HUMAN_READABLE_SZ];
 
 	struct iwl_fw_dbg dbg;
+
+	u8 *phy_integration_ver;
+	u32 phy_integration_ver_len;
 };
 
 static inline const char *get_fw_dbg_mode_string(int mode)

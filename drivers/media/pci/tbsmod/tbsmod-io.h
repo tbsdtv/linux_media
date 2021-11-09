@@ -9,6 +9,9 @@
 #define SPI_RD_DATA     	 0x1c
 #define SPI_ENABLE       	 0x1c
 
+
+#define SPI_MAX2871       	 0x2c   // spi config ad4351 
+
 #define SPI_DEVICE       	 0x20   // spi choose: 0 is for 9789, 1 is for fpga , default is 0
 #define SPI_RESET       	 0x24   // spi config 9789 reset , default 0, 1 is valid. read for qamb is mod and control
 #define SPI_AD4351       	 0x2c   // spi config ad4351 
@@ -20,6 +23,8 @@
 
 #define SPI_TESTREG       	 0x30   // debug
 #define MOD_RESET_IPCORE       	 0x38   //qamb reset ipcore
+
+#define ISDBT_IPRST       	 0x38
 
 #define MOD_ASI_DEVICE		0X14
 #define MOD_ASI_BASEADDRESS  0x4000
@@ -34,6 +39,15 @@
 #define ASI_SPI_RD_DATA     	 0x04
 #define ASI_SPI_ENABLE       	 0x10
 #define ASI_SPI_TESTREG       	 0x28   // debug
+
+#define I2C_STATUS     	 0x00
+#define I2C_COMMAND    	 0x00
+#define I2C_W_DATA     	 0x04
+#define I2C_R_DATA     	 0x04
+#define I2C_SPEED        0x08  
+
+#define I2C0_BASEADDRESS  0x4000
+#define I2C1_BASEADDRESS  0x5000
 
 enum{
 	AD9789_SPI_CTL	 				= 0x00,

@@ -33,6 +33,10 @@ enum perf_stat_evsel_id {
 	PERF_STAT_EVSEL_ID__TOPDOWN_BAD_SPEC,
 	PERF_STAT_EVSEL_ID__TOPDOWN_FE_BOUND,
 	PERF_STAT_EVSEL_ID__TOPDOWN_BE_BOUND,
+	PERF_STAT_EVSEL_ID__TOPDOWN_HEAVY_OPS,
+	PERF_STAT_EVSEL_ID__TOPDOWN_BR_MISPREDICT,
+	PERF_STAT_EVSEL_ID__TOPDOWN_FETCH_LAT,
+	PERF_STAT_EVSEL_ID__TOPDOWN_MEM_BOUND,
 	PERF_STAT_EVSEL_ID__SMI_NUM,
 	PERF_STAT_EVSEL_ID__APERF,
 	PERF_STAT_EVSEL_ID__MAX,
@@ -91,6 +95,10 @@ enum stat_type {
 	STAT_TOPDOWN_BAD_SPEC,
 	STAT_TOPDOWN_FE_BOUND,
 	STAT_TOPDOWN_BE_BOUND,
+	STAT_TOPDOWN_HEAVY_OPS,
+	STAT_TOPDOWN_BR_MISPREDICT,
+	STAT_TOPDOWN_FETCH_LAT,
+	STAT_TOPDOWN_MEM_BOUND,
 	STAT_SMI_NUM,
 	STAT_APERF,
 	STAT_MAX
@@ -120,10 +128,12 @@ struct perf_stat_config {
 	bool			 all_user;
 	bool			 percore_show_thread;
 	bool			 summary;
+	bool			 no_csv_summary;
 	bool			 metric_no_group;
 	bool			 metric_no_merge;
 	bool			 stop_read_counter;
 	bool			 quiet;
+	bool			 iostat_run;
 	FILE			*output;
 	unsigned int		 interval;
 	unsigned int		 timeout;
@@ -148,9 +158,11 @@ struct perf_stat_config {
 	int			 ctl_fd_ack;
 	bool			 ctl_fd_close;
 	const char		*cgroup_list;
+	unsigned int		topdown_level;
 };
 
 void perf_stat__set_big_num(int set);
+void perf_stat__set_no_csv_summary(int set);
 
 void update_stats(struct stats *stats, u64 val);
 double avg_stats(struct stats *stats);
@@ -178,11 +190,10 @@ struct perf_aggr_thread_value {
 	u64 ena;
 };
 
-bool __perf_evsel_stat__is(struct evsel *evsel,
-			   enum perf_stat_evsel_id id);
+bool __perf_stat_evsel__is(struct evsel *evsel, enum perf_stat_evsel_id id);
 
 #define perf_stat_evsel__is(evsel, id) \
-	__perf_evsel_stat__is(evsel, PERF_STAT_EVSEL_ID__ ## id)
+	__perf_stat_evsel__is(evsel, PERF_STAT_EVSEL_ID__ ## id)
 
 extern struct runtime_stat rt_stat;
 extern struct stats walltime_nsecs_stats;

@@ -491,7 +491,7 @@ static int __q6asm_memory_map_regions(struct audio_client *ac, int dir,
  *
  * @dir: direction of audio stream
  * @ac: audio client instanace
- * @phys: physcial address that needs mapping.
+ * @phys: physical address that needs mapping.
  * @period_sz: audio period size
  * @periods: number of periods
  *
@@ -1624,7 +1624,7 @@ EXPORT_SYMBOL_GPL(q6asm_write_async);
 
 static void q6asm_reset_buf_state(struct audio_client *ac)
 {
-	struct audio_port_data *port = NULL;
+	struct audio_port_data *port;
 	unsigned long flags;
 
 	spin_lock_irqsave(&ac->lock, flags);

@@ -538,18 +538,17 @@ static int gx1133_set_voltage(struct dvb_frontend *fe,
 		case SEC_VOLTAGE_13:
 			if (priv->cfg->lnb_power)
 				 	priv->cfg->lnb_power(fe, 1);
-			
-				gx1133_rd(priv,DVB_S2,GX1133_DISEQC_MODE,&temp);
-				temp=temp|0x40; //13V select
-				gx1133_wr(priv,DVB_S2,GX1133_DISEQC_MODE,temp);
-			break;
-		case SEC_VOLTAGE_18:
-			if (priv->cfg->lnb_power)
-				    priv->cfg->lnb_power(fe, 1);
-			
 				gx1133_rd(priv,DVB_S2,GX1133_DISEQC_MODE,&temp);
 				temp = temp & 0xBF; //18V select
 				gx1133_wr(priv,DVB_S2,GX1133_DISEQC_MODE,temp);
+
+			break;
+		case SEC_VOLTAGE_18:
+			if (priv->cfg->lnb_power)
+				    priv->cfg->lnb_power(fe, 1);		
+				gx1133_rd(priv,DVB_S2,GX1133_DISEQC_MODE,&temp);
+				temp=temp|0x40; //13V select
+				gx1133_wr(priv,DVB_S2,GX1133_DISEQC_MODE,temp);	
 
 			break;
 		default: /* OFF */

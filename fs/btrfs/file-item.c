@@ -9,6 +9,7 @@
 #include <linux/highmem.h>
 #include <linux/sched/mm.h>
 #include <crypto/hash.h>
+#include "misc.h"
 #include "ctree.h"
 #include "disk-io.h"
 #include "transaction.h"
@@ -24,8 +25,10 @@
 				       PAGE_SIZE))
 
 /**
- * @inode - the inode we want to update the disk_i_size for
- * @new_i_size - the i_size we want to set to, 0 if we use i_size
+ * Set inode's size according to filesystem options
+ *
+ * @inode:      inode we want to update the disk_i_size for
+ * @new_i_size: i_size we want to set to, 0 if we use i_size
  *
  * With NO_HOLES set this simply sets the disk_is_size to whatever i_size_read()
  * returns as it is perfectly fine with a file that has holes without hole file
@@ -62,9 +65,11 @@ void btrfs_inode_safe_disk_i_size_write(struct btrfs_inode *inode, u64 new_i_siz
 }
 
 /**
- * @inode - the inode we're modifying
- * @start - the start file offset of the file extent we've inserted
- * @len - the logical length of the file extent item
+ * Mark range within a file as having a new extent inserted
+ *
+ * @inode: inode being modified
+ * @start: start file offset of the file extent we've inserted
+ * @len:   logical length of the file extent item
  *
  * Call when we are inserting a new file extent where there was none before.
  * Does not need to call this in the case where we're replacing an existing file
@@ -88,9 +93,11 @@ int btrfs_inode_set_file_extent_range(struct btrfs_inode *inode, u64 start,
 }
 
 /**
- * @inode - the inode we're modifying
- * @start - the start file offset of the file extent we've inserted
- * @len - the logical length of the file extent item
+ * Marks an inode range as not having a backing extent
+ *
+ * @inode: inode being modified
+ * @start: start file offset of the file extent we've inserted
+ * @len:   logical length of the file extent item
  *
  * Called when we drop a file extent, for example when we truncate.  Doesn't
  * need to be called for cases where we're replacing a file extent, like when
@@ -226,7 +233,6 @@ int btrfs_lookup_file_extent(struct btrfs_trans_handle *trans,
 			     struct btrfs_path *path, u64 objectid,
 			     u64 offset, int mod)
 {
-	int ret;
 	struct btrfs_key file_key;
 	int ins_len = mod < 0 ? -1 : 0;
 	int cow = mod != 0;
@@ -234,8 +240,8 @@ int btrfs_lookup_file_extent(struct btrfs_trans_handle *trans,
 	file_key.objectid = objectid;
 	file_key.offset = offset;
 	file_key.type = BTRFS_EXTENT_DATA_KEY;
-	ret = btrfs_search_slot(trans, root, &file_key, path, ins_len, cow);
-	return ret;
+
+	return btrfs_search_slot(trans, root, &file_key, path, ins_len, cow);
 }
 
 /*
@@ -611,7 +617,7 @@ fail:
  * @file_start:  offset in file this bio begins to describe
  * @contig:	 Boolean. If true/1 means all bio vecs in this bio are
  *		 contiguous and they begin at @file_start in the file. False/0
- *		 means this bio can contains potentially discontigous bio vecs
+ *		 means this bio can contain potentially discontiguous bio vecs
  *		 so the logical offset of each should be calculated separately.
  */
 blk_status_t btrfs_csum_one_bio(struct btrfs_inode *inode, struct bio *bio,
@@ -659,7 +665,18 @@ blk_status_t btrfs_csum_one_bio(struct btrfs_inode *inode, struct bio *bio,
 
 		if (!ordered) {
 			ordered = btrfs_lookup_ordered_extent(inode, offset);
-			BUG_ON(!ordered); /* Logic error */
+			/*
+			 * The bio range is not covered by any ordered extent,
+			 * must be a code logic error.
+			 */
+			if (unlikely(!ordered)) {
+				WARN(1, KERN_WARNING
+			"no ordered extent for root %llu ino %llu offset %llu\n",
+				     inode->root->root_key.objectid,
+				     btrfs_ino(inode), offset);
+				kvfree(sums);
+				return BLK_STS_IOERR;
+			}
 		}
 
 		nr_sectors = BTRFS_BYTES_TO_BLKS(fs_info,
@@ -781,7 +798,7 @@ int btrfs_del_csums(struct btrfs_trans_handle *trans,
 	u64 end_byte = bytenr + len;
 	u64 csum_end;
 	struct extent_buffer *leaf;
-	int ret;
+	int ret = 0;
 	const u32 csum_size = fs_info->csum_size;
 	u32 blocksize_bits = fs_info->sectorsize_bits;
 
@@ -799,6 +816,7 @@ int btrfs_del_csums(struct btrfs_trans_handle *trans,
 
 		ret = btrfs_search_slot(trans, root, &key, path, -1, 1);
 		if (ret > 0) {
+			ret = 0;
 			if (path->slots[0] == 0)
 				break;
 			path->slots[0]--;
@@ -855,7 +873,7 @@ int btrfs_del_csums(struct btrfs_trans_handle *trans,
 			ret = btrfs_del_items(trans, root, path,
 					      path->slots[0], del_nr);
 			if (ret)
-				goto out;
+				break;
 			if (key.offset == bytenr)
 				break;
 		} else if (key.offset < bytenr && csum_end > end_byte) {
@@ -899,8 +917,9 @@ int btrfs_del_csums(struct btrfs_trans_handle *trans,
 			ret = btrfs_split_item(trans, root, path, &key, offset);
 			if (ret && ret != -EAGAIN) {
 				btrfs_abort_transaction(trans, ret);
-				goto out;
+				break;
 			}
+			ret = 0;
 
 			key.offset = end_byte - 1;
 		} else {
@@ -910,10 +929,39 @@ int btrfs_del_csums(struct btrfs_trans_handle *trans,
 		}
 		btrfs_release_path(path);
 	}
-	ret = 0;
-out:
 	btrfs_free_path(path);
 	return ret;
+}
+
+static int find_next_csum_offset(struct btrfs_root *root,
+				 struct btrfs_path *path,
+				 u64 *next_offset)
+{
+	const u32 nritems = btrfs_header_nritems(path->nodes[0]);
+	struct btrfs_key found_key;
+	int slot = path->slots[0] + 1;
+	int ret;
+
+	if (nritems == 0 || slot >= nritems) {
+		ret = btrfs_next_leaf(root, path);
+		if (ret < 0) {
+			return ret;
+		} else if (ret > 0) {
+			*next_offset = (u64)-1;
+			return 0;
+		}
+		slot = path->slots[0];
+	}
+
+	btrfs_item_key_to_cpu(path->nodes[0], &found_key, slot);
+
+	if (found_key.objectid != BTRFS_EXTENT_CSUM_OBJECTID ||
+	    found_key.type != BTRFS_EXTENT_CSUM_KEY)
+		*next_offset = (u64)-1;
+	else
+		*next_offset = found_key.offset;
+
+	return 0;
 }
 
 int btrfs_csum_file_blocks(struct btrfs_trans_handle *trans,
@@ -931,7 +979,6 @@ int btrfs_csum_file_blocks(struct btrfs_trans_handle *trans,
 	u64 total_bytes = 0;
 	u64 csum_offset;
 	u64 bytenr;
-	u32 nritems;
 	u32 ins_size;
 	int index = 0;
 	int found_next;
@@ -974,26 +1021,10 @@ again:
 			goto insert;
 		}
 	} else {
-		int slot = path->slots[0] + 1;
-		/* we didn't find a csum item, insert one */
-		nritems = btrfs_header_nritems(path->nodes[0]);
-		if (!nritems || (path->slots[0] >= nritems - 1)) {
-			ret = btrfs_next_leaf(root, path);
-			if (ret < 0) {
-				goto out;
-			} else if (ret > 0) {
-				found_next = 1;
-				goto insert;
-			}
-			slot = path->slots[0];
-		}
-		btrfs_item_key_to_cpu(path->nodes[0], &found_key, slot);
-		if (found_key.objectid != BTRFS_EXTENT_CSUM_OBJECTID ||
-		    found_key.type != BTRFS_EXTENT_CSUM_KEY) {
-			found_next = 1;
-			goto insert;
-		}
-		next_offset = found_key.offset;
+		/* We didn't find a csum item, insert one. */
+		ret = find_next_csum_offset(root, path, &next_offset);
+		if (ret < 0)
+			goto out;
 		found_next = 1;
 		goto insert;
 	}
@@ -1049,8 +1080,48 @@ extend_csum:
 		tmp = sums->len - total_bytes;
 		tmp >>= fs_info->sectorsize_bits;
 		WARN_ON(tmp < 1);
+		extend_nr = max_t(int, 1, tmp);
 
-		extend_nr = max_t(int, 1, (int)tmp);
+		/*
+		 * A log tree can already have checksum items with a subset of
+		 * the checksums we are trying to log. This can happen after
+		 * doing a sequence of partial writes into prealloc extents and
+		 * fsyncs in between, with a full fsync logging a larger subrange
+		 * of an extent for which a previous fast fsync logged a smaller
+		 * subrange. And this happens in particular due to merging file
+		 * extent items when we complete an ordered extent for a range
+		 * covered by a prealloc extent - this is done at
+		 * btrfs_mark_extent_written().
+		 *
+		 * So if we try to extend the previous checksum item, which has
+		 * a range that ends at the start of the range we want to insert,
+		 * make sure we don't extend beyond the start offset of the next
+		 * checksum item. If we are at the last item in the leaf, then
+		 * forget the optimization of extending and add a new checksum
+		 * item - it is not worth the complexity of releasing the path,
+		 * getting the first key for the next leaf, repeat the btree
+		 * search, etc, because log trees are temporary anyway and it
+		 * would only save a few bytes of leaf space.
+		 */
+		if (root->root_key.objectid == BTRFS_TREE_LOG_OBJECTID) {
+			if (path->slots[0] + 1 >=
+			    btrfs_header_nritems(path->nodes[0])) {
+				ret = find_next_csum_offset(root, path, &next_offset);
+				if (ret < 0)
+					goto out;
+				found_next = 1;
+				goto insert;
+			}
+
+			ret = find_next_csum_offset(root, path, &next_offset);
+			if (ret < 0)
+				goto out;
+
+			tmp = (next_offset - bytenr) >> fs_info->sectorsize_bits;
+			if (tmp <= INT_MAX)
+				extend_nr = min_t(int, extend_nr, tmp);
+		}
+
 		diff = (csum_offset + extend_nr) * csum_size;
 		diff = min(diff,
 			   MAX_CSUM_ITEMS(fs_info, csum_size) * csum_size);

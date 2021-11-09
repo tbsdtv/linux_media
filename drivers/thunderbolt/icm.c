@@ -85,8 +85,8 @@ struct usb4_switch_nvm_auth {
  * @set_uuid: Set UUID for the root switch (optional)
  * @device_connected: Handle device connected ICM message
  * @device_disconnected: Handle device disconnected ICM message
- * @xdomain_connected - Handle XDomain connected ICM message
- * @xdomain_disconnected - Handle XDomain disconnected ICM message
+ * @xdomain_connected: Handle XDomain connected ICM message
+ * @xdomain_disconnected: Handle XDomain disconnected ICM message
  * @rtd3_veto: Handle RTD3 veto notification ICM message
  */
 struct icm {
@@ -557,7 +557,9 @@ static int icm_fr_challenge_switch_key(struct tb *tb, struct tb_switch *sw,
 	return 0;
 }
 
-static int icm_fr_approve_xdomain_paths(struct tb *tb, struct tb_xdomain *xd)
+static int icm_fr_approve_xdomain_paths(struct tb *tb, struct tb_xdomain *xd,
+					int transmit_path, int transmit_ring,
+					int receive_path, int receive_ring)
 {
 	struct icm_fr_pkg_approve_xdomain_response reply;
 	struct icm_fr_pkg_approve_xdomain request;
@@ -568,10 +570,10 @@ static int icm_fr_approve_xdomain_paths(struct tb *tb, struct tb_xdomain *xd)
 	request.link_info = xd->depth << ICM_LINK_INFO_DEPTH_SHIFT | xd->link;
 	memcpy(&request.remote_uuid, xd->remote_uuid, sizeof(*xd->remote_uuid));
 
-	request.transmit_path = xd->transmit_path;
-	request.transmit_ring = xd->transmit_ring;
-	request.receive_path = xd->receive_path;
-	request.receive_ring = xd->receive_ring;
+	request.transmit_path = transmit_path;
+	request.transmit_ring = transmit_ring;
+	request.receive_path = receive_path;
+	request.receive_ring = receive_ring;
 
 	memset(&reply, 0, sizeof(reply));
 	ret = icm_request(tb, &request, sizeof(request), &reply, sizeof(reply),
@@ -585,7 +587,9 @@ static int icm_fr_approve_xdomain_paths(struct tb *tb, struct tb_xdomain *xd)
 	return 0;
 }
 
-static int icm_fr_disconnect_xdomain_paths(struct tb *tb, struct tb_xdomain *xd)
+static int icm_fr_disconnect_xdomain_paths(struct tb *tb, struct tb_xdomain *xd,
+					   int transmit_path, int transmit_ring,
+					   int receive_path, int receive_ring)
 {
 	u8 phy_port;
 	u8 cmd;
@@ -1122,7 +1126,9 @@ static int icm_tr_challenge_switch_key(struct tb *tb, struct tb_switch *sw,
 	return 0;
 }
 
-static int icm_tr_approve_xdomain_paths(struct tb *tb, struct tb_xdomain *xd)
+static int icm_tr_approve_xdomain_paths(struct tb *tb, struct tb_xdomain *xd,
+					int transmit_path, int transmit_ring,
+					int receive_path, int receive_ring)
 {
 	struct icm_tr_pkg_approve_xdomain_response reply;
 	struct icm_tr_pkg_approve_xdomain request;
@@ -1132,10 +1138,10 @@ static int icm_tr_approve_xdomain_paths(struct tb *tb, struct tb_xdomain *xd)
 	request.hdr.code = ICM_APPROVE_XDOMAIN;
 	request.route_hi = upper_32_bits(xd->route);
 	request.route_lo = lower_32_bits(xd->route);
-	request.transmit_path = xd->transmit_path;
-	request.transmit_ring = xd->transmit_ring;
-	request.receive_path = xd->receive_path;
-	request.receive_ring = xd->receive_ring;
+	request.transmit_path = transmit_path;
+	request.transmit_ring = transmit_ring;
+	request.receive_path = receive_path;
+	request.receive_ring = receive_ring;
 	memcpy(&request.remote_uuid, xd->remote_uuid, sizeof(*xd->remote_uuid));
 
 	memset(&reply, 0, sizeof(reply));
@@ -1176,7 +1182,9 @@ static int icm_tr_xdomain_tear_down(struct tb *tb, struct tb_xdomain *xd,
 	return 0;
 }
 
-static int icm_tr_disconnect_xdomain_paths(struct tb *tb, struct tb_xdomain *xd)
+static int icm_tr_disconnect_xdomain_paths(struct tb *tb, struct tb_xdomain *xd,
+					   int transmit_path, int transmit_ring,
+					   int receive_path, int receive_ring)
 {
 	int ret;
 
@@ -1669,14 +1677,18 @@ static void icm_icl_rtd3_veto(struct tb *tb, const struct icm_pkg_header *hdr)
 
 static bool icm_tgl_is_supported(struct tb *tb)
 {
-	u32 val;
+	unsigned long end = jiffies + msecs_to_jiffies(10);
 
-	/*
-	 * If the firmware is not running use software CM. This platform
-	 * should fully support both.
-	 */
-	val = ioread32(tb->nhi->iobase + REG_FW_STS);
-	return !!(val & REG_FW_STS_NVM_AUTH_DONE);
+	do {
+		u32 val;
+
+		val = ioread32(tb->nhi->iobase + REG_FW_STS);
+		if (val & REG_FW_STS_NVM_AUTH_DONE)
+			return true;
+		usleep_range(100, 500);
+	} while (time_before(jiffies, end));
+
+	return false;
 }
 
 static void icm_handle_notification(struct work_struct *work)
@@ -1701,10 +1713,12 @@ static void icm_handle_notification(struct work_struct *work)
 			icm->device_disconnected(tb, n->pkg);
 			break;
 		case ICM_EVENT_XDOMAIN_CONNECTED:
-			icm->xdomain_connected(tb, n->pkg);
+			if (tb_is_xdomain_enabled())
+				icm->xdomain_connected(tb, n->pkg);
 			break;
 		case ICM_EVENT_XDOMAIN_DISCONNECTED:
-			icm->xdomain_disconnected(tb, n->pkg);
+			if (tb_is_xdomain_enabled())
+				icm->xdomain_disconnected(tb, n->pkg);
 			break;
 		case ICM_EVENT_RTD3_VETO:
 			icm->rtd3_veto(tb, n->pkg);
@@ -2414,7 +2428,7 @@ struct tb *icm_probe(struct tb_nhi *nhi)
 	struct icm *icm;
 	struct tb *tb;
 
-	tb = tb_domain_alloc(nhi, sizeof(struct icm));
+	tb = tb_domain_alloc(nhi, ICM_TIMEOUT, sizeof(struct icm));
 	if (!tb)
 		return NULL;
 
@@ -2495,6 +2509,8 @@ struct tb *icm_probe(struct tb_nhi *nhi)
 	case PCI_DEVICE_ID_INTEL_TGL_NHI1:
 	case PCI_DEVICE_ID_INTEL_TGL_H_NHI0:
 	case PCI_DEVICE_ID_INTEL_TGL_H_NHI1:
+	case PCI_DEVICE_ID_INTEL_ADL_NHI0:
+	case PCI_DEVICE_ID_INTEL_ADL_NHI1:
 		icm->is_supported = icm_tgl_is_supported;
 		icm->driver_ready = icm_icl_driver_ready;
 		icm->set_uuid = icm_icl_set_uuid;

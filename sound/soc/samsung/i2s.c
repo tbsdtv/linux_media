@@ -1156,11 +1156,10 @@ static int i2s_alloc_dais(struct samsung_i2s_priv *priv,
 	static const char *stream_names[] = { "Primary Playback",
 					      "Secondary Playback" };
 	struct snd_soc_dai_driver *dai_drv;
-	struct i2s_dai *dai;
 	int i;
 
 	priv->dai = devm_kcalloc(&priv->pdev->dev, num_dais,
-				     sizeof(*dai), GFP_KERNEL);
+				     sizeof(struct i2s_dai), GFP_KERNEL);
 	if (!priv->dai)
 		return -ENOMEM;
 
@@ -1175,7 +1174,7 @@ static int i2s_alloc_dais(struct samsung_i2s_priv *priv,
 		dai_drv->probe = samsung_i2s_dai_probe;
 		dai_drv->remove = samsung_i2s_dai_remove;
 
-		dai_drv->symmetric_rates = 1;
+		dai_drv->symmetric_rate = 1;
 		dai_drv->ops = &samsung_i2s_dai_ops;
 
 		dai_drv->playback.channels_min = 1;
@@ -1442,8 +1441,7 @@ static int samsung_i2s_probe(struct platform_device *pdev)
 		}
 	}
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	priv->addr = devm_ioremap_resource(&pdev->dev, res);
+	priv->addr = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(priv->addr))
 		return PTR_ERR(priv->addr);
 

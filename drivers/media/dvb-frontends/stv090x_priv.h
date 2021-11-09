@@ -46,8 +46,8 @@
 
 #define STV090x_ADDR_OFFST(__state, __x) ((			\
 	(__state->demod) == STV090x_DEMODULATOR_1)	?	\
-		STV090x_P1_##__x :				\
-		STV090x_P2_##__x)
+		STV090x_P2_##__x :				\
+		STV090x_P1_##__x)
 
 
 #define STV090x_SETFIELD(mask, bitf, val)	(mask = (mask & (~(((1 << STV090x_WIDTH_##bitf) - 1) <<\

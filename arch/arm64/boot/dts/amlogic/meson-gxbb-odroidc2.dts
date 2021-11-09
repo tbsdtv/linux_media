@@ -176,7 +176,7 @@
 
 	sound {
 		compatible = "amlogic,gx-sound-card";
-		model = "GXBB-ODROID-C2";
+		model = "ODROID-C2";
 		assigned-clocks = <&clkc CLKID_MPLL0>,
 				  <&clkc CLKID_MPLL1>,
 				  <&clkc CLKID_MPLL2>;
@@ -257,7 +257,7 @@
 	 * This signal should be handled by a USB specific power sequence
 	 * in order to reset the Hub when USB bus is powered down.
 	 */
-	usb-hub {
+	hog-0 {
 		gpio-hog;
 		gpios = <GPIOAO_4 GPIO_ACTIVE_HIGH>;
 		output-high;

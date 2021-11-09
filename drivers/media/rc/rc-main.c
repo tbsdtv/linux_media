@@ -1940,7 +1940,7 @@ int rc_register_device(struct rc_dev *dev)
 	kfree(path);
 
 	/*
-	 * once the the input device is registered in rc_setup_rx_device,
+	 * once the input device is registered in rc_setup_rx_device,
 	 * userspace can open the input device and rc_open() will be called
 	 * as a result. This results in driver code being allowed to submit
 	 * keycodes with rc_keydown, so lirc must be registered first.
@@ -2069,6 +2069,9 @@ static int __init rc_core_init(void)
 
 	led_trigger_register_simple("rc-feedback", &led_feedback);
 	rc_map_register(&empty_map);
+#ifdef CONFIG_MEDIA_CEC_RC
+	rc_map_register(&cec_map);
+#endif
 
 	return 0;
 }
@@ -2078,6 +2081,9 @@ static void __exit rc_core_exit(void)
 	lirc_dev_exit();
 	class_unregister(&rc_class);
 	led_trigger_unregister_simple(led_feedback);
+#ifdef CONFIG_MEDIA_CEC_RC
+	rc_map_unregister(&cec_map);
+#endif
 	rc_map_unregister(&empty_map);
 }
 

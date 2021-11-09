@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2005-2014, 2018-2019 Intel Corporation
+ * Copyright (C) 2005-2014, 2018-2021 Intel Corporation
  * Copyright (C) 2013-2014 Intel Mobile Communications GmbH
  * Copyright (C) 2015 Intel Deutschland GmbH
  */
@@ -9,6 +9,7 @@
 
 #include <linux/netdevice.h>
 #include <linux/debugfs.h>
+#include "iwl-dbg-tlv.h"
 
 struct iwl_op_mode;
 struct iwl_trans;
@@ -77,12 +78,13 @@ struct iwl_cfg;
  *	there are Tx packets pending in the transport layer.
  *	Must be atomic
  * @nic_error: error notification. Must be atomic and must be called with BH
- *	disabled.
+ *	disabled, unless the sync parameter is true.
  * @cmd_queue_full: Called when the command queue gets full. Must be atomic and
  *	called with BH disabled.
  * @nic_config: configure NIC, called before firmware is started.
  *	May sleep
  * @wimax_active: invoked when WiMax becomes active. May sleep
+ * @time_point: called when transport layer wants to collect debug data
  */
 struct iwl_op_mode_ops {
 	struct iwl_op_mode *(*start)(struct iwl_trans *trans,
@@ -100,10 +102,13 @@ struct iwl_op_mode_ops {
 	void (*queue_not_full)(struct iwl_op_mode *op_mode, int queue);
 	bool (*hw_rf_kill)(struct iwl_op_mode *op_mode, bool state);
 	void (*free_skb)(struct iwl_op_mode *op_mode, struct sk_buff *skb);
-	void (*nic_error)(struct iwl_op_mode *op_mode);
+	void (*nic_error)(struct iwl_op_mode *op_mode, bool sync);
 	void (*cmd_queue_full)(struct iwl_op_mode *op_mode);
 	void (*nic_config)(struct iwl_op_mode *op_mode);
 	void (*wimax_active)(struct iwl_op_mode *op_mode);
+	void (*time_point)(struct iwl_op_mode *op_mode,
+			   enum iwl_fw_ini_time_point tp_id,
+			   union iwl_dbg_tlv_tp_data *tp_data);
 };
 
 int iwl_opmode_register(const char *name, const struct iwl_op_mode_ops *ops);
@@ -171,12 +176,14 @@ iwl_op_mode_hw_rf_kill(struct iwl_op_mode *op_mode, bool state)
 static inline void iwl_op_mode_free_skb(struct iwl_op_mode *op_mode,
 					struct sk_buff *skb)
 {
+	if (WARN_ON_ONCE(!op_mode))
+		return;
 	op_mode->ops->free_skb(op_mode, skb);
 }
 
-static inline void iwl_op_mode_nic_error(struct iwl_op_mode *op_mode)
+static inline void iwl_op_mode_nic_error(struct iwl_op_mode *op_mode, bool sync)
 {
-	op_mode->ops->nic_error(op_mode);
+	op_mode->ops->nic_error(op_mode, sync);
 }
 
 static inline void iwl_op_mode_cmd_queue_full(struct iwl_op_mode *op_mode)
@@ -194,6 +201,15 @@ static inline void iwl_op_mode_wimax_active(struct iwl_op_mode *op_mode)
 {
 	might_sleep();
 	op_mode->ops->wimax_active(op_mode);
+}
+
+static inline void iwl_op_mode_time_point(struct iwl_op_mode *op_mode,
+					  enum iwl_fw_ini_time_point tp_id,
+					  union iwl_dbg_tlv_tp_data *tp_data)
+{
+	if (!op_mode || !op_mode->ops || !op_mode->ops->time_point)
+		return;
+	op_mode->ops->time_point(op_mode, tp_id, tp_data);
 }
 
 #endif /* __iwl_op_mode_h__ */

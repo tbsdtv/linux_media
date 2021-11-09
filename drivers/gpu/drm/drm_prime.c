@@ -73,7 +73,7 @@
  * Thus the chain of references always flows in one direction, avoiding loops:
  * importing GEM object -> dma-buf -> exported GEM bo. A further complication
  * are the lookup caches for import and export. These are required to guarantee
- * that any given object will always have only one uniqe userspace handle. This
+ * that any given object will always have only one unique userspace handle. This
  * is required to allow userspace to detect duplicated imports, since some GEM
  * drivers do fail command submissions if a given buffer object is listed more
  * than once. These import and export caches in &drm_prime_file_private only
@@ -549,7 +549,7 @@ int drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data,
  *
  * FIXME: The underlying helper functions are named rather inconsistently.
  *
- * Exporting buffers
+ * Importing buffers
  * ~~~~~~~~~~~~~~~~~
  *
  * Importing dma-bufs using drm_gem_prime_import() relies on
@@ -717,6 +717,8 @@ int drm_gem_prime_mmap(struct drm_gem_object *obj, struct vm_area_struct *vma)
 	vma->vm_pgoff += drm_vma_node_start(&obj->vma_node);
 
 	if (obj->funcs && obj->funcs->mmap) {
+		vma->vm_ops = obj->funcs->vm_ops;
+
 		ret = obj->funcs->mmap(obj, vma);
 		if (ret)
 			return ret;
@@ -805,8 +807,8 @@ struct sg_table *drm_prime_pages_to_sg(struct drm_device *dev,
 				       struct page **pages, unsigned int nr_pages)
 {
 	struct sg_table *sg;
-	struct scatterlist *sge;
 	size_t max_segment = 0;
+	int err;
 
 	sg = kmalloc(sizeof(struct sg_table), GFP_KERNEL);
 	if (!sg)
@@ -816,13 +818,12 @@ struct sg_table *drm_prime_pages_to_sg(struct drm_device *dev,
 		max_segment = dma_max_mapping_size(dev->dev);
 	if (max_segment == 0)
 		max_segment = UINT_MAX;
-	sge = __sg_alloc_table_from_pages(sg, pages, nr_pages, 0,
-					  nr_pages << PAGE_SHIFT,
-					  max_segment,
-					  NULL, 0, GFP_KERNEL);
-	if (IS_ERR(sge)) {
+	err = sg_alloc_table_from_pages_segment(sg, pages, nr_pages, 0,
+						nr_pages << PAGE_SHIFT,
+						max_segment, GFP_KERNEL);
+	if (err) {
 		kfree(sg);
-		sg = ERR_CAST(sge);
+		sg = ERR_PTR(err);
 	}
 	return sg;
 }
@@ -978,44 +979,58 @@ struct drm_gem_object *drm_gem_prime_import(struct drm_device *dev,
 EXPORT_SYMBOL(drm_gem_prime_import);
 
 /**
- * drm_prime_sg_to_page_addr_arrays - convert an sg table into a page array
+ * drm_prime_sg_to_page_array - convert an sg table into a page array
  * @sgt: scatter-gather table to convert
- * @pages: optional array of page pointers to store the page array in
- * @addrs: optional array to store the dma bus address of each page
- * @max_entries: size of both the passed-in arrays
+ * @pages: array of page pointers to store the pages in
+ * @max_entries: size of the passed-in array
  *
- * Exports an sg table into an array of pages and addresses. This is currently
- * required by the TTM driver in order to do correct fault handling.
+ * Exports an sg table into an array of pages.
  *
- * Drivers can use this in their &drm_driver.gem_prime_import_sg_table
- * implementation.
+ * This function is deprecated and strongly discouraged to be used.
+ * The page array is only useful for page faults and those can corrupt fields
+ * in the struct page if they are not handled by the exporting driver.
  */
-int drm_prime_sg_to_page_addr_arrays(struct sg_table *sgt, struct page **pages,
-				     dma_addr_t *addrs, int max_entries)
+int __deprecated drm_prime_sg_to_page_array(struct sg_table *sgt,
+					    struct page **pages,
+					    int max_entries)
 {
-	struct sg_dma_page_iter dma_iter;
 	struct sg_page_iter page_iter;
 	struct page **p = pages;
-	dma_addr_t *a = addrs;
 
-	if (pages) {
-		for_each_sgtable_page(sgt, &page_iter, 0) {
-			if (WARN_ON(p - pages >= max_entries))
-				return -1;
-			*p++ = sg_page_iter_page(&page_iter);
-		}
+	for_each_sgtable_page(sgt, &page_iter, 0) {
+		if (WARN_ON(p - pages >= max_entries))
+			return -1;
+		*p++ = sg_page_iter_page(&page_iter);
 	}
-	if (addrs) {
-		for_each_sgtable_dma_page(sgt, &dma_iter, 0) {
-			if (WARN_ON(a - addrs >= max_entries))
-				return -1;
-			*a++ = sg_page_iter_dma_address(&dma_iter);
-		}
-	}
-
 	return 0;
 }
-EXPORT_SYMBOL(drm_prime_sg_to_page_addr_arrays);
+EXPORT_SYMBOL(drm_prime_sg_to_page_array);
+
+/**
+ * drm_prime_sg_to_dma_addr_array - convert an sg table into a dma addr array
+ * @sgt: scatter-gather table to convert
+ * @addrs: array to store the dma bus address of each page
+ * @max_entries: size of both the passed-in arrays
+ *
+ * Exports an sg table into an array of addresses.
+ *
+ * Drivers should use this in their &drm_driver.gem_prime_import_sg_table
+ * implementation.
+ */
+int drm_prime_sg_to_dma_addr_array(struct sg_table *sgt, dma_addr_t *addrs,
+				   int max_entries)
+{
+	struct sg_dma_page_iter dma_iter;
+	dma_addr_t *a = addrs;
+
+	for_each_sgtable_dma_page(sgt, &dma_iter, 0) {
+		if (WARN_ON(a - addrs >= max_entries))
+			return -1;
+		*a++ = sg_page_iter_dma_address(&dma_iter);
+	}
+	return 0;
+}
+EXPORT_SYMBOL(drm_prime_sg_to_dma_addr_array);
 
 /**
  * drm_prime_gem_destroy - helper to clean up a PRIME-imported GEM object

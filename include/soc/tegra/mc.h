@@ -7,8 +7,10 @@
 #define __SOC_TEGRA_MC_H__
 
 #include <linux/bits.h>
+#include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/interconnect-provider.h>
+#include <linux/irq.h>
 #include <linux/reset-controller.h>
 #include <linux/types.h>
 
@@ -16,34 +18,48 @@ struct clk;
 struct device;
 struct page;
 
-struct tegra_smmu_enable {
-	unsigned int reg;
-	unsigned int bit;
-};
-
 struct tegra_mc_timing {
 	unsigned long rate;
 
 	u32 *emem_data;
 };
 
-/* latency allowance */
-struct tegra_mc_la {
-	unsigned int reg;
-	unsigned int shift;
-	unsigned int mask;
-	unsigned int def;
-};
-
 struct tegra_mc_client {
 	unsigned int id;
 	const char *name;
-	unsigned int swgroup;
+	/*
+	 * For Tegra210 and earlier, this is the SWGROUP ID used for IOVA translations in the
+	 * Tegra SMMU, whereas on Tegra186 and later this is the ID used to override the ARM SMMU
+	 * stream ID used for IOVA translations for the given memory client.
+	 */
+	union {
+		unsigned int swgroup;
+		unsigned int sid;
+	};
 
 	unsigned int fifo_size;
 
-	struct tegra_smmu_enable smmu;
-	struct tegra_mc_la la;
+	struct {
+		/* Tegra SMMU enable (Tegra210 and earlier) */
+		struct {
+			unsigned int reg;
+			unsigned int bit;
+		} smmu;
+
+		/* latency allowance */
+		struct {
+			unsigned int reg;
+			unsigned int shift;
+			unsigned int mask;
+			unsigned int def;
+		} la;
+
+		/* stream ID overrides (Tegra186 and later) */
+		struct {
+			unsigned int override;
+			unsigned int security;
+		} sid;
+	} regs;
 };
 
 struct tegra_smmu_swgroup {
@@ -154,6 +170,19 @@ struct tegra_mc_icc_ops {
 						void *data);
 };
 
+struct tegra_mc_ops {
+	/*
+	 * @probe: Callback to set up SoC-specific bits of the memory controller. This is called
+	 * after basic, common set up that is done by the SoC-agnostic bits.
+	 */
+	int (*probe)(struct tegra_mc *mc);
+	void (*remove)(struct tegra_mc *mc);
+	int (*suspend)(struct tegra_mc *mc);
+	int (*resume)(struct tegra_mc *mc);
+	irqreturn_t (*handle_irq)(int irq, void *data);
+	int (*probe_device)(struct tegra_mc *mc, struct device *dev);
+};
+
 struct tegra_mc_soc {
 	const struct tegra_mc_client *clients;
 	unsigned int num_clients;
@@ -175,6 +204,7 @@ struct tegra_mc_soc {
 	unsigned int num_resets;
 
 	const struct tegra_mc_icc_ops *icc_ops;
+	const struct tegra_mc_ops *ops;
 };
 
 struct tegra_mc {
@@ -196,6 +226,10 @@ struct tegra_mc {
 	struct icc_provider provider;
 
 	spinlock_t lock;
+
+	struct {
+		struct dentry *root;
+	} debugfs;
 };
 
 int tegra_mc_write_emem_configuration(struct tegra_mc *mc, unsigned long rate);
@@ -203,11 +237,18 @@ unsigned int tegra_mc_get_emem_device_count(struct tegra_mc *mc);
 
 #ifdef CONFIG_TEGRA_MC
 struct tegra_mc *devm_tegra_memory_controller_get(struct device *dev);
+int tegra_mc_probe_device(struct tegra_mc *mc, struct device *dev);
 #else
 static inline struct tegra_mc *
 devm_tegra_memory_controller_get(struct device *dev)
 {
 	return ERR_PTR(-ENODEV);
+}
+
+static inline int
+tegra_mc_probe_device(struct tegra_mc *mc, struct device *dev)
+{
+	return -ENODEV;
 }
 #endif
 

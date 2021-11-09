@@ -19,8 +19,6 @@
 #include <linux/phy.h>
 #include <linux/netdevice.h>
 
-#define DEBUG
-
 /* DP83865 phy identifier values */
 #define DP83865_PHY_ID	0x20005c7a
 
@@ -70,7 +68,8 @@ static int ns_ack_interrupt(struct phy_device *phydev)
 		return ret;
 
 	/* Clear the interrupt status bit by writing a “1”
-	 * to the corresponding bit in INT_CLEAR (2:0 are reserved) */
+	 * to the corresponding bit in INT_CLEAR (2:0 are reserved)
+	 */
 	ret = phy_write(phydev, DP83865_INT_CLEAR, ret & ~0x7);
 
 	return ret;
@@ -152,7 +151,8 @@ static int ns_config_init(struct phy_device *phydev)
 {
 	ns_giga_speed_fallback(phydev, ALL_FALLBACK_ON);
 	/* In the latest MAC or switches design, the 10 Mbps loopback
-	   is desired to be turned off. */
+	 * is desired to be turned off.
+	 */
 	ns_10_base_t_hdx_loopack(phydev, hdx_loopback_off);
 	return ns_ack_interrupt(phydev);
 }

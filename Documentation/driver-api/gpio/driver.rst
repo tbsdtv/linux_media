@@ -547,13 +547,10 @@ To use the helpers please keep the following in mind:
   the irqchip can initialize. E.g. .dev and .can_sleep shall be set up
   properly.
 
-- Nominally set all handlers to handle_bad_irq() in the setup call and pass
-  handle_bad_irq() as flow handler parameter in gpiochip_irqchip_add() if it is
-  expected for GPIO driver that irqchip .set_type() callback will be called
-  before using/enabling each GPIO IRQ. Then set the handler to
-  handle_level_irq() and/or handle_edge_irq() in the irqchip .set_type()
-  callback depending on what your controller supports and what is requested
-  by the consumer.
+- Nominally set gpio_irq_chip.handler to handle_bad_irq. Then, if your irqchip
+  is cascaded, set the handler to handle_level_irq() and/or handle_edge_irq()
+  in the irqchip .set_type() callback depending on what your controller
+  supports and what is requested by the consumer.
 
 
 Locking IRQ usage
@@ -640,8 +637,8 @@ compliance:
   level and edge IRQs
 
 * [1] http://www.spinics.net/lists/linux-omap/msg120425.html
-* [2] https://lkml.org/lkml/2015/9/25/494
-* [3] https://lkml.org/lkml/2015/9/25/495
+* [2] https://lore.kernel.org/r/1443209283-20781-2-git-send-email-grygorii.strashko@ti.com
+* [3] https://lore.kernel.org/r/1443209283-20781-3-git-send-email-grygorii.strashko@ti.com
 
 
 Requesting self-owned GPIO pins

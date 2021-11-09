@@ -33,14 +33,13 @@ struct clk_gfm {
 	void __iomem *gfm_mux;
 };
 
-#define GFM_MASK	BIT(1)
 #define to_clk_gfm(_hw) container_of(_hw, struct clk_gfm, hw)
 
 static u8 clk_gfm_get_parent(struct clk_hw *hw)
 {
 	struct clk_gfm *clk = to_clk_gfm(hw);
 
-	return readl(clk->gfm_mux) & GFM_MASK;
+	return readl(clk->gfm_mux) & clk->mux_mask;
 }
 
 static int clk_gfm_set_parent(struct clk_hw *hw, u8 index)
@@ -51,9 +50,10 @@ static int clk_gfm_set_parent(struct clk_hw *hw, u8 index)
 	val = readl(clk->gfm_mux);
 
 	if (index)
-		val |= GFM_MASK;
+		val |= clk->mux_mask;
 	else
-		val &= ~GFM_MASK;
+		val &= ~clk->mux_mask;
+
 
 	writel(val, clk->gfm_mux);
 
@@ -251,15 +251,18 @@ static int lpass_gfm_clk_driver_probe(struct platform_device *pdev)
 	if (IS_ERR(cc->base))
 		return PTR_ERR(cc->base);
 
-	pm_runtime_enable(dev);
-	err = pm_clk_create(dev);
+	err = devm_pm_runtime_enable(dev);
 	if (err)
-		goto pm_clk_err;
+		return err;
+
+	err = devm_pm_clk_create(dev);
+	if (err)
+		return err;
 
 	err = of_pm_clk_add_clks(dev);
 	if (err < 0) {
 		dev_dbg(dev, "Failed to get lpass core voting clocks\n");
-		goto clk_reg_err;
+		return err;
 	}
 
 	for (i = 0; i < data->onecell_data->num; i++) {
@@ -273,22 +276,16 @@ static int lpass_gfm_clk_driver_probe(struct platform_device *pdev)
 
 		err = devm_clk_hw_register(dev, &data->gfm_clks[i]->hw);
 		if (err)
-			goto clk_reg_err;
+			return err;
 
 	}
 
 	err = devm_of_clk_add_hw_provider(dev, of_clk_hw_onecell_get,
 					  data->onecell_data);
 	if (err)
-		goto clk_reg_err;
+		return err;
 
 	return 0;
-
-clk_reg_err:
-	pm_clk_destroy(dev);
-pm_clk_err:
-	pm_runtime_disable(dev);
-	return err;
 }
 
 static const struct of_device_id lpass_gfm_clk_match_table[] = {

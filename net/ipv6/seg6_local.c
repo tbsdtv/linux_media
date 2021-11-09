@@ -30,6 +30,9 @@
 #include <net/seg6_local.h>
 #include <linux/etherdevice.h>
 #include <linux/bpf.h>
+#include <linux/netfilter.h>
+
+#define SEG6_F_ATTR(i)		BIT(i)
 
 struct seg6_local_lwt;
 
@@ -85,11 +88,40 @@ struct seg6_end_dt_info {
 	int vrf_ifindex;
 	int vrf_table;
 
-	/* tunneled packet proto and family (IPv4 or IPv6) */
-	__be16 proto;
+	/* tunneled packet family (IPv4 or IPv6).
+	 * Protocol and header length are inferred from family.
+	 */
 	u16 family;
-	int hdrlen;
 };
+
+struct pcpu_seg6_local_counters {
+	u64_stats_t packets;
+	u64_stats_t bytes;
+	u64_stats_t errors;
+
+	struct u64_stats_sync syncp;
+};
+
+/* This struct groups all the SRv6 Behavior counters supported so far.
+ *
+ * put_nla_counters() makes use of this data structure to collect all counter
+ * values after the per-CPU counter evaluation has been performed.
+ * Finally, each counter value (in seg6_local_counters) is stored in the
+ * corresponding netlink attribute and sent to user space.
+ *
+ * NB: we don't want to expose this structure to user space!
+ */
+struct seg6_local_counters {
+	__u64 packets;
+	__u64 bytes;
+	__u64 errors;
+};
+
+#define seg6_local_alloc_pcpu_counters(__gfp)				\
+	__netdev_alloc_pcpu_stats(struct pcpu_seg6_local_counters,	\
+				  ((__gfp) | __GFP_ZERO))
+
+#define SEG6_F_LOCAL_COUNTERS	SEG6_F_ATTR(SEG6_LOCAL_COUNTERS)
 
 struct seg6_local_lwt {
 	int action;
@@ -103,6 +135,7 @@ struct seg6_local_lwt {
 #ifdef CONFIG_NET_L3_MASTER_DEV
 	struct seg6_end_dt_info dt_info;
 #endif
+	struct pcpu_seg6_local_counters __percpu *pcpu_counters;
 
 	int headroom;
 	struct seg6_action_desc *desc;
@@ -117,12 +150,12 @@ static struct seg6_local_lwt *seg6_local_lwtunnel(struct lwtunnel_state *lwt)
 	return (struct seg6_local_lwt *)lwt->data;
 }
 
-static struct ipv6_sr_hdr *get_srh(struct sk_buff *skb)
+static struct ipv6_sr_hdr *get_srh(struct sk_buff *skb, int flags)
 {
 	struct ipv6_sr_hdr *srh;
 	int len, srhoff = 0;
 
-	if (ipv6_find_hdr(skb, &srhoff, IPPROTO_ROUTING, NULL, NULL) < 0)
+	if (ipv6_find_hdr(skb, &srhoff, IPPROTO_ROUTING, NULL, &flags) < 0)
 		return NULL;
 
 	if (!pskb_may_pull(skb, srhoff + sizeof(*srh)))
@@ -150,11 +183,8 @@ static struct ipv6_sr_hdr *get_and_validate_srh(struct sk_buff *skb)
 {
 	struct ipv6_sr_hdr *srh;
 
-	srh = get_srh(skb);
+	srh = get_srh(skb, IP6_FH_F_SKIP_RH);
 	if (!srh)
-		return NULL;
-
-	if (srh->segments_left == 0)
 		return NULL;
 
 #ifdef CONFIG_IPV6_SEG6_HMAC
@@ -170,7 +200,7 @@ static bool decap_and_validate(struct sk_buff *skb, int proto)
 	struct ipv6_sr_hdr *srh;
 	unsigned int off = 0;
 
-	srh = get_srh(skb);
+	srh = get_srh(skb, 0);
 	if (srh && srh->segments_left > 0)
 		return false;
 
@@ -384,12 +414,33 @@ drop:
 	return -EINVAL;
 }
 
+static int input_action_end_dx6_finish(struct net *net, struct sock *sk,
+				       struct sk_buff *skb)
+{
+	struct dst_entry *orig_dst = skb_dst(skb);
+	struct in6_addr *nhaddr = NULL;
+	struct seg6_local_lwt *slwt;
+
+	slwt = seg6_local_lwtunnel(orig_dst->lwtstate);
+
+	/* The inner packet is not associated to any local interface,
+	 * so we do not call netif_rx().
+	 *
+	 * If slwt->nh6 is set to ::, then lookup the nexthop for the
+	 * inner packet's DA. Otherwise, use the specified nexthop.
+	 */
+	if (!ipv6_addr_any(&slwt->nh6))
+		nhaddr = &slwt->nh6;
+
+	seg6_lookup_nexthop(skb, nhaddr, 0);
+
+	return dst_input(skb);
+}
+
 /* decapsulate and forward to specified nexthop */
 static int input_action_end_dx6(struct sk_buff *skb,
 				struct seg6_local_lwt *slwt)
 {
-	struct in6_addr *nhaddr = NULL;
-
 	/* this function accepts IPv6 encapsulated packets, with either
 	 * an SRH with SL=0, or no SRH.
 	 */
@@ -400,40 +451,30 @@ static int input_action_end_dx6(struct sk_buff *skb,
 	if (!pskb_may_pull(skb, sizeof(struct ipv6hdr)))
 		goto drop;
 
-	/* The inner packet is not associated to any local interface,
-	 * so we do not call netif_rx().
-	 *
-	 * If slwt->nh6 is set to ::, then lookup the nexthop for the
-	 * inner packet's DA. Otherwise, use the specified nexthop.
-	 */
-
-	if (!ipv6_addr_any(&slwt->nh6))
-		nhaddr = &slwt->nh6;
-
 	skb_set_transport_header(skb, sizeof(struct ipv6hdr));
+	nf_reset_ct(skb);
 
-	seg6_lookup_nexthop(skb, nhaddr, 0);
+	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
+		return NF_HOOK(NFPROTO_IPV6, NF_INET_PRE_ROUTING,
+			       dev_net(skb->dev), NULL, skb, NULL,
+			       skb_dst(skb)->dev, input_action_end_dx6_finish);
 
-	return dst_input(skb);
+	return input_action_end_dx6_finish(dev_net(skb->dev), NULL, skb);
 drop:
 	kfree_skb(skb);
 	return -EINVAL;
 }
 
-static int input_action_end_dx4(struct sk_buff *skb,
-				struct seg6_local_lwt *slwt)
+static int input_action_end_dx4_finish(struct net *net, struct sock *sk,
+				       struct sk_buff *skb)
 {
+	struct dst_entry *orig_dst = skb_dst(skb);
+	struct seg6_local_lwt *slwt;
 	struct iphdr *iph;
 	__be32 nhaddr;
 	int err;
 
-	if (!decap_and_validate(skb, IPPROTO_IPIP))
-		goto drop;
-
-	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
-		goto drop;
-
-	skb->protocol = htons(ETH_P_IP);
+	slwt = seg6_local_lwtunnel(orig_dst->lwtstate);
 
 	iph = ip_hdr(skb);
 
@@ -441,14 +482,34 @@ static int input_action_end_dx4(struct sk_buff *skb,
 
 	skb_dst_drop(skb);
 
-	skb_set_transport_header(skb, sizeof(struct iphdr));
-
 	err = ip_route_input(skb, nhaddr, iph->saddr, 0, skb->dev);
-	if (err)
-		goto drop;
+	if (err) {
+		kfree_skb(skb);
+		return -EINVAL;
+	}
 
 	return dst_input(skb);
+}
 
+static int input_action_end_dx4(struct sk_buff *skb,
+				struct seg6_local_lwt *slwt)
+{
+	if (!decap_and_validate(skb, IPPROTO_IPIP))
+		goto drop;
+
+	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
+		goto drop;
+
+	skb->protocol = htons(ETH_P_IP);
+	skb_set_transport_header(skb, sizeof(struct iphdr));
+	nf_reset_ct(skb);
+
+	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
+		return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
+			       dev_net(skb->dev), NULL, skb, NULL,
+			       skb_dst(skb)->dev, input_action_end_dx4_finish);
+
+	return input_action_end_dx4_finish(dev_net(skb->dev), NULL, skb);
 drop:
 	kfree_skb(skb);
 	return -EINVAL;
@@ -491,19 +552,6 @@ static int __seg6_end_dt_vrf_build(struct seg6_local_lwt *slwt, const void *cfg,
 
 	info->net = net;
 	info->vrf_ifindex = vrf_ifindex;
-
-	switch (family) {
-	case AF_INET:
-		info->proto = htons(ETH_P_IP);
-		info->hdrlen = sizeof(struct iphdr);
-		break;
-	case AF_INET6:
-		info->proto = htons(ETH_P_IPV6);
-		info->hdrlen = sizeof(struct ipv6hdr);
-		break;
-	default:
-		return -EINVAL;
-	}
 
 	info->family = family;
 	info->mode = DT_VRF_MODE;
@@ -593,22 +641,45 @@ error:
 }
 
 static struct sk_buff *end_dt_vrf_core(struct sk_buff *skb,
-				       struct seg6_local_lwt *slwt)
+				       struct seg6_local_lwt *slwt, u16 family)
 {
 	struct seg6_end_dt_info *info = &slwt->dt_info;
 	struct net_device *vrf;
+	__be16 protocol;
+	int hdrlen;
 
 	vrf = end_dt_get_vrf_rcu(skb, info);
 	if (unlikely(!vrf))
 		goto drop;
 
-	skb->protocol = info->proto;
+	switch (family) {
+	case AF_INET:
+		protocol = htons(ETH_P_IP);
+		hdrlen = sizeof(struct iphdr);
+		break;
+	case AF_INET6:
+		protocol = htons(ETH_P_IPV6);
+		hdrlen = sizeof(struct ipv6hdr);
+		break;
+	case AF_UNSPEC:
+		fallthrough;
+	default:
+		goto drop;
+	}
+
+	if (unlikely(info->family != AF_UNSPEC && info->family != family)) {
+		pr_warn_once("seg6local: SRv6 End.DT* family mismatch");
+		goto drop;
+	}
+
+	skb->protocol = protocol;
 
 	skb_dst_drop(skb);
 
-	skb_set_transport_header(skb, info->hdrlen);
+	skb_set_transport_header(skb, hdrlen);
+	nf_reset_ct(skb);
 
-	return end_dt_vrf_rcv(skb, info->family, vrf);
+	return end_dt_vrf_rcv(skb, family, vrf);
 
 drop:
 	kfree_skb(skb);
@@ -627,7 +698,7 @@ static int input_action_end_dt4(struct sk_buff *skb,
 	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
 		goto drop;
 
-	skb = end_dt_vrf_core(skb, slwt);
+	skb = end_dt_vrf_core(skb, slwt, AF_INET);
 	if (!skb)
 		/* packet has been processed and consumed by the VRF */
 		return 0;
@@ -660,8 +731,8 @@ seg6_end_dt_mode seg6_end_dt6_parse_mode(struct seg6_local_lwt *slwt)
 	unsigned long parsed_optattrs = slwt->parsed_optattrs;
 	bool legacy, vrfmode;
 
-	legacy	= !!(parsed_optattrs & (1 << SEG6_LOCAL_TABLE));
-	vrfmode	= !!(parsed_optattrs & (1 << SEG6_LOCAL_VRFTABLE));
+	legacy	= !!(parsed_optattrs & SEG6_F_ATTR(SEG6_LOCAL_TABLE));
+	vrfmode	= !!(parsed_optattrs & SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE));
 
 	if (!(legacy ^ vrfmode))
 		/* both are absent or present: invalid DT6 mode */
@@ -710,7 +781,7 @@ static int input_action_end_dt6(struct sk_buff *skb,
 		goto legacy_mode;
 
 	/* DT6_VRF_MODE */
-	skb = end_dt_vrf_core(skb, slwt);
+	skb = end_dt_vrf_core(skb, slwt, AF_INET6);
 	if (!skb)
 		/* packet has been processed and consumed by the VRF */
 		return 0;
@@ -737,6 +808,36 @@ drop:
 	kfree_skb(skb);
 	return -EINVAL;
 }
+
+#ifdef CONFIG_NET_L3_MASTER_DEV
+static int seg6_end_dt46_build(struct seg6_local_lwt *slwt, const void *cfg,
+			       struct netlink_ext_ack *extack)
+{
+	return __seg6_end_dt_vrf_build(slwt, cfg, AF_UNSPEC, extack);
+}
+
+static int input_action_end_dt46(struct sk_buff *skb,
+				 struct seg6_local_lwt *slwt)
+{
+	unsigned int off = 0;
+	int nexthdr;
+
+	nexthdr = ipv6_find_hdr(skb, &off, -1, NULL, NULL);
+	if (unlikely(nexthdr < 0))
+		goto drop;
+
+	switch (nexthdr) {
+	case IPPROTO_IPIP:
+		return input_action_end_dt4(skb, slwt);
+	case IPPROTO_IPV6:
+		return input_action_end_dt6(skb, slwt);
+	}
+
+drop:
+	kfree_skb(skb);
+	return -EINVAL;
+}
+#endif
 
 /* push an SRH on top of the current one */
 static int input_action_end_b6(struct sk_buff *skb, struct seg6_local_lwt *slwt)
@@ -879,36 +980,43 @@ static struct seg6_action_desc seg6_action_table[] = {
 	{
 		.action		= SEG6_LOCAL_ACTION_END,
 		.attrs		= 0,
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_X,
-		.attrs		= (1 << SEG6_LOCAL_NH6),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_NH6),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_x,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_T,
-		.attrs		= (1 << SEG6_LOCAL_TABLE),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_TABLE),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_t,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DX2,
-		.attrs		= (1 << SEG6_LOCAL_OIF),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_OIF),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_dx2,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DX6,
-		.attrs		= (1 << SEG6_LOCAL_NH6),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_NH6),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_dx6,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DX4,
-		.attrs		= (1 << SEG6_LOCAL_NH4),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_NH4),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_dx4,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DT4,
-		.attrs		= (1 << SEG6_LOCAL_VRFTABLE),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 #ifdef CONFIG_NET_L3_MASTER_DEV
 		.input		= input_action_end_dt4,
 		.slwt_ops	= {
@@ -920,30 +1028,46 @@ static struct seg6_action_desc seg6_action_table[] = {
 		.action		= SEG6_LOCAL_ACTION_END_DT6,
 #ifdef CONFIG_NET_L3_MASTER_DEV
 		.attrs		= 0,
-		.optattrs	= (1 << SEG6_LOCAL_TABLE) |
-				  (1 << SEG6_LOCAL_VRFTABLE),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS		|
+				  SEG6_F_ATTR(SEG6_LOCAL_TABLE) |
+				  SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE),
 		.slwt_ops	= {
 					.build_state = seg6_end_dt6_build,
 				  },
 #else
-		.attrs		= (1 << SEG6_LOCAL_TABLE),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_TABLE),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 #endif
 		.input		= input_action_end_dt6,
 	},
 	{
+		.action		= SEG6_LOCAL_ACTION_END_DT46,
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
+#ifdef CONFIG_NET_L3_MASTER_DEV
+		.input		= input_action_end_dt46,
+		.slwt_ops	= {
+					.build_state = seg6_end_dt46_build,
+				  },
+#endif
+	},
+	{
 		.action		= SEG6_LOCAL_ACTION_END_B6,
-		.attrs		= (1 << SEG6_LOCAL_SRH),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_SRH),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_b6,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_B6_ENCAP,
-		.attrs		= (1 << SEG6_LOCAL_SRH),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_SRH),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_b6_encap,
 		.static_headroom	= sizeof(struct ipv6hdr),
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_BPF,
-		.attrs		= (1 << SEG6_LOCAL_BPF),
+		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_BPF),
+		.optattrs	= SEG6_F_LOCAL_COUNTERS,
 		.input		= input_action_end_bpf,
 	},
 
@@ -964,21 +1088,64 @@ static struct seg6_action_desc *__get_action_desc(int action)
 	return NULL;
 }
 
-static int seg6_local_input(struct sk_buff *skb)
+static bool seg6_lwtunnel_counters_enabled(struct seg6_local_lwt *slwt)
+{
+	return slwt->parsed_optattrs & SEG6_F_LOCAL_COUNTERS;
+}
+
+static void seg6_local_update_counters(struct seg6_local_lwt *slwt,
+				       unsigned int len, int err)
+{
+	struct pcpu_seg6_local_counters *pcounters;
+
+	pcounters = this_cpu_ptr(slwt->pcpu_counters);
+	u64_stats_update_begin(&pcounters->syncp);
+
+	if (likely(!err)) {
+		u64_stats_inc(&pcounters->packets);
+		u64_stats_add(&pcounters->bytes, len);
+	} else {
+		u64_stats_inc(&pcounters->errors);
+	}
+
+	u64_stats_update_end(&pcounters->syncp);
+}
+
+static int seg6_local_input_core(struct net *net, struct sock *sk,
+				 struct sk_buff *skb)
 {
 	struct dst_entry *orig_dst = skb_dst(skb);
 	struct seg6_action_desc *desc;
 	struct seg6_local_lwt *slwt;
+	unsigned int len = skb->len;
+	int rc;
 
+	slwt = seg6_local_lwtunnel(orig_dst->lwtstate);
+	desc = slwt->desc;
+
+	rc = desc->input(skb, slwt);
+
+	if (!seg6_lwtunnel_counters_enabled(slwt))
+		return rc;
+
+	seg6_local_update_counters(slwt, len, rc);
+
+	return rc;
+}
+
+static int seg6_local_input(struct sk_buff *skb)
+{
 	if (skb->protocol != htons(ETH_P_IPV6)) {
 		kfree_skb(skb);
 		return -EINVAL;
 	}
 
-	slwt = seg6_local_lwtunnel(orig_dst->lwtstate);
-	desc = slwt->desc;
+	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
+		return NF_HOOK(NFPROTO_IPV6, NF_INET_LOCAL_IN,
+			       dev_net(skb->dev), NULL, skb, skb->dev, NULL,
+			       seg6_local_input_core);
 
-	return desc->input(skb, slwt);
+	return seg6_local_input_core(dev_net(skb->dev), NULL, skb);
 }
 
 static const struct nla_policy seg6_local_policy[SEG6_LOCAL_MAX + 1] = {
@@ -993,6 +1160,7 @@ static const struct nla_policy seg6_local_policy[SEG6_LOCAL_MAX + 1] = {
 	[SEG6_LOCAL_IIF]	= { .type = NLA_U32 },
 	[SEG6_LOCAL_OIF]	= { .type = NLA_U32 },
 	[SEG6_LOCAL_BPF]	= { .type = NLA_NESTED },
+	[SEG6_LOCAL_COUNTERS]	= { .type = NLA_NESTED },
 };
 
 static int parse_nla_srh(struct nlattr **attrs, struct seg6_local_lwt *slwt)
@@ -1297,6 +1465,112 @@ static void destroy_attr_bpf(struct seg6_local_lwt *slwt)
 		bpf_prog_put(slwt->bpf.prog);
 }
 
+static const struct
+nla_policy seg6_local_counters_policy[SEG6_LOCAL_CNT_MAX + 1] = {
+	[SEG6_LOCAL_CNT_PACKETS]	= { .type = NLA_U64 },
+	[SEG6_LOCAL_CNT_BYTES]		= { .type = NLA_U64 },
+	[SEG6_LOCAL_CNT_ERRORS]		= { .type = NLA_U64 },
+};
+
+static int parse_nla_counters(struct nlattr **attrs,
+			      struct seg6_local_lwt *slwt)
+{
+	struct pcpu_seg6_local_counters __percpu *pcounters;
+	struct nlattr *tb[SEG6_LOCAL_CNT_MAX + 1];
+	int ret;
+
+	ret = nla_parse_nested_deprecated(tb, SEG6_LOCAL_CNT_MAX,
+					  attrs[SEG6_LOCAL_COUNTERS],
+					  seg6_local_counters_policy, NULL);
+	if (ret < 0)
+		return ret;
+
+	/* basic support for SRv6 Behavior counters requires at least:
+	 * packets, bytes and errors.
+	 */
+	if (!tb[SEG6_LOCAL_CNT_PACKETS] || !tb[SEG6_LOCAL_CNT_BYTES] ||
+	    !tb[SEG6_LOCAL_CNT_ERRORS])
+		return -EINVAL;
+
+	/* counters are always zero initialized */
+	pcounters = seg6_local_alloc_pcpu_counters(GFP_KERNEL);
+	if (!pcounters)
+		return -ENOMEM;
+
+	slwt->pcpu_counters = pcounters;
+
+	return 0;
+}
+
+static int seg6_local_fill_nla_counters(struct sk_buff *skb,
+					struct seg6_local_counters *counters)
+{
+	if (nla_put_u64_64bit(skb, SEG6_LOCAL_CNT_PACKETS, counters->packets,
+			      SEG6_LOCAL_CNT_PAD))
+		return -EMSGSIZE;
+
+	if (nla_put_u64_64bit(skb, SEG6_LOCAL_CNT_BYTES, counters->bytes,
+			      SEG6_LOCAL_CNT_PAD))
+		return -EMSGSIZE;
+
+	if (nla_put_u64_64bit(skb, SEG6_LOCAL_CNT_ERRORS, counters->errors,
+			      SEG6_LOCAL_CNT_PAD))
+		return -EMSGSIZE;
+
+	return 0;
+}
+
+static int put_nla_counters(struct sk_buff *skb, struct seg6_local_lwt *slwt)
+{
+	struct seg6_local_counters counters = { 0, 0, 0 };
+	struct nlattr *nest;
+	int rc, i;
+
+	nest = nla_nest_start(skb, SEG6_LOCAL_COUNTERS);
+	if (!nest)
+		return -EMSGSIZE;
+
+	for_each_possible_cpu(i) {
+		struct pcpu_seg6_local_counters *pcounters;
+		u64 packets, bytes, errors;
+		unsigned int start;
+
+		pcounters = per_cpu_ptr(slwt->pcpu_counters, i);
+		do {
+			start = u64_stats_fetch_begin_irq(&pcounters->syncp);
+
+			packets = u64_stats_read(&pcounters->packets);
+			bytes = u64_stats_read(&pcounters->bytes);
+			errors = u64_stats_read(&pcounters->errors);
+
+		} while (u64_stats_fetch_retry_irq(&pcounters->syncp, start));
+
+		counters.packets += packets;
+		counters.bytes += bytes;
+		counters.errors += errors;
+	}
+
+	rc = seg6_local_fill_nla_counters(skb, &counters);
+	if (rc < 0) {
+		nla_nest_cancel(skb, nest);
+		return rc;
+	}
+
+	return nla_nest_end(skb, nest);
+}
+
+static int cmp_nla_counters(struct seg6_local_lwt *a, struct seg6_local_lwt *b)
+{
+	/* a and b are equal if both have pcpu_counters set or not */
+	return (!!((unsigned long)a->pcpu_counters)) ^
+		(!!((unsigned long)b->pcpu_counters));
+}
+
+static void destroy_attr_counters(struct seg6_local_lwt *slwt)
+{
+	free_percpu(slwt->pcpu_counters);
+}
+
 struct seg6_action_param {
 	int (*parse)(struct nlattr **attrs, struct seg6_local_lwt *slwt);
 	int (*put)(struct sk_buff *skb, struct seg6_local_lwt *slwt);
@@ -1344,6 +1618,10 @@ static struct seg6_action_param seg6_action_params[SEG6_LOCAL_MAX + 1] = {
 				    .put = put_nla_vrftable,
 				    .cmp = cmp_nla_vrftable },
 
+	[SEG6_LOCAL_COUNTERS]	= { .parse = parse_nla_counters,
+				    .put = put_nla_counters,
+				    .cmp = cmp_nla_counters,
+				    .destroy = destroy_attr_counters },
 };
 
 /* call the destroy() callback (if available) for each set attribute in
@@ -1366,7 +1644,7 @@ static void __destroy_attrs(unsigned long parsed_attrs, int max_parsed,
 	 * attribute; otherwise, we call the destroy() callback.
 	 */
 	for (i = 0; i < max_parsed; ++i) {
-		if (!(parsed_attrs & (1 << i)))
+		if (!(parsed_attrs & SEG6_F_ATTR(i)))
 			continue;
 
 		param = &seg6_action_params[i];
@@ -1395,7 +1673,7 @@ static int parse_nla_optional_attrs(struct nlattr **attrs,
 	int err, i;
 
 	for (i = 0; i < SEG6_LOCAL_MAX + 1; ++i) {
-		if (!(desc->optattrs & (1 << i)) || !attrs[i])
+		if (!(desc->optattrs & SEG6_F_ATTR(i)) || !attrs[i])
 			continue;
 
 		/* once here, the i-th attribute is provided by the
@@ -1408,7 +1686,7 @@ static int parse_nla_optional_attrs(struct nlattr **attrs,
 			goto parse_optattrs_err;
 
 		/* current attribute has been correctly parsed */
-		parsed_optattrs |= (1 << i);
+		parsed_optattrs |= SEG6_F_ATTR(i);
 	}
 
 	/* store in the tunnel state all the optional attributed successfully
@@ -1476,7 +1754,7 @@ static int parse_nla_action(struct nlattr **attrs, struct seg6_local_lwt *slwt)
 	/* Forcing the desc->optattrs *set* and the desc->attrs *set* to be
 	 * disjoined, this allow us to release acquired resources by optional
 	 * attributes and by required attributes independently from each other
-	 * without any interfarence.
+	 * without any interference.
 	 * In other terms, we are sure that we do not release some the acquired
 	 * resources twice.
 	 *
@@ -1494,7 +1772,7 @@ static int parse_nla_action(struct nlattr **attrs, struct seg6_local_lwt *slwt)
 
 	/* parse the required attributes */
 	for (i = 0; i < SEG6_LOCAL_MAX + 1; i++) {
-		if (desc->attrs & (1 << i)) {
+		if (desc->attrs & SEG6_F_ATTR(i)) {
 			if (!attrs[i])
 				return -EINVAL;
 
@@ -1599,7 +1877,7 @@ static int seg6_local_fill_encap(struct sk_buff *skb,
 	attrs = slwt->desc->attrs | slwt->parsed_optattrs;
 
 	for (i = 0; i < SEG6_LOCAL_MAX + 1; i++) {
-		if (attrs & (1 << i)) {
+		if (attrs & SEG6_F_ATTR(i)) {
 			param = &seg6_action_params[i];
 			err = param->put(skb, slwt);
 			if (err < 0)
@@ -1620,31 +1898,40 @@ static int seg6_local_get_encap_size(struct lwtunnel_state *lwt)
 
 	attrs = slwt->desc->attrs | slwt->parsed_optattrs;
 
-	if (attrs & (1 << SEG6_LOCAL_SRH))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_SRH))
 		nlsize += nla_total_size((slwt->srh->hdrlen + 1) << 3);
 
-	if (attrs & (1 << SEG6_LOCAL_TABLE))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_TABLE))
 		nlsize += nla_total_size(4);
 
-	if (attrs & (1 << SEG6_LOCAL_NH4))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_NH4))
 		nlsize += nla_total_size(4);
 
-	if (attrs & (1 << SEG6_LOCAL_NH6))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_NH6))
 		nlsize += nla_total_size(16);
 
-	if (attrs & (1 << SEG6_LOCAL_IIF))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_IIF))
 		nlsize += nla_total_size(4);
 
-	if (attrs & (1 << SEG6_LOCAL_OIF))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_OIF))
 		nlsize += nla_total_size(4);
 
-	if (attrs & (1 << SEG6_LOCAL_BPF))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_BPF))
 		nlsize += nla_total_size(sizeof(struct nlattr)) +
 		       nla_total_size(MAX_PROG_NAME) +
 		       nla_total_size(4);
 
-	if (attrs & (1 << SEG6_LOCAL_VRFTABLE))
+	if (attrs & SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE))
 		nlsize += nla_total_size(4);
+
+	if (attrs & SEG6_F_LOCAL_COUNTERS)
+		nlsize += nla_total_size(0) + /* nest SEG6_LOCAL_COUNTERS */
+			  /* SEG6_LOCAL_CNT_PACKETS */
+			  nla_total_size_64bit(sizeof(__u64)) +
+			  /* SEG6_LOCAL_CNT_BYTES */
+			  nla_total_size_64bit(sizeof(__u64)) +
+			  /* SEG6_LOCAL_CNT_ERRORS */
+			  nla_total_size_64bit(sizeof(__u64));
 
 	return nlsize;
 }
@@ -1670,7 +1957,7 @@ static int seg6_local_cmp_encap(struct lwtunnel_state *a,
 		return 1;
 
 	for (i = 0; i < SEG6_LOCAL_MAX + 1; i++) {
-		if (attrs_a & (1 << i)) {
+		if (attrs_a & SEG6_F_ATTR(i)) {
 			param = &seg6_action_params[i];
 			if (param->cmp(slwt_a, slwt_b))
 				return 1;
@@ -1692,6 +1979,15 @@ static const struct lwtunnel_encap_ops seg6_local_ops = {
 
 int __init seg6_local_init(void)
 {
+	/* If the max total number of defined attributes is reached, then your
+	 * kernel build stops here.
+	 *
+	 * This check is required to avoid arithmetic overflows when processing
+	 * behavior attributes and the maximum number of defined attributes
+	 * exceeds the allowed value.
+	 */
+	BUILD_BUG_ON(SEG6_LOCAL_MAX + 1 > BITS_PER_TYPE(unsigned long));
+
 	return lwtunnel_encap_add_ops(&seg6_local_ops,
 				      LWTUNNEL_ENCAP_SEG6_LOCAL);
 }

@@ -110,7 +110,7 @@ static ssize_t ddr_perf_identifier_show(struct device *dev,
 {
 	struct ddr_pmu *pmu = dev_get_drvdata(dev);
 
-	return sprintf(page, "%s\n", pmu->devtype_data->identifier);
+	return sysfs_emit(page, "%s\n", pmu->devtype_data->identifier);
 }
 
 static umode_t ddr_perf_identifier_attr_visible(struct kobject *kobj,
@@ -133,7 +133,7 @@ static struct attribute *ddr_perf_identifier_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group ddr_perf_identifier_attr_group = {
+static const struct attribute_group ddr_perf_identifier_attr_group = {
 	.attrs = ddr_perf_identifier_attrs,
 	.is_visible = ddr_perf_identifier_attr_visible,
 };
@@ -170,8 +170,7 @@ static ssize_t ddr_perf_filter_cap_show(struct device *dev,
 		container_of(attr, struct dev_ext_attribute, attr);
 	int cap = (long)ea->var;
 
-	return snprintf(buf, PAGE_SIZE, "%u\n",
-			ddr_perf_filter_cap_get(pmu, cap));
+	return sysfs_emit(buf, "%u\n", ddr_perf_filter_cap_get(pmu, cap));
 }
 
 #define PERF_EXT_ATTR_ENTRY(_name, _func, _var)				\
@@ -188,7 +187,7 @@ static struct attribute *ddr_perf_filter_cap_attr[] = {
 	NULL,
 };
 
-static struct attribute_group ddr_perf_filter_cap_attr_group = {
+static const struct attribute_group ddr_perf_filter_cap_attr_group = {
 	.name = "caps",
 	.attrs = ddr_perf_filter_cap_attr,
 };
@@ -209,7 +208,7 @@ static struct attribute *ddr_perf_cpumask_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group ddr_perf_cpumask_attr_group = {
+static const struct attribute_group ddr_perf_cpumask_attr_group = {
 	.attrs = ddr_perf_cpumask_attrs,
 };
 
@@ -220,14 +219,11 @@ ddr_pmu_event_show(struct device *dev, struct device_attribute *attr,
 	struct perf_pmu_events_attr *pmu_attr;
 
 	pmu_attr = container_of(attr, struct perf_pmu_events_attr, attr);
-	return sprintf(page, "event=0x%02llx\n", pmu_attr->id);
+	return sysfs_emit(page, "event=0x%02llx\n", pmu_attr->id);
 }
 
-#define IMX8_DDR_PMU_EVENT_ATTR(_name, _id)				\
-	(&((struct perf_pmu_events_attr[]) {				\
-		{ .attr = __ATTR(_name, 0444, ddr_pmu_event_show, NULL),\
-		  .id = _id, }						\
-	})[0].attr.attr)
+#define IMX8_DDR_PMU_EVENT_ATTR(_name, _id)		\
+	PMU_EVENT_ATTR_ID(_name, ddr_pmu_event_show, _id)
 
 static struct attribute *ddr_perf_events_attrs[] = {
 	IMX8_DDR_PMU_EVENT_ATTR(cycles, EVENT_CYCLES_ID),
@@ -265,7 +261,7 @@ static struct attribute *ddr_perf_events_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group ddr_perf_events_attr_group = {
+static const struct attribute_group ddr_perf_events_attr_group = {
 	.name = "events",
 	.attrs = ddr_perf_events_attrs,
 };
@@ -281,7 +277,7 @@ static struct attribute *ddr_perf_format_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group ddr_perf_format_attr_group = {
+static const struct attribute_group ddr_perf_format_attr_group = {
 	.name = "format",
 	.attrs = ddr_perf_format_attrs,
 };
@@ -675,7 +671,7 @@ static int ddr_perf_offline_cpu(unsigned int cpu, struct hlist_node *node)
 	perf_pmu_migrate_context(&pmu->pmu, cpu, target);
 	pmu->cpu = target;
 
-	WARN_ON(irq_set_affinity_hint(pmu->irq, cpumask_of(pmu->cpu)));
+	WARN_ON(irq_set_affinity(pmu->irq, cpumask_of(pmu->cpu)));
 
 	return 0;
 }
@@ -706,8 +702,10 @@ static int ddr_perf_probe(struct platform_device *pdev)
 
 	name = devm_kasprintf(&pdev->dev, GFP_KERNEL, DDR_PERF_DEV_NAME "%d",
 			      num);
-	if (!name)
-		return -ENOMEM;
+	if (!name) {
+		ret = -ENOMEM;
+		goto cpuhp_state_err;
+	}
 
 	pmu->devtype_data = of_device_get_match_data(&pdev->dev);
 
@@ -750,7 +748,7 @@ static int ddr_perf_probe(struct platform_device *pdev)
 	}
 
 	pmu->irq = irq;
-	ret = irq_set_affinity_hint(pmu->irq, cpumask_of(pmu->cpu));
+	ret = irq_set_affinity(pmu->irq, cpumask_of(pmu->cpu));
 	if (ret) {
 		dev_err(pmu->dev, "Failed to set interrupt affinity!\n");
 		goto ddr_perf_err;
@@ -778,7 +776,6 @@ static int ddr_perf_remove(struct platform_device *pdev)
 
 	cpuhp_state_remove_instance_nocalls(pmu->cpuhp_state, &pmu->node);
 	cpuhp_remove_multi_state(pmu->cpuhp_state);
-	irq_set_affinity_hint(pmu->irq, NULL);
 
 	perf_pmu_unregister(&pmu->pmu);
 

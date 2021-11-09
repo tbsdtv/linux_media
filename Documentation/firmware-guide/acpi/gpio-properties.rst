@@ -99,6 +99,12 @@ native::
       }
   }
 
+Note, that historically ACPI has no means of the GPIO polarity and thus
+the SPISerialBus() resource defines it on the per-chip basis. In order
+to avoid a chain of negations, the GPIO polarity is considered being
+Active High. Even for the cases when _DSD() is involved (see the example
+above) the GPIO CS polarity must be defined Active High to avoid ambiguity.
+
 Other supported properties
 ==========================
 
@@ -146,6 +152,7 @@ following rules (see also the examples):
     other words, it is not mandatory to fill all the GPIO lines
   - empty names are allowed (two quotation marks ``""`` correspond to an empty
     name)
+  - names inside one GPIO controller/expander must be unique
 
 Example of a GPIO controller of 16 lines, with an incomplete list with two
 empty names::

@@ -17,7 +17,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-	PROVIDE(_vdso_datapage = . - PAGE_SIZE);
+	PROVIDE(_vdso_datapage = . - 2 * PAGE_SIZE);
 	. = SIZEOF_HEADERS;
 
 	.hash		: { *(.hash) }			:text
@@ -131,4 +131,4 @@ VERSION
 /*
  * Make the sigreturn code visible to the kernel.
  */
-VDSO_sigtramp_rt64	= __kernel_sigtramp_rt64;
+VDSO_sigtramp_rt64	= __kernel_start_sigtramp_rt64;

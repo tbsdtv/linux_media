@@ -547,7 +547,7 @@ static int at91_adc_get_trigger_value_by_name(struct iio_dev *idev,
 		char *name = kasprintf(GFP_KERNEL,
 				"%s-dev%d-%s",
 				idev->name,
-				idev->id,
+				iio_device_id(idev),
 				triggers[i].name);
 		if (!name)
 			return -ENOMEM;
@@ -625,12 +625,11 @@ static struct iio_trigger *at91_adc_allocate_trigger(struct iio_dev *idev,
 	struct iio_trigger *trig;
 	int ret;
 
-	trig = iio_trigger_alloc("%s-dev%d-%s", idev->name,
-				 idev->id, trigger->name);
+	trig = iio_trigger_alloc(idev->dev.parent, "%s-dev%d-%s", idev->name,
+				 iio_device_id(idev), trigger->name);
 	if (trig == NULL)
 		return NULL;
 
-	trig->dev.parent = idev->dev.parent;
 	iio_trigger_set_drvdata(trig, idev);
 	trig->ops = &at91_adc_trigger_ops;
 

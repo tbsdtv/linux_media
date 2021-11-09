@@ -28,8 +28,8 @@ static uint64_t guest_percpu_mem_size = DEFAULT_PER_VCPU_MEM_SIZE;
 /* Host variables */
 static u64 dirty_log_manual_caps;
 static bool host_quit;
-static uint64_t iteration;
-static uint64_t vcpu_last_completed_iteration[KVM_MAX_VCPUS];
+static int iteration;
+static int vcpu_last_completed_iteration[KVM_MAX_VCPUS];
 
 static void *vcpu_worker(void *data)
 {
@@ -44,15 +44,14 @@ static void *vcpu_worker(void *data)
 	struct perf_test_vcpu_args *vcpu_args = (struct perf_test_vcpu_args *)data;
 	int vcpu_id = vcpu_args->vcpu_id;
 
-	vcpu_args_set(vm, vcpu_id, 1, vcpu_id);
 	run = vcpu_state(vm, vcpu_id);
 
 	while (!READ_ONCE(host_quit)) {
-		uint64_t current_iteration = READ_ONCE(iteration);
+		int current_iteration = READ_ONCE(iteration);
 
 		clock_gettime(CLOCK_MONOTONIC, &start);
 		ret = _vcpu_run(vm, vcpu_id);
-		ts_diff = timespec_diff_now(start);
+		ts_diff = timespec_elapsed(start);
 
 		TEST_ASSERT(ret == 0, "vcpu_run failed: %d\n", ret);
 		TEST_ASSERT(get_ucall(vm, vcpu_id, NULL) == UCALL_SYNC,
@@ -61,17 +60,17 @@ static void *vcpu_worker(void *data)
 
 		pr_debug("Got sync event from vCPU %d\n", vcpu_id);
 		vcpu_last_completed_iteration[vcpu_id] = current_iteration;
-		pr_debug("vCPU %d updated last completed iteration to %lu\n",
+		pr_debug("vCPU %d updated last completed iteration to %d\n",
 			 vcpu_id, vcpu_last_completed_iteration[vcpu_id]);
 
 		if (current_iteration) {
 			pages_count += vcpu_args->pages;
 			total = timespec_add(total, ts_diff);
-			pr_debug("vCPU %d iteration %lu dirty memory time: %ld.%.9lds\n",
+			pr_debug("vCPU %d iteration %d dirty memory time: %ld.%.9lds\n",
 				vcpu_id, current_iteration, ts_diff.tv_sec,
 				ts_diff.tv_nsec);
 		} else {
-			pr_debug("vCPU %d iteration %lu populate memory time: %ld.%.9lds\n",
+			pr_debug("vCPU %d iteration %d populate memory time: %ld.%.9lds\n",
 				vcpu_id, current_iteration, ts_diff.tv_sec,
 				ts_diff.tv_nsec);
 		}
@@ -81,7 +80,7 @@ static void *vcpu_worker(void *data)
 	}
 
 	avg = timespec_div(total, vcpu_last_completed_iteration[vcpu_id]);
-	pr_debug("\nvCPU %d dirtied 0x%lx pages over %lu iterations in %ld.%.9lds. (Avg %ld.%.9lds/iteration)\n",
+	pr_debug("\nvCPU %d dirtied 0x%lx pages over %d iterations in %ld.%.9lds. (Avg %ld.%.9lds/iteration)\n",
 		vcpu_id, pages_count, vcpu_last_completed_iteration[vcpu_id],
 		total.tv_sec, total.tv_nsec, avg.tv_sec, avg.tv_nsec);
 
@@ -92,16 +91,91 @@ struct test_params {
 	unsigned long iterations;
 	uint64_t phys_offset;
 	int wr_fract;
+	bool partition_vcpu_memory_access;
+	enum vm_mem_backing_src_type backing_src;
+	int slots;
 };
+
+static void toggle_dirty_logging(struct kvm_vm *vm, int slots, bool enable)
+{
+	int i;
+
+	for (i = 0; i < slots; i++) {
+		int slot = PERF_TEST_MEM_SLOT_INDEX + i;
+		int flags = enable ? KVM_MEM_LOG_DIRTY_PAGES : 0;
+
+		vm_mem_region_set_flags(vm, slot, flags);
+	}
+}
+
+static inline void enable_dirty_logging(struct kvm_vm *vm, int slots)
+{
+	toggle_dirty_logging(vm, slots, true);
+}
+
+static inline void disable_dirty_logging(struct kvm_vm *vm, int slots)
+{
+	toggle_dirty_logging(vm, slots, false);
+}
+
+static void get_dirty_log(struct kvm_vm *vm, unsigned long *bitmaps[], int slots)
+{
+	int i;
+
+	for (i = 0; i < slots; i++) {
+		int slot = PERF_TEST_MEM_SLOT_INDEX + i;
+
+		kvm_vm_get_dirty_log(vm, slot, bitmaps[i]);
+	}
+}
+
+static void clear_dirty_log(struct kvm_vm *vm, unsigned long *bitmaps[],
+			    int slots, uint64_t pages_per_slot)
+{
+	int i;
+
+	for (i = 0; i < slots; i++) {
+		int slot = PERF_TEST_MEM_SLOT_INDEX + i;
+
+		kvm_vm_clear_dirty_log(vm, slot, bitmaps[i], 0, pages_per_slot);
+	}
+}
+
+static unsigned long **alloc_bitmaps(int slots, uint64_t pages_per_slot)
+{
+	unsigned long **bitmaps;
+	int i;
+
+	bitmaps = malloc(slots * sizeof(bitmaps[0]));
+	TEST_ASSERT(bitmaps, "Failed to allocate bitmaps array.");
+
+	for (i = 0; i < slots; i++) {
+		bitmaps[i] = bitmap_zalloc(pages_per_slot);
+		TEST_ASSERT(bitmaps[i], "Failed to allocate slot bitmap.");
+	}
+
+	return bitmaps;
+}
+
+static void free_bitmaps(unsigned long *bitmaps[], int slots)
+{
+	int i;
+
+	for (i = 0; i < slots; i++)
+		free(bitmaps[i]);
+
+	free(bitmaps);
+}
 
 static void run_test(enum vm_guest_mode mode, void *arg)
 {
 	struct test_params *p = arg;
 	pthread_t *vcpu_threads;
 	struct kvm_vm *vm;
-	unsigned long *bmap;
+	unsigned long **bitmaps;
 	uint64_t guest_num_pages;
 	uint64_t host_num_pages;
+	uint64_t pages_per_slot;
 	int vcpu_id;
 	struct timespec start;
 	struct timespec ts_diff;
@@ -111,14 +185,17 @@ static void run_test(enum vm_guest_mode mode, void *arg)
 	struct kvm_enable_cap cap = {};
 	struct timespec clear_dirty_log_total = (struct timespec){0};
 
-	vm = perf_test_create_vm(mode, nr_vcpus, guest_percpu_mem_size);
+	vm = perf_test_create_vm(mode, nr_vcpus, guest_percpu_mem_size,
+				 p->slots, p->backing_src);
 
 	perf_test_args.wr_fract = p->wr_fract;
 
 	guest_num_pages = (nr_vcpus * guest_percpu_mem_size) >> vm_get_page_shift(vm);
 	guest_num_pages = vm_adjust_num_guest_pages(mode, guest_num_pages);
 	host_num_pages = vm_num_host_pages(mode, guest_num_pages);
-	bmap = bitmap_alloc(host_num_pages);
+	pages_per_slot = host_num_pages / p->slots;
+
+	bitmaps = alloc_bitmaps(p->slots, pages_per_slot);
 
 	if (dirty_log_manual_caps) {
 		cap.cap = KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2;
@@ -129,7 +206,8 @@ static void run_test(enum vm_guest_mode mode, void *arg)
 	vcpu_threads = malloc(nr_vcpus * sizeof(*vcpu_threads));
 	TEST_ASSERT(vcpu_threads, "Memory allocation failed");
 
-	perf_test_setup_vcpus(vm, nr_vcpus, guest_percpu_mem_size);
+	perf_test_setup_vcpus(vm, nr_vcpus, guest_percpu_mem_size,
+			      p->partition_vcpu_memory_access);
 
 	sync_global_to_guest(vm, perf_test_args);
 
@@ -139,25 +217,28 @@ static void run_test(enum vm_guest_mode mode, void *arg)
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
 	for (vcpu_id = 0; vcpu_id < nr_vcpus; vcpu_id++) {
+		vcpu_last_completed_iteration[vcpu_id] = -1;
+
 		pthread_create(&vcpu_threads[vcpu_id], NULL, vcpu_worker,
 			       &perf_test_args.vcpu_args[vcpu_id]);
 	}
 
-	/* Allow the vCPU to populate memory */
-	pr_debug("Starting iteration %lu - Populating\n", iteration);
-	while (READ_ONCE(vcpu_last_completed_iteration[vcpu_id]) != iteration)
-		pr_debug("Waiting for vcpu_last_completed_iteration == %lu\n",
-			iteration);
+	/* Allow the vCPUs to populate memory */
+	pr_debug("Starting iteration %d - Populating\n", iteration);
+	for (vcpu_id = 0; vcpu_id < nr_vcpus; vcpu_id++) {
+		while (READ_ONCE(vcpu_last_completed_iteration[vcpu_id]) !=
+		       iteration)
+			;
+	}
 
-	ts_diff = timespec_diff_now(start);
+	ts_diff = timespec_elapsed(start);
 	pr_info("Populate memory time: %ld.%.9lds\n",
 		ts_diff.tv_sec, ts_diff.tv_nsec);
 
 	/* Enable dirty logging */
 	clock_gettime(CLOCK_MONOTONIC, &start);
-	vm_mem_region_set_flags(vm, PERF_TEST_MEM_SLOT_INDEX,
-				KVM_MEM_LOG_DIRTY_PAGES);
-	ts_diff = timespec_diff_now(start);
+	enable_dirty_logging(vm, p->slots);
+	ts_diff = timespec_elapsed(start);
 	pr_info("Enabling dirty logging time: %ld.%.9lds\n\n",
 		ts_diff.tv_sec, ts_diff.tv_nsec);
 
@@ -169,51 +250,48 @@ static void run_test(enum vm_guest_mode mode, void *arg)
 		clock_gettime(CLOCK_MONOTONIC, &start);
 		iteration++;
 
-		pr_debug("Starting iteration %lu\n", iteration);
+		pr_debug("Starting iteration %d\n", iteration);
 		for (vcpu_id = 0; vcpu_id < nr_vcpus; vcpu_id++) {
-			while (READ_ONCE(vcpu_last_completed_iteration[vcpu_id]) != iteration)
-				pr_debug("Waiting for vCPU %d vcpu_last_completed_iteration == %lu\n",
-					 vcpu_id, iteration);
+			while (READ_ONCE(vcpu_last_completed_iteration[vcpu_id])
+			       != iteration)
+				;
 		}
 
-		ts_diff = timespec_diff_now(start);
+		ts_diff = timespec_elapsed(start);
 		vcpu_dirty_total = timespec_add(vcpu_dirty_total, ts_diff);
-		pr_info("Iteration %lu dirty memory time: %ld.%.9lds\n",
+		pr_info("Iteration %d dirty memory time: %ld.%.9lds\n",
 			iteration, ts_diff.tv_sec, ts_diff.tv_nsec);
 
 		clock_gettime(CLOCK_MONOTONIC, &start);
-		kvm_vm_get_dirty_log(vm, PERF_TEST_MEM_SLOT_INDEX, bmap);
-
-		ts_diff = timespec_diff_now(start);
+		get_dirty_log(vm, bitmaps, p->slots);
+		ts_diff = timespec_elapsed(start);
 		get_dirty_log_total = timespec_add(get_dirty_log_total,
 						   ts_diff);
-		pr_info("Iteration %lu get dirty log time: %ld.%.9lds\n",
+		pr_info("Iteration %d get dirty log time: %ld.%.9lds\n",
 			iteration, ts_diff.tv_sec, ts_diff.tv_nsec);
 
 		if (dirty_log_manual_caps) {
 			clock_gettime(CLOCK_MONOTONIC, &start);
-			kvm_vm_clear_dirty_log(vm, PERF_TEST_MEM_SLOT_INDEX, bmap, 0,
-					       host_num_pages);
-
-			ts_diff = timespec_diff_now(start);
+			clear_dirty_log(vm, bitmaps, p->slots, pages_per_slot);
+			ts_diff = timespec_elapsed(start);
 			clear_dirty_log_total = timespec_add(clear_dirty_log_total,
 							     ts_diff);
-			pr_info("Iteration %lu clear dirty log time: %ld.%.9lds\n",
+			pr_info("Iteration %d clear dirty log time: %ld.%.9lds\n",
 				iteration, ts_diff.tv_sec, ts_diff.tv_nsec);
 		}
 	}
+
+	/* Disable dirty logging */
+	clock_gettime(CLOCK_MONOTONIC, &start);
+	disable_dirty_logging(vm, p->slots);
+	ts_diff = timespec_elapsed(start);
+	pr_info("Disabling dirty logging time: %ld.%.9lds\n",
+		ts_diff.tv_sec, ts_diff.tv_nsec);
 
 	/* Tell the vcpu thread to quit */
 	host_quit = true;
 	for (vcpu_id = 0; vcpu_id < nr_vcpus; vcpu_id++)
 		pthread_join(vcpu_threads[vcpu_id], NULL);
-
-	/* Disable dirty logging */
-	clock_gettime(CLOCK_MONOTONIC, &start);
-	vm_mem_region_set_flags(vm, PERF_TEST_MEM_SLOT_INDEX, 0);
-	ts_diff = timespec_diff_now(start);
-	pr_info("Disabling dirty logging time: %ld.%.9lds\n",
-		ts_diff.tv_sec, ts_diff.tv_nsec);
 
 	avg = timespec_div(get_dirty_log_total, p->iterations);
 	pr_info("Get dirty log over %lu iterations took %ld.%.9lds. (Avg %ld.%.9lds/iteration)\n",
@@ -227,7 +305,7 @@ static void run_test(enum vm_guest_mode mode, void *arg)
 			clear_dirty_log_total.tv_nsec, avg.tv_sec, avg.tv_nsec);
 	}
 
-	free(bmap);
+	free_bitmaps(bitmaps, p->slots);
 	free(vcpu_threads);
 	perf_test_destroy_vm(vm);
 }
@@ -236,7 +314,8 @@ static void help(char *name)
 {
 	puts("");
 	printf("usage: %s [-h] [-i iterations] [-p offset] "
-	       "[-m mode] [-b vcpu bytes] [-v vcpus]\n", name);
+	       "[-m mode] [-b vcpu bytes] [-v vcpus] [-o] [-s mem type]"
+	       "[-x memslots]\n", name);
 	puts("");
 	printf(" -i: specify iteration counts (default: %"PRIu64")\n",
 	       TEST_HOST_LOOP_N);
@@ -251,6 +330,11 @@ static void help(char *name)
 	       "     1/<fraction of pages to write>.\n"
 	       "     (default: 1 i.e. all pages are written to.)\n");
 	printf(" -v: specify the number of vCPUs to run.\n");
+	printf(" -o: Overlap guest memory accesses instead of partitioning\n"
+	       "     them into a separate region of memory for each vCPU.\n");
+	backing_src_help("-s");
+	printf(" -x: Split the memory region into this number of memslots.\n"
+	       "     (default: 1)\n");
 	puts("");
 	exit(0);
 }
@@ -261,6 +345,9 @@ int main(int argc, char *argv[])
 	struct test_params p = {
 		.iterations = TEST_HOST_LOOP_N,
 		.wr_fract = 1,
+		.partition_vcpu_memory_access = true,
+		.backing_src = DEFAULT_VM_MEM_SRC,
+		.slots = 1,
 	};
 	int opt;
 
@@ -271,10 +358,10 @@ int main(int argc, char *argv[])
 
 	guest_modes_append_default();
 
-	while ((opt = getopt(argc, argv, "hi:p:m:b:f:v:")) != -1) {
+	while ((opt = getopt(argc, argv, "hi:p:m:b:f:v:os:x:")) != -1) {
 		switch (opt) {
 		case 'i':
-			p.iterations = strtol(optarg, NULL, 10);
+			p.iterations = atoi(optarg);
 			break;
 		case 'p':
 			p.phys_offset = strtoull(optarg, NULL, 0);
@@ -294,6 +381,15 @@ int main(int argc, char *argv[])
 			nr_vcpus = atoi(optarg);
 			TEST_ASSERT(nr_vcpus > 0 && nr_vcpus <= max_vcpus,
 				    "Invalid number of vcpus, must be between 1 and %d", max_vcpus);
+			break;
+		case 'o':
+			p.partition_vcpu_memory_access = false;
+			break;
+		case 's':
+			p.backing_src = parse_backing_src_type(optarg);
+			break;
+		case 'x':
+			p.slots = atoi(optarg);
 			break;
 		case 'h':
 		default:

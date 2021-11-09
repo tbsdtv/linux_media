@@ -273,7 +273,7 @@ struct max310x_port {
 #ifdef CONFIG_GPIOLIB
 	struct gpio_chip	gpio;
 #endif
-	struct max310x_one	p[0];
+	struct max310x_one	p[];
 };
 
 static struct uart_driver max310x_uart = {
@@ -552,7 +552,7 @@ static int max310x_update_best_err(unsigned long f, long *besterr)
 	return 1;
 }
 
-static int max310x_set_ref_clk(struct device *dev, struct max310x_port *s,
+static u32 max310x_set_ref_clk(struct device *dev, struct max310x_port *s,
 			       unsigned long freq, bool xtal)
 {
 	unsigned int div, clksrc, pllcfg = 0;
@@ -618,7 +618,7 @@ static int max310x_set_ref_clk(struct device *dev, struct max310x_port *s,
 		}
 	}
 
-	return (int)bestfreq;
+	return bestfreq;
 }
 
 static void max310x_batch_write(struct uart_port *port, u8 *txbuf, unsigned int len)
@@ -1056,9 +1056,9 @@ static int max310x_startup(struct uart_port *port)
 	max310x_port_update(port, MAX310X_MODE1_REG,
 			    MAX310X_MODE1_TRNSCVCTRL_BIT, 0);
 
-	/* Reset FIFOs */
-	max310x_port_write(port, MAX310X_MODE2_REG,
-			   MAX310X_MODE2_FIFORST_BIT);
+	/* Configure MODE2 register & Reset FIFOs*/
+	val = MAX310X_MODE2_RXEMPTINV_BIT | MAX310X_MODE2_FIFORST_BIT;
+	max310x_port_write(port, MAX310X_MODE2_REG, val);
 	max310x_port_update(port, MAX310X_MODE2_REG,
 			    MAX310X_MODE2_FIFORST_BIT, 0);
 
@@ -1086,27 +1086,8 @@ static int max310x_startup(struct uart_port *port)
 	/* Clear IRQ status register */
 	max310x_port_read(port, MAX310X_IRQSTS_REG);
 
-	/*
-	 * Let's ask for an interrupt after a timeout equivalent to
-	 * the receiving time of 4 characters after the last character
-	 * has been received.
-	 */
-	max310x_port_write(port, MAX310X_RXTO_REG, 4);
-
-	/*
-	 * Make sure we also get RX interrupts when the RX FIFO is
-	 * filling up quickly, so get an interrupt when half of the RX
-	 * FIFO has been filled in.
-	 */
-	max310x_port_write(port, MAX310X_FIFOTRIGLVL_REG,
-			   MAX310X_FIFOTRIGLVL_RX(MAX310X_FIFO_SIZE / 2));
-
-	/* Enable RX timeout interrupt in LSR */
-	max310x_port_write(port, MAX310X_LSR_IRQEN_REG,
-			   MAX310X_LSR_RXTO_BIT);
-
-	/* Enable LSR, RX FIFO trigger, CTS change interrupts */
-	val = MAX310X_IRQ_LSR_BIT  | MAX310X_IRQ_RXFIFO_BIT | MAX310X_IRQ_TXEMPTY_BIT;
+	/* Enable RX, TX, CTS change interrupts */
+	val = MAX310X_IRQ_RXEMPTY_BIT | MAX310X_IRQ_TXEMPTY_BIT;
 	max310x_port_write(port, MAX310X_IRQEN_REG, val | MAX310X_IRQ_CTS_BIT);
 
 	return 0;
@@ -1272,9 +1253,10 @@ static int max310x_gpio_set_config(struct gpio_chip *chip, unsigned int offset,
 static int max310x_probe(struct device *dev, const struct max310x_devtype *devtype,
 			 struct regmap *regmap, int irq)
 {
-	int i, ret, fmin, fmax, freq, uartclk;
+	int i, ret, fmin, fmax, freq;
 	struct max310x_port *s;
-	bool xtal = false;
+	u32 uartclk = 0;
+	bool xtal;
 
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
@@ -1286,31 +1268,38 @@ static int max310x_probe(struct device *dev, const struct max310x_devtype *devty
 		return -ENOMEM;
 	}
 
-	s->clk = devm_clk_get_optional(dev, "osc");
+	/* Always ask for fixed clock rate from a property. */
+	device_property_read_u32(dev, "clock-frequency", &uartclk);
+
+	xtal = device_property_match_string(dev, "clock-names", "osc") < 0;
+	if (xtal)
+		s->clk = devm_clk_get_optional(dev, "xtal");
+	else
+		s->clk = devm_clk_get_optional(dev, "osc");
 	if (IS_ERR(s->clk))
 		return PTR_ERR(s->clk);
-	if (s->clk) {
-		fmin = 500000;
-		fmax = 35000000;
-	} else {
-		s->clk = devm_clk_get_optional(dev, "xtal");
-		if (IS_ERR(s->clk))
-			return PTR_ERR(s->clk);
-		if (s->clk) {
-			fmin = 1000000;
-			fmax = 4000000;
-			xtal = true;
-		} else {
-			dev_err(dev, "Cannot get clock\n");
-			return -EINVAL;
-		}
-	}
 
 	ret = clk_prepare_enable(s->clk);
 	if (ret)
 		return ret;
 
 	freq = clk_get_rate(s->clk);
+	if (freq == 0)
+		freq = uartclk;
+	if (freq == 0) {
+		dev_err(dev, "Cannot get clock rate\n");
+		ret = -EINVAL;
+		goto out_clk;
+	}
+
+	if (xtal) {
+		fmin = 1000000;
+		fmax = 4000000;
+	} else {
+		fmin = 500000;
+		fmax = 35000000;
+	}
+
 	/* Check frequency limits */
 	if (freq < fmin || freq > fmax) {
 		ret = -ERANGE;
@@ -1538,6 +1527,8 @@ static int __init max310x_uart_init(void)
 
 #ifdef CONFIG_SPI_MASTER
 	ret = spi_register_driver(&max310x_spi_driver);
+	if (ret)
+		uart_unregister_driver(&max310x_uart);
 #endif
 
 	return ret;

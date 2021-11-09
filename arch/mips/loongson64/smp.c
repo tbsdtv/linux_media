@@ -51,11 +51,11 @@ static uint32_t core0_c0count[NR_CPUS];
 		__wbflush();			\
 	} while (0)
 
-u32 (*ipi_read_clear)(int cpu);
-void (*ipi_write_action)(int cpu, u32 action);
-void (*ipi_write_enable)(int cpu);
-void (*ipi_clear_buf)(int cpu);
-void (*ipi_write_buf)(int cpu, struct task_struct *idle);
+static u32 (*ipi_read_clear)(int cpu);
+static void (*ipi_write_action)(int cpu, u32 action);
+static void (*ipi_write_enable)(int cpu);
+static void (*ipi_clear_buf)(int cpu);
+static void (*ipi_write_buf)(int cpu, struct task_struct *idle);
 
 /* send mail via Mail_Send register for 3A4000+ CPU */
 static void csr_mail_send(uint64_t data, int cpu, int mailbox)
@@ -483,7 +483,8 @@ static void __init loongson3_smp_setup(void)
 	init_cpu_possible(cpu_none_mask);
 
 	/* For unified kernel, NR_CPUS is the maximum possible value,
-	 * loongson_sysconf.nr_cpus is the really present value */
+	 * loongson_sysconf.nr_cpus is the really present value
+	 */
 	while (i < loongson_sysconf.nr_cpus) {
 		if (loongson_sysconf.reserved_cpus_mask & (1<<i)) {
 			/* Reserved physical CPU cores */
@@ -492,6 +493,8 @@ static void __init loongson3_smp_setup(void)
 			__cpu_number_map[i] = num;
 			__cpu_logical_map[num] = i;
 			set_cpu_possible(num, true);
+			/* Loongson processors are always grouped by 4 */
+			cpu_set_cluster(&cpu_data[num], i / 4);
 			num++;
 		}
 		i++;
@@ -567,7 +570,8 @@ static void loongson3_cpu_die(unsigned int cpu)
 /* To shutdown a core in Loongson 3, the target core should go to CKSEG1 and
  * flush all L1 entries at first. Then, another core (usually Core 0) can
  * safely disable the clock of the target core. loongson3_play_dead() is
- * called via CKSEG1 (uncached and unmmaped) */
+ * called via CKSEG1 (uncached and unmmaped)
+ */
 static void loongson3_type1_play_dead(int *state_addr)
 {
 	register int val;

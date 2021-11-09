@@ -24,10 +24,10 @@
 #include <sound/initval.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
+#include <sound/rt1015.h>
 #include <sound/soc-dapm.h>
 #include <sound/soc.h>
 #include <sound/tlv.h>
-#include <sound/rt1015.h>
 
 #include "rl6231.h"
 #include "rt1015.h"
@@ -209,6 +209,7 @@ static bool rt1015_volatile_register(struct device *dev, unsigned int reg)
 	case RT1015_VENDOR_ID:
 	case RT1015_DEVICE_ID:
 	case RT1015_PRO_ALT:
+	case RT1015_MAN_I2C:
 	case RT1015_DAC3:
 	case RT1015_VBAT_TEST_OUT1:
 	case RT1015_VBAT_TEST_OUT2:
@@ -444,10 +445,9 @@ static int rt1015_boost_mode_put(struct snd_kcontrol *kcontrol,
 		snd_soc_kcontrol_component(kcontrol);
 	struct rt1015_priv *rt1015 =
 		snd_soc_component_get_drvdata(component);
+	int boost_mode = ucontrol->value.integer.value[0];
 
-	rt1015->boost_mode = ucontrol->value.integer.value[0];
-
-	switch (rt1015->boost_mode) {
+	switch (boost_mode) {
 	case BYPASS:
 		snd_soc_component_update_bits(component,
 			RT1015_SMART_BST_CTRL1, RT1015_ABST_AUTO_EN_MASK |
@@ -471,7 +471,10 @@ static int rt1015_boost_mode_put(struct snd_kcontrol *kcontrol,
 		break;
 	default:
 		dev_err(component->dev, "Unknown boost control.\n");
+		return -EINVAL;
 	}
+
+	rt1015->boost_mode = boost_mode;
 
 	return 0;
 }
@@ -497,40 +500,21 @@ static void rt1015_calibrate(struct rt1015_priv *rt1015)
 	snd_soc_dapm_mutex_lock(&component->dapm);
 	regcache_cache_bypass(regmap, true);
 
-	regmap_write(regmap, RT1015_PWR9, 0xAA60);
-	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x0089);
-	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x008A);
-	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x008C);
-	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x008D);
-	regmap_write(regmap, RT1015_PWR4, 0x80B2);
-	regmap_write(regmap, RT1015_CLASSD_SEQ, 0x5797);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL8, 0x2100);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL9, 0x0100);
-	regmap_write(regmap, RT1015_PWR5, 0x2175);
-	regmap_write(regmap, RT1015_MIXER1, 0x005D);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL1, 0x00A1);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL2, 0x12F7);
-	regmap_write(regmap, RT1015_DC_CALIB_CLSD1, 0x1205);
-	msleep(200);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL8, 0x2000);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL9, 0x0180);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL1, 0x00A1);
-	regmap_write(regmap, RT1015_DC_CALIB_CLSD1, 0x0A05);
-	msleep(200);
+	regmap_write(regmap, RT1015_CLK_DET, 0x0000);
 	regmap_write(regmap, RT1015_PWR4, 0x00B2);
+	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x0009);
+	msleep(100);
+	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x000A);
+	msleep(100);
+	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x000C);
+	msleep(100);
 	regmap_write(regmap, RT1015_CLSD_INTERNAL8, 0x2028);
 	regmap_write(regmap, RT1015_CLSD_INTERNAL9, 0x0140);
-	regmap_write(regmap, RT1015_PWR5, 0x0175);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL1, 0x1721);
-	regmap_write(regmap, RT1015_CLASSD_SEQ, 0x570E);
-	regmap_write(regmap, RT1015_MIXER1, 0x203D);
-	regmap_write(regmap, RT1015_DC_CALIB_CLSD1, 0x5A01);
-	regmap_write(regmap, RT1015_CLSD_INTERNAL2, 0x12FF);
-	regmap_write(regmap, RT1015_GAT_BOOST, 0x0eFE);
-	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x008E);
-	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x0088);
+	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x000D);
+	msleep(300);
+	regmap_write(regmap, RT1015_PWR_STATE_CTRL, 0x0008);
 	regmap_write(regmap, RT1015_SYS_RST1, 0x05F5);
-	regmap_write(regmap, RT1015_SYS_RST2, 0x0b9a);
+	regmap_write(regmap, RT1015_CLK_DET, 0x8000);
 
 	regcache_cache_bypass(regmap, false);
 	regcache_mark_dirty(regmap);
@@ -546,45 +530,21 @@ static int rt1015_bypass_boost_put(struct snd_kcontrol *kcontrol,
 	struct rt1015_priv *rt1015 =
 		snd_soc_component_get_drvdata(component);
 
-	if (!rt1015->dac_is_used) {
-		rt1015->bypass_boost = ucontrol->value.integer.value[0];
-		if (rt1015->bypass_boost == RT1015_Bypass_Boost &&
-			!rt1015->cali_done) {
-			rt1015_calibrate(rt1015);
-			rt1015->cali_done = 1;
-
-			regmap_write(rt1015->regmap, RT1015_MONO_DYNA_CTRL, 0x0010);
-		}
-	} else
+	if (rt1015->dac_is_used) {
 		dev_err(component->dev, "DAC is being used!\n");
-
-	return 0;
-}
-
-static void rt1015_flush_work(struct work_struct *work)
-{
-	struct rt1015_priv *rt1015 = container_of(work, struct rt1015_priv,
-						flush_work.work);
-	struct snd_soc_component *component = rt1015->component;
-	unsigned int val, i = 0, count = 200;
-
-	while (i < count) {
-		usleep_range(1000, 1500);
-		dev_dbg(component->dev, "Flush DAC (retry:%u)\n", i);
-		regmap_read(rt1015->regmap, RT1015_CLK_DET, &val);
-		if (val & 0x800)
-			break;
-		i++;
+		return -EBUSY;
 	}
 
-	regmap_write(rt1015->regmap, RT1015_SYS_RST1, 0x0597);
-	regmap_write(rt1015->regmap, RT1015_SYS_RST1, 0x05f7);
-	regmap_write(rt1015->regmap, RT1015_MAN_I2C, 0x0028);
+	rt1015->bypass_boost = ucontrol->value.integer.value[0];
+	if (rt1015->bypass_boost == RT1015_Bypass_Boost &&
+			!rt1015->cali_done) {
+		rt1015_calibrate(rt1015);
+		rt1015->cali_done = 1;
 
-	if (val & 0x800)
-		dev_dbg(component->dev, "Flush DAC completed.\n");
-	else
-		dev_warn(component->dev, "Fail to flush DAC data.\n");
+		regmap_write(rt1015->regmap, RT1015_MONO_DYNA_CTRL, 0x0010);
+	}
+
+	return 0;
 }
 
 static const struct snd_kcontrol_new rt1015_snd_controls[] = {
@@ -645,10 +605,6 @@ static int r1015_dac_event(struct snd_soc_dapm_widget *w,
 		}
 		break;
 
-	case SND_SOC_DAPM_POST_PMU:
-		regmap_write(rt1015->regmap, RT1015_MAN_I2C, 0x00a8);
-		break;
-
 	case SND_SOC_DAPM_POST_PMD:
 		if (rt1015->bypass_boost == RT1015_Enable_Boost) {
 			snd_soc_component_write(component,
@@ -668,8 +624,6 @@ static int r1015_dac_event(struct snd_soc_dapm_widget *w,
 				RT1015_SYS_RST2, 0x0b9a);
 		}
 		rt1015->dac_is_used = 0;
-
-		cancel_delayed_work_sync(&rt1015->flush_work);
 		break;
 
 	default:
@@ -684,11 +638,24 @@ static int rt1015_amp_drv_event(struct snd_soc_dapm_widget *w,
 	struct snd_soc_component *component =
 		snd_soc_dapm_to_component(w->dapm);
 	struct rt1015_priv *rt1015 = snd_soc_component_get_drvdata(component);
+	unsigned int ret, ret2;
 
 	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		ret = snd_soc_component_read(component, RT1015_CLK_DET);
+		ret2 = snd_soc_component_read(component, RT1015_SPK_DC_DETECT1);
+		if (!((ret >> 15) & 0x1)) {
+			snd_soc_component_update_bits(component, RT1015_CLK_DET,
+				RT1015_EN_BCLK_DET_MASK, RT1015_EN_BCLK_DET);
+			dev_dbg(component->dev, "BCLK Detection Enabled.\n");
+		}
+		if (!((ret2 >> 12) & 0x1)) {
+			snd_soc_component_update_bits(component, RT1015_SPK_DC_DETECT1,
+				RT1015_EN_CLA_D_DC_DET_MASK, RT1015_EN_CLA_D_DC_DET);
+			dev_dbg(component->dev, "Class-D DC Detection Enabled.\n");
+		}
+		break;
 	case SND_SOC_DAPM_POST_PMU:
-		if (rt1015->hw_config == RT1015_HW_28)
-			schedule_delayed_work(&rt1015->flush_work, msecs_to_jiffies(10));
 		msleep(rt1015->pdata.power_up_delay_ms);
 		break;
 	default:
@@ -702,10 +669,11 @@ static const struct snd_soc_dapm_widget rt1015_dapm_widgets[] = {
 		NULL, 0),
 	SND_SOC_DAPM_AIF_IN("AIFRX", "AIF Playback", 0, SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_DAC_E("DAC", NULL, SND_SOC_NOPM, 0, 0,
-		r1015_dac_event, SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
+		r1015_dac_event, SND_SOC_DAPM_PRE_PMU |
 		SND_SOC_DAPM_POST_PMD),
 	SND_SOC_DAPM_OUT_DRV_E("Amp Drv", SND_SOC_NOPM, 0, 0, NULL, 0,
-			rt1015_amp_drv_event, SND_SOC_DAPM_POST_PMU),
+			rt1015_amp_drv_event, SND_SOC_DAPM_PRE_PMU |
+			SND_SOC_DAPM_POST_PMU),
 	SND_SOC_DAPM_OUTPUT("SPO"),
 };
 
@@ -721,11 +689,11 @@ static int rt1015_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct rt1015_priv *rt1015 = snd_soc_component_get_drvdata(component);
-	int pre_div, bclk_ms, frame_size;
+	int pre_div, frame_size, lrck;
 	unsigned int val_len = 0;
 
-	rt1015->lrck = params_rate(params);
-	pre_div = rl6231_get_clk_info(rt1015->sysclk, rt1015->lrck);
+	lrck = params_rate(params);
+	pre_div = rl6231_get_clk_info(rt1015->sysclk, lrck);
 	if (pre_div < 0) {
 		dev_err(component->dev, "Unsupported clock rate\n");
 		return -EINVAL;
@@ -738,14 +706,10 @@ static int rt1015_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	bclk_ms = frame_size > 32;
-	rt1015->bclk = rt1015->lrck * (32 << bclk_ms);
-
-	dev_dbg(component->dev, "bclk_ms is %d and pre_div is %d for iis %d\n",
-				bclk_ms, pre_div, dai->id);
+	dev_dbg(component->dev, "pre_div is %d for iis %d\n", pre_div, dai->id);
 
 	dev_dbg(component->dev, "lrck is %dHz and pre_div is %d for iis %d\n",
-				rt1015->lrck, pre_div, dai->id);
+				lrck, pre_div, dai->id);
 
 	switch (params_width(params)) {
 	case 16:
@@ -882,14 +846,6 @@ static int rt1015_set_component_pll(struct snd_soc_component *component,
 		freq_out == rt1015->pll_out)
 		return 0;
 
-	if (source == RT1015_PLL_S_BCLK) {
-		if (rt1015->bclk_ratio == 0) {
-			dev_err(component->dev,
-				"Can not support bclk ratio as 0.\n");
-			return -EINVAL;
-		}
-	}
-
 	switch (source) {
 	case RT1015_PLL_S_MCLK:
 		snd_soc_component_update_bits(component, RT1015_CLK2,
@@ -917,31 +873,15 @@ static int rt1015_set_component_pll(struct snd_soc_component *component,
 		pll_code.n_code, pll_code.k_code);
 
 	snd_soc_component_write(component, RT1015_PLL1,
-		(pll_code.m_bp ? 0 : pll_code.m_code) << RT1015_PLL_M_SFT |
-		pll_code.m_bp << RT1015_PLL_M_BP_SFT | pll_code.n_code);
+		((pll_code.m_bp ? 0 : pll_code.m_code) << RT1015_PLL_M_SFT) |
+		(pll_code.m_bp << RT1015_PLL_M_BP_SFT) |
+		pll_code.n_code);
 	snd_soc_component_write(component, RT1015_PLL2,
 		pll_code.k_code);
 
 	rt1015->pll_in = freq_in;
 	rt1015->pll_out = freq_out;
 	rt1015->pll_src = source;
-
-	return 0;
-}
-
-static int rt1015_set_bclk_ratio(struct snd_soc_dai *dai, unsigned int ratio)
-{
-	struct snd_soc_component *component = dai->component;
-	struct rt1015_priv *rt1015 = snd_soc_component_get_drvdata(component);
-
-	dev_dbg(component->dev, "%s ratio=%d\n", __func__, ratio);
-
-	rt1015->bclk_ratio = ratio;
-
-	if (ratio == 50) {
-		dev_dbg(component->dev, "Unsupport bclk ratio\n");
-		return -EINVAL;
-	}
 
 	return 0;
 }
@@ -1052,10 +992,6 @@ static int rt1015_probe(struct snd_soc_component *component)
 		snd_soc_component_get_drvdata(component);
 
 	rt1015->component = component;
-	rt1015->bclk_ratio = 0;
-	rt1015->cali_done = 0;
-
-	INIT_DELAYED_WORK(&rt1015->flush_work, rt1015_flush_work);
 
 	return 0;
 }
@@ -1064,7 +1000,6 @@ static void rt1015_remove(struct snd_soc_component *component)
 {
 	struct rt1015_priv *rt1015 = snd_soc_component_get_drvdata(component);
 
-	cancel_delayed_work_sync(&rt1015->flush_work);
 	regmap_write(rt1015->regmap, RT1015_RESET, 0);
 }
 
@@ -1072,10 +1007,9 @@ static void rt1015_remove(struct snd_soc_component *component)
 #define RT1015_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE | \
 			SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S8)
 
-static struct snd_soc_dai_ops rt1015_aif_dai_ops = {
+static const struct snd_soc_dai_ops rt1015_aif_dai_ops = {
 	.hw_params = rt1015_hw_params,
 	.set_fmt = rt1015_set_dai_fmt,
-	.set_bclk_ratio = rt1015_set_bclk_ratio,
 	.set_tdm_slot = rt1015_set_tdm_slot,
 };
 
@@ -1111,6 +1045,10 @@ static int rt1015_resume(struct snd_soc_component *component)
 
 	regcache_cache_only(rt1015->regmap, false);
 	regcache_sync(rt1015->regmap);
+
+	if (rt1015->cali_done)
+		rt1015_calibrate(rt1015);
+
 	return 0;
 }
 #else
@@ -1162,7 +1100,7 @@ MODULE_DEVICE_TABLE(of, rt1015_of_match);
 #endif
 
 #ifdef CONFIG_ACPI
-static struct acpi_device_id rt1015_acpi_match[] = {
+static const struct acpi_device_id rt1015_acpi_match[] = {
 	{"10EC1015", 0,},
 	{},
 };
@@ -1183,9 +1121,8 @@ static int rt1015_i2c_probe(struct i2c_client *i2c,
 	int ret;
 	unsigned int val;
 
-	rt1015 = devm_kzalloc(&i2c->dev, sizeof(struct rt1015_priv),
-				GFP_KERNEL);
-	if (rt1015 == NULL)
+	rt1015 = devm_kzalloc(&i2c->dev, sizeof(*rt1015), GFP_KERNEL);
+	if (!rt1015)
 		return -ENOMEM;
 
 	i2c_set_clientdata(i2c, rt1015);
@@ -1204,8 +1141,6 @@ static int rt1015_i2c_probe(struct i2c_client *i2c,
 			ret);
 		return ret;
 	}
-
-	rt1015->hw_config = (i2c->addr == 0x29) ? RT1015_HW_29 : RT1015_HW_28;
 
 	ret = regmap_read(rt1015->regmap, RT1015_DEVICE_ID, &val);
 	if (ret) {

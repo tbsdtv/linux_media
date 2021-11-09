@@ -30,7 +30,7 @@
 #include "xdp_umem.h"
 #include "xsk.h"
 
-#define TX_BATCH_SIZE 16
+#define TX_BATCH_SIZE 32
 
 static DEFINE_PER_CPU(struct list_head, xskmap_flush_list);
 
@@ -184,12 +184,13 @@ static void xsk_copy_xdp(struct xdp_buff *to, struct xdp_buff *from, u32 len)
 	memcpy(to_buf, from_buf, len + metalen);
 }
 
-static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len,
-		     bool explicit_free)
+static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
 	struct xdp_buff *xsk_xdp;
 	int err;
+	u32 len;
 
+	len = xdp->data_end - xdp->data;
 	if (len > xsk_pool_get_rx_frame_size(xs->pool)) {
 		xs->rx_dropped++;
 		return -ENOSPC;
@@ -207,8 +208,6 @@ static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len,
 		xsk_buff_free(xsk_xdp);
 		return err;
 	}
-	if (explicit_free)
-		xdp_return_buff(xdp);
 	return 0;
 }
 
@@ -230,11 +229,8 @@ static bool xsk_is_bound(struct xdp_sock *xs)
 	return false;
 }
 
-static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp,
-		   bool explicit_free)
+static int xsk_rcv_check(struct xdp_sock *xs, struct xdp_buff *xdp)
 {
-	u32 len;
-
 	if (!xsk_is_bound(xs))
 		return -EINVAL;
 
@@ -242,11 +238,7 @@ static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp,
 		return -EINVAL;
 
 	sk_mark_napi_id_once_xdp(&xs->sk, xdp);
-	len = xdp->data_end - xdp->data;
-
-	return xdp->rxq->mem.type == MEM_TYPE_XSK_BUFF_POOL ?
-		__xsk_rcv_zc(xs, xdp, len) :
-		__xsk_rcv(xs, xdp, len, explicit_free);
+	return 0;
 }
 
 static void xsk_flush(struct xdp_sock *xs)
@@ -261,9 +253,32 @@ int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 	int err;
 
 	spin_lock_bh(&xs->rx_lock);
-	err = xsk_rcv(xs, xdp, false);
-	xsk_flush(xs);
+	err = xsk_rcv_check(xs, xdp);
+	if (!err) {
+		err = __xsk_rcv(xs, xdp);
+		xsk_flush(xs);
+	}
 	spin_unlock_bh(&xs->rx_lock);
+	return err;
+}
+
+static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
+{
+	int err;
+	u32 len;
+
+	err = xsk_rcv_check(xs, xdp);
+	if (err)
+		return err;
+
+	if (xdp->rxq->mem.type == MEM_TYPE_XSK_BUFF_POOL) {
+		len = xdp->data_end - xdp->data;
+		return __xsk_rcv_zc(xs, xdp, len);
+	}
+
+	err = __xsk_rcv(xs, xdp);
+	if (!err)
+		xdp_return_buff(xdp);
 	return err;
 }
 
@@ -272,7 +287,7 @@ int __xsk_map_redirect(struct xdp_sock *xs, struct xdp_buff *xdp)
 	struct list_head *flush_list = this_cpu_ptr(&xskmap_flush_list);
 	int err;
 
-	err = xsk_rcv(xs, xdp, true);
+	err = xsk_rcv(xs, xdp);
 	if (err)
 		return err;
 
@@ -430,6 +445,97 @@ static void xsk_destruct_skb(struct sk_buff *skb)
 	sock_wfree(skb);
 }
 
+static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
+					      struct xdp_desc *desc)
+{
+	struct xsk_buff_pool *pool = xs->pool;
+	u32 hr, len, ts, offset, copy, copied;
+	struct sk_buff *skb;
+	struct page *page;
+	void *buffer;
+	int err, i;
+	u64 addr;
+
+	hr = max(NET_SKB_PAD, L1_CACHE_ALIGN(xs->dev->needed_headroom));
+
+	skb = sock_alloc_send_skb(&xs->sk, hr, 1, &err);
+	if (unlikely(!skb))
+		return ERR_PTR(err);
+
+	skb_reserve(skb, hr);
+
+	addr = desc->addr;
+	len = desc->len;
+	ts = pool->unaligned ? len : pool->chunk_size;
+
+	buffer = xsk_buff_raw_get_data(pool, addr);
+	offset = offset_in_page(buffer);
+	addr = buffer - pool->addrs;
+
+	for (copied = 0, i = 0; copied < len; i++) {
+		page = pool->umem->pgs[addr >> PAGE_SHIFT];
+		get_page(page);
+
+		copy = min_t(u32, PAGE_SIZE - offset, len - copied);
+		skb_fill_page_desc(skb, i, page, offset, copy);
+
+		copied += copy;
+		addr += copy;
+		offset = 0;
+	}
+
+	skb->len += len;
+	skb->data_len += len;
+	skb->truesize += ts;
+
+	refcount_add(ts, &xs->sk.sk_wmem_alloc);
+
+	return skb;
+}
+
+static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
+				     struct xdp_desc *desc)
+{
+	struct net_device *dev = xs->dev;
+	struct sk_buff *skb;
+
+	if (dev->priv_flags & IFF_TX_SKB_NO_LINEAR) {
+		skb = xsk_build_skb_zerocopy(xs, desc);
+		if (IS_ERR(skb))
+			return skb;
+	} else {
+		u32 hr, tr, len;
+		void *buffer;
+		int err;
+
+		hr = max(NET_SKB_PAD, L1_CACHE_ALIGN(dev->needed_headroom));
+		tr = dev->needed_tailroom;
+		len = desc->len;
+
+		skb = sock_alloc_send_skb(&xs->sk, hr + len + tr, 1, &err);
+		if (unlikely(!skb))
+			return ERR_PTR(err);
+
+		skb_reserve(skb, hr);
+		skb_put(skb, len);
+
+		buffer = xsk_buff_raw_get_data(xs->pool, desc->addr);
+		err = skb_store_bits(skb, 0, buffer, len);
+		if (unlikely(err)) {
+			kfree_skb(skb);
+			return ERR_PTR(err);
+		}
+	}
+
+	skb->dev = dev;
+	skb->priority = xs->sk.sk_priority;
+	skb->mark = xs->sk.sk_mark;
+	skb_shinfo(skb)->destructor_arg = (void *)(long)desc->addr;
+	skb->destructor = xsk_destruct_skb;
+
+	return skb;
+}
+
 static int xsk_generic_xmit(struct sock *sk)
 {
 	struct xdp_sock *xs = xdp_sk(sk);
@@ -446,42 +552,29 @@ static int xsk_generic_xmit(struct sock *sk)
 		goto out;
 
 	while (xskq_cons_peek_desc(xs->tx, &desc, xs->pool)) {
-		char *buffer;
-		u64 addr;
-		u32 len;
-
 		if (max_batch-- == 0) {
 			err = -EAGAIN;
 			goto out;
 		}
 
-		len = desc.len;
-		skb = sock_alloc_send_skb(sk, len, 1, &err);
-		if (unlikely(!skb))
+		skb = xsk_build_skb(xs, &desc);
+		if (IS_ERR(skb)) {
+			err = PTR_ERR(skb);
 			goto out;
+		}
 
-		skb_put(skb, len);
-		addr = desc.addr;
-		buffer = xsk_buff_raw_get_data(xs->pool, addr);
-		err = skb_store_bits(skb, 0, buffer, len);
 		/* This is the backpressure mechanism for the Tx path.
 		 * Reserve space in the completion queue and only proceed
 		 * if there is space in it. This avoids having to implement
 		 * any buffering in the Tx path.
 		 */
 		spin_lock_irqsave(&xs->pool->cq_lock, flags);
-		if (unlikely(err) || xskq_prod_reserve(xs->pool->cq)) {
+		if (xskq_prod_reserve(xs->pool->cq)) {
 			spin_unlock_irqrestore(&xs->pool->cq_lock, flags);
 			kfree_skb(skb);
 			goto out;
 		}
 		spin_unlock_irqrestore(&xs->pool->cq_lock, flags);
-
-		skb->dev = xs->dev;
-		skb->priority = sk->sk_priority;
-		skb->mark = sk->sk_mark;
-		skb_shinfo(skb)->destructor_arg = (void *)(long)desc.addr;
-		skb->destructor = xsk_destruct_skb;
 
 		err = __dev_direct_xmit(skb, xs->queue_id);
 		if  (err == NETDEV_TX_BUSY) {
@@ -656,7 +749,7 @@ static void xsk_unbind_dev(struct xdp_sock *xs)
 }
 
 static struct xsk_map *xsk_get_map_list_entry(struct xdp_sock *xs,
-					      struct xdp_sock ***map_entry)
+					      struct xdp_sock __rcu ***map_entry)
 {
 	struct xsk_map *map = NULL;
 	struct xsk_map_node *node;
@@ -692,7 +785,7 @@ static void xsk_delete_from_maps(struct xdp_sock *xs)
 	 * might be updates to the map between
 	 * xsk_get_map_list_entry() and xsk_map_try_sock_delete().
 	 */
-	struct xdp_sock **map_entry = NULL;
+	struct xdp_sock __rcu **map_entry = NULL;
 	struct xsk_map *map;
 
 	while ((map = xsk_get_map_list_entry(xs, &map_entry))) {
@@ -1220,7 +1313,7 @@ static int xsk_notifier(struct notifier_block *this,
 			if (xs->dev == dev) {
 				sk->sk_err = ENETDOWN;
 				if (!sock_flag(sk, SOCK_DEAD))
-					sk->sk_error_report(sk);
+					sk_error_report(sk);
 
 				xsk_unbind_dev(xs);
 

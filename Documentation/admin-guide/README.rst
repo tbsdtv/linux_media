@@ -226,10 +226,11 @@ Configuring the kernel
                            all module options to built in (=y) options. You can
                            also preserve modules by LMC_KEEP.
 
-     "make kvmconfig"   Enable additional options for kvm guest kernel support.
+     "make kvm_guest.config"   Enable additional options for kvm guest kernel
+                               support.
 
-     "make xenconfig"   Enable additional options for xen dom0 guest kernel
-                        support.
+     "make xen.config"   Enable additional options for xen dom0 guest kernel
+                         support.
 
      "make tinyconfig"  Configure the tiniest possible kernel.
 
@@ -258,7 +259,7 @@ Configuring the kernel
 Compiling the kernel
 --------------------
 
- - Make sure you have at least gcc 4.9 available.
+ - Make sure you have at least gcc 5.1 available.
    For more information, refer to :ref:`Documentation/process/changes.rst <changes>`.
 
    Please note that you can still run a.out user programs with this kernel.

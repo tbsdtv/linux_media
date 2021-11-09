@@ -113,7 +113,7 @@ dmc620_pmu_event_show(struct device *dev,
 
 	eattr = container_of(attr, typeof(*eattr), attr);
 
-	return sprintf(page, "event=0x%x,clkdiv2=0x%x\n", eattr->eventid, eattr->clkdiv2);
+	return sysfs_emit(page, "event=0x%x,clkdiv2=0x%x\n", eattr->eventid, eattr->clkdiv2);
 }
 
 #define DMC620_PMU_EVENT_ATTR(_name, _eventid, _clkdiv2)		\
@@ -159,7 +159,7 @@ static struct attribute *dmc620_pmu_events_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group dmc620_pmu_events_attr_group = {
+static const struct attribute_group dmc620_pmu_events_attr_group = {
 	.name = "events",
 	.attrs = dmc620_pmu_events_attrs,
 };
@@ -222,7 +222,7 @@ static struct attribute *dmc620_pmu_formats_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group dmc620_pmu_format_attr_group = {
+static const struct attribute_group dmc620_pmu_format_attr_group = {
 	.name	= "format",
 	.attrs	= dmc620_pmu_formats_attrs,
 };
@@ -421,7 +421,7 @@ static struct dmc620_pmu_irq *__dmc620_pmu_get_irq(int irq_num)
 	if (ret)
 		goto out_free_aff;
 
-	ret = irq_set_affinity_hint(irq_num, cpumask_of(irq->cpu));
+	ret = irq_set_affinity(irq_num, cpumask_of(irq->cpu));
 	if (ret)
 		goto out_free_irq;
 
@@ -475,7 +475,6 @@ static void dmc620_pmu_put_irq(struct dmc620_pmu *dmc620_pmu)
 	list_del(&irq->irqs_node);
 	mutex_unlock(&dmc620_pmu_irqs_lock);
 
-	WARN_ON(irq_set_affinity_hint(irq->irq_num, NULL));
 	free_irq(irq->irq_num, irq);
 	cpuhp_state_remove_instance_nocalls(cpuhp_state_num, &irq->node);
 	kfree(irq);
@@ -622,7 +621,7 @@ static int dmc620_pmu_cpu_teardown(unsigned int cpu,
 		perf_pmu_migrate_context(&dmc620_pmu->pmu, irq->cpu, target);
 	mutex_unlock(&dmc620_pmu_irqs_lock);
 
-	WARN_ON(irq_set_affinity_hint(irq->irq_num, cpumask_of(target)));
+	WARN_ON(irq_set_affinity(irq->irq_num, cpumask_of(target)));
 	irq->cpu = target;
 
 	return 0;
@@ -681,6 +680,7 @@ static int dmc620_pmu_device_probe(struct platform_device *pdev)
 	if (!name) {
 		dev_err(&pdev->dev,
 			  "Create name failed, PMU @%pa\n", &res->start);
+		ret = -ENOMEM;
 		goto out_teardown_dev;
 	}
 
@@ -717,6 +717,7 @@ static struct platform_driver dmc620_pmu_driver = {
 	.driver	= {
 		.name		= DMC620_DRVNAME,
 		.acpi_match_table = dmc620_acpi_match,
+		.suppress_bind_attrs = true,
 	},
 	.probe	= dmc620_pmu_device_probe,
 	.remove	= dmc620_pmu_device_remove,

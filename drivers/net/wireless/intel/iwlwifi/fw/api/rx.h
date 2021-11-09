@@ -140,7 +140,8 @@ enum iwl_rx_phy_flags {
  * @RX_MPDU_RES_STATUS_SEC_TKIP_ENC: this frame is encrypted using TKIP
  * @RX_MPDU_RES_STATUS_SEC_EXT_ENC: this frame is encrypted using extension
  *	algorithm
- * @RX_MPDU_RES_STATUS_SEC_CCM_CMAC_ENC: this frame is encrypted using CCM_CMAC
+ * @RX_MPDU_RES_STATUS_SEC_CMAC_GMAC_ENC: this frame is protected using
+ *	CMAC or GMAC
  * @RX_MPDU_RES_STATUS_SEC_ENC_ERR: this frame couldn't be decrypted
  * @RX_MPDU_RES_STATUS_SEC_ENC_MSK: bitmask of the encryption algorithm
  * @RX_MPDU_RES_STATUS_DEC_DONE: this frame has been successfully decrypted
@@ -167,7 +168,7 @@ enum iwl_mvm_rx_status {
 	RX_MPDU_RES_STATUS_SEC_CCM_ENC			= (2 << 8),
 	RX_MPDU_RES_STATUS_SEC_TKIP_ENC			= (3 << 8),
 	RX_MPDU_RES_STATUS_SEC_EXT_ENC			= (4 << 8),
-	RX_MPDU_RES_STATUS_SEC_CCM_CMAC_ENC		= (6 << 8),
+	RX_MPDU_RES_STATUS_SEC_CMAC_GMAC_ENC		= (6 << 8),
 	RX_MPDU_RES_STATUS_SEC_ENC_ERR			= (7 << 8),
 	RX_MPDU_RES_STATUS_SEC_ENC_MSK			= (7 << 8),
 	RX_MPDU_RES_STATUS_DEC_DONE			= BIT(11),
@@ -239,6 +240,8 @@ enum iwl_rx_mpdu_status {
 	IWL_RX_MPDU_STATUS_ICV_OK		= BIT(5),
 	IWL_RX_MPDU_STATUS_MIC_OK		= BIT(6),
 	IWL_RX_MPDU_RES_STATUS_TTAK_OK		= BIT(7),
+	/* overlayed since IWL_UCODE_TLV_API_DEPRECATE_TTAK */
+	IWL_RX_MPDU_STATUS_REPLAY_ERROR		= BIT(7),
 	IWL_RX_MPDU_STATUS_SEC_MASK		= 0x7 << 8,
 	IWL_RX_MPDU_STATUS_SEC_UNKNOWN		= IWL_RX_MPDU_STATUS_SEC_MASK,
 	IWL_RX_MPDU_STATUS_SEC_NONE		= 0x0 << 8,
@@ -775,36 +778,6 @@ struct iwl_rxq_sync_notification {
 	__le32 count;
 	u8 payload[];
 } __packed; /* MULTI_QUEUE_DRV_SYNC_HDR_CMD_API_S_VER_1 */
-
-/**
- * enum iwl_mvm_rxq_notif_type - Internal message identifier
- *
- * @IWL_MVM_RXQ_EMPTY: empty sync notification
- * @IWL_MVM_RXQ_NOTIF_DEL_BA: notify RSS queues of delBA
- * @IWL_MVM_RXQ_NSSN_SYNC: notify all the RSS queues with the new NSSN
- */
-enum iwl_mvm_rxq_notif_type {
-	IWL_MVM_RXQ_EMPTY,
-	IWL_MVM_RXQ_NOTIF_DEL_BA,
-	IWL_MVM_RXQ_NSSN_SYNC,
-};
-
-/**
- * struct iwl_mvm_internal_rxq_notif - Internal representation of the data sent
- * in &iwl_rxq_sync_cmd. Should be DWORD aligned.
- * FW is agnostic to the payload, so there are no endianity requirements.
- *
- * @type: value from &iwl_mvm_rxq_notif_type
- * @sync: ctrl path is waiting for all notifications to be received
- * @cookie: internal cookie to identify old notifications
- * @data: payload
- */
-struct iwl_mvm_internal_rxq_notif {
-	u16 type;
-	u16 sync;
-	u32 cookie;
-	u8 data[];
-} __packed;
 
 /**
  * enum iwl_mvm_pm_event - type of station PM event

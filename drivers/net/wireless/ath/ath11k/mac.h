@@ -116,6 +116,12 @@ struct ath11k_generic_iter {
 
 #define ATH11K_CHAN_WIDTH_NUM			8
 
+#define ATH11K_OBSS_PD_MAX_THRESHOLD			-82
+#define ATH11K_OBSS_PD_NON_SRG_MAX_THRESHOLD		-62
+#define ATH11K_OBSS_PD_THRESHOLD_IN_DBM			BIT(29)
+#define ATH11K_OBSS_PD_SRG_EN				BIT(30)
+#define ATH11K_OBSS_PD_NON_SRG_EN			BIT(31)
+
 extern const struct htt_rx_ring_tlv_filter ath11k_mac_mon_status_filter_default;
 
 void ath11k_mac_destroy(struct ath11k_base *ab);
@@ -144,4 +150,6 @@ int ath11k_mac_tx_mgmt_pending_free(int buf_id, void *skb, void *ctx);
 u8 ath11k_mac_bw_to_mac80211_bw(u8 bw);
 enum ath11k_supported_bw ath11k_mac_mac80211_bw_to_ath11k_bw(enum rate_info_bw bw);
 enum hal_encrypt_type ath11k_dp_tx_get_encrypt_type(u32 cipher);
+void ath11k_mac_handle_beacon(struct ath11k *ar, struct sk_buff *skb);
+void ath11k_mac_handle_beacon_miss(struct ath11k *ar, u32 vdev_id);
 #endif

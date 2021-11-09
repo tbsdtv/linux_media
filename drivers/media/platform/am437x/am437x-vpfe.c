@@ -1021,7 +1021,9 @@ static int vpfe_initialize_device(struct vpfe_device *vpfe)
 	if (ret)
 		return ret;
 
-	pm_runtime_get_sync(vpfe->pdev);
+	ret = pm_runtime_resume_and_get(vpfe->pdev);
+	if (ret < 0)
+		return ret;
 
 	vpfe_config_enable(&vpfe->ccdc, 1);
 
@@ -2295,7 +2297,7 @@ vpfe_get_pdata(struct vpfe_device *vpfe)
 
 	dev_dbg(dev, "vpfe_get_pdata\n");
 
-	v4l2_async_notifier_init(&vpfe->notifier);
+	v4l2_async_nf_init(&vpfe->notifier);
 
 	if (!IS_ENABLED(CONFIG_OF) || !dev->of_node)
 		return dev->platform_data;
@@ -2363,9 +2365,10 @@ vpfe_get_pdata(struct vpfe_device *vpfe)
 			goto cleanup;
 		}
 
-		pdata->asd[i] = v4l2_async_notifier_add_fwnode_subdev(
-			&vpfe->notifier, of_fwnode_handle(rem),
-			sizeof(struct v4l2_async_subdev));
+		pdata->asd[i] = v4l2_async_nf_add_fwnode(&vpfe->notifier,
+							 of_fwnode_handle(rem),
+							 struct
+							 v4l2_async_subdev);
 		of_node_put(rem);
 		if (IS_ERR(pdata->asd[i]))
 			goto cleanup;
@@ -2375,7 +2378,7 @@ vpfe_get_pdata(struct vpfe_device *vpfe)
 	return pdata;
 
 cleanup:
-	v4l2_async_notifier_cleanup(&vpfe->notifier);
+	v4l2_async_nf_cleanup(&vpfe->notifier);
 	of_node_put(endpoint);
 	return NULL;
 }
@@ -2390,7 +2393,6 @@ static int vpfe_probe(struct platform_device *pdev)
 	struct vpfe_config *vpfe_cfg;
 	struct vpfe_device *vpfe;
 	struct vpfe_ccdc *ccdc;
-	struct resource	*res;
 	int ret;
 
 	vpfe = devm_kzalloc(&pdev->dev, sizeof(*vpfe), GFP_KERNEL);
@@ -2408,8 +2410,7 @@ static int vpfe_probe(struct platform_device *pdev)
 	vpfe->cfg = vpfe_cfg;
 	ccdc = &vpfe->ccdc;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	ccdc->ccdc_cfg.base_addr = devm_ioremap_resource(&pdev->dev, res);
+	ccdc->ccdc_cfg.base_addr = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(ccdc->ccdc_cfg.base_addr)) {
 		ret = PTR_ERR(ccdc->ccdc_cfg.base_addr);
 		goto probe_out_cleanup;
@@ -2443,7 +2444,11 @@ static int vpfe_probe(struct platform_device *pdev)
 	pm_runtime_enable(&pdev->dev);
 
 	/* for now just enable it here instead of waiting for the open */
-	pm_runtime_get_sync(&pdev->dev);
+	ret = pm_runtime_resume_and_get(&pdev->dev);
+	if (ret < 0) {
+		vpfe_err(vpfe, "Unable to resume device.\n");
+		goto probe_out_v4l2_unregister;
+	}
 
 	vpfe_ccdc_config_defaults(ccdc);
 
@@ -2459,7 +2464,7 @@ static int vpfe_probe(struct platform_device *pdev)
 	}
 
 	vpfe->notifier.ops = &vpfe_async_ops;
-	ret = v4l2_async_notifier_register(&vpfe->v4l2_dev, &vpfe->notifier);
+	ret = v4l2_async_nf_register(&vpfe->v4l2_dev, &vpfe->notifier);
 	if (ret) {
 		vpfe_err(vpfe, "Error registering async notifier\n");
 		ret = -EINVAL;
@@ -2471,7 +2476,7 @@ static int vpfe_probe(struct platform_device *pdev)
 probe_out_v4l2_unregister:
 	v4l2_device_unregister(&vpfe->v4l2_dev);
 probe_out_cleanup:
-	v4l2_async_notifier_cleanup(&vpfe->notifier);
+	v4l2_async_nf_cleanup(&vpfe->notifier);
 	return ret;
 }
 
@@ -2484,8 +2489,8 @@ static int vpfe_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(&pdev->dev);
 
-	v4l2_async_notifier_unregister(&vpfe->notifier);
-	v4l2_async_notifier_cleanup(&vpfe->notifier);
+	v4l2_async_nf_unregister(&vpfe->notifier);
+	v4l2_async_nf_cleanup(&vpfe->notifier);
 	v4l2_device_unregister(&vpfe->v4l2_dev);
 	video_unregister_device(&vpfe->video_dev);
 
@@ -2530,6 +2535,11 @@ static int vpfe_suspend(struct device *dev)
 
 	/* only do full suspend if streaming has started */
 	if (vb2_start_streaming_called(&vpfe->buffer_queue)) {
+		/*
+		 * ignore RPM resume errors here, as it is already too late.
+		 * A check like that should happen earlier, either at
+		 * open() or just before start streaming.
+		 */
 		pm_runtime_get_sync(dev);
 		vpfe_config_enable(ccdc, 1);
 

@@ -102,13 +102,6 @@ config MTD_NAND_S3C2410_CLKSTOP
 	  when the is NAND chip selected or released, but will save
 	  approximately 5mA of power when there is nothing happening.
 
-config MTD_NAND_TANGO
-	tristate "Tango NAND controller"
-	depends on ARCH_TANGO || COMPILE_TEST
-	depends on HAS_IOMEM
-	help
-	  Enables the NAND Flash controller on Tango chips.
-
 config MTD_NAND_SHARPSL
 	tristate "Sharp SL Series (C7xx + others) NAND controller"
 	depends on ARCH_PXA || COMPILE_TEST
@@ -331,8 +324,7 @@ source "drivers/mtd/nand/raw/ingenic/Kconfig"
 config MTD_NAND_FSMC
 	tristate "ST Micros FSMC NAND controller"
 	depends on OF && HAS_IOMEM
-	depends on PLAT_SPEAR || ARCH_NOMADIK || ARCH_U8500 || MACH_U300 || \
-		   COMPILE_TEST
+	depends on PLAT_SPEAR || ARCH_NOMADIK || ARCH_U8500 || COMPILE_TEST
 	help
 	  Enables support for NAND Flash chips on the ST Microelectronics
 	  Flexible Static Memory Controller (FSMC)
@@ -461,6 +453,14 @@ config MTD_NAND_ROCKCHIP
 	    NFC v800: RK3308, RV1108
 	    NFC v900: PX30, RK3326
 
+config MTD_NAND_PL35X
+	tristate "ARM PL35X NAND controller"
+	depends on OF || COMPILE_TEST
+	depends on PL353_SMC
+	help
+	  Enables support for PrimeCell SMC PL351 and PL353 NAND
+	  controller found on Zynq7000.
+
 comment "Misc"
 
 config MTD_SM_COMMON
@@ -480,9 +480,9 @@ config MTD_NAND_RICOH
 	select MTD_SM_COMMON
 	help
 	  Enable support for Ricoh R5C852 xD card reader
-	  You also need to enable ether
+	  You also need to enable either
 	  NAND SSFDC (SmartMedia) read only translation layer' or new
-	  expermental, readwrite
+	  experimental, readwrite
 	  'SmartMedia/xD new translation layer'
 
 config MTD_NAND_DISKONCHIP

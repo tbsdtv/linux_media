@@ -521,9 +521,7 @@ static int venc_s_routing(struct v4l2_subdev *sd, u32 input, u32 output,
 	return ret;
 }
 
-static long venc_ioctl(struct v4l2_subdev *sd,
-			unsigned int cmd,
-			void *arg)
+static long venc_command(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	u32 val;
 
@@ -542,7 +540,7 @@ static long venc_ioctl(struct v4l2_subdev *sd,
 }
 
 static const struct v4l2_subdev_core_ops venc_core_ops = {
-	.ioctl      = venc_ioctl,
+	.command      = venc_command,
 };
 
 static const struct v4l2_subdev_video_ops venc_video_ops = {
@@ -623,7 +621,6 @@ static int venc_probe(struct platform_device *pdev)
 {
 	const struct platform_device_id *pdev_id;
 	struct venc_state *venc;
-	struct resource *res;
 
 	if (!pdev->dev.platform_data) {
 		dev_err(&pdev->dev, "No platform data for VENC sub device");
@@ -642,16 +639,12 @@ static int venc_probe(struct platform_device *pdev)
 	venc->pdev = &pdev->dev;
 	venc->pdata = pdev->dev.platform_data;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-
-	venc->venc_base = devm_ioremap_resource(&pdev->dev, res);
+	venc->venc_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(venc->venc_base))
 		return PTR_ERR(venc->venc_base);
 
 	if (venc->venc_type != VPBE_VERSION_1) {
-		res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-
-		venc->vdaccfg_reg = devm_ioremap_resource(&pdev->dev, res);
+		venc->vdaccfg_reg = devm_platform_ioremap_resource(pdev, 1);
 		if (IS_ERR(venc->vdaccfg_reg))
 			return PTR_ERR(venc->vdaccfg_reg);
 	}

@@ -59,7 +59,6 @@ union flowi_uli {
 		__le16	sport;
 	} dnports;
 
-	__be32		spi;
 	__be32		gre_key;
 
 	struct {
@@ -90,7 +89,6 @@ struct flowi4 {
 #define fl4_dport		uli.ports.dport
 #define fl4_icmp_type		uli.icmpt.type
 #define fl4_icmp_code		uli.icmpt.code
-#define fl4_ipsec_spi		uli.spi
 #define fl4_mh_type		uli.mht.type
 #define fl4_gre_key		uli.gre_key
 } __attribute__((__aligned__(BITS_PER_LONG/8)));
@@ -150,7 +148,6 @@ struct flowi6 {
 #define fl6_dport		uli.ports.dport
 #define fl6_icmp_type		uli.icmpt.type
 #define fl6_icmp_code		uli.icmpt.code
-#define fl6_ipsec_spi		uli.spi
 #define fl6_mh_type		uli.mht.type
 #define fl6_gre_key		uli.gre_key
 	__u32			mp_hash;
@@ -197,7 +194,7 @@ static inline struct flowi *flowi4_to_flowi(struct flowi4 *fl4)
 
 static inline struct flowi_common *flowi4_to_flowi_common(struct flowi4 *fl4)
 {
-	return &(flowi4_to_flowi(fl4)->u.__fl_common);
+	return &(fl4->__fl_common);
 }
 
 static inline struct flowi *flowi6_to_flowi(struct flowi6 *fl6)
@@ -207,7 +204,7 @@ static inline struct flowi *flowi6_to_flowi(struct flowi6 *fl6)
 
 static inline struct flowi_common *flowi6_to_flowi_common(struct flowi6 *fl6)
 {
-	return &(flowi6_to_flowi(fl6)->u.__fl_common);
+	return &(fl6->__fl_common);
 }
 
 static inline struct flowi *flowidn_to_flowi(struct flowidn *fldn)

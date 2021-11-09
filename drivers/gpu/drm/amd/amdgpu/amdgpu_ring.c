@@ -158,15 +158,17 @@ void amdgpu_ring_undo(struct amdgpu_ring *ring)
  * @irq_src: interrupt source to use for this ring
  * @irq_type: interrupt type to use for this ring
  * @hw_prio: ring priority (NORMAL/HIGH)
+ * @sched_score: optional score atomic shared with other schedulers
  *
  * Initialize the driver information for the selected ring (all asics).
  * Returns 0 on success, error on failure.
  */
 int amdgpu_ring_init(struct amdgpu_device *adev, struct amdgpu_ring *ring,
 		     unsigned int max_dw, struct amdgpu_irq_src *irq_src,
-		     unsigned int irq_type, unsigned int hw_prio)
+		     unsigned int irq_type, unsigned int hw_prio,
+		     atomic_t *sched_score)
 {
-	int r, i;
+	int r;
 	int sched_hw_submission = amdgpu_sched_hw_submission;
 	u32 *num_sched;
 	u32 hw_ip;
@@ -189,7 +191,8 @@ int amdgpu_ring_init(struct amdgpu_device *adev, struct amdgpu_ring *ring,
 		ring->adev = adev;
 		ring->idx = adev->num_rings++;
 		adev->rings[ring->idx] = ring;
-		r = amdgpu_fence_driver_init_ring(ring, sched_hw_submission);
+		r = amdgpu_fence_driver_init_ring(ring, sched_hw_submission,
+						  sched_score);
 		if (r)
 			return r;
 	}
@@ -258,8 +261,7 @@ int amdgpu_ring_init(struct amdgpu_device *adev, struct amdgpu_ring *ring,
 	}
 
 	ring->max_dw = max_dw;
-	ring->priority = DRM_SCHED_PRIORITY_NORMAL;
-	mutex_init(&ring->priority_mutex);
+	ring->hw_prio = hw_prio;
 
 	if (!ring->no_scheduler) {
 		hw_ip = ring->funcs->type;
@@ -267,9 +269,6 @@ int amdgpu_ring_init(struct amdgpu_device *adev, struct amdgpu_ring *ring,
 		adev->gpu_sched[hw_ip][hw_prio].sched[(*num_sched)++] =
 			&ring->sched;
 	}
-
-	for (i = DRM_SCHED_PRIORITY_MIN; i < DRM_SCHED_PRIORITY_COUNT; ++i)
-		atomic_set(&ring->num_jobs[i], 0);
 
 	return 0;
 }
@@ -429,8 +428,8 @@ int amdgpu_debugfs_ring_init(struct amdgpu_device *adev,
 	ent = debugfs_create_file(name,
 				  S_IFREG | S_IRUGO, root,
 				  ring, &amdgpu_debugfs_ring_fops);
-	if (!ent)
-		return -ENOMEM;
+	if (IS_ERR(ent))
+		return PTR_ERR(ent);
 
 	i_size_write(ent->d_inode, ring->ring_size + 12);
 	ring->ent = ent;

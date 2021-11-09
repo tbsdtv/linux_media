@@ -22,23 +22,6 @@
 
 #include "panel-samsung-s6e63m0.h"
 
-/* Manufacturer Command Set */
-#define MCS_ELVSS_ON		0xb1
-#define MCS_TEMP_SWIRE		0xb2
-#define MCS_MIECTL1		0xc0
-#define MCS_BCMODE		0xc1
-#define MCS_ERROR_CHECK		0xd5
-#define MCS_READ_ID1		0xda
-#define MCS_READ_ID2		0xdb
-#define MCS_READ_ID3		0xdc
-#define MCS_LEVEL_2_KEY		0xf0
-#define MCS_MTP_KEY		0xf1
-#define MCS_DISCTL		0xf2
-#define MCS_SRCCTL		0xf6
-#define MCS_IFCTL		0xf7
-#define MCS_PANELCTL		0xf8
-#define MCS_PGAMMACTL		0xfa
-
 #define S6E63M0_LCD_ID_VALUE_M2		0xA4
 #define S6E63M0_LCD_ID_VALUE_SM2	0xB4
 #define S6E63M0_LCD_ID_VALUE_SM2_1	0xB6
@@ -275,12 +258,14 @@ static u8 const s6e63m0_elvss_per_gamma[NUM_GAMMA_LEVELS] = {
 
 struct s6e63m0 {
 	struct device *dev;
-	int (*dcs_read)(struct device *dev, const u8 cmd, u8 *val);
-	int (*dcs_write)(struct device *dev, const u8 *data, size_t len);
+	void *transport_data;
+	int (*dcs_read)(struct device *dev, void *trsp, const u8 cmd, u8 *val);
+	int (*dcs_write)(struct device *dev, void *trsp, const u8 *data, size_t len);
 	struct drm_panel panel;
 	struct backlight_device *bl_dev;
 	u8 lcd_type;
 	u8 elvss_pulse;
+	bool dsi_mode;
 
 	struct regulator_bulk_data supplies[2];
 	struct gpio_desc *reset_gpio;
@@ -331,7 +316,7 @@ static void s6e63m0_dcs_read(struct s6e63m0 *ctx, const u8 cmd, u8 *data)
 	if (ctx->error < 0)
 		return;
 
-	ctx->error = ctx->dcs_read(ctx->dev, cmd, data);
+	ctx->error = ctx->dcs_read(ctx->dev, ctx->transport_data, cmd, data);
 }
 
 static void s6e63m0_dcs_write(struct s6e63m0 *ctx, const u8 *data, size_t len)
@@ -339,7 +324,7 @@ static void s6e63m0_dcs_write(struct s6e63m0 *ctx, const u8 *data, size_t len)
 	if (ctx->error < 0 || len == 0)
 		return;
 
-	ctx->error = ctx->dcs_write(ctx->dev, data, len);
+	ctx->error = ctx->dcs_write(ctx->dev, ctx->transport_data, data, len);
 }
 
 #define s6e63m0_dcs_write_seq_static(ctx, seq ...) \
@@ -395,9 +380,21 @@ static int s6e63m0_check_lcd_type(struct s6e63m0 *ctx)
 
 static void s6e63m0_init(struct s6e63m0 *ctx)
 {
-	s6e63m0_dcs_write_seq_static(ctx, MCS_PANELCTL,
-				     0x01, 0x27, 0x27, 0x07, 0x07, 0x54, 0x9f,
-				     0x63, 0x8f, 0x1a, 0x33, 0x0d, 0x00, 0x00);
+	/*
+	 * We do not know why there is a difference in the DSI mode.
+	 * (No datasheet.)
+	 *
+	 * In the vendor driver this sequence is called
+	 * "SEQ_PANEL_CONDITION_SET" or "DCS_CMD_SEQ_PANEL_COND_SET".
+	 */
+	if (ctx->dsi_mode)
+		s6e63m0_dcs_write_seq_static(ctx, MCS_PANELCTL,
+					     0x01, 0x2c, 0x2c, 0x07, 0x07, 0x5f, 0xb3,
+					     0x6d, 0x97, 0x1d, 0x3a, 0x0f, 0x00, 0x00);
+	else
+		s6e63m0_dcs_write_seq_static(ctx, MCS_PANELCTL,
+					     0x01, 0x27, 0x27, 0x07, 0x07, 0x54, 0x9f,
+					     0x63, 0x8f, 0x1a, 0x33, 0x0d, 0x00, 0x00);
 
 	s6e63m0_dcs_write_seq_static(ctx, MCS_DISCTL,
 				     0x02, 0x03, 0x1c, 0x10, 0x10);
@@ -414,40 +411,40 @@ static void s6e63m0_init(struct s6e63m0 *ctx)
 
 	s6e63m0_dcs_write_seq_static(ctx, MCS_SRCCTL,
 				     0x00, 0x8e, 0x07);
-	s6e63m0_dcs_write_seq_static(ctx, 0xb3, 0x6c);
+	s6e63m0_dcs_write_seq_static(ctx, MCS_PENTILE_1, 0x6c);
 
-	s6e63m0_dcs_write_seq_static(ctx, 0xb5,
+	s6e63m0_dcs_write_seq_static(ctx, MCS_GAMMA_DELTA_Y_RED,
 				     0x2c, 0x12, 0x0c, 0x0a, 0x10, 0x0e, 0x17,
 				     0x13, 0x1f, 0x1a, 0x2a, 0x24, 0x1f, 0x1b,
 				     0x1a, 0x17, 0x2b, 0x26, 0x22, 0x20, 0x3a,
 				     0x34, 0x30, 0x2c, 0x29, 0x26, 0x25, 0x23,
 				     0x21, 0x20, 0x1e, 0x1e);
 
-	s6e63m0_dcs_write_seq_static(ctx, 0xb6,
+	s6e63m0_dcs_write_seq_static(ctx, MCS_GAMMA_DELTA_X_RED,
 				     0x00, 0x00, 0x11, 0x22, 0x33, 0x44, 0x44,
 				     0x44, 0x55, 0x55, 0x66, 0x66, 0x66, 0x66,
 				     0x66, 0x66);
 
-	s6e63m0_dcs_write_seq_static(ctx, 0xb7,
+	s6e63m0_dcs_write_seq_static(ctx, MCS_GAMMA_DELTA_Y_GREEN,
 				     0x2c, 0x12, 0x0c, 0x0a, 0x10, 0x0e, 0x17,
 				     0x13, 0x1f, 0x1a, 0x2a, 0x24, 0x1f, 0x1b,
 				     0x1a, 0x17, 0x2b, 0x26, 0x22, 0x20, 0x3a,
 				     0x34, 0x30, 0x2c, 0x29, 0x26, 0x25, 0x23,
 				     0x21, 0x20, 0x1e, 0x1e);
 
-	s6e63m0_dcs_write_seq_static(ctx, 0xb8,
+	s6e63m0_dcs_write_seq_static(ctx, MCS_GAMMA_DELTA_X_GREEN,
 				     0x00, 0x00, 0x11, 0x22, 0x33, 0x44, 0x44,
 				     0x44, 0x55, 0x55, 0x66, 0x66, 0x66, 0x66,
 				     0x66, 0x66);
 
-	s6e63m0_dcs_write_seq_static(ctx, 0xb9,
+	s6e63m0_dcs_write_seq_static(ctx, MCS_GAMMA_DELTA_Y_BLUE,
 				     0x2c, 0x12, 0x0c, 0x0a, 0x10, 0x0e, 0x17,
 				     0x13, 0x1f, 0x1a, 0x2a, 0x24, 0x1f, 0x1b,
 				     0x1a, 0x17, 0x2b, 0x26, 0x22, 0x20, 0x3a,
 				     0x34, 0x30, 0x2c, 0x29, 0x26, 0x25, 0x23,
 				     0x21, 0x20, 0x1e, 0x1e);
 
-	s6e63m0_dcs_write_seq_static(ctx, 0xba,
+	s6e63m0_dcs_write_seq_static(ctx, MCS_GAMMA_DELTA_X_BLUE,
 				     0x00, 0x00, 0x11, 0x22, 0x33, 0x44, 0x44,
 				     0x44, 0x55, 0x55, 0x66, 0x66, 0x66, 0x66,
 				     0x66, 0x66);
@@ -671,12 +668,12 @@ static const struct backlight_ops s6e63m0_backlight_ops = {
 	.update_status	= s6e63m0_set_brightness,
 };
 
-static int s6e63m0_backlight_register(struct s6e63m0 *ctx)
+static int s6e63m0_backlight_register(struct s6e63m0 *ctx, u32 max_brightness)
 {
 	struct backlight_properties props = {
 		.type		= BACKLIGHT_RAW,
-		.brightness	= MAX_BRIGHTNESS,
-		.max_brightness = MAX_BRIGHTNESS
+		.brightness	= max_brightness,
+		.max_brightness = max_brightness,
 	};
 	struct device *dev = ctx->dev;
 	int ret = 0;
@@ -692,18 +689,21 @@ static int s6e63m0_backlight_register(struct s6e63m0 *ctx)
 	return ret;
 }
 
-int s6e63m0_probe(struct device *dev,
-		  int (*dcs_read)(struct device *dev, const u8 cmd, u8 *val),
-		  int (*dcs_write)(struct device *dev, const u8 *data, size_t len),
+int s6e63m0_probe(struct device *dev, void *trsp,
+		  int (*dcs_read)(struct device *dev, void *trsp, const u8 cmd, u8 *val),
+		  int (*dcs_write)(struct device *dev, void *trsp, const u8 *data, size_t len),
 		  bool dsi_mode)
 {
 	struct s6e63m0 *ctx;
+	u32 max_brightness;
 	int ret;
 
 	ctx = devm_kzalloc(dev, sizeof(struct s6e63m0), GFP_KERNEL);
 	if (!ctx)
 		return -ENOMEM;
 
+	ctx->transport_data = trsp;
+	ctx->dsi_mode = dsi_mode;
 	ctx->dcs_read = dcs_read;
 	ctx->dcs_write = dcs_write;
 	dev_set_drvdata(dev, ctx);
@@ -711,6 +711,14 @@ int s6e63m0_probe(struct device *dev,
 	ctx->dev = dev;
 	ctx->enabled = false;
 	ctx->prepared = false;
+
+	ret = device_property_read_u32(dev, "max-brightness", &max_brightness);
+	if (ret)
+		max_brightness = MAX_BRIGHTNESS;
+	if (max_brightness > MAX_BRIGHTNESS) {
+		dev_err(dev, "illegal max brightness specified\n");
+		max_brightness = MAX_BRIGHTNESS;
+	}
 
 	ctx->supplies[0].supply = "vdd3";
 	ctx->supplies[1].supply = "vci";
@@ -731,7 +739,7 @@ int s6e63m0_probe(struct device *dev,
 		       dsi_mode ? DRM_MODE_CONNECTOR_DSI :
 		       DRM_MODE_CONNECTOR_DPI);
 
-	ret = s6e63m0_backlight_register(ctx);
+	ret = s6e63m0_backlight_register(ctx, max_brightness);
 	if (ret < 0)
 		return ret;
 

@@ -92,12 +92,12 @@ icc_provider_to_tegra_mc(struct icc_provider *provider)
 	return container_of(provider, struct tegra_mc, provider);
 }
 
-static inline u32 mc_readl(struct tegra_mc *mc, unsigned long offset)
+static inline u32 mc_readl(const struct tegra_mc *mc, unsigned long offset)
 {
 	return readl_relaxed(mc->regs + offset);
 }
 
-static inline void mc_writel(struct tegra_mc *mc, u32 value,
+static inline void mc_writel(const struct tegra_mc *mc, u32 value,
 			     unsigned long offset)
 {
 	writel_relaxed(value, mc->regs + offset);
@@ -128,6 +128,31 @@ extern const struct tegra_mc_soc tegra132_mc_soc;
 #ifdef CONFIG_ARCH_TEGRA_210_SOC
 extern const struct tegra_mc_soc tegra210_mc_soc;
 #endif
+
+#ifdef CONFIG_ARCH_TEGRA_186_SOC
+extern const struct tegra_mc_soc tegra186_mc_soc;
+#endif
+
+#ifdef CONFIG_ARCH_TEGRA_194_SOC
+extern const struct tegra_mc_soc tegra194_mc_soc;
+#endif
+
+#if defined(CONFIG_ARCH_TEGRA_3x_SOC) || \
+    defined(CONFIG_ARCH_TEGRA_114_SOC) || \
+    defined(CONFIG_ARCH_TEGRA_124_SOC) || \
+    defined(CONFIG_ARCH_TEGRA_132_SOC) || \
+    defined(CONFIG_ARCH_TEGRA_210_SOC)
+int tegra30_mc_probe(struct tegra_mc *mc);
+extern const struct tegra_mc_ops tegra30_mc_ops;
+#endif
+
+#if defined(CONFIG_ARCH_TEGRA_186_SOC) || \
+    defined(CONFIG_ARCH_TEGRA_194_SOC)
+extern const struct tegra_mc_ops tegra186_mc_ops;
+#endif
+
+extern const char * const tegra_mc_status_names[32];
+extern const char * const tegra_mc_error_names[8];
 
 /*
  * These IDs are for internal use of Tegra ICC drivers. The ID numbers are

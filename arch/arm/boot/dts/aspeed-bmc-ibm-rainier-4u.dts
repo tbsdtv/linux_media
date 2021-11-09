@@ -19,19 +19,3 @@
 		reg = <0x6b>;
 	};
 };
-
-&fan0 {
-	tach-pulses = <4>;
-};
-
-&fan1 {
-	tach-pulses = <4>;
-};
-
-&fan2 {
-	tach-pulses = <4>;
-};
-
-&fan3 {
-	tach-pulses = <4>;
-};

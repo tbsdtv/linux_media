@@ -220,6 +220,8 @@ static int gx1503_set_frontend(struct dvb_frontend *fe)
 
 	bandwidth = c->bandwidth_hz/1000;
 	bandwidth = bandwidth/1000;
+	if(bandwidth==0)
+		bandwidth = 8;
 
 	GX1503_WriteRegWithMask(client,0xF5,1,6,6); 
 	GX1503_WriteRegWithMask(client,0xF5,0,6,6);

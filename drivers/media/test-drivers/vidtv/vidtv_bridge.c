@@ -416,6 +416,7 @@ static int vidtv_bridge_dvb_init(struct vidtv_dvb *dvb)
 	ret = vidtv_bridge_register_adap(dvb);
 	if (ret < 0)
 		goto fail_adapter;
+	dvb_register_media_controller(&dvb->adapter, &dvb->mdev);
 
 	for (i = 0; i < NUM_FE; ++i) {
 		ret = vidtv_bridge_probe_demod(dvb, i);
@@ -495,6 +496,15 @@ static int vidtv_bridge_probe(struct platform_device *pdev)
 
 	dvb->pdev = pdev;
 
+#ifdef CONFIG_MEDIA_CONTROLLER_DVB
+	dvb->mdev.dev = &pdev->dev;
+
+	strscpy(dvb->mdev.model, "vidtv", sizeof(dvb->mdev.model));
+	strscpy(dvb->mdev.bus_info, "platform:vidtv", sizeof(dvb->mdev.bus_info));
+
+	media_device_init(&dvb->mdev);
+#endif
+
 	ret = vidtv_bridge_dvb_init(dvb);
 	if (ret < 0)
 		goto err_dvb;
@@ -504,20 +514,12 @@ static int vidtv_bridge_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, dvb);
 
 #ifdef CONFIG_MEDIA_CONTROLLER_DVB
-	dvb->mdev.dev = &pdev->dev;
-
-	strscpy(dvb->mdev.model, "vidtv", sizeof(dvb->mdev.model));
-	strscpy(dvb->mdev.bus_info, "platform:vidtv", sizeof(dvb->mdev.bus_info));
-
-	media_device_init(&dvb->mdev);
 	ret = media_device_register(&dvb->mdev);
 	if (ret) {
 		dev_err(dvb->mdev.dev,
 			"media device register failed (err=%d)\n", ret);
 		goto err_media_device_register;
 	}
-
-	dvb_register_media_controller(&dvb->adapter, &dvb->mdev);
 #endif /* CONFIG_MEDIA_CONTROLLER_DVB */
 
 	dev_info(&pdev->dev, "Successfully initialized vidtv!\n");
@@ -562,6 +564,10 @@ static int vidtv_bridge_remove(struct platform_device *pdev)
 
 static void vidtv_bridge_dev_release(struct device *dev)
 {
+	struct vidtv_dvb *dvb;
+
+	dvb = dev_get_drvdata(dev);
+	kfree(dvb);
 }
 
 static struct platform_device vidtv_bridge_dev = {

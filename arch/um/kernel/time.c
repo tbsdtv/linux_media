@@ -68,23 +68,15 @@ static void time_travel_handle_message(struct um_timetravel_msg *msg,
 	int ret;
 
 	/*
-	 * Poll outside the locked section (if we're not called to only read
-	 * the response) so we can get interrupts for e.g. virtio while we're
-	 * here, but then we need to lock to not get interrupted between the
-	 * read of the message and write of the ACK.
+	 * We can't unlock here, but interrupt signals with a timetravel_handler
+	 * (see um_request_irq_tt) get to the timetravel_handler anyway.
 	 */
 	if (mode != TTMH_READ) {
-		bool disabled = irqs_disabled();
+		BUG_ON(mode == TTMH_IDLE && !irqs_disabled());
 
-		BUG_ON(mode == TTMH_IDLE && !disabled);
-
-		if (disabled)
-			local_irq_enable();
 		while (os_poll(1, &time_travel_ext_fd) != 0) {
 			/* nothing */
 		}
-		if (disabled)
-			local_irq_disable();
 	}
 
 	ret = os_read_file(time_travel_ext_fd, msg, sizeof(*msg));
@@ -123,15 +115,15 @@ static u64 time_travel_ext_req(u32 op, u64 time)
 		.time = time,
 		.seq = mseq,
 	};
-	unsigned long flags;
 
 	/*
-	 * We need to save interrupts here and only restore when we
-	 * got the ACK - otherwise we can get interrupted and send
-	 * another request while we're still waiting for an ACK, but
-	 * the peer doesn't know we got interrupted and will send
-	 * the ACKs in the same order as the message, but we'd need
-	 * to see them in the opposite order ...
+	 * We need to block even the timetravel handlers of SIGIO here and
+	 * only restore their use when we got the ACK - otherwise we may
+	 * (will) get interrupted by that, try to queue the IRQ for future
+	 * processing and thus send another request while we're still waiting
+	 * for an ACK, but the peer doesn't know we got interrupted and will
+	 * send the ACKs in the same order as the message, but we'd need to
+	 * see them in the opposite order ...
 	 *
 	 * This wouldn't matter *too* much, but some ACKs carry the
 	 * current time (for UM_TIMETRAVEL_GET) and getting another
@@ -140,7 +132,7 @@ static u64 time_travel_ext_req(u32 op, u64 time)
 	 * The sequence number assignment that happens here lets us
 	 * debug such message handling issues more easily.
 	 */
-	local_irq_save(flags);
+	block_signals_hard();
 	os_write_file(time_travel_ext_fd, &msg, sizeof(msg));
 
 	while (msg.op != UM_TIMETRAVEL_ACK)
@@ -152,7 +144,7 @@ static u64 time_travel_ext_req(u32 op, u64 time)
 
 	if (op == UM_TIMETRAVEL_GET)
 		time_travel_set_time(msg.time);
-	local_irq_restore(flags);
+	unblock_signals_hard();
 
 	return msg.time;
 }
@@ -278,6 +270,7 @@ static void __time_travel_add_event(struct time_travel_event *e,
 {
 	struct time_travel_event *tmp;
 	bool inserted = false;
+	unsigned long flags;
 
 	if (e->pending)
 		return;
@@ -285,6 +278,7 @@ static void __time_travel_add_event(struct time_travel_event *e,
 	e->pending = true;
 	e->time = time;
 
+	local_irq_save(flags);
 	list_for_each_entry(tmp, &time_travel_events, list) {
 		/*
 		 * Add the new entry before one with higher time,
@@ -307,6 +301,7 @@ static void __time_travel_add_event(struct time_travel_event *e,
 	tmp = time_travel_first_event();
 	time_travel_ext_update_request(tmp->time);
 	time_travel_next_event = tmp->time;
+	local_irq_restore(flags);
 }
 
 static void time_travel_add_event(struct time_travel_event *e,
@@ -316,6 +311,12 @@ static void time_travel_add_event(struct time_travel_event *e,
 		return;
 
 	__time_travel_add_event(e, time);
+}
+
+void time_travel_add_event_rel(struct time_travel_event *e,
+			       unsigned long long delay_ns)
+{
+	time_travel_add_event(e, time_travel_time + delay_ns);
 }
 
 void time_travel_periodic_timer(struct time_travel_event *e)
@@ -343,9 +344,6 @@ void deliver_time_travel_irqs(void)
 	while ((e = list_first_entry_or_null(&time_travel_irqs,
 					     struct time_travel_event,
 					     list))) {
-		WARN(e->time != time_travel_time,
-		     "time moved from %lld to %lld before IRQ delivery\n",
-		     time_travel_time, e->time);
 		list_del(&e->list);
 		e->pending = false;
 		e->fn(e);
@@ -381,12 +379,16 @@ static void time_travel_deliver_event(struct time_travel_event *e)
 	}
 }
 
-static bool time_travel_del_event(struct time_travel_event *e)
+bool time_travel_del_event(struct time_travel_event *e)
 {
+	unsigned long flags;
+
 	if (!e->pending)
 		return false;
+	local_irq_save(flags);
 	list_del(&e->list);
 	e->pending = false;
+	local_irq_restore(flags);
 	return true;
 }
 
@@ -535,6 +537,31 @@ invalid_number:
 
 	return 1;
 }
+
+static void time_travel_set_start(void)
+{
+	if (time_travel_start_set)
+		return;
+
+	switch (time_travel_mode) {
+	case TT_MODE_EXTERNAL:
+		time_travel_start = time_travel_ext_req(UM_TIMETRAVEL_GET_TOD, -1);
+		/* controller gave us the *current* time, so adjust by that */
+		time_travel_ext_get_time();
+		time_travel_start -= time_travel_time;
+		break;
+	case TT_MODE_INFCPU:
+	case TT_MODE_BASIC:
+		if (!time_travel_start_set)
+			time_travel_start = os_persistent_clock_emulation();
+		break;
+	case TT_MODE_OFF:
+		/* we just read the host clock with os_persistent_clock_emulation() */
+		break;
+	}
+
+	time_travel_start_set = true;
+}
 #else /* CONFIG_UML_TIME_TRAVEL_SUPPORT */
 #define time_travel_start_set 0
 #define time_travel_start 0
@@ -553,11 +580,17 @@ static void time_travel_set_interval(unsigned long long interval)
 {
 }
 
+static inline void time_travel_set_start(void)
+{
+}
+
 /* fail link if this actually gets used */
 extern u64 time_travel_ext_req(u32 op, u64 time);
 
 /* these are empty macros so the struct/fn need not exist */
 #define time_travel_add_event(e, time) do { } while (0)
+/* externally not usable - redefine here so we can */
+#undef time_travel_del_event
 #define time_travel_del_event(e) do { } while (0)
 #endif
 
@@ -731,6 +764,8 @@ void read_persistent_clock64(struct timespec64 *ts)
 {
 	long long nsecs;
 
+	time_travel_set_start();
+
 	if (time_travel_mode != TT_MODE_OFF)
 		nsecs = time_travel_start + time_travel_time;
 	else
@@ -742,25 +777,6 @@ void read_persistent_clock64(struct timespec64 *ts)
 
 void __init time_init(void)
 {
-#ifdef CONFIG_UML_TIME_TRAVEL_SUPPORT
-	switch (time_travel_mode) {
-	case TT_MODE_EXTERNAL:
-		time_travel_start = time_travel_ext_req(UM_TIMETRAVEL_GET_TOD, -1);
-		/* controller gave us the *current* time, so adjust by that */
-		time_travel_ext_get_time();
-		time_travel_start -= time_travel_time;
-		break;
-	case TT_MODE_INFCPU:
-	case TT_MODE_BASIC:
-		if (!time_travel_start_set)
-			time_travel_start = os_persistent_clock_emulation();
-		break;
-	case TT_MODE_OFF:
-		/* we just read the host clock with os_persistent_clock_emulation() */
-		break;
-	}
-#endif
-
 	timer_set_signal_handler();
 	late_time_init = um_timer_setup;
 }
