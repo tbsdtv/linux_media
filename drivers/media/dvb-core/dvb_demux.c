@@ -28,6 +28,7 @@
 #include <linux/string.h>
 #include <linux/crc32.h>
 #include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <asm/div64.h>
 
 #include <media/dvb_demux.h>
