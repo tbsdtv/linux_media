@@ -1840,14 +1840,14 @@ static int rtvRF_SetFrequency(struct mtv23x_dev*dev,enum E_RTV_SERVICE_TYPE eSer
 	rtvRF_SelectService(dev,eServiceType);
 
 	if (dev->rtv_1seglpmode) {
-	regmap_write(dev->regmap,MAP_SEL_REG,LPOFDM_PAGE);
+		regmap_write(dev->regmap,MAP_SEL_REG,LPOFDM_PAGE);
 
-	if (eServiceType == RTV_SERVICE_VHF_ISDBTmm_1seg) {
-		regmap_write(dev->regmap,0x10, 0xFA);
-		dwLoFreq = dwChFreqKHz - 857;
-	} else {
-		regmap_write(dev->regmap,0x10, 0xF8);
-		dwLoFreq = dwChFreqKHz + 857;
+		if (eServiceType == RTV_SERVICE_VHF_ISDBTmm_1seg) {
+			regmap_write(dev->regmap,0x10, 0xFA);
+			dwLoFreq = dwChFreqKHz - 857;
+		} else {
+			regmap_write(dev->regmap,0x10, 0xF8);
+			dwLoFreq = dwChFreqKHz + 857;
 		}
 	} else
 		dwLoFreq = dwChFreqKHz;
