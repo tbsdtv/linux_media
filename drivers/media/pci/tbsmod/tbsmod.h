@@ -45,6 +45,7 @@ struct tbs_pcie_dev {
 	u8			mods_num;
 
 	u8			bw;  //dvbt
+	bool			msi;
 	
 
 };

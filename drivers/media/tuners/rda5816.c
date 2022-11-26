@@ -68,8 +68,9 @@ static int rda5816_rd(struct rda5816_priv *priv, u8 addr, u8 *data)
 static int rda5816_init(struct dvb_frontend *fe)
 {
 	struct rda5816_priv *priv = fe->tuner_priv;
-	dev_dbg(&priv->i2c->dev,"%s()\n",__func__);
 	u8 buffer;
+	dev_dbg(&priv->i2c->dev,"%s()\n",__func__);
+
 
 	if(priv->init_done)
 		return 0;
@@ -293,10 +294,10 @@ static int rda5816_set_params(struct dvb_frontend *fe)
 {
 	struct rda5816_priv *priv = fe->tuner_priv;
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
-	u32 fPLL, bw,fSym,temp_value = 0;;
 	u8 buffer; 
 	u8 Filter_bw_control_bit;	
 	int i;
+	u32 fPLL, bw,fSym,temp_value = 0;
 
 	dev_dbg(&priv->i2c->dev, "%s() delivery_system=%d frequency=%d " \
 			"symbol_rate=%d\n", __func__,

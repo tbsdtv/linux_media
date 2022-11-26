@@ -24,6 +24,10 @@
 #define BOOL bool
 #define PIKOTV_MBKB_THRESHOLD 210 /* PikoTV */
 
+static bool enable_msi = true;
+module_param(enable_msi, bool, 0444);
+MODULE_PARM_DESC(enable_msi, "use an msi interrupt if available");
+
 static void spi_ad9789Enable(struct tbs_pcie_dev *dev, int Data)
 {
 	unsigned char tmpbuf[4];
@@ -377,6 +381,50 @@ static void config_qamb_ctl(struct tbs_pcie_dev *dev, int control)
 
 }
 
+//srate Ks
+static void config_srate(struct tbs_pcie_dev *dev, unsigned long srate)
+{
+	unsigned char buff[4] = {0};
+	//srate = (2400 * 1000 *16384) /srate;
+
+	srate = srate / 1000;
+	printk("set symbolrate: %ld\n", srate);
+	srate = div_u64(39321600000ULL, srate);
+
+	buff[2] = srate & 0xff;
+	buff[1] = (srate >> 8) & 0xff;
+	buff[0] = (srate >> 16) & 0xff;
+
+	ad9789_wt_nBytes(dev, 3, AD9789_RATE_CONVERT_P, buff);
+
+	//update
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
+
+
+}
+
+static void config_srate_qamb(struct tbs_pcie_dev *dev, unsigned long srate)
+{
+	unsigned char buff[4] = {0};
+	//srate = (2160 * 1000 *16384) /srate;
+	srate = srate / 1000;
+	printk("set symbolrate: %ld\n", srate);
+	srate = div_u64(35389440000ULL, srate);
+
+	buff[2] = srate & 0xff;
+	buff[1] = (srate >> 8) & 0xff;
+	buff[0] = (srate >> 16) & 0xff;
+
+	ad9789_wt_nBytes(dev, 3, AD9789_RATE_CONVERT_P, buff);
+
+	//update
+	buff[0] = 0x80;
+	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
+
+
+}
+
 //qam ( 0:64qam  1:qam256 )
 static void config_qamb(struct tbs_pcie_dev *dev, int qam)
 {
@@ -403,42 +451,21 @@ static void config_qamb(struct tbs_pcie_dev *dev, int qam)
 		
 	TBS_PCIE_WRITE(0, AD9789_MODULATION, *(u32 *)&buf[0]);
 
+	buf[2] = 0x00;
+	buf[1] = 0x00;
+	buf[0] = 0x80;
+	ad9789_wt_nBytes(dev,3,AD9789_RATE_CONVERT_Q,buf);
 	//config srate  
 	//5056
 	if(qam == QAM_64)
 	{
-		buf[2] = 0x78;
-		buf[1] = 0xC4;
-		buf[0] = 0xCD;
-		ad9789_wt_nBytes(dev,3,AD9789_RATE_CONVERT_Q,buf);
-		
-		buf[2] = 0x00;
-		buf[1] = 0x12;
-		buf[0] = 0x7A;
-		ad9789_wt_nBytes(dev,3,AD9789_RATE_CONVERT_P,buf);
+		config_srate_qamb(dev, 5056000);
 
-		buf[0] = 0x61;
-		ad9789_wt_nBytes(dev, 1, AD9789_DATA_CONTROL, buf); 
-		buf[0] = 0x62;
-		ad9789_wt_nBytes(dev, 1, AD9789_INTERNAL_COLCK_ADJUST, buf); 
 	}
 	else // 5360
 	{
+		config_srate_qamb(dev, 5360000);
 	
-		buf[2] = 0x00;
-		buf[1] = 0x00;
-		buf[0] = 0x80;
-		ad9789_wt_nBytes(dev,3,AD9789_RATE_CONVERT_Q,buf);
-		
-		buf[2] = 0x4C;
-		buf[1] = 0xA4;
-		buf[0] = 0x47;
-		ad9789_wt_nBytes(dev,3,AD9789_RATE_CONVERT_P,buf);
-
-		buf[0] = 0x60;
-		ad9789_wt_nBytes(dev, 1, AD9789_DATA_CONTROL, buf); 
-		buf[0] = 0x07;
-		ad9789_wt_nBytes(dev, 1, AD9789_INTERNAL_COLCK_ADJUST, buf); 	
 	}
 
 	//update
@@ -479,28 +506,28 @@ static BOOL ad9789_setFre_qamb(struct tbs_pcie_dev *dev, unsigned long freq)
 	freq = freq / 1000000;
 	printk("set freq: %ld\n", freq);
 	//freq_0 = (16777216 * freq)/96;
-	freq_0 = div_u64(16777216ULL * freq, 96);
+	freq_0 = div_u64(16777216ULL * freq, 135);
 	buff[2] = freq_0 & 0xff;
 	buff[1] = (freq_0 >> 8) & 0xff;
 	buff[0] = (freq_0 >> 16) & 0xff;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_0_FRE, buff);
 
 	//freq_1 = (16777216 * (freq+8))/96;
-	freq_1 = div_u64(16777216ULL * (freq + 6), 96);
+	freq_1 = div_u64(16777216ULL * (freq + 6), 135);
 	buff[2] = freq_1 & 0xff;
 	buff[1] = (freq_1 >> 8) & 0xff;
 	buff[0] = (freq_1 >> 16) & 0xff;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_1_FRE, buff);
 
 	//freq_2 = (16777216 * (freq+16))/96;
-	freq_2 = div_u64(16777216ULL * (freq + 12), 96);
+	freq_2 = div_u64(16777216ULL * (freq + 12), 135);
 	buff[2] = freq_2 & 0xff;
 	buff[1] = (freq_2 >> 8) & 0xff;
 	buff[0] = (freq_2 >> 16) & 0xff;
 	ad9789_wt_nBytes(dev, 3, AD9789_NCO_2_FRE, buff);
 
 	//freq_3 = (16777216 * (freq+24))/96;
-	freq_3 = div_u64(16777216ULL * (freq + 18), 96);
+	freq_3 = div_u64(16777216ULL * (freq + 18), 135);
 	buff[2] = freq_3 & 0xff;
 	buff[1] = (freq_3 >> 8) & 0xff;
 	buff[0] = (freq_3 >> 16) & 0xff;
@@ -508,10 +535,11 @@ static BOOL ad9789_setFre_qamb(struct tbs_pcie_dev *dev, unsigned long freq)
 
 	fcenter = freq + 9;
 	//fcenter = (fcenter*65536)/1536;
-	fcenter = div_u64(fcenter * 65536ULL, 1536);
+	fcenter = div_u64(fcenter * 65536ULL, 2160);
 	buff[1] = fcenter & 0xff;
 	buff[0] = (fcenter >> 8) & 0xff; 
-	ad9789_wt_nBytes(dev, 2, AD9789_CENTER_FRE_BPF, buff); 
+	ad9789_wt_nBytes(dev, 2, AD9789_CENTER_FRE_BPF, buff);
+
 
 	//update
 	buff[0] = 0x00;
@@ -630,27 +658,7 @@ static BOOL ad9789_setFre_dvbc(struct tbs_pcie_dev *dev, unsigned long freq)
 	return TRUE;
 }
 */
-//srate Ks
-static void config_srate(struct tbs_pcie_dev *dev, unsigned long srate)
-{
-	unsigned char buff[4] = {0};
-	//srate = (2400 * 1000 *16384) /srate;
-	srate = srate / 1000;
-	printk("set symbolrate: %ld\n", srate);
-	srate = div_u64(39321600000ULL, srate);
 
-	buff[2] = srate & 0xff;
-	buff[1] = (srate >> 8) & 0xff;
-	buff[0] = (srate >> 16) & 0xff;
-
-	ad9789_wt_nBytes(dev, 3, AD9789_RATE_CONVERT_P, buff);
-
-	//update
-	buff[0] = 0x80;
-	ad9789_wt_nBytes(dev, 1, AD9789_FRE_UPDATE, buff);
-
-
-}
 
 static void AD9789_Configration_dvbc(struct tbs_pcie_dev *dev)
 {
@@ -803,6 +811,11 @@ static void AD9789_Configration_qamb(struct tbs_pcie_dev *dev)
 	config_qamb(dev,dev->modulation);
 	config_qamb_ctl(dev,0);
 
+	buff[0] = 0x60;
+	ad9789_wt_nBytes(dev, 1, AD9789_DATA_CONTROL, buff); 
+	buff[0] = 0x39;
+	ad9789_wt_nBytes(dev, 1, AD9789_INTERNAL_COLCK_ADJUST, buff); 
+
 	buff[0] = 0x14;
 	ad9789_wt_nBytes(dev, 1, AD9789_SUM_SCALAR, buff); 
 	buff[0] = 0x20;
@@ -856,6 +869,7 @@ static void AD9789_Configration_qamb(struct tbs_pcie_dev *dev)
 
 	buff[0] = 0x0E;
 	ad9789_wt_nBytes(dev, 1, AD9789_INT_ENABLE, buff); 
+
 
 	return;
 }
@@ -1020,7 +1034,7 @@ static BOOL MAX2871ConfigrationDvbc(struct tbs_pcie_dev *dev)
 	return TRUE;
 }
 
-
+//1536
 static BOOL AD4351_Configration_qamb(struct tbs_pcie_dev *dev)
 {
 	unsigned char ret;
@@ -1085,7 +1099,7 @@ static BOOL AD4351_Configration_qamb(struct tbs_pcie_dev *dev)
 	return TRUE;
 }
 
-
+//2400
 static BOOL AD4351_Configration_dvbc(struct tbs_pcie_dev *dev)
 {
 	unsigned char ret;
@@ -1149,7 +1163,70 @@ static BOOL AD4351_Configration_dvbc(struct tbs_pcie_dev *dev)
 	}
 	return TRUE;
 }
+//2160
+static BOOL AD4351_Configration_2160(struct tbs_pcie_dev *dev)
+{
+	unsigned char ret;
+	unsigned char buff[4] = {0};
 
+	buff[3] = 0x05;
+	buff[2] = 0x00;
+	buff[1] = 0x58;
+	buff[0] = 0x00;
+
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0x3c;
+	buff[2] = 0x80;
+	buff[1] = 0x9C;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+
+	buff[3] = 0xB3;
+	buff[2] = 0x04;
+	buff[1] = 0x00;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0x42;
+	buff[2] = 0x4E;
+	buff[1] = 0x00;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0x29;
+	buff[2] = 0x80;
+	buff[1] = 0x00;
+	buff[0] = 0x08;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0x20;
+	buff[2] = 0x00;
+	buff[1] = 0x56;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
 static BOOL AD4351_Configration_dvbt(struct tbs_pcie_dev *dev)
 {
 	unsigned char ret;
@@ -2751,7 +2828,9 @@ static void tbs_adapters_init_qamb(struct tbs_pcie_dev *dev)
 	TBS_PCIE_WRITE(0, SPI_BW_LIGHT, *(u32 *)&tmpbuf[0]);
 	msleep(100);
 	*/
-	ret = AD4351_Configration_qamb(dev);
+	//ret = AD4351_Configration_qamb(dev);
+	//ret = AD4351_Configration_dvbc(dev);
+	ret = AD4351_Configration_2160(dev);
 	if (ret == FALSE)
 		printk("configration ad4351 false! \n");
 
@@ -3040,7 +3119,7 @@ static void tbsmod_remove(struct pci_dev *pdev)
 		kfifo_free(&dev->channel[i].fifo);
 //		device_destroy(mod_cdev_class, dev->channel[i].devno);
 		if (dev->channel[i].dmavirt){
-			pci_free_consistent(dev->pdev, DMASIZE, dev->channel[i].dmavirt, dev->channel[i].dmaphy);
+			dma_free_coherent(&dev->pdev->dev, DMASIZE, dev->channel[i].dmavirt, dev->channel[i].dmaphy);
 			dev->channel[i].dmavirt = NULL;
 		}
 	}
@@ -3048,6 +3127,10 @@ static void tbsmod_remove(struct pci_dev *pdev)
 
 	/* disable interrupts */
 	free_irq(dev->pdev->irq, dev);
+	if (dev->msi) {
+		pci_disable_msi(pdev);
+		dev->msi = false;
+	}
 
 	if (dev->mmio)
 		iounmap(dev->mmio);
@@ -3055,6 +3138,38 @@ static void tbsmod_remove(struct pci_dev *pdev)
 	kfree(dev);
 	pci_disable_device(pdev);
 	pci_set_drvdata(pdev, NULL);
+}
+
+static bool tbsmod_enable_msi(struct pci_dev *pdev, struct tbs_pcie_dev *dev)
+{
+	int err;
+
+	if (!enable_msi) {
+		dev_warn(&dev->pdev->dev,
+			"MSI disabled by module parameter 'enable_msi'\n");
+		return false;
+	}
+
+	err = pci_enable_msi(pdev);
+	if (err) {
+		dev_err(&dev->pdev->dev,
+			"Failed to enable MSI interrupt."
+			" Falling back to a shared IRQ\n");
+		return false;
+	}
+
+	/* no error - so request an msi interrupt */
+	err = request_irq(pdev->irq, tbsmod_irq, 0,
+				KBUILD_MODNAME, dev);
+	if (err) {
+		/* fall back to legacy interrupt */
+		dev_err(&dev->pdev->dev,
+			"Failed to get an MSI interrupt."
+			" Falling back to a shared IRQ\n");
+		pci_disable_msi(pdev);
+		return false;
+	}
+	return true;
 }
 
 static int tbsmod_probe(struct pci_dev *pdev,
@@ -3093,12 +3208,20 @@ static int tbsmod_probe(struct pci_dev *pdev,
 		goto fail2;
 	}
 
-	ret = request_irq(dev->pdev->irq, tbsmod_irq, IRQF_SHARED, KBUILD_MODNAME, (void *)dev);
-	if (ret < 0)
-	{
-		printk(KERN_ERR "%s ERROR: IRQ registration failed <%d>\n", __func__, ret);
-		ret = -ENODEV;
-		goto fail2;
+	//interrupts 
+	if (tbsmod_enable_msi(pdev, dev)) {
+		printk("KBUILD_MODNAME : %s --MSI!\n",KBUILD_MODNAME);
+		dev->msi = true;
+	} else {
+		printk("KBUILD_MODNAME : %s --INTx\n\n",KBUILD_MODNAME);
+		ret = request_irq(pdev->irq, tbsmod_irq,
+				IRQF_SHARED, KBUILD_MODNAME, dev);
+		if (ret < 0) {
+			printk(KERN_ERR "%s ERROR: IRQ registration failed <%d>\n", __func__, ret);
+			ret = -ENODEV;
+			goto fail2;
+		}
+		dev->msi = false;
 	}
 
 	pci_set_drvdata(pdev, dev);
@@ -3147,7 +3270,7 @@ static int tbsmod_probe(struct pci_dev *pdev,
 	}
 
 	for(i=0;i<dev->mods_num;i++){
-		dev->channel[i].dmavirt = pci_alloc_consistent(dev->pdev, DMASIZE, &dev->channel[i].dmaphy);
+		dev->channel[i].dmavirt = dma_alloc_coherent(&dev->pdev->dev, DMASIZE, &dev->channel[i].dmaphy, GFP_KERNEL);
 		if (!dev->channel[i].dmavirt)
 		{
 			printk(" allocate memory failed\n");
@@ -3247,6 +3370,10 @@ static int tbsmod_probe(struct pci_dev *pdev,
 
 fail3:
 	free_irq(dev->pdev->irq, dev);
+	if (dev->msi) {
+		pci_disable_msi(pdev);
+		dev->msi = false;
+	}
 	if (dev->mmio)
 		iounmap(dev->mmio);
 fail2:

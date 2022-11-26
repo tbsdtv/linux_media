@@ -107,6 +107,9 @@ obj-$(CONFIG_DVB_USB_TBS5880) += dvb-usb-tbs5880.o
 dvb-usb-tbs5220-objs = tbs5220.o
 obj-$(CONFIG_DVB_USB_TBS5220) += dvb-usb-tbs5220.o
 
+dvb-usb-tbs5230-objs = tbs5230.o
+obj-$(CONFIG_DVB_USB_TBS5230) += dvb-usb-tbs5230.o
+
 dvb-usb-tbs5881-objs = tbs5881.o
 obj-$(CONFIG_DVB_USB_TBS5881) += dvb-usb-tbs5881.o
 
@@ -115,6 +118,9 @@ obj-$(CONFIG_DVB_USB_TBS5520) += dvb-usb-tbs5520.o
 
 dvb-usb-tbs5520se-objs = tbs5520se.o
 obj-$(CONFIG_DVB_USB_TBS5520se) += dvb-usb-tbs5520se.o
+
+dvb-usb-tbs5530-objs = tbs5530.o
+obj-$(CONFIG_DVB_USB_TBS5530) += dvb-usb-tbs5530.o
 
 dvb-usb-tbs5580-objs = tbs5580.o
 obj-$(CONFIG_DVB_USB_TBS5580) += dvb-usb-tbs5580.o

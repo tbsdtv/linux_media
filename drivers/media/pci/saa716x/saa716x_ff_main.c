@@ -603,15 +603,15 @@ static void video_vip_worker(unsigned long data)
 	}
 
 	do {
-		pci_dma_sync_sg_for_cpu(saa716x->pdev,
+		dma_sync_sg_for_cpu(&saa716x->pdev->dev,
 			vip_entry->dma_buf[0][vip_entry->read_index].sg_list,
 			vip_entry->dma_buf[0][vip_entry->read_index].list_len,
-			PCI_DMA_FROMDEVICE);
+			DMA_FROM_DEVICE);
 		if (vip_entry->dual_channel) {
-			pci_dma_sync_sg_for_cpu(saa716x->pdev,
+			dma_sync_sg_for_cpu(&saa716x->pdev->dev,
 				vip_entry->dma_buf[1][vip_entry->read_index].sg_list,
 				vip_entry->dma_buf[1][vip_entry->read_index].list_len,
-				PCI_DMA_FROMDEVICE);
+				DMA_FROM_DEVICE);
 		}
 
 		vip_entry->read_index = (vip_entry->read_index + 1) & 7;
@@ -1279,10 +1279,10 @@ static void demux_worker(unsigned long data)
 	do {
 		u8 *data = (u8 *)fgpi_entry->dma_buf[fgpi_entry->read_index].mem_virt;
 
-		pci_dma_sync_sg_for_cpu(saa716x->pdev,
+		dma_sync_sg_for_cpu(&saa716x->pdev->dev,
 			fgpi_entry->dma_buf[fgpi_entry->read_index].sg_list,
 			fgpi_entry->dma_buf[fgpi_entry->read_index].list_len,
-			PCI_DMA_FROMDEVICE);
+			DMA_FROM_DEVICE);
 
 		dvb_dmx_swfilter(demux, data, 348 * 188);
 

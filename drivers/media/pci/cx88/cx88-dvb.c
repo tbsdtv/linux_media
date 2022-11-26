@@ -41,9 +41,9 @@
 #include "stv0288.h"
 #include "stb6000.h"
 #include "cx24116.h"
-#include "stv0900.h"
+#include "stv090x.h"
 #include "stb6100.h"
-#include "stb6100_proc.h"
+#include "stb6100_cfg.h"
 #include "mb86a16.h"
 #include "ts2020.h"
 #include "ds3000.h"
@@ -684,16 +684,6 @@ static int cx24116_set_ts_param(struct dvb_frontend *fe,
 	return 0;
 }
 
-static int stv0900_set_ts_param(struct dvb_frontend *fe,
-				int is_punctured)
-{
-	struct cx8802_dev *dev = fe->dvb->priv;
-
-	dev->ts_gen_cntrl = 0;
-
-	return 0;
-}
-
 static int cx24116_reset_device(struct dvb_frontend *fe)
 {
 	struct cx8802_dev *dev = fe->dvb->priv;
@@ -742,16 +732,22 @@ static struct ts2020_config tevii_ts2020_config  = {
 	.clk_out_div = 1,
 };
 
-static const struct stv0900_config prof_7301_stv0900_config = {
-	.demod_address = 0x6a,
-/*	demod_mode = 0,*/
-	.xtal = 27000000,
-	.clkmode = 3,/* 0-CLKI, 2-XTALI, else AUTO */
-	.diseqc_mode = 2,/* 2/3 PWM */
-	.tun1_maddress = 0,/* 0x60 */
-	.tun1_adc = 0,/* 2 Vpp */
-	.path1_mode = 3,
-	.set_ts_params = stv0900_set_ts_param,
+static struct stv090x_config prof_7301_stv090x_config = {
+	.device                 = STV0903,
+	.demod_mode             = STV090x_SINGLE,
+	.clk_mode               = STV090x_CLK_EXT,
+	.xtal                   = 27000000,
+	.address                = 0x6A,
+	.ts1_mode               = STV090x_TSMODE_PARALLEL_PUNCTURED,
+	.repeater_level         = STV090x_RPTLEVEL_64,
+	.adc1_range             = STV090x_ADC_2Vpp,
+	.diseqc_envelope_mode   = false,
+
+	.tuner_bbgain			= 6,
+	.tuner_get_frequency    = stb6100_get_frequency,
+	.tuner_set_frequency    = stb6100_set_frequency,
+	.tuner_set_bandwidth    = stb6100_set_bandwidth,
+	.tuner_get_bandwidth    = stb6100_get_bandwidth,
 };
 
 static const struct stb6100_config prof_7301_stb6100_config = {
@@ -1573,22 +1569,17 @@ static int dvb_register(struct cx8802_dev *dev)
 		}
 		break;
 	case CX88_BOARD_PROF_7301:{
-		struct dvb_tuner_ops *tuner_ops = NULL;
+		dev->ts_gen_cntrl = 0x00;
 
-		fe0->dvb.frontend = dvb_attach(stv0900_attach,
-					       &prof_7301_stv0900_config,
-					       &core->i2c_adap, 0);
-		if (fe0->dvb.frontend) {
-			if (!dvb_attach(stb6100_attach, fe0->dvb.frontend,
+		fe0->dvb.frontend = dvb_attach(stv090x_attach,
+						&prof_7301_stv090x_config,
+						&core->i2c_adap, STV090x_DEMODULATOR_0);
+		if (fe0->dvb.frontend != NULL) {
+			if (!dvb_attach(stb6100_attach,
+                    fe0->dvb.frontend,
 					&prof_7301_stb6100_config,
 					&core->i2c_adap))
 				goto frontend_detach;
-
-			tuner_ops = &fe0->dvb.frontend->ops.tuner_ops;
-			tuner_ops->set_frequency = stb6100_set_freq;
-			tuner_ops->get_frequency = stb6100_get_freq;
-			tuner_ops->set_bandwidth = stb6100_set_bandw;
-			tuner_ops->get_bandwidth = stb6100_get_bandw;
 
 			core->prev_set_voltage =
 					fe0->dvb.frontend->ops.set_voltage;

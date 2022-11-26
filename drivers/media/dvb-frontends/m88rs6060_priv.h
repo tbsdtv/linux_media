@@ -23,32 +23,6 @@
 /*set frequency offset to tuner when symbol rate <5000KSs*/
 #define FREQ_OFFSET_AT_SMALL_SYM_RATE_KHz  3000
 
-struct m88rs6060_dev {
-	struct i2c_client *demod_client;	//demod
-	struct i2c_client *tuner_client;
-	struct regmap *regmap;	//demod
-	enum fe_status fe_status;
-	struct dvb_frontend fe;
-	struct m88rs6060_cfg config;
-
-	bool TsClockChecked;  //clock retio
-	bool warm;		// for the init and download fw
-	s32 mclk;		/*main mclk */
-
-	u32 dvbv3_ber;		/* for old DVBv3 API read_ber */
-	u32 frequecy;    //khz
-	u64 post_bit_error;
-	u64 post_bit_count;
-
-	void (*write_properties)(struct i2c_adapter * i2c, u8 reg, u32 buf);
-	void (*read_properties)(struct i2c_adapter * i2c, u8 reg, u32 * buf);
-
-	//for si5351
-	u32 plla_freq;
-	u32 pllb_freq;
-	bool newTP;
-	
-};
 
 struct m88rs6060_reg_val {
 	u8 reg;
@@ -122,7 +96,7 @@ struct MT_FE_CHAN_INFO_DVBS2 {
 //for si5351
 /* Define definitions */
 
-#define SI5351_BUS_BASE_ADDR				0xC0
+#define SI5351_BUS_BASE_ADDR				0x60
 #define SI5351_XTAL_FREQ					27000000
 #define SI5351_PLL_FIXED					900000000
 

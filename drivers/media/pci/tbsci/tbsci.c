@@ -29,6 +29,10 @@
 DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 struct workqueue_struct *wq;
 
+static bool enable_msi = true;
+module_param(enable_msi, bool, 0444);
+MODULE_PARM_DESC(enable_msi, "use an msi interrupt if available");
+
 static int write_block_cell = 64;
 module_param(write_block_cell, int, 0444);
 MODULE_PARM_DESC(
@@ -893,11 +897,11 @@ static void tbs_adapters_remove(struct tbs_pcie_dev *dev)
 		kfifo_free(&tbsca->w_fifo);
 		kfifo_free(&tbsca->r_fifo);
 		if (!tbsca->w_dmavirt){
-			pci_free_consistent(dev->pdev, DMASIZE, tbsca->w_dmavirt, tbsca->w_dmaphy);
+			dma_free_coherent(&dev->pdev->dev, DMASIZE, tbsca->w_dmavirt, tbsca->w_dmaphy);
 			tbsca->w_dmavirt = NULL;
 		}
 		if (!tbsca->r_dmavirt){
-			pci_free_consistent(dev->pdev, DMASIZE, tbsca->r_dmavirt, tbsca->r_dmaphy);
+			dma_free_coherent(&dev->pdev->dev, DMASIZE, tbsca->r_dmavirt, tbsca->r_dmaphy);
 			tbsca->r_dmavirt = NULL;
 		}
 	//	tasklet_kill(&tbsca->tasklet);
@@ -930,16 +934,16 @@ static int tbs_adapters_init(struct tbs_pcie_dev *dev)
 
 	for(i=0;i<CHANNELS;i++){
 		tbsca = &dev->channnel[i];
-		tbsca->w_dmavirt = pci_alloc_consistent(dev->pdev, DMASIZE, &tbsca->w_dmaphy);
+		tbsca->w_dmavirt = dma_alloc_coherent(&dev->pdev->dev, DMASIZE, &tbsca->w_dmaphy, GFP_KERNEL);
 		if (!tbsca->w_dmavirt)
 		{
-			printk(" allocate write memory failed\n");
+			printk("allocate write DMA  memory failed, set coherent_pool=4M or higher\n");
 			goto fail;
 		}
-		tbsca->r_dmavirt = pci_alloc_consistent(dev->pdev, DMASIZE, &tbsca->r_dmaphy);
+		tbsca->r_dmavirt = dma_alloc_coherent(&dev->pdev->dev, DMASIZE, &tbsca->r_dmaphy, GFP_KERNEL);
 		if (!tbsca->r_dmavirt)
 		{
-			printk(" allocate read memory failed\n");
+			printk("allocate read DMA memory failed, set coherent_pool=4M or higher\n");
 			goto fail;
 		}
 		tbsca->channel_index=i;
@@ -1038,6 +1042,10 @@ static void tbsci_remove(struct pci_dev *pdev)
 
 	/* disable interrupts */
 	free_irq(dev->pdev->irq, dev);
+	if (dev->msi) {
+		pci_disable_msi(pdev);
+		dev->msi = false;
+	}
 
 	if (dev->mmio)
 		iounmap(dev->mmio);
@@ -1045,6 +1053,38 @@ static void tbsci_remove(struct pci_dev *pdev)
 	kfree(dev);
 	pci_disable_device(pdev);
 	pci_set_drvdata(pdev, NULL);
+}
+
+static bool tbsci_enable_msi(struct pci_dev *pdev, struct tbs_pcie_dev *dev)
+{
+	int err;
+
+	if (!enable_msi) {
+		dev_warn(&dev->pdev->dev,
+			"MSI disabled by module parameter 'enable_msi'\n");
+		return false;
+	}
+
+	err = pci_enable_msi(pdev);
+	if (err) {
+		dev_err(&dev->pdev->dev,
+			"Failed to enable MSI interrupt."
+			" Falling back to a shared IRQ\n");
+		return false;
+	}
+
+	/* no error - so request an msi interrupt */
+	err = request_irq(pdev->irq, tbsci_irq, 0,
+				KBUILD_MODNAME, dev);
+	if (err) {
+		/* fall back to legacy interrupt */
+		dev_err(&dev->pdev->dev,
+			"Failed to get an MSI interrupt."
+			" Falling back to a shared IRQ\n");
+		pci_disable_msi(pdev);
+		return false;
+	}
+	return true;
 }
 
 
@@ -1091,19 +1131,30 @@ static int tbsci_probe(struct pci_dev *pdev,
 		goto fail2;
 	}
 
-	ret = request_irq(dev->pdev->irq, tbsci_irq, IRQF_SHARED,
-			  KBUILD_MODNAME, (void *)dev);
-	if (ret < 0) {
-		printk("%s ERROR: IRQ registration failed <%d>\n", __func__,
-		       ret);
-		ret = -ENODEV;
-		goto fail3;
+	//interrupts 
+	if (tbsci_enable_msi(pdev, dev)) {
+		printk("KBUILD_MODNAME : %s --MSI!\n",KBUILD_MODNAME);
+		dev->msi = true;
+	} else {
+		printk("KBUILD_MODNAME : %s --INTx\n\n",KBUILD_MODNAME);
+		ret = request_irq(pdev->irq, tbsci_irq,
+				IRQF_SHARED, KBUILD_MODNAME, dev);
+		if (ret < 0) {
+			printk(KERN_ERR "%s ERROR: IRQ registration failed <%d>\n", __func__, ret);
+			ret = -ENODEV;
+			goto fail3;
+		}
+		dev->msi = false;
 	}
 
 	return 0;
 
 fail3:
 	free_irq(dev->pdev->irq, dev);
+	if (dev->msi) {
+		pci_disable_msi(pdev);
+		dev->msi = false;
+	}
 	if (dev->mmio)
 		iounmap(dev->mmio);
 fail2:

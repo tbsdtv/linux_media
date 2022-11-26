@@ -51,6 +51,14 @@ static unsigned int mc_auto;
 module_param(mc_auto, int, 0644);
 MODULE_PARM_DESC(mc_auto, "Enable auto modcode filtering depend from current C/N (default:0 - disabled)");
 
+static unsigned int ts_nosync;
+module_param(ts_nosync, int, 0644);
+MODULE_PARM_DESC(ts_nosync, "TS FIFO Minimum latence mode (default:off)");
+
+static unsigned int mis;
+module_param(mis,int,0644);
+MODULE_PARM_DESC(mis,"someone search the multi-stream signal lose packets,please turn on it(default:off)");
+
 struct stv_base {
 	struct list_head     stvlist;
 
@@ -78,7 +86,6 @@ struct stv_base {
 	void (*set_TSsampling)(struct i2c_adapter *i2c,int tuner,int time);  
 	u32  (*set_TSparam)(struct i2c_adapter *i2c,int tuner,int time,bool flag);
 	//end
-
 	int vglna;
 };
 
@@ -94,6 +101,8 @@ struct stv {
 	bool newTP; //for tbs6912
 	u32  bit_rate; //for tbs6912;
 	int loops ;//for tbs6912
+	
+	bool modcode_filter; //for set the modcode
 };
 
 I2C_RESULT I2cReadWrite(void *pI2CHost, I2C_MODE mode, u8 ChipAddress, u8 *Data, int NbData)
@@ -136,7 +145,8 @@ static int stid135_probe(struct stv *state)
 	init_params.rf_input_type	=	0xF; // Single ended RF input on Oxford valid board rev2
 	init_params.roll_off		=  	FE_SAT_35; // NYQUIST Filter value (used for DVBS1/DSS, DVBS2 is automatic)
 	init_params.tuner_iq_inversion	=	FE_SAT_IQ_NORMAL;
-	
+    	init_params.ts_nosync		=	ts_nosync;
+	init_params.mis		= mis;
 	err = fe_stid135_init(&init_params,&state->base->handle);
 	
 	if (err != FE_LLA_NO_ERROR) {
@@ -368,15 +378,19 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 
 	/* Set PLS before search */
 	dev_dbg(&state->base->i2c->dev, "%s: set pls_mode %d, pls_code %d !\n", __func__, pls_mode, pls_code);
-	err |= fe_stid135_set_pls(state->base->handle, state->nr + 1, pls_mode, pls_code);
+	
+	if((p->stream_id != NO_STREAM_ID_FILTER)||(p->scrambling_sequence_index)){
+		err |= fe_stid135_set_pls(state->base->handle, state->nr + 1, pls_mode, pls_code);
 	
 	if (err != FE_LLA_NO_ERROR)
 		dev_err(&state->base->i2c->dev, "%s: fe_stid135_set_pls error %d !\n", __func__, err);
-
-	err |= fe_stid135_reset_modcodes_filter(state->base->handle, state->nr + 1);
-	if (err != FE_LLA_NO_ERROR)
-		dev_err(&state->base->i2c->dev, "%s: fe_stid135_reset_modcodes_filter error %d !\n", __func__, err);
-
+	}
+		
+	if(state->modcode_filter){
+	    err |= fe_stid135_reset_modcodes_filter(state->base->handle, state->nr + 1);
+		if (err != FE_LLA_NO_ERROR)
+			dev_err(&state->base->i2c->dev, "%s: fe_stid135_reset_modcodes_filter error %d !\n", __func__, err);
+	}
 	state->stats_time = 0;
 	state->signal_info.locked = 0;
 	p->strength.len = 1;
@@ -405,9 +419,11 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 
 	if (search_results.locked){
 		dev_dbg(&state->base->i2c->dev, "%s: locked !\n", __func__);
-		//set maxllr,when the  demod locked ,allocation of resources
-		//err |= fe_stid135_set_maxllr_rate(state->base->handle, state->nr +1, 180);
-		get_current_llr(state->base->handle, state->nr +1, &current_llr);
+		//set maxllr,when the signal is dvbs2 and demod locked ,allocation of resources 
+		if(search_results.standard==FE_SAT_DVBS2_STANDARD)
+		     get_current_llr(state->base->handle, state->nr +1, &current_llr);
+		   //err |= fe_stid135_set_maxllr_rate(state->base->handle, state->nr +1, 180);
+
 		//for tbs6912
 		state->newTP = true;
 		state->loops = 15;
@@ -444,6 +460,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
             }
             m >>= 1;
         }
+        state->modcode_filter = true;
         err |= fe_stid135_set_modcodes_filter(state->base->handle, state->nr + 1, modcode_mask, j);
         if (err != FE_LLA_NO_ERROR)
             dev_err(&state->base->i2c->dev, "%s: fe_stid135_set_modcodes_filter error %d !\n", __func__, err);
@@ -491,6 +508,9 @@ static int stid135_get_frontend(struct dvb_frontend *fe, struct dtv_frontend_pro
 	case FE_SAT_MOD_16APSK:
 		p->modulation = APSK_16;
 		break;
+	case FE_SAT_MOD_32APSK:
+		p->modulation = APSK_32;
+		break;
 	case FE_SAT_MOD_64APSK:
 		p->modulation = APSK_64;
 		break;
@@ -508,6 +528,9 @@ static int stid135_get_frontend(struct dvb_frontend *fe, struct dtv_frontend_pro
 		break;
 	case FE_SAT_MOD_16APSK_L:
 		p->modulation = APSK_16L;
+		break;
+	case FE_SAT_MOD_32APSK_L:
+		p->modulation = APSK_32L;
 		break;
 	case FE_SAT_MOD_64APSK_L:
 		p->modulation = APSK_64L;
@@ -1050,6 +1073,7 @@ struct dvb_frontend *stid135_attach(struct i2c_adapter *i2c,
 	state->newTP = false;
 	state->bit_rate  = 0;
 	state->loops = 15;
+	state->modcode_filter = false;
 	
 	if (rfsource > 0 && rfsource < 5)
 		rf_in = rfsource - 1;

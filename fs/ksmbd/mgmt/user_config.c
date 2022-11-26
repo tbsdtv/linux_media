@@ -55,7 +55,7 @@ struct ksmbd_user *ksmbd_alloc_user(struct ksmbd_login_response *resp)
 
 void ksmbd_free_user(struct ksmbd_user *user)
 {
-	ksmbd_ipc_logout_request(user->name);
+	ksmbd_ipc_logout_request(user->name, user->flags);
 	kfree(user->name);
 	kfree(user->passkey);
 	kfree(user);
@@ -66,4 +66,14 @@ int ksmbd_anonymous_user(struct ksmbd_user *user)
 	if (user->name[0] == '\0')
 		return 1;
 	return 0;
+}
+
+bool ksmbd_compare_user(struct ksmbd_user *u1, struct ksmbd_user *u2)
+{
+	if (strcmp(u1->name, u2->name))
+		return false;
+	if (memcmp(u1->passkey, u2->passkey, u1->passkey_sz))
+		return false;
+
+	return true;
 }

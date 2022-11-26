@@ -100,9 +100,9 @@ static void ice_display_lag_info(struct ice_lag *lag)
  */
 static void ice_lag_info_event(struct ice_lag *lag, void *ptr)
 {
-	struct net_device *event_netdev, *netdev_tmp;
 	struct netdev_notifier_bonding_info *info;
 	struct netdev_bonding_info *bonding_info;
+	struct net_device *event_netdev;
 	const char *lag_netdev_name;
 
 	event_netdev = netdev_notifier_info_to_dev(ptr);
@@ -122,19 +122,6 @@ static void ice_lag_info_event(struct ice_lag *lag, void *ptr)
 		netdev_dbg(lag->netdev, "Bonding event recv, but slave info not for us\n");
 		goto lag_out;
 	}
-
-	rcu_read_lock();
-	for_each_netdev_in_bond_rcu(lag->upper_netdev, netdev_tmp) {
-		if (!netif_is_ice(netdev_tmp))
-			continue;
-
-		if (netdev_tmp && netdev_tmp != lag->netdev &&
-		    lag->peer_netdev != netdev_tmp) {
-			dev_hold(netdev_tmp);
-			lag->peer_netdev = netdev_tmp;
-		}
-	}
-	rcu_read_unlock();
 
 	if (bonding_info->slave.state)
 		ice_lag_set_backup(lag);
@@ -217,13 +204,35 @@ ice_lag_unlink(struct ice_lag *lag,
 		lag->upper_netdev = NULL;
 	}
 
-	if (lag->peer_netdev) {
-		dev_put(lag->peer_netdev);
-		lag->peer_netdev = NULL;
-	}
-
+	lag->peer_netdev = NULL;
 	ice_set_sriov_cap(pf);
 	ice_set_rdma_cap(pf);
+	lag->bonded = false;
+	lag->role = ICE_LAG_NONE;
+}
+
+/**
+ * ice_lag_unregister - handle netdev unregister events
+ * @lag: LAG info struct
+ * @netdev: netdev reporting the event
+ */
+static void ice_lag_unregister(struct ice_lag *lag, struct net_device *netdev)
+{
+	struct ice_pf *pf = lag->pf;
+
+	/* check to see if this event is for this netdev
+	 * check that we are in an aggregate
+	 */
+	if (netdev != lag->netdev || !lag->bonded)
+		return;
+
+	if (lag->upper_netdev) {
+		dev_put(lag->upper_netdev);
+		lag->upper_netdev = NULL;
+		ice_set_sriov_cap(pf);
+		ice_set_rdma_cap(pf);
+	}
+	/* perform some cleanup in case we come back */
 	lag->bonded = false;
 	lag->role = ICE_LAG_NONE;
 }
@@ -318,6 +327,9 @@ ice_lag_event_handler(struct notifier_block *notif_blk, unsigned long event,
 		break;
 	case NETDEV_BONDING_INFO:
 		ice_lag_info_event(lag, ptr);
+		break;
+	case NETDEV_UNREGISTER:
+		ice_lag_unregister(lag, netdev);
 		break;
 	default:
 		break;

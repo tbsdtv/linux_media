@@ -71,6 +71,7 @@ struct tbs_pcie_dev {
 	void __iomem		*mmio;
 	struct dvb_adapter	adapter;
 	struct ca_channel	channnel[CHANNELS];
+	bool			msi;
 };
 
 

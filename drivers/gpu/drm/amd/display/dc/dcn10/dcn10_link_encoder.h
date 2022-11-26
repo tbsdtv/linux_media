@@ -118,6 +118,7 @@ struct dcn10_link_enc_registers {
 	uint32_t RDPCSTX_PHY_CNTL4;
 	uint32_t RDPCSTX_PHY_CNTL5;
 	uint32_t RDPCSTX_PHY_CNTL6;
+	uint32_t RDPCSPIPE_PHY_CNTL6;
 	uint32_t RDPCSTX_PHY_CNTL7;
 	uint32_t RDPCSTX_PHY_CNTL8;
 	uint32_t RDPCSTX_PHY_CNTL9;
@@ -580,7 +581,8 @@ void dcn10_link_encoder_disable_output(
 /* set DP lane settings */
 void dcn10_link_encoder_dp_set_lane_settings(
 	struct link_encoder *enc,
-	const struct link_training_settings *link_settings);
+	const struct dc_link_settings *link_settings,
+	const struct dc_lane_settings lane_settings[LANE_COUNT_DP_MAX]);
 
 void dcn10_link_encoder_dp_set_phy_pattern(
 	struct link_encoder *enc,

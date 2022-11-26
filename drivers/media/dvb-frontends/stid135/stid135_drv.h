@@ -258,7 +258,8 @@ struct fe_stid135_internal_param {
 	u32				master_clock, /* Master clock frequency */
 					lo_frequency; /* Temporary definition 
 					for LO frequency   */
-	
+	BOOL			ts_nosync;
+	BOOL	 mis;
 	enum fe_sat_iq_inversion 	tuner_global_iqv_inv[8]; /* Global I,Q 
 					inversion I,Q conection from tuner to 
 					demod */

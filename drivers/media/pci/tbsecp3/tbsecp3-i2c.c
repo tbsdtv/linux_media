@@ -101,7 +101,7 @@ static int i2c_xfer(struct i2c_adapter *adapter, struct i2c_msg *msg, int num)
 			remaining -= len;
 		} while (remaining);
 
-	}
+	}	
 	retval = num;
 i2c_xfer_exit:
 	mutex_unlock(&bus->lock);

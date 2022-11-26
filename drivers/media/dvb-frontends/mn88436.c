@@ -1694,8 +1694,8 @@ MXL_STATUS MxLWare603_API_ReqDevVersionInfo(struct dvb_frontend *fe, MXL603_VER_
 		status |= MxLWare603_OEM_ReadRegister(fe, CHIP_VERSION_REQ_REG, &readBack);
 		mxlDevVerInfoPtr->chipVersion = (readBack & 0xFF); 
 
-		printk("Chip ID = 0x%d, Version = 0x%d \n", mxlDevVerInfoPtr->chipId, 
-			mxlDevVerInfoPtr->chipVersion);
+	//	printk("Chip ID = 0x%d, Version = 0x%d \n", mxlDevVerInfoPtr->chipId, 
+	//		mxlDevVerInfoPtr->chipVersion);
 
 		// Get MxLWare version infromation
 		for (k = 0; k < MXL603_VERSION_SIZE; k++)
@@ -1764,11 +1764,11 @@ MXL_STATUS MxLWare603_API_CfgTunerMode(struct dvb_frontend *fe, MXL603_TUNER_MOD
 	UINT8 dfeRegData = 0;
 	//struct MXL603_REG_CTRL_INFO_T* tmpRegTable;
 
-	printk(" Signal Mode = %d, IF Freq = %d, xtal = %d, IF Gain = %d", 
-		tunerModeCfg.signalMode,
-		tunerModeCfg.ifOutFreqinKHz,
-		tunerModeCfg.xtalFreqSel,
-		tunerModeCfg.ifOutGainLevel); 
+////	printk(" Signal Mode = %d, IF Freq = %d, xtal = %d, IF Gain = %d", 
+//		tunerModeCfg.signalMode,
+//		tunerModeCfg.ifOutFreqinKHz,
+//		tunerModeCfg.xtalFreqSel,
+//		tunerModeCfg.ifOutGainLevel); 
 
 	switch(tunerModeCfg.signalMode)
 	{
@@ -1912,11 +1912,11 @@ MXL_STATUS MxLWare603_API_CfgTunerAGC(struct dvb_frontend *fe, MXL603_AGC_CFG_T 
 	UINT8 status = MXL_SUCCESS;
 	UINT8 regData = 0; 
 
-	printk("%s, AGC sel = %d, attack point set = %d, Flip = %d \n", 
-		__FUNCTION__, 
-		agcCfg.agcType,
-		agcCfg.setPoint, 
-		agcCfg.agcPolarityInverstion);
+//	printk("%s, AGC sel = %d, attack point set = %d, Flip = %d \n", 
+//		__FUNCTION__, 
+//		agcCfg.agcType,
+//		agcCfg.setPoint, 
+//		agcCfg.agcPolarityInverstion);
 
 	if ((agcCfg.agcPolarityInverstion <= MXL_ENABLE) && 
 		(agcCfg.agcType <= MXL603_AGC_EXTERNAL))
@@ -2010,12 +2010,12 @@ MXL_STATUS MxLWare603_API_CfgTunerChanTune(struct dvb_frontend *fe, MXL603_CHAN_
 	UINT8 dfeTuneData = 0;
 	UINT8 dfeCdcData = 0;
 
-	printk("%s, signal type = %d, Freq = %d, BW = %d, Xtal = %d \n",  
-		__FUNCTION__,
-		chanTuneCfg.signalMode, 
-		chanTuneCfg.freqInHz, 
-		chanTuneCfg.bandWidth, 
-		chanTuneCfg.xtalFreqSel);
+//	printk("%s, signal type = %d, Freq = %d, BW = %d, Xtal = %d \n",  
+//		__FUNCTION__,
+//		chanTuneCfg.signalMode, 
+//		chanTuneCfg.freqInHz, 
+//		chanTuneCfg.bandWidth, 
+//		chanTuneCfg.xtalFreqSel);
 
 	// Abort Tune
 	status |= MxLWare603_OEM_WriteRegister(fe, START_TUNE_REG, 0x00); 
@@ -2064,8 +2064,7 @@ MXL_STATUS MxLWare603_API_CfgTunerChanTune(struct dvb_frontend *fe, MXL603_CHAN_
 
 				/* Calculate RF Channel = DIV(64*RF(Hz), 1E6) */
 				frequency *= 64;
-				do_div(frequency,1000000); 
-                freq = frequency;
+				freq = (UINT32)(frequency / 1000000); 
 
 				// Set RF  
 				status |= MxLWare603_OEM_WriteRegister(fe, CHAN_TUNE_LOW_REG, (UINT8)(freq & 0xFF));
@@ -2164,12 +2163,12 @@ MXL_STATUS MxLWare603_API_CfgTunerIFOutParam(struct dvb_frontend *fe,  MXL603_IF
 	UINT8 readData = 0;
 	UINT8 control = 0;
 
-	printk("%s, Manual set = %d \n", __FUNCTION__, ifOutCfg.manualFreqSet); 
+//	printk("%s, Manual set = %d \n", __FUNCTION__, ifOutCfg.manualFreqSet); 
 
 	//Test only 
 	MxLWare603_OEM_WriteRegister(fe, 0x10, 0x99);
 	MxLWare603_OEM_ReadRegister(fe, 0x10, &readData);
-	printk("\n ----------- test Tuner I2C read out = 0x%x [ if 0x99, I2C OK!]-------------\n", readData); 
+//	printk("\n ----------- test Tuner I2C read out = 0x%x [ if 0x99, I2C OK!]-------------\n", readData); 
 
 	// Read back register for manual IF Out 
 	status = MxLWare603_OEM_ReadRegister(fe, IF_FREQ_SEL_REG, &readData);
@@ -2242,8 +2241,6 @@ MXL_STATUS MxLWare603_API_ReqTunerAGCLock(struct dvb_frontend *fe, MXL_BOOL* agc
 	UINT8 regData = 0;
 	 MXL_BOOL lockStatus = MXL_UNLOCKED;
 
-//	MxL_DLL_DEBUG0("%s", __FUNCTION__);
-
 	if (agcLockStatusPtr)
 	{
 		status = MxLWare603_OEM_ReadRegister(fe, AGC_SAGCLOCK_STATUS_REG, &regData);  
@@ -2288,8 +2285,6 @@ MXL_STATUS MxLWare603_API_ReqTunerLockStatus(struct dvb_frontend *fe,  MXL_BOOL*
 
 		if ((regData & 0x02) == 0x02) rfLockStatus = MXL_LOCKED;
 		if ((regData & 0x01) == 0x01) refLockStatus = MXL_LOCKED;
-
-		printk(" RfSynthStatus = %d, RefSynthStatus = %d \n", (UINT8)rfLockStatus,(UINT8)refLockStatus); 
 
 		*rfLockPtr =  rfLockStatus;
 		*refLockPtr = refLockStatus;
@@ -2340,7 +2335,7 @@ MXL_STATUS MxLWare603_API_ReqTunerRxPower(struct dvb_frontend *fe, SINT16* rxPwr
 		if (tmpData & 0x01) *rxPwrPtr += 25;
 		if (tmpData & 0x0200) *rxPwrPtr -= 128*100;
 
-		printk(" Rx power = %d times of 0.01dBm \n", *rxPwrPtr);
+		//printk(" Rx power = %d times of 0.01dBm \n", *rxPwrPtr);
 	}
 	else
 		status = MXL_INVALID_PARAMETER;
@@ -2468,7 +2463,7 @@ MXL_STATUS Mxl603SetFreqBw(struct dvb_frontend *fe,UINT32 freq)
 //	devId = MXL603_I2C_ADDR;
 	
 	//Step 7 : Channel frequency & bandwidth setting
-	printk("freq=%d",freq);
+//	printk("freq=%d",freq);
 	if(freq>1000000)rf=freq;
 	else if(freq>1000)rf=freq*1000;
 	else
@@ -2941,11 +2936,19 @@ DMD_ERROR_t DMD_init( struct dvb_frontend* fe, DMD_PARAMETER_t* param )
 static int MNDMD_init(struct dvb_frontend* fe)
 {	
 	struct mndmd_state *state = fe->demodulator_priv;
-	printk( "_______MNDMD init_____" );
+	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
+
 	DMD_open(&param);
 	DMD_init( fe,&param);
 	MXL603_init(fe);
 	DMD_set_ts_output(fe,&param,DMD_E_TSCLK_POLARITY_NORMAL);
+
+	c->cnr.len = 1;
+	c->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	c->post_bit_error.len = 1;
+	c->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+	c->post_bit_count.len = 1;
+	c->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 
 	return 0;
 }
@@ -2955,7 +2958,7 @@ static int DMD_set_parameters(struct dvb_frontend* fe)
 	int ret;
 	struct mndmd_state* state = fe->demodulator_priv;
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
-	printk( "_______DMD_set_parameters_____" );
+
 	switch (c->modulation) {
 	case VSB_8:
 		param.system = DMD_E_ATSC;
@@ -2995,9 +2998,8 @@ static int DMD_read_status(struct dvb_frontend *fe, enum fe_status *status)
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	DMD_u32_t	lockstatus = 0;
 	DMD_u8_t	rd = 0;
-	DMD_u32_t	ifagc = 0, rfagc = 0;
-	DMD_u8_t	RF1, RF2, IF1, IF2;
 	DMD_u32_t  x,y,val;
+	s16 rfpower;
 	DMD_I2C_Read(fe, DMD_BANK_MAIN(0) , DMD_MAIN_STSMON1 , &rd );
 	rd &= 1;
 	if( rd ) lockstatus = 1;
@@ -3006,24 +3008,20 @@ static int DMD_read_status(struct dvb_frontend *fe, enum fe_status *status)
 		*status = FE_HAS_SIGNAL|FE_HAS_CARRIER|FE_HAS_VITERBI|
 			  FE_HAS_SYNC|FE_HAS_LOCK;
 	else
-		*status = 0;
+		*status = FE_HAS_SIGNAL;
 
 
-
-	DMD_I2C_Read(fe, DMD_BANK_USR(0) , DMD_USR_RFAGCMON1 , &RF1 );
-	DMD_I2C_Read(fe, DMD_BANK_USR(0) , DMD_USR_RFAGCMON2 , &RF2 );
-	DMD_I2C_Read(fe, DMD_BANK_USR(0) , DMD_USR_IFAGCMON1 , &IF1 );
-	DMD_I2C_Read(fe, DMD_BANK_USR(0) , DMD_USR_IFAGCMON2 , &IF2 );
-	rfagc = RF1 * 256 + RF2;
-	ifagc = IF1 * 256 + IF2;
+	MxLWare603_API_ReqTunerRxPower(fe,&rfpower);
+	
 
 	c->strength.len = 2;
 	c->strength.stat[0].scale = FE_SCALE_DECIBEL;
-	c->strength.stat[0].svalue = ((ifagc-801)*100/2537)*65535/100;
+	c->strength.stat[0].svalue = rfpower*10;
 
 	c->strength.stat[1].scale = FE_SCALE_RELATIVE;
-	c->strength.stat[1].uvalue = (ifagc-801)*100/2537;
+	c->strength.stat[1].uvalue = min(max(2*(rfpower/100+69),0),100);
 
+	if(*status&FE_HAS_VITERBI){
 	DMD_I2C_Read(fe, DMD_BANK_USR(0) , DMD_USR_CNMON1 , &rd );
 	x = 0x100 * rd;
 	DMD_I2C_Read(fe, DMD_BANK_USR(0) , DMD_USR_CNMON2 , &rd );
@@ -3046,22 +3044,49 @@ static int DMD_read_status(struct dvb_frontend *fe, enum fe_status *status)
 			val = 0;
 
 	}
-	
+	printk("cnr = %d",val);
 	c->cnr.len = 2;
 	c->cnr.stat[0].scale = FE_SCALE_DECIBEL;
-	c->cnr.stat[0].uvalue =  val%100;
+	c->cnr.stat[0].uvalue =  val*10;
 
 	c->cnr.stat[1].scale = FE_SCALE_RELATIVE;
-	c->cnr.stat[1].uvalue = (u16) (val/100) * 328;
-	if (c->cnr.stat[1].uvalue > 0xffff)
-		c->cnr.stat[1].uvalue = 0xffff;
+	c->cnr.stat[1].uvalue =min(max((val*10)/1000*24/10,0),100);
+	}
+
+	if(*status &FE_HAS_LOCK){
+	DMD_u32_t	berr = 0 ,bit = 1;
+	DMD_u8_t	rd;
+
+	DMD_I2C_Write(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET1 , 0x40 );
+	DMD_I2C_Write(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET2 , 0x0C );
+	DMD_I2C_Read(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET1 , &rd );
+	rd &= 0xfe;		//bit error mode
+	DMD_I2C_Write(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET1 , rd );
+	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET2 , &rd );
+	bit = (rd >> 2) & 0x7;
+	if( c->modulation == VSB_8 )
+		bit = (1 << (5+bit*2))*208*8;
+	else
+		bit = (1 << (5+bit*2))*127*7;
+	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERMON1 , &rd );
+	berr = rd * 65536;
+	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERMON2 , &rd );
+	berr += rd * 256;
+	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERMON3 , &rd );
+	berr += rd ;
+	c->post_bit_error.len = 1;
+	c->post_bit_error.stat[0].scale = FE_SCALE_COUNTER;
+	c->post_bit_error.stat[0].uvalue = berr;
+	c->post_bit_count.len = 1;
+	c->post_bit_count.stat[0].scale = FE_SCALE_COUNTER;
+	c->post_bit_count.stat[0].uvalue = berr;	
+	}
 	return 0;
 }
 
 static int DMD_tune(struct dvb_frontend *fe, bool re_tune,
 	unsigned int mode_flags, unsigned int *delay, enum fe_status *status)
 {
-	printk ("dmd tune \n");
 	struct mndmd_state* state = fe->demodulator_priv;
 	*delay = HZ/5;
 	if(re_tune){
@@ -3101,9 +3126,7 @@ static int DMD_read_signal_strength(struct dvb_frontend* fe, u16* strength)
 	for (i=0; i < p->strength.len; i++)
 	{
 		if (p->strength.stat[i].scale == FE_SCALE_RELATIVE)
-			*strength = (u16)p->strength.stat[i].uvalue;
-		else if (p->strength.stat[i].scale == FE_SCALE_DECIBEL)
-			*strength = ((100000 + (s32)p->strength.stat[i].svalue)/1000) * 656;
+			*strength = (u16)p->strength.stat[i].uvalue*655;
 	}
 
 	return 0;
@@ -3116,40 +3139,23 @@ static int DMD_read_snr(struct dvb_frontend* fe, u16* snr)
 	int i;
 
 	*snr = 0;
-	for (i=0; i < p->cnr.len; i++)
+	for (i=0; i < p->cnr.len; i++){
 		if (p->cnr.stat[i].scale == FE_SCALE_RELATIVE)
-		  *snr = (u16)p->cnr.stat[i].uvalue;
+		  *snr = (u16)p->cnr.stat[i].uvalue*655;
+
+	}
 	return 0;
 }
 
 static int DMD_read_ber(struct dvb_frontend* fe, u32* ber)
 {
-	struct mndmd_state* state = fe->demodulator_priv;
-	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
-	*ber = 0;
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 
-	DMD_u32_t	berr = 0 ,bit = 1;
-	DMD_u8_t	rd;
+	if ( p->post_bit_error.stat[0].scale == FE_SCALE_COUNTER &&
+		p->post_bit_count.stat[0].scale == FE_SCALE_COUNTER )
+		*ber = (u32)p->post_bit_count.stat[0].uvalue ? (u32)p->post_bit_error.stat[0].uvalue /
+					(u32)p->post_bit_count.stat[0].uvalue : 0;
 
-	DMD_I2C_Write(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET1 , 0x40 );
-	DMD_I2C_Write(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET2 , 0x0C );
-	DMD_I2C_Read(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET1 , &rd );
-	rd &= 0xfe;		//bit error mode
-	DMD_I2C_Write(fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET1 , rd );
-	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERTSET2 , &rd );
-	bit = (rd >> 2) & 0x7;
-	if( c->modulation == VSB_8 )
-		bit = (1 << (5+bit*2))*208*8;
-	else
-		bit = (1 << (5+bit*2))*127*7;
-	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERMON1 , &rd );
-	berr = rd * 65536;
-	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERMON2 , &rd );
-	berr += rd * 256;
-	DMD_I2C_Read (fe,  DMD_BANK_USR(0) , DMD_USR_BERMON3 , &rd );
-	berr += rd ;
-	
-	*ber = berr;
 	return 0;
 }
 

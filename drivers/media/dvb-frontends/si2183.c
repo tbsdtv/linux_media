@@ -310,10 +310,13 @@ static int si2183_read_status(struct dvb_frontend *fe, enum fe_status *status)
 	case 0x03:
 		*status = FE_HAS_SIGNAL | FE_HAS_CARRIER | FE_HAS_VITERBI |
 				FE_HAS_SYNC | FE_HAS_LOCK;
-		c->cnr.len = 1;
-		c->cnr.stat[0].scale = FE_SCALE_DECIBEL;			
-		c->cnr.stat[0].svalue = (s64) cmd.args[3] * 250;
 		dev->snr *= cmd.args[3] * 164;
+		c->cnr.len = 2;
+		c->cnr.stat[0].scale = FE_SCALE_DECIBEL;
+		c->cnr.stat[0].svalue = (s64) cmd.args[3] * 250;
+		c->cnr.stat[1].scale = FE_SCALE_RELATIVE;
+		c->cnr.stat[1].svalue = dev->snr;
+
 		// writing missing properties
 		// CONSTELLATION or modulation
 		switch (cmd.args[8] & 0x3f){
@@ -538,6 +541,12 @@ static int si2183_read_status(struct dvb_frontend *fe, enum fe_status *status)
 		fe->ops.tuner_ops.get_rf_strength(fe, &agc);
 	}
 
+	if ( c->strength.len == 1 && c->strength.stat[0].scale == FE_SCALE_DECIBEL) {
+		c->strength.len ++;
+		c->strength.stat[1].scale = FE_SCALE_RELATIVE;
+		c->strength.stat[1].svalue = ((100000 + (s32)c->strength.stat[0].svalue) / 1000) * 656;
+    }
+
 	return 0;
 err:
 	dev_err(&client->dev, "read_status failed=%d\n", ret);
@@ -557,8 +566,16 @@ static int si2183_read_snr(struct dvb_frontend *fe, u16 *snr)
 static int si2183_read_signal_strength(struct dvb_frontend *fe, u16 *strength)
 {
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
-	
-	*strength = c->strength.stat[0].scale == FE_SCALE_DECIBEL ? ((100000 + (s32)c->strength.stat[0].svalue) / 1000) * 656 : 0;
+	int i;
+
+	*strength = 0;
+	for (i=0; i < c->strength.len; i++)
+	{
+		if (c->strength.stat[i].scale == FE_SCALE_RELATIVE)
+			*strength = (u16)c->strength.stat[i].uvalue;
+		else if (c->strength.stat[i].scale == FE_SCALE_DECIBEL)
+			*strength = ((100000 + (s32)c->strength.stat[i].svalue)/1000) * 656;
+	}
 
 	return 0;
 }
