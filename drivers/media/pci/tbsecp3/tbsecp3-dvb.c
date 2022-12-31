@@ -50,6 +50,9 @@ static bool swapfe = false;
 module_param(swapfe, bool, 0444);
 MODULE_PARM_DESC(swapfe, "swap combo frontends order");
 
+static bool ciclock = false;
+module_param(ciclock, bool, 0444);
+MODULE_PARM_DESC(ciclock, "whether to manually set ci clock. false=set by fpga,true=set by si5351");
 
 struct sec_priv {
 	struct tbsecp3_adapter *adap;
@@ -1151,6 +1154,26 @@ static int GetTSSpeed(struct i2c_adapter *i2c,int tuner)
 
 	return bit_rate;
 }
+static int SetCIClock(struct i2c_adapter *i2c,int tuner)
+{
+		u32 clock = 0;
+		int stat = 0;
+		u32 speed = 0;
+		msleep(50);
+		SetSpeedstatus(i2c,tuner);
+		msleep(50);
+		while(!stat){
+		 stat=GetSpeedstatus(i2c,tuner);
+			msleep(10);
+		}
+		speed = GetTSSpeed(i2c,tuner);
+		clock = ((speed*4)*204*8/1024)+500; //khz
+		if(clock<42000)
+			clock = 42000;
+		
+//		printk("clock = %d,value = %d\n",clock,value);	
+	return clock;
+}
 static struct cxd2878_config tbs6209se_cfg[] = {
 	{
 		.addr_slvt = 0x64,
@@ -1266,6 +1289,17 @@ static u32 tbs_FPGA_fireware_info(struct tbsecp3_adapter *adapter)
 	tmp = tbs_read(TBSECP3_GPIO_BASE, 0x20);
 	data = tbs_read(TBSECP3_GPIO_BASE, 0x28);
 	printk("the device hardware id :%x,fw data: %x \n",tmp,data);
+	
+	if(ciclock){
+		tbs_write(0x6000, 0x10, 0); //tuner 0
+		tbs_write(0x7000, 0x10, 0); //tuner 1
+
+	}else{
+		tbs_write(0x6000, 0x10, 0xffffffff);
+		tbs_write(0x7000, 0x10, 0xffffffff);
+
+	}
+			
 	return data;	
 }
 static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
@@ -1340,31 +1374,29 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 			 m88rs6060_config.ts_mode = MtFeTsOutMode_Serial;
 			 m88rs6060_config.ts_pinswitch = 0;
 
-
 		 }else{
 			 m88rs6060_config.ts_mode = MtFeTsOutMode_Parallel;
 			 m88rs6060_config.ts_pinswitch = 1;
-
-
 		 	}
 		 
 		 if(dev->info->board_id == TBSECP3_BOARD_TBS6910SE){
-		 
-		 	if(tbs_FPGA_fireware_info(adapter)==0x22082220)
-		 	 	m88rs6060_config.HAS_CI = 0;
-		 	 else
-		 	 	m88rs6060_config.HAS_CI = 1;
+		 	 m88rs6060_config.HAS_CI = 1;
+	
+		 	if(tbs_FPGA_fireware_info(adapter)==0x22082220){
+				if(!ciclock)
+					m88rs6060_config.HAS_CI = 0;
+				
+				m88rs6060_config.clk_port = adapter->nr;
+				}
+			else
+				m88rs6060_config.clk_port = 0;				
 		 	 	
-			 m88rs6060_config.SetSpeedstatus = SetSpeedstatus;
-			 m88rs6060_config.GetSpeedstatus = GetSpeedstatus;
-			 m88rs6060_config.GetSpeed = GetTSSpeed;
 			 m88rs6060_config.SetTimes= Set_TSsamplingtimes;
+			 m88rs6060_config.SetCIClock= SetCIClock;
 		 }else{
 		 	 m88rs6060_config.HAS_CI = 0;
-			 m88rs6060_config.SetSpeedstatus = NULL;
-			 m88rs6060_config.GetSpeedstatus = NULL;
-			 m88rs6060_config.GetSpeed = NULL;
-			 m88rs6060_config.SetTimes= NULL;
+			 m88rs6060_config.SetCIClock= NULL;
+
 		 }	
 		
 		 m88rs6060_config.envelope_mode = 0;

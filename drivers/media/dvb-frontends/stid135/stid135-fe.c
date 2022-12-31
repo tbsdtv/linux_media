@@ -422,7 +422,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 		//set maxllr,when the signal is dvbs2 and demod locked ,allocation of resources 
 		if(search_results.standard==FE_SAT_DVBS2_STANDARD)
 		     get_current_llr(state->base->handle, state->nr +1, &current_llr);
-		   //err |= fe_stid135_set_maxllr_rate(state->base->handle, state->nr +1, 180);
+		   //fe_stid135_set_maxllr_rate(state->base->handle, state->nr +1, 180);
 
 		//for tbs6912
 		state->newTP = true;
@@ -578,10 +578,33 @@ static int stid135_get_frontend(struct dvb_frontend *fe, struct dtv_frontend_pro
 			FEC_3_4, FEC_4_5, FEC_5_6, FEC_8_9,
 			FEC_9_10
 		};
+		
+		enum fe_code_rate modcodxfec[] = {
+			FEC_AUTO, FEC_AUTO, FEC_13_45, FEC_9_20,
+			FEC_11_20, FEC_5_9, FEC_26_45, FEC_23_36,
+			FEC_25_36, FEC_13_18, FEC_1_2, FEC_8_15,
+			FEC_5_9, FEC_26_45, FEC_3_5, FEC_3_5,
+			FEC_28_45, FEC_23_36, FEC_2_3, FEC_25_36,
+			FEC_13_18, FEC_7_9, FEC_77_90, FEC_2_3,
+			FEC_R_58, FEC_32_45, FEC_11_15, FEC_7_9,
+			FEC_32_45, FEC_11_15, FEC_R_5E, FEC_7_9,
+			FEC_R_60, FEC_4_5, FEC_R_62, FEC_5_6,
+			FEC_3_4, FEC_7_9, FEC_29_45, FEC_2_3,
+			FEC_31_45, FEC_32_45, FEC_11_15, FEC_3_4,
+			FEC_11_45, FEC_4_15, FEC_14_45, FEC_7_15,
+			FEC_8_15, FEC_32_45, FEC_7_15, FEC_8_15,
+			FEC_26_45, FEC_32_45, FEC_7_15, FEC_8_15,
+			FEC_26_45, FEC_3_5, FEC_32_45, FEC_2_3,
+			FEC_32_45,FEC_AUTO
+		};
+			
 		if (state->signal_info.modcode < FE_SAT_MODCODE_UNKNOWN)
 			p->fec_inner = modcod2fec[state->signal_info.modcode];
+		else if(state->signal_info.modcode > 0x40)
+			p->fec_inner = modcodxfec[state->signal_info.modcode-0x40];	
 		else
 			p->fec_inner = FEC_AUTO;
+			
 		p->pilot = state->signal_info.pilots == FE_SAT_PILOTS_ON ? PILOT_ON : PILOT_OFF;
 	}
 	else {

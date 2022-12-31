@@ -2135,7 +2135,7 @@ static fe_lla_error_t FE_STiD135_GetDemodLock    (fe_stid135_handle_t handle,
 static fe_lla_error_t FE_STiD135_GetFECLock(stchip_handle_t hChip, enum fe_stid135_demod Demod, 
 				u32 TimeOut, BOOL* lock_bool_p)
 {
-	u32 headerField, pktdelinField, lockVitField, timer = 0;
+	u32 headerField, pktdelinField, lockVitField, pedlstatus,timer = 0;
 	s32 lock = 0;
 	fe_lla_error_t error = FE_LLA_NO_ERROR; 
 	s32 fld_value;
@@ -2150,7 +2150,11 @@ static fe_lla_error_t FE_STiD135_GetFECLock(stchip_handle_t hChip, enum fe_stid1
 		
 	error |= ChipGetField(hChip, headerField, &fld_value);
 	demodState = (enum fe_sat_search_state)fld_value;
-	
+	ChipGetOneRegister(hChip, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_PDELSTATUS1(Demod), &pedlstatus);
+	if(pedlstatus&3!=3){
+	ChipSetOneRegister(hChip, (u16)REG_RC8CODEW_DVBSX_DEMOD_DMDISTATE(Demod), 0x05);
+	ChipWaitOrAbort(hChip, 10);	
+	}
 	while ((timer < TimeOut) && (lock == 0)) {
 
 		switch (demodState) {
@@ -2172,6 +2176,9 @@ static fe_lla_error_t FE_STiD135_GetFECLock(stchip_handle_t hChip, enum fe_stid1
 		{
 			ChipWaitOrAbort(hChip, 10);
 			timer += 10;
+			if(timer==150)
+				ChipSetOneRegister(hChip, (u16)REG_RC8CODEW_DVBSX_DEMOD_DMDISTATE(Demod), 0x05);
+
 		}
 	}
 
