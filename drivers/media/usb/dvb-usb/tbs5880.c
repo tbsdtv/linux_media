@@ -554,7 +554,7 @@ static int tbs5880_tuner_attach(struct dvb_usb_adapter *adap)
 	tda18212_config.fe = adap->fe_adap->fe;
 	request_module("tda18212");
 	client = i2c_new_client_device(adapter, &board_info);
-	if (client == NULL || client->dev.driver == NULL) {
+	if (!i2c_client_has_driver(client)) {
 		dvb_frontend_detach(adap->fe_adap->fe);
 		goto err;
 	}

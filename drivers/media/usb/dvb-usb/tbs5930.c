@@ -171,7 +171,7 @@ static int tbs5930_frontend_attach(struct dvb_usb_adapter *adap)
 	info.platform_data = &m88rs6060_config;
 	request_module(info.type);
 	client = i2c_new_client_device(&d->i2c_adap,&info);
-	if(client ==NULL || client->dev.driver == NULL)
+	if(!i2c_client_has_driver(client))
 				return -ENODEV;
 	if (!try_module_get(client->dev.driver->owner)) {
 			i2c_unregister_device(client);

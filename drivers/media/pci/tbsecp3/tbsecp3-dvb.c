@@ -1423,8 +1423,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &m88rs6060_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-					client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 				goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 				i2c_unregister_device(client_demod);
@@ -1461,8 +1460,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2183_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 			goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 			i2c_unregister_device(client_demod);
@@ -1495,8 +1493,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2157_config;
 		request_module(info.type);
 		client_tuner = i2c_new_client_device(i2c, &info);
-		if (client_tuner == NULL ||
-			client_tuner->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_tuner))
 			goto frontend_atach_fail;
 	
 		if (!try_module_get(client_tuner->dev.driver->owner)) {
@@ -1545,8 +1542,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2183_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 		    i2c_unregister_device(client_demod);
@@ -1678,8 +1674,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &gx1503_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c,&info);
-		if(client_demod == NULL||
-			client_demod->dev.driver == NULL)
+		if(!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 
 		if (!try_module_get(client_demod->dev.driver->owner)) {
@@ -1700,8 +1695,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2157_config;
 		request_module(info.type);
 		client_tuner = i2c_new_client_device(i2c, &info);
-		if (client_tuner == NULL ||
-			client_tuner->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_tuner))
 		    goto frontend_atach_fail;
 
 		if (!try_module_get(client_tuner->dev.driver->owner)) {
@@ -1724,8 +1718,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &mtv23x_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 		    i2c_unregister_device(client_demod);
@@ -1753,8 +1746,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2183_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 		    i2c_unregister_device(client_demod);
@@ -1781,8 +1773,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2157_config;
 		request_module(info.type);
 		client_tuner = i2c_new_client_device(i2c, &info);
-		if (client_tuner == NULL ||
-			client_tuner->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_tuner))
 		    goto frontend_atach_fail;
 
 		if (!try_module_get(client_tuner->dev.driver->owner)) {
@@ -1814,8 +1805,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2168_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 		    i2c_unregister_device(client_demod);
@@ -1834,8 +1824,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2157_config;
 		request_module(info.type);
 		client_tuner = i2c_new_client_device(i2c, &info);
-		if (client_tuner == NULL ||
-			client_tuner->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_tuner))
 		    goto frontend_atach_fail;
 
 		if (!try_module_get(client_tuner->dev.driver->owner)) {
@@ -1860,8 +1849,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2168_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 		    i2c_unregister_device(client_demod);
@@ -1880,8 +1868,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2157_config;
 		request_module(info.type);
 		client_tuner = i2c_new_client_device(i2c, &info);
-		if (client_tuner == NULL ||
-			client_tuner->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_tuner))
 		    goto frontend_atach_fail;
 
 		if (!try_module_get(client_tuner->dev.driver->owner)) {
@@ -1912,8 +1899,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2183_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 		    i2c_unregister_device(client_demod);
@@ -1946,8 +1932,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2157_config;
 		request_module(info.type);
 		client_tuner = i2c_new_client_device(i2c, &info);
-		if (client_tuner == NULL ||
-			client_tuner->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_tuner))
 		    goto frontend_atach_fail;
 
 		if (!try_module_get(client_tuner->dev.driver->owner)) {
@@ -2004,8 +1989,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2183_config;
 		request_module(info.type);
 		client_demod = i2c_new_client_device(i2c, &info);
-		if (client_demod == NULL ||
-			client_demod->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_demod))
 		    goto frontend_atach_fail;
 		if (!try_module_get(client_demod->dev.driver->owner)) {
 		    i2c_unregister_device(client_demod);
@@ -2041,8 +2025,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		info.platform_data = &si2157_config;
 		request_module(info.type);
 		client_tuner = i2c_new_client_device(i2c, &info);
-		if (client_tuner == NULL ||
-			client_tuner->dev.driver == NULL)
+		if (!i2c_client_has_driver(client_tuner))
 		    goto frontend_atach_fail;
 
 		if (!try_module_get(client_tuner->dev.driver->owner)) {
