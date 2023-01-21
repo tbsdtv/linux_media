@@ -28,7 +28,7 @@ MODULE_PARM_DESC(gse_dump, "Turn on/off GSE dump (default:off).");
 static int gse_tscheck;
 module_param(gse_tscheck, int, 0644);
 MODULE_PARM_DESC(gse_tscheck,
-		"enable transport stream continuity and TEI check");
+		"enable GSE continuity and TEI check");
 
 static int gse_feed_err_pkts = 1;
 module_param(gse_feed_err_pkts, int, 0644);
