@@ -912,7 +912,7 @@ static int dvb_net_gse(struct net_device *dev, const u8 *buffer,
 	u16 gse_sndu_type = *(buffer + header_len - 2) << 8 |
 				*(buffer + header_len - 1);
 
-	pr_warn("gse_lbits = %d gse_sndu_type = %d buff_len = %lu header_len= %lu first4bytes=%x\n",
+	pr_debug("gse_lbits = %d gse_sndu_type = %d buff_len = %lu header_len= %lu first4bytes=%x\n",
 			gse_lbits, gse_sndu_type, buff_len, header_len,
 			*((u32*)buffer));
 
