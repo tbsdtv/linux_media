@@ -39,6 +39,7 @@ struct amdgpu_vm;
 #define AMDGPU_MAX_RINGS		28
 #define AMDGPU_MAX_HWIP_RINGS		8
 #define AMDGPU_MAX_GFX_RINGS		2
+#define AMDGPU_MAX_SW_GFX_RINGS         2
 #define AMDGPU_MAX_COMPUTE_RINGS	8
 #define AMDGPU_MAX_VCE_RINGS		3
 #define AMDGPU_MAX_UVD_ENC_RINGS	2
@@ -59,6 +60,7 @@ enum amdgpu_ring_priority_level {
 #define AMDGPU_FENCE_FLAG_64BIT         (1 << 0)
 #define AMDGPU_FENCE_FLAG_INT           (1 << 1)
 #define AMDGPU_FENCE_FLAG_TC_WB_ONLY    (1 << 2)
+#define AMDGPU_FENCE_FLAG_EXEC          (1 << 3)
 
 #define to_amdgpu_ring(s) container_of((s), struct amdgpu_ring, sched)
 
@@ -143,6 +145,12 @@ signed long amdgpu_fence_wait_polling(struct amdgpu_ring *ring,
 				      uint32_t wait_seq,
 				      signed long timeout);
 unsigned amdgpu_fence_count_emitted(struct amdgpu_ring *ring);
+
+void amdgpu_fence_driver_isr_toggle(struct amdgpu_device *adev, bool stop);
+
+u64 amdgpu_fence_last_unsignaled_time_us(struct amdgpu_ring *ring);
+void amdgpu_fence_update_start_timestamp(struct amdgpu_ring *ring, uint32_t seq,
+					 ktime_t timestamp);
 
 /*
  * Rings.
@@ -230,6 +238,8 @@ struct amdgpu_ring {
 	struct amdgpu_bo	*ring_obj;
 	volatile uint32_t	*ring;
 	unsigned		rptr_offs;
+	u64			rptr_gpu_addr;
+	volatile u32		*rptr_cpu_addr;
 	u64			wptr;
 	u64			wptr_old;
 	unsigned		ring_size;
@@ -250,7 +260,11 @@ struct amdgpu_ring {
 	bool			use_doorbell;
 	bool			use_pollmem;
 	unsigned		wptr_offs;
+	u64			wptr_gpu_addr;
+	volatile u32		*wptr_cpu_addr;
 	unsigned		fence_offs;
+	u64			fence_gpu_addr;
+	volatile u32		*fence_cpu_addr;
 	uint64_t		current_ctx;
 	char			name[16];
 	u32                     trail_seq;
@@ -267,6 +281,15 @@ struct amdgpu_ring {
 	int			hw_prio;
 	unsigned 		num_hw_submission;
 	atomic_t		*sched_score;
+
+	/* used for mes */
+	bool			is_mes_queue;
+	uint32_t		hw_queue_id;
+	struct amdgpu_mes_ctx_data *mes_ctx;
+
+	bool            is_sw_ring;
+	unsigned int    entry_index;
+
 };
 
 #define amdgpu_ring_parse_cs(r, p, job, ib) ((r)->funcs->parse_cs((p), (job), (ib)))
@@ -295,6 +318,9 @@ struct amdgpu_ring {
 #define amdgpu_ring_preempt_ib(r) (r)->funcs->preempt_ib(r)
 
 int amdgpu_ring_alloc(struct amdgpu_ring *ring, unsigned ndw);
+void amdgpu_ring_ib_begin(struct amdgpu_ring *ring);
+void amdgpu_ring_ib_end(struct amdgpu_ring *ring);
+
 void amdgpu_ring_insert_nop(struct amdgpu_ring *ring, uint32_t count);
 void amdgpu_ring_generic_pad_ib(struct amdgpu_ring *ring, struct amdgpu_ib *ib);
 void amdgpu_ring_commit(struct amdgpu_ring *ring);
@@ -364,10 +390,21 @@ static inline void amdgpu_ring_write_multiple(struct amdgpu_ring *ring,
 	ring->count_dw -= count_dw;
 }
 
+#define amdgpu_mes_ctx_get_offs_gpu_addr(ring, offset)			\
+	(ring->is_mes_queue && ring->mes_ctx ?				\
+	 (ring->mes_ctx->meta_data_gpu_addr + offset) : 0)
+
+#define amdgpu_mes_ctx_get_offs_cpu_addr(ring, offset)			\
+	(ring->is_mes_queue && ring->mes_ctx ?				\
+	 (void *)((uint8_t *)(ring->mes_ctx->meta_data_ptr) + offset) : \
+	 NULL)
+
 int amdgpu_ring_test_helper(struct amdgpu_ring *ring);
 
 void amdgpu_debugfs_ring_init(struct amdgpu_device *adev,
 			      struct amdgpu_ring *ring);
+
+int amdgpu_ring_init_mqd(struct amdgpu_ring *ring);
 
 static inline u32 amdgpu_ib_get_value(struct amdgpu_ib *ib, int idx)
 {

@@ -12,7 +12,12 @@
 #include <linux/if_vlan.h>
 #include <net/switchdev.h>
 
-#include "dsa_priv.h"
+#include "dsa.h"
+#include "netlink.h"
+#include "port.h"
+#include "slave.h"
+#include "switch.h"
+#include "tag_8021q.h"
 
 static unsigned int dsa_switch_fastest_ageing_time(struct dsa_switch *ds,
 						   unsigned int ageing_time)
@@ -49,19 +54,7 @@ static int dsa_switch_ageing_time(struct dsa_switch *ds,
 static bool dsa_port_mtu_match(struct dsa_port *dp,
 			       struct dsa_notifier_mtu_info *info)
 {
-	if (dp->ds->index == info->sw_index && dp->index == info->port)
-		return true;
-
-	/* Do not propagate to other switches in the tree if the notifier was
-	 * targeted for a single switch.
-	 */
-	if (info->targeted_match)
-		return false;
-
-	if (dsa_port_is_dsa(dp) || dsa_port_is_cpu(dp))
-		return true;
-
-	return false;
+	return dp == info->dp || dsa_port_is_dsa(dp) || dsa_port_is_cpu(dp);
 }
 
 static int dsa_switch_mtu(struct dsa_switch *ds,
@@ -88,78 +81,28 @@ static int dsa_switch_mtu(struct dsa_switch *ds,
 static int dsa_switch_bridge_join(struct dsa_switch *ds,
 				  struct dsa_notifier_bridge_info *info)
 {
-	struct dsa_switch_tree *dst = ds->dst;
 	int err;
 
-	if (dst->index == info->tree_index && ds->index == info->sw_index) {
+	if (info->dp->ds == ds) {
 		if (!ds->ops->port_bridge_join)
 			return -EOPNOTSUPP;
 
-		err = ds->ops->port_bridge_join(ds, info->port, info->bridge,
+		err = ds->ops->port_bridge_join(ds, info->dp->index,
+						info->bridge,
 						&info->tx_fwd_offload,
 						info->extack);
 		if (err)
 			return err;
 	}
 
-	if ((dst->index != info->tree_index || ds->index != info->sw_index) &&
-	    ds->ops->crosschip_bridge_join) {
-		err = ds->ops->crosschip_bridge_join(ds, info->tree_index,
-						     info->sw_index,
-						     info->port, info->bridge,
+	if (info->dp->ds != ds && ds->ops->crosschip_bridge_join) {
+		err = ds->ops->crosschip_bridge_join(ds,
+						     info->dp->ds->dst->index,
+						     info->dp->ds->index,
+						     info->dp->index,
+						     info->bridge,
 						     info->extack);
 		if (err)
-			return err;
-	}
-
-	return 0;
-}
-
-static int dsa_switch_sync_vlan_filtering(struct dsa_switch *ds,
-					  struct dsa_notifier_bridge_info *info)
-{
-	struct netlink_ext_ack extack = {0};
-	bool change_vlan_filtering = false;
-	bool vlan_filtering;
-	struct dsa_port *dp;
-	int err;
-
-	if (ds->needs_standalone_vlan_filtering &&
-	    !br_vlan_enabled(info->bridge.dev)) {
-		change_vlan_filtering = true;
-		vlan_filtering = true;
-	} else if (!ds->needs_standalone_vlan_filtering &&
-		   br_vlan_enabled(info->bridge.dev)) {
-		change_vlan_filtering = true;
-		vlan_filtering = false;
-	}
-
-	/* If the bridge was vlan_filtering, the bridge core doesn't trigger an
-	 * event for changing vlan_filtering setting upon slave ports leaving
-	 * it. That is a good thing, because that lets us handle it and also
-	 * handle the case where the switch's vlan_filtering setting is global
-	 * (not per port). When that happens, the correct moment to trigger the
-	 * vlan_filtering callback is only when the last port leaves the last
-	 * VLAN-aware bridge.
-	 */
-	if (change_vlan_filtering && ds->vlan_filtering_is_global) {
-		dsa_switch_for_each_port(dp, ds) {
-			struct net_device *br = dsa_port_bridge_dev_get(dp);
-
-			if (br && br_vlan_enabled(br)) {
-				change_vlan_filtering = false;
-				break;
-			}
-		}
-	}
-
-	if (change_vlan_filtering) {
-		err = dsa_port_vlan_filtering(dsa_to_port(ds, info->port),
-					      vlan_filtering, &extack);
-		if (extack._msg)
-			dev_err(ds->dev, "port %d: %s\n", info->port,
-				extack._msg);
-		if (err && err != -EOPNOTSUPP)
 			return err;
 	}
 
@@ -169,24 +112,14 @@ static int dsa_switch_sync_vlan_filtering(struct dsa_switch *ds,
 static int dsa_switch_bridge_leave(struct dsa_switch *ds,
 				   struct dsa_notifier_bridge_info *info)
 {
-	struct dsa_switch_tree *dst = ds->dst;
-	int err;
+	if (info->dp->ds == ds && ds->ops->port_bridge_leave)
+		ds->ops->port_bridge_leave(ds, info->dp->index, info->bridge);
 
-	if (dst->index == info->tree_index && ds->index == info->sw_index &&
-	    ds->ops->port_bridge_leave)
-		ds->ops->port_bridge_leave(ds, info->port, info->bridge);
-
-	if ((dst->index != info->tree_index || ds->index != info->sw_index) &&
-	    ds->ops->crosschip_bridge_leave)
-		ds->ops->crosschip_bridge_leave(ds, info->tree_index,
-						info->sw_index, info->port,
+	if (info->dp->ds != ds && ds->ops->crosschip_bridge_leave)
+		ds->ops->crosschip_bridge_leave(ds, info->dp->ds->dst->index,
+						info->dp->ds->index,
+						info->dp->index,
 						info->bridge);
-
-	if (ds->dst->index == info->tree_index && ds->index == info->sw_index) {
-		err = dsa_switch_sync_vlan_filtering(ds, info);
-		if (err)
-			return err;
-	}
 
 	return 0;
 }
@@ -196,16 +129,11 @@ static int dsa_switch_bridge_leave(struct dsa_switch *ds,
  * emitted and its dedicated CPU port.
  */
 static bool dsa_port_host_address_match(struct dsa_port *dp,
-					int info_sw_index, int info_port)
+					const struct dsa_port *targeted_dp)
 {
-	struct dsa_port *targeted_dp, *cpu_dp;
-	struct dsa_switch *targeted_ds;
+	struct dsa_port *cpu_dp = targeted_dp->cpu_dp;
 
-	targeted_ds = dsa_switch_find(dp->ds->dst->index, info_sw_index);
-	targeted_dp = dsa_to_port(targeted_ds, info_port);
-	cpu_dp = targeted_dp->cpu_dp;
-
-	if (dsa_switch_is_upstream_of(dp->ds, targeted_ds))
+	if (dsa_switch_is_upstream_of(dp->ds, targeted_dp->ds))
 		return dp->index == dsa_towards_port(dp->ds, cpu_dp->ds->index,
 						     cpu_dp->index);
 
@@ -421,6 +349,7 @@ static int dsa_switch_do_lag_fdb_add(struct dsa_switch *ds, struct dsa_lag *lag,
 
 	ether_addr_copy(a->addr, addr);
 	a->vid = vid;
+	a->db = db;
 	refcount_set(&a->refcount, 1);
 	list_add_tail(&a->list, &lag->fdbs);
 
@@ -473,10 +402,16 @@ static int dsa_switch_host_fdb_add(struct dsa_switch *ds,
 		return -EOPNOTSUPP;
 
 	dsa_switch_for_each_port(dp, ds) {
-		if (dsa_port_host_address_match(dp, info->sw_index,
-						info->port)) {
-			err = dsa_port_do_fdb_add(dp, info->addr, info->vid,
-						  info->db);
+		if (dsa_port_host_address_match(dp, info->dp)) {
+			if (dsa_port_is_cpu(dp) && info->dp->cpu_port_in_lag) {
+				err = dsa_switch_do_lag_fdb_add(ds, dp->lag,
+								info->addr,
+								info->vid,
+								info->db);
+			} else {
+				err = dsa_port_do_fdb_add(dp, info->addr,
+							  info->vid, info->db);
+			}
 			if (err)
 				break;
 		}
@@ -495,10 +430,16 @@ static int dsa_switch_host_fdb_del(struct dsa_switch *ds,
 		return -EOPNOTSUPP;
 
 	dsa_switch_for_each_port(dp, ds) {
-		if (dsa_port_host_address_match(dp, info->sw_index,
-						info->port)) {
-			err = dsa_port_do_fdb_del(dp, info->addr, info->vid,
-						  info->db);
+		if (dsa_port_host_address_match(dp, info->dp)) {
+			if (dsa_port_is_cpu(dp) && info->dp->cpu_port_in_lag) {
+				err = dsa_switch_do_lag_fdb_del(ds, dp->lag,
+								info->addr,
+								info->vid,
+								info->db);
+			} else {
+				err = dsa_port_do_fdb_del(dp, info->addr,
+							  info->vid, info->db);
+			}
 			if (err)
 				break;
 		}
@@ -510,7 +451,7 @@ static int dsa_switch_host_fdb_del(struct dsa_switch *ds,
 static int dsa_switch_fdb_add(struct dsa_switch *ds,
 			      struct dsa_notifier_fdb_info *info)
 {
-	int port = dsa_towards_port(ds, info->sw_index, info->port);
+	int port = dsa_towards_port(ds, info->dp->ds->index, info->dp->index);
 	struct dsa_port *dp = dsa_to_port(ds, port);
 
 	if (!ds->ops->port_fdb_add)
@@ -522,7 +463,7 @@ static int dsa_switch_fdb_add(struct dsa_switch *ds,
 static int dsa_switch_fdb_del(struct dsa_switch *ds,
 			      struct dsa_notifier_fdb_info *info)
 {
-	int port = dsa_towards_port(ds, info->sw_index, info->port);
+	int port = dsa_towards_port(ds, info->dp->ds->index, info->dp->index);
 	struct dsa_port *dp = dsa_to_port(ds, port);
 
 	if (!ds->ops->port_fdb_del)
@@ -570,12 +511,12 @@ static int dsa_switch_lag_fdb_del(struct dsa_switch *ds,
 static int dsa_switch_lag_change(struct dsa_switch *ds,
 				 struct dsa_notifier_lag_info *info)
 {
-	if (ds->index == info->sw_index && ds->ops->port_lag_change)
-		return ds->ops->port_lag_change(ds, info->port);
+	if (info->dp->ds == ds && ds->ops->port_lag_change)
+		return ds->ops->port_lag_change(ds, info->dp->index);
 
-	if (ds->index != info->sw_index && ds->ops->crosschip_lag_change)
-		return ds->ops->crosschip_lag_change(ds, info->sw_index,
-						     info->port);
+	if (info->dp->ds != ds && ds->ops->crosschip_lag_change)
+		return ds->ops->crosschip_lag_change(ds, info->dp->ds->index,
+						     info->dp->index);
 
 	return 0;
 }
@@ -583,14 +524,14 @@ static int dsa_switch_lag_change(struct dsa_switch *ds,
 static int dsa_switch_lag_join(struct dsa_switch *ds,
 			       struct dsa_notifier_lag_info *info)
 {
-	if (ds->index == info->sw_index && ds->ops->port_lag_join)
-		return ds->ops->port_lag_join(ds, info->port, info->lag,
-					      info->info);
+	if (info->dp->ds == ds && ds->ops->port_lag_join)
+		return ds->ops->port_lag_join(ds, info->dp->index, info->lag,
+					      info->info, info->extack);
 
-	if (ds->index != info->sw_index && ds->ops->crosschip_lag_join)
-		return ds->ops->crosschip_lag_join(ds, info->sw_index,
-						   info->port, info->lag,
-						   info->info);
+	if (info->dp->ds != ds && ds->ops->crosschip_lag_join)
+		return ds->ops->crosschip_lag_join(ds, info->dp->ds->index,
+						   info->dp->index, info->lag,
+						   info->info, info->extack);
 
 	return -EOPNOTSUPP;
 }
@@ -598,12 +539,12 @@ static int dsa_switch_lag_join(struct dsa_switch *ds,
 static int dsa_switch_lag_leave(struct dsa_switch *ds,
 				struct dsa_notifier_lag_info *info)
 {
-	if (ds->index == info->sw_index && ds->ops->port_lag_leave)
-		return ds->ops->port_lag_leave(ds, info->port, info->lag);
+	if (info->dp->ds == ds && ds->ops->port_lag_leave)
+		return ds->ops->port_lag_leave(ds, info->dp->index, info->lag);
 
-	if (ds->index != info->sw_index && ds->ops->crosschip_lag_leave)
-		return ds->ops->crosschip_lag_leave(ds, info->sw_index,
-						    info->port, info->lag);
+	if (info->dp->ds != ds && ds->ops->crosschip_lag_leave)
+		return ds->ops->crosschip_lag_leave(ds, info->dp->ds->index,
+						    info->dp->index, info->lag);
 
 	return -EOPNOTSUPP;
 }
@@ -611,7 +552,7 @@ static int dsa_switch_lag_leave(struct dsa_switch *ds,
 static int dsa_switch_mdb_add(struct dsa_switch *ds,
 			      struct dsa_notifier_mdb_info *info)
 {
-	int port = dsa_towards_port(ds, info->sw_index, info->port);
+	int port = dsa_towards_port(ds, info->dp->ds->index, info->dp->index);
 	struct dsa_port *dp = dsa_to_port(ds, port);
 
 	if (!ds->ops->port_mdb_add)
@@ -623,7 +564,7 @@ static int dsa_switch_mdb_add(struct dsa_switch *ds,
 static int dsa_switch_mdb_del(struct dsa_switch *ds,
 			      struct dsa_notifier_mdb_info *info)
 {
-	int port = dsa_towards_port(ds, info->sw_index, info->port);
+	int port = dsa_towards_port(ds, info->dp->ds->index, info->dp->index);
 	struct dsa_port *dp = dsa_to_port(ds, port);
 
 	if (!ds->ops->port_mdb_del)
@@ -642,8 +583,7 @@ static int dsa_switch_host_mdb_add(struct dsa_switch *ds,
 		return -EOPNOTSUPP;
 
 	dsa_switch_for_each_port(dp, ds) {
-		if (dsa_port_host_address_match(dp, info->sw_index,
-						info->port)) {
+		if (dsa_port_host_address_match(dp, info->dp)) {
 			err = dsa_port_do_mdb_add(dp, info->mdb, info->db);
 			if (err)
 				break;
@@ -663,8 +603,7 @@ static int dsa_switch_host_mdb_del(struct dsa_switch *ds,
 		return -EOPNOTSUPP;
 
 	dsa_switch_for_each_port(dp, ds) {
-		if (dsa_port_host_address_match(dp, info->sw_index,
-						info->port)) {
+		if (dsa_port_host_address_match(dp, info->dp)) {
 			err = dsa_port_do_mdb_del(dp, info->mdb, info->db);
 			if (err)
 				break;
@@ -678,29 +617,18 @@ static int dsa_switch_host_mdb_del(struct dsa_switch *ds,
 static bool dsa_port_vlan_match(struct dsa_port *dp,
 				struct dsa_notifier_vlan_info *info)
 {
-	if (dp->ds->index == info->sw_index && dp->index == info->port)
-		return true;
-
-	if (dsa_port_is_dsa(dp))
-		return true;
-
-	return false;
+	return dsa_port_is_dsa(dp) || dp == info->dp;
 }
 
 /* Host VLANs match on the targeted port's CPU port, and on all DSA ports
  * (upstream and downstream) of that switch and its upstream switches.
  */
 static bool dsa_port_host_vlan_match(struct dsa_port *dp,
-				     struct dsa_notifier_vlan_info *info)
+				     const struct dsa_port *targeted_dp)
 {
-	struct dsa_port *targeted_dp, *cpu_dp;
-	struct dsa_switch *targeted_ds;
+	struct dsa_port *cpu_dp = targeted_dp->cpu_dp;
 
-	targeted_ds = dsa_switch_find(dp->ds->dst->index, info->sw_index);
-	targeted_dp = dsa_to_port(targeted_ds, info->port);
-	cpu_dp = targeted_dp->cpu_dp;
-
-	if (dsa_switch_is_upstream_of(dp->ds, targeted_ds))
+	if (dsa_switch_is_upstream_of(dp->ds, targeted_dp->ds))
 		return dsa_port_is_dsa(dp) || dp == cpu_dp;
 
 	return false;
@@ -858,7 +786,7 @@ static int dsa_switch_host_vlan_add(struct dsa_switch *ds,
 		return -EOPNOTSUPP;
 
 	dsa_switch_for_each_port(dp, ds) {
-		if (dsa_port_host_vlan_match(dp, info)) {
+		if (dsa_port_host_vlan_match(dp, info->dp)) {
 			err = dsa_port_do_vlan_add(dp, info->vlan,
 						   info->extack);
 			if (err)
@@ -879,7 +807,7 @@ static int dsa_switch_host_vlan_del(struct dsa_switch *ds,
 		return -EOPNOTSUPP;
 
 	dsa_switch_for_each_port(dp, ds) {
-		if (dsa_port_host_vlan_match(dp, info)) {
+		if (dsa_port_host_vlan_match(dp, info->dp)) {
 			err = dsa_port_do_vlan_del(dp, info->vlan);
 			if (err)
 				return err;
@@ -901,14 +829,12 @@ static int dsa_switch_change_tag_proto(struct dsa_switch *ds,
 
 	ASSERT_RTNL();
 
-	dsa_switch_for_each_cpu_port(cpu_dp, ds) {
-		err = ds->ops->change_tag_protocol(ds, cpu_dp->index,
-						   tag_ops->proto);
-		if (err)
-			return err;
+	err = ds->ops->change_tag_protocol(ds, tag_ops->proto);
+	if (err)
+		return err;
 
+	dsa_switch_for_each_cpu_port(cpu_dp, ds)
 		dsa_port_set_tag_protocol(cpu_dp, tag_ops);
-	}
 
 	/* Now that changing the tag protocol can no longer fail, let's update
 	 * the remaining bits which are "duplicated for faster access", and the
@@ -1090,6 +1016,52 @@ static int dsa_switch_event(struct notifier_block *nb,
 			event, err);
 
 	return notifier_from_errno(err);
+}
+
+/**
+ * dsa_tree_notify - Execute code for all switches in a DSA switch tree.
+ * @dst: collection of struct dsa_switch devices to notify.
+ * @e: event, must be of type DSA_NOTIFIER_*
+ * @v: event-specific value.
+ *
+ * Given a struct dsa_switch_tree, this can be used to run a function once for
+ * each member DSA switch. The other alternative of traversing the tree is only
+ * through its ports list, which does not uniquely list the switches.
+ */
+int dsa_tree_notify(struct dsa_switch_tree *dst, unsigned long e, void *v)
+{
+	struct raw_notifier_head *nh = &dst->nh;
+	int err;
+
+	err = raw_notifier_call_chain(nh, e, v);
+
+	return notifier_to_errno(err);
+}
+
+/**
+ * dsa_broadcast - Notify all DSA trees in the system.
+ * @e: event, must be of type DSA_NOTIFIER_*
+ * @v: event-specific value.
+ *
+ * Can be used to notify the switching fabric of events such as cross-chip
+ * bridging between disjoint trees (such as islands of tagger-compatible
+ * switches bridged by an incompatible middle switch).
+ *
+ * WARNING: this function is not reliable during probe time, because probing
+ * between trees is asynchronous and not all DSA trees might have probed.
+ */
+int dsa_broadcast(unsigned long e, void *v)
+{
+	struct dsa_switch_tree *dst;
+	int err = 0;
+
+	list_for_each_entry(dst, &dsa_tree_list, list) {
+		err = dsa_tree_notify(dst, e, v);
+		if (err)
+			break;
+	}
+
+	return err;
 }
 
 int dsa_switch_register_notifier(struct dsa_switch *ds)

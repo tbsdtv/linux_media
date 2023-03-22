@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <linux/dma-resv.h>
+#include <linux/dma-fence-chain.h>
 
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_atomic_uapi.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
@@ -137,33 +139,69 @@
  *
  * This function is the default implementation for GEM drivers of
  * &drm_plane_helper_funcs.prepare_fb if no callback is provided.
- *
- * See drm_atomic_set_fence_for_plane() for a discussion of implicit and
- * explicit fencing in atomic modeset updates.
  */
-int drm_gem_plane_helper_prepare_fb(struct drm_plane *plane, struct drm_plane_state *state)
+int drm_gem_plane_helper_prepare_fb(struct drm_plane *plane,
+				    struct drm_plane_state *state)
 {
-	struct dma_resv_iter cursor;
-	struct drm_gem_object *obj;
-	struct dma_fence *fence;
+	struct dma_fence *fence = dma_fence_get(state->fence);
+	enum dma_resv_usage usage;
+	size_t i;
+	int ret;
 
 	if (!state->fb)
 		return 0;
 
-	obj = drm_gem_fb_get_obj(state->fb, 0);
-	dma_resv_iter_begin(&cursor, obj->resv, false);
-	dma_resv_for_each_fence_unlocked(&cursor, fence) {
-		/* TODO: Currently there should be only one write fence, so this
-		 * here works fine. But drm_atomic_set_fence_for_plane() should
-		 * be changed to be able to handle more fences in general for
-		 * multiple BOs per fb anyway. */
-		dma_fence_get(fence);
-		break;
-	}
-	dma_resv_iter_end(&cursor);
+	/*
+	 * Only add the kernel fences here if there is already a fence set via
+	 * explicit fencing interfaces on the atomic ioctl.
+	 *
+	 * This way explicit fencing can be used to overrule implicit fencing,
+	 * which is important to make explicit fencing use-cases work: One
+	 * example is using one buffer for 2 screens with different refresh
+	 * rates. Implicit fencing will clamp rendering to the refresh rate of
+	 * the slower screen, whereas explicit fence allows 2 independent
+	 * render and display loops on a single buffer. If a driver allows
+	 * obeys both implicit and explicit fences for plane updates, then it
+	 * will break all the benefits of explicit fencing.
+	 */
+	usage = fence ? DMA_RESV_USAGE_KERNEL : DMA_RESV_USAGE_WRITE;
 
-	drm_atomic_set_fence_for_plane(state, fence);
+	for (i = 0; i < state->fb->format->num_planes; ++i) {
+		struct drm_gem_object *obj = drm_gem_fb_get_obj(state->fb, i);
+		struct dma_fence *new;
+
+		if (!obj) {
+			ret = -EINVAL;
+			goto error;
+		}
+
+		ret = dma_resv_get_singleton(obj->resv, usage, &new);
+		if (ret)
+			goto error;
+
+		if (new && fence) {
+			struct dma_fence_chain *chain = dma_fence_chain_alloc();
+
+			if (!chain) {
+				ret = -ENOMEM;
+				goto error;
+			}
+
+			dma_fence_chain_init(chain, fence, new, 1);
+			fence = &chain->base;
+
+		} else if (new) {
+			fence = new;
+		}
+	}
+
+	dma_fence_put(state->fence);
+	state->fence = fence;
 	return 0;
+
+error:
+	dma_fence_put(fence);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(drm_gem_plane_helper_prepare_fb);
 
@@ -172,13 +210,13 @@ EXPORT_SYMBOL_GPL(drm_gem_plane_helper_prepare_fb);
  * @pipe: Simple display pipe
  * @plane_state: Plane state
  *
- * This function uses drm_gem_plane_helper_prepare_fb() to extract the exclusive fence
- * from &drm_gem_object.resv and attaches it to plane state for the atomic
+ * This function uses drm_gem_plane_helper_prepare_fb() to extract the fences
+ * from &drm_gem_object.resv and attaches them to the plane state for the atomic
  * helper to wait on. This is necessary to correctly implement implicit
  * synchronization for any buffers shared as a struct &dma_buf. Drivers can use
  * this as their &drm_simple_display_pipe_funcs.prepare_fb callback.
  *
- * See drm_atomic_set_fence_for_plane() for a discussion of implicit and
+ * See drm_gem_plane_helper_prepare_fb() for a discussion of implicit and
  * explicit fencing in atomic modeset updates.
  */
 int drm_gem_simple_display_pipe_prepare_fb(struct drm_simple_display_pipe *pipe,
@@ -322,48 +360,43 @@ void drm_gem_reset_shadow_plane(struct drm_plane *plane)
 EXPORT_SYMBOL(drm_gem_reset_shadow_plane);
 
 /**
- * drm_gem_prepare_shadow_fb - prepares shadow framebuffers
+ * drm_gem_begin_shadow_fb_access - prepares shadow framebuffers for CPU access
  * @plane: the plane
  * @plane_state: the plane state of type struct drm_shadow_plane_state
  *
- * This function implements struct &drm_plane_helper_funcs.prepare_fb. It
+ * This function implements struct &drm_plane_helper_funcs.begin_fb_access. It
  * maps all buffer objects of the plane's framebuffer into kernel address
- * space and stores them in &struct drm_shadow_plane_state.map. The
- * framebuffer will be synchronized as part of the atomic commit.
+ * space and stores them in struct &drm_shadow_plane_state.map. The first data
+ * bytes are available in struct &drm_shadow_plane_state.data.
  *
- * See drm_gem_cleanup_shadow_fb() for cleanup.
+ * See drm_gem_end_shadow_fb_access() for cleanup.
  *
  * Returns:
  * 0 on success, or a negative errno code otherwise.
  */
-int drm_gem_prepare_shadow_fb(struct drm_plane *plane, struct drm_plane_state *plane_state)
+int drm_gem_begin_shadow_fb_access(struct drm_plane *plane, struct drm_plane_state *plane_state)
 {
 	struct drm_shadow_plane_state *shadow_plane_state = to_drm_shadow_plane_state(plane_state);
 	struct drm_framebuffer *fb = plane_state->fb;
-	int ret;
 
 	if (!fb)
 		return 0;
 
-	ret = drm_gem_plane_helper_prepare_fb(plane, plane_state);
-	if (ret)
-		return ret;
-
 	return drm_gem_fb_vmap(fb, shadow_plane_state->map, shadow_plane_state->data);
 }
-EXPORT_SYMBOL(drm_gem_prepare_shadow_fb);
+EXPORT_SYMBOL(drm_gem_begin_shadow_fb_access);
 
 /**
- * drm_gem_cleanup_shadow_fb - releases shadow framebuffers
+ * drm_gem_end_shadow_fb_access - releases shadow framebuffers from CPU access
  * @plane: the plane
  * @plane_state: the plane state of type struct drm_shadow_plane_state
  *
- * This function implements struct &drm_plane_helper_funcs.cleanup_fb.
- * This function unmaps all buffer objects of the plane's framebuffer.
+ * This function implements struct &drm_plane_helper_funcs.end_fb_access. It
+ * undoes all effects of drm_gem_begin_shadow_fb_access() in reverse order.
  *
- * See drm_gem_prepare_shadow_fb() for more information.
+ * See drm_gem_begin_shadow_fb_access() for more information.
  */
-void drm_gem_cleanup_shadow_fb(struct drm_plane *plane, struct drm_plane_state *plane_state)
+void drm_gem_end_shadow_fb_access(struct drm_plane *plane, struct drm_plane_state *plane_state)
 {
 	struct drm_shadow_plane_state *shadow_plane_state = to_drm_shadow_plane_state(plane_state);
 	struct drm_framebuffer *fb = plane_state->fb;
@@ -373,46 +406,45 @@ void drm_gem_cleanup_shadow_fb(struct drm_plane *plane, struct drm_plane_state *
 
 	drm_gem_fb_vunmap(fb, shadow_plane_state->map);
 }
-EXPORT_SYMBOL(drm_gem_cleanup_shadow_fb);
+EXPORT_SYMBOL(drm_gem_end_shadow_fb_access);
 
 /**
- * drm_gem_simple_kms_prepare_shadow_fb - prepares shadow framebuffers
+ * drm_gem_simple_kms_begin_shadow_fb_access - prepares shadow framebuffers for CPU access
  * @pipe: the simple display pipe
  * @plane_state: the plane state of type struct drm_shadow_plane_state
  *
- * This function implements struct drm_simple_display_funcs.prepare_fb. It
- * maps all buffer objects of the plane's framebuffer into kernel address
- * space and stores them in struct drm_shadow_plane_state.map. The
- * framebuffer will be synchronized as part of the atomic commit.
+ * This function implements struct drm_simple_display_funcs.begin_fb_access.
  *
- * See drm_gem_simple_kms_cleanup_shadow_fb() for cleanup.
+ * See drm_gem_begin_shadow_fb_access() for details and
+ * drm_gem_simple_kms_cleanup_shadow_fb() for cleanup.
  *
  * Returns:
  * 0 on success, or a negative errno code otherwise.
  */
-int drm_gem_simple_kms_prepare_shadow_fb(struct drm_simple_display_pipe *pipe,
-					 struct drm_plane_state *plane_state)
+int drm_gem_simple_kms_begin_shadow_fb_access(struct drm_simple_display_pipe *pipe,
+					      struct drm_plane_state *plane_state)
 {
-	return drm_gem_prepare_shadow_fb(&pipe->plane, plane_state);
+	return drm_gem_begin_shadow_fb_access(&pipe->plane, plane_state);
 }
-EXPORT_SYMBOL(drm_gem_simple_kms_prepare_shadow_fb);
+EXPORT_SYMBOL(drm_gem_simple_kms_begin_shadow_fb_access);
 
 /**
- * drm_gem_simple_kms_cleanup_shadow_fb - releases shadow framebuffers
+ * drm_gem_simple_kms_end_shadow_fb_access - releases shadow framebuffers from CPU access
  * @pipe: the simple display pipe
  * @plane_state: the plane state of type struct drm_shadow_plane_state
  *
- * This function implements struct drm_simple_display_funcs.cleanup_fb.
- * This function unmaps all buffer objects of the plane's framebuffer.
+ * This function implements struct drm_simple_display_funcs.end_fb_access.
+ * It undoes all effects of drm_gem_simple_kms_begin_shadow_fb_access() in
+ * reverse order.
  *
- * See drm_gem_simple_kms_prepare_shadow_fb().
+ * See drm_gem_simple_kms_begin_shadow_fb_access().
  */
-void drm_gem_simple_kms_cleanup_shadow_fb(struct drm_simple_display_pipe *pipe,
-					  struct drm_plane_state *plane_state)
+void drm_gem_simple_kms_end_shadow_fb_access(struct drm_simple_display_pipe *pipe,
+					     struct drm_plane_state *plane_state)
 {
-	drm_gem_cleanup_shadow_fb(&pipe->plane, plane_state);
+	drm_gem_end_shadow_fb_access(&pipe->plane, plane_state);
 }
-EXPORT_SYMBOL(drm_gem_simple_kms_cleanup_shadow_fb);
+EXPORT_SYMBOL(drm_gem_simple_kms_end_shadow_fb_access);
 
 /**
  * drm_gem_simple_kms_reset_shadow_plane - resets a shadow-buffered plane

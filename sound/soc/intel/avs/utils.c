@@ -7,6 +7,7 @@
 //
 
 #include <linux/firmware.h>
+#include <linux/kfifo.h>
 #include <linux/slab.h>
 #include "avs.h"
 #include "messages.h"

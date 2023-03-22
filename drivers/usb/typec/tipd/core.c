@@ -14,6 +14,7 @@
 #include <linux/regmap.h>
 #include <linux/interrupt.h>
 #include <linux/usb/typec.h>
+#include <linux/usb/typec_altmode.h>
 #include <linux/usb/role.h>
 
 #include "tps6598x.h"
@@ -93,6 +94,8 @@ struct tps6598x {
 	struct power_supply *psy;
 	struct power_supply_desc psy_desc;
 	enum power_supply_usb_type usb_type;
+
+	u16 pwr_status;
 };
 
 static enum power_supply_property tps6598x_psy_props[] = {
@@ -230,17 +233,12 @@ static int tps6598x_connect(struct tps6598x *tps, u32 status)
 {
 	struct typec_partner_desc desc;
 	enum typec_pwr_opmode mode;
-	u16 pwr_status;
 	int ret;
 
 	if (tps->partner)
 		return 0;
 
-	ret = tps6598x_read16(tps, TPS_REG_POWER_STATUS, &pwr_status);
-	if (ret < 0)
-		return ret;
-
-	mode = TPS_POWER_STATUS_PWROPMODE(pwr_status);
+	mode = TPS_POWER_STATUS_PWROPMODE(tps->pwr_status);
 
 	desc.usb_pd = mode == TYPEC_PWR_MODE_PD;
 	desc.accessory = TYPEC_ACCESSORY_NONE; /* XXX: handle accessories */
@@ -260,6 +258,7 @@ static int tps6598x_connect(struct tps6598x *tps, u32 status)
 		typec_set_orientation(tps->port, TYPEC_ORIENTATION_REVERSE);
 	else
 		typec_set_orientation(tps->port, TYPEC_ORIENTATION_NORMAL);
+	typec_set_mode(tps->port, TYPEC_STATE_USB);
 	tps6598x_set_data_role(tps, TPS_STATUS_TO_TYPEC_DATAROLE(status), true);
 
 	tps->partner = typec_register_partner(tps->port, &desc);
@@ -283,6 +282,7 @@ static void tps6598x_disconnect(struct tps6598x *tps, u32 status)
 	typec_set_pwr_role(tps->port, TPS_STATUS_TO_TYPEC_PORTROLE(status));
 	typec_set_vconn_role(tps->port, TPS_STATUS_TO_TYPEC_VCONN(status));
 	typec_set_orientation(tps->port, TYPEC_ORIENTATION_NONE);
+	typec_set_mode(tps->port, TYPEC_STATE_SAFE);
 	tps6598x_set_data_role(tps, TPS_STATUS_TO_TYPEC_DATAROLE(status), false);
 
 	power_supply_changed(tps->psy);
@@ -455,6 +455,7 @@ static bool tps6598x_read_power_status(struct tps6598x *tps)
 		dev_err(tps->dev, "failed to read power status: %d\n", ret);
 		return false;
 	}
+	tps->pwr_status = pwr_status;
 	trace_tps6598x_power_status(pwr_status);
 
 	return true;
@@ -476,7 +477,7 @@ static void tps6598x_handle_plug_event(struct tps6598x *tps, u32 status)
 static irqreturn_t cd321x_interrupt(int irq, void *data)
 {
 	struct tps6598x *tps = data;
-	u64 event;
+	u64 event = 0;
 	u32 status;
 	int ret;
 
@@ -521,8 +522,8 @@ err_unlock:
 static irqreturn_t tps6598x_interrupt(int irq, void *data)
 {
 	struct tps6598x *tps = data;
-	u64 event1;
-	u64 event2;
+	u64 event1 = 0;
+	u64 event2 = 0;
 	u32 status;
 	int ret;
 
@@ -601,15 +602,8 @@ static const struct regmap_config tps6598x_regmap_config = {
 static int tps6598x_psy_get_online(struct tps6598x *tps,
 				   union power_supply_propval *val)
 {
-	int ret;
-	u16 pwr_status;
-
-	ret = tps6598x_read16(tps, TPS_REG_POWER_STATUS, &pwr_status);
-	if (ret < 0)
-		return ret;
-
-	if (TPS_POWER_STATUS_CONNECTION(pwr_status) &&
-	    TPS_POWER_STATUS_SOURCESINK(pwr_status)) {
+	if (TPS_POWER_STATUS_CONNECTION(tps->pwr_status) &&
+	    TPS_POWER_STATUS_SOURCESINK(tps->pwr_status)) {
 		val->intval = 1;
 	} else {
 		val->intval = 0;
@@ -622,15 +616,11 @@ static int tps6598x_psy_get_prop(struct power_supply *psy,
 				 union power_supply_propval *val)
 {
 	struct tps6598x *tps = power_supply_get_drvdata(psy);
-	u16 pwr_status;
 	int ret = 0;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_USB_TYPE:
-		ret = tps6598x_read16(tps, TPS_REG_POWER_STATUS, &pwr_status);
-		if (ret < 0)
-			return ret;
-		if (TPS_POWER_STATUS_PWROPMODE(pwr_status) == TYPEC_PWR_MODE_PD)
+		if (TPS_POWER_STATUS_PWROPMODE(tps->pwr_status) == TYPEC_PWR_MODE_PD)
 			val->intval = POWER_SUPPLY_USB_TYPE_PD;
 		else
 			val->intval = POWER_SUPPLY_USB_TYPE_C;
@@ -827,16 +817,20 @@ static int tps6598x_probe(struct i2c_client *client)
 
 	ret = devm_tps6598_psy_register(tps);
 	if (ret)
-		return ret;
+		goto err_role_put;
 
 	tps->port = typec_register_port(&client->dev, &typec_cap);
 	if (IS_ERR(tps->port)) {
 		ret = PTR_ERR(tps->port);
 		goto err_role_put;
 	}
-	fwnode_handle_put(fwnode);
 
 	if (status & TPS_STATUS_PLUG_PRESENT) {
+		ret = tps6598x_read16(tps, TPS_REG_POWER_STATUS, &tps->pwr_status);
+		if (ret < 0) {
+			dev_err(tps->dev, "failed to read power status: %d\n", ret);
+			goto err_unregister_port;
+		}
 		ret = tps6598x_connect(tps, status);
 		if (ret)
 			dev_err(&client->dev, "failed to register partner\n");
@@ -846,16 +840,18 @@ static int tps6598x_probe(struct i2c_client *client)
 					irq_handler,
 					IRQF_SHARED | IRQF_ONESHOT,
 					dev_name(&client->dev), tps);
-	if (ret) {
-		tps6598x_disconnect(tps, 0);
-		typec_unregister_port(tps->port);
-		goto err_role_put;
-	}
+	if (ret)
+		goto err_disconnect;
 
 	i2c_set_clientdata(client, tps);
+	fwnode_handle_put(fwnode);
 
 	return 0;
 
+err_disconnect:
+	tps6598x_disconnect(tps, 0);
+err_unregister_port:
+	typec_unregister_port(tps->port);
 err_role_put:
 	usb_role_switch_put(tps->role_sw);
 err_fwnode_put:
@@ -865,15 +861,13 @@ err_clear_mask:
 	return ret;
 }
 
-static int tps6598x_remove(struct i2c_client *client)
+static void tps6598x_remove(struct i2c_client *client)
 {
 	struct tps6598x *tps = i2c_get_clientdata(client);
 
 	tps6598x_disconnect(tps, 0);
 	typec_unregister_port(tps->port);
 	usb_role_switch_put(tps->role_sw);
-
-	return 0;
 }
 
 static const struct of_device_id tps6598x_of_match[] = {

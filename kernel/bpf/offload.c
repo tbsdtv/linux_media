@@ -216,9 +216,6 @@ static void __bpf_prog_offload_destroy(struct bpf_prog *prog)
 	if (offload->dev_state)
 		offload->offdev->ops->destroy(prog);
 
-	/* Make sure BPF_PROG_GET_NEXT_ID can't find this dead program */
-	bpf_prog_free_id(prog, true);
-
 	list_del_init(&offload->offloads);
 	kfree(offload);
 	prog->aux->offload = NULL;
@@ -372,7 +369,7 @@ struct bpf_map *bpf_map_offload_map_alloc(union bpf_attr *attr)
 	    attr->map_type != BPF_MAP_TYPE_HASH)
 		return ERR_PTR(-EINVAL);
 
-	offmap = kzalloc(sizeof(*offmap), GFP_USER);
+	offmap = bpf_map_area_alloc(sizeof(*offmap), NUMA_NO_NODE);
 	if (!offmap)
 		return ERR_PTR(-ENOMEM);
 
@@ -404,7 +401,7 @@ struct bpf_map *bpf_map_offload_map_alloc(union bpf_attr *attr)
 err_unlock:
 	up_write(&bpf_devs_lock);
 	rtnl_unlock();
-	kfree(offmap);
+	bpf_map_area_free(offmap);
 	return ERR_PTR(err);
 }
 
@@ -428,7 +425,7 @@ void bpf_map_offload_map_free(struct bpf_map *map)
 	up_write(&bpf_devs_lock);
 	rtnl_unlock();
 
-	kfree(offmap);
+	bpf_map_area_free(offmap);
 }
 
 int bpf_map_offload_lookup_elem(struct bpf_map *map, void *key, void *value)

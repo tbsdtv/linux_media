@@ -24,7 +24,7 @@
 #define BOOL bool
 #define PIKOTV_MBKB_THRESHOLD 210 /* PikoTV */
 
-static bool enable_msi = true;
+static bool enable_msi = true;//false;
 module_param(enable_msi, bool, 0444);
 MODULE_PARM_DESC(enable_msi, "use an msi interrupt if available");
 
@@ -61,7 +61,7 @@ static BOOL AD4351_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 		return FALSE;
 	}
 }
-static BOOL MAX2871CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
+/*static BOOL MAX2871CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 {
 	unsigned char tmpbuf[4] = {0};
 	int i, j;
@@ -84,7 +84,7 @@ static BOOL MAX2871CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 		printk(("----------MAX2871CheckFree error, time out! \n"));
 		return FALSE;
 	}
-}
+}*/
 
 
 static BOOL ad9789_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
@@ -211,7 +211,7 @@ static BOOL ad4351_wt_nBytes(struct tbs_pcie_dev *dev, unsigned char *WR_buf, in
 	return TRUE;
 }
 
-static BOOL MAX2871WritenBytes(struct tbs_pcie_dev *dev, unsigned char *WR_buf, int length)
+/*static BOOL MAX2871WritenBytes(struct tbs_pcie_dev *dev, unsigned char *WR_buf, int length)
 {
 	unsigned char tmpbuf[4] = { 0 }, i;
 
@@ -226,7 +226,7 @@ static BOOL MAX2871WritenBytes(struct tbs_pcie_dev *dev, unsigned char *WR_buf, 
 		return FALSE;
 	}
 	return TRUE;
-}
+}*/
 
 
 static BOOL GS2972_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
@@ -254,7 +254,7 @@ static BOOL GS2972_CheckFree(struct tbs_pcie_dev *dev, int OpbyteNum)
 	}
 }
 
-static BOOL GS2972_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Wr_buf)
+/*static BOOL GS2972_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Wr_buf)
 {
 	unsigned char i = 0, tmpdt = 0, tmpbuf[8];
 	mutex_lock(&dev->spi_mutex);
@@ -293,7 +293,7 @@ static BOOL GS2972_wt_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr,
 	}
 	mutex_unlock(&dev->spi_mutex);
 	return TRUE;
-}
+}*/
 
 static BOOL GS2972_rd_nBytes(struct tbs_pcie_dev *dev, int length, int Reg_Addr, unsigned char *Rd_buf)
 {
@@ -563,7 +563,7 @@ static BOOL ad9789_setFre_dvbc(struct tbs_pcie_dev *dev, unsigned long freq, uns
 	unsigned long fcenter;
 
 	freq = freq / 1000000;
-	printk("set freq: %ld, bw: %d\n", freq, bw);
+	//printk("set freq: %ld, bw: %d\n", freq, bw);
 	//freq_0 = (16777216 * freq)/150;
 	freq_0 = div_u64(16777216ULL * freq, 150);
 	buff[2] = freq_0 & 0xff;
@@ -874,7 +874,7 @@ static void AD9789_Configration_qamb(struct tbs_pcie_dev *dev)
 	return;
 }
 
-static BOOL MAX2871ConfigrationDvbc(struct tbs_pcie_dev *dev)
+/*static BOOL MAX2871ConfigrationDvbc(struct tbs_pcie_dev *dev)
 {
 	unsigned char ret;
 	unsigned char buff[4] = { 0 };
@@ -938,10 +938,10 @@ static BOOL MAX2871ConfigrationDvbc(struct tbs_pcie_dev *dev)
 	buff[1] = 0x2e;
 	buff[0] = 0x00;
 	
-	/*buff[3] = 0xB8;
-	buff[2] = 0x81;
-	buff[1] = 0x1e;
-	buff[0] = 0x00;*/
+	buff[3] = 0xB8;
+	//buff[2] = 0x81;
+	//buff[1] = 0x1e;
+	//buff[0] = 0x00;
 	ret = MAX2871WritenBytes(dev, buff, 4);
 	if (ret == FALSE)
 	{
@@ -1006,11 +1006,11 @@ static BOOL MAX2871ConfigrationDvbc(struct tbs_pcie_dev *dev)
 	buff[2] = 0x00;
 	buff[1] = 0x2e;
 	buff[0] = 0x00;
-	/*
-	buff[3] = 0xB8;
-	buff[2] = 0x81;
-	buff[1] = 0x1e;
-	buff[0] = 0x00;*/
+	//
+	//buff[3] = 0xB8;
+	//buff[2] = 0x81;
+	//buff[1] = 0x1e;
+	//buff[0] = 0x00;
 
 	ret = MAX2871WritenBytes(dev, buff, 4);
 	if (ret == FALSE)
@@ -1032,10 +1032,10 @@ static BOOL MAX2871ConfigrationDvbc(struct tbs_pcie_dev *dev)
 	}
 	
 	return TRUE;
-}
+}*/
 
 //1536
-static BOOL AD4351_Configration_qamb(struct tbs_pcie_dev *dev)
+/*static BOOL AD4351_Configration_qamb(struct tbs_pcie_dev *dev)
 {
 	unsigned char ret;
 	unsigned char buff[4] = {0};
@@ -1097,9 +1097,69 @@ static BOOL AD4351_Configration_qamb(struct tbs_pcie_dev *dev)
 		return FALSE;
 	}
 	return TRUE;
-}
+}*/
 
+static BOOL AD4351_Configration_2304(struct tbs_pcie_dev *dev)
+{
+	unsigned char ret;
+	unsigned char buff[4] = {0};
 //2400
+	buff[3] = 0x05;
+	buff[2] = 0x00;
+	buff[1] = 0x58;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0x3c;
+	buff[2] = 0x80;
+	buff[1] = 0x8C;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0xB3;
+	buff[2] = 0x04;
+	buff[1] = 0x00;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0x42;
+	buff[2] = 0x4E;
+	buff[1] = 0x00;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0xc9;
+	buff[2] = 0x80;
+	buff[1] = 0x00;
+	buff[0] = 0x08;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	buff[3] = 0x20;
+	buff[2] = 0x00;
+	buff[1] = 0x2e;
+	buff[0] = 0x00;
+	ret = ad4351_wt_nBytes(dev, buff, 4);
+	if (ret == FALSE)
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
 static BOOL AD4351_Configration_dvbc(struct tbs_pcie_dev *dev)
 {
 	unsigned char ret;
@@ -1804,12 +1864,7 @@ static void AD9789_Configration_isdbt_6m(struct tbs_pcie_dev *dev)
 {
 	int i = 0;
 	unsigned char buff[8] = {0};
-	//struct RF_Param * dvb_c = ptr;
-	unsigned long freq_0 = 0,tmp = 0,fcenter = 0,p_srate = 0;
-	unsigned long Freq = 0,Freq_0 = 0,Freq_1 = 0,Freq_2 = 0,Freq_3 = 0,Fcenter = 0,P_srate = 0;
-	int qam =0;
-	unsigned long srate = 0;
-/***********************************************************************/
+
 	//Software Reset
 	buff[0] = 0x3C;
 	ad9789_wt_nBytes(dev,1,AD9789_SPI_CTL,buff);
@@ -1992,7 +2047,6 @@ static BOOL ad9789_setFre_atsc (struct tbs_pcie_dev *dev, unsigned long freq)
 	unsigned char buff[4] = {0};
 	//config center freq
 	unsigned long fcenter;
-	int i;
 
 	unsigned long bandwidth = 6;
 
@@ -2210,16 +2264,14 @@ static void AD9789_Configration_atsc_6m(struct tbs_pcie_dev *dev)
 	return ;
 }
 
-u8 tbsmods[10];
-struct tbs_pcie_dev * tbsmodsdev[10];
+u8 tbsmods[32];
+struct tbs_pcie_dev * tbsmodsdev[32];
 struct cdev		mod_cdev;
 struct class	*mod_cdev_class;
 
 static void start_dma_transfer(struct mod_channel *pchannel)
 {
 	struct tbs_pcie_dev *dev=pchannel->dev;
-	u32 delay;
-	u32 bitrate;
 	u32 speedctrl;
 
 	/* PikoTV 20200306 */
@@ -2236,28 +2288,34 @@ static void start_dma_transfer(struct mod_channel *pchannel)
 		}
 		
 		//printk("ioctl 0x20 speedctrl: %d \n", speedctrl);
-		TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_SPEED_CTRL, (speedctrl));
-		TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_INT_MONITOR, (2*speedctrl));
+		TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_SPEED_CTRL, (speedctrl));
+		TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_INT_MONITOR, (2*speedctrl));
 		if(dev->cardid == 0x690b)
 		{
 			//speedctrl =div_u64(speedctrl,BLOCKCEEL );
 			speedctrl =div_u64(speedctrl*9,BLOCKCEEL*10 );	
 			//printk("ioctl 0x24 frm: %d \n", speedctrl);
-			TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_FRAME_CNT, (speedctrl));
+			TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_FRAME_CNT, (speedctrl));
 		}
 		if(dev->cardid == 0x6214)
 		{
 			speedctrl =div_u64(speedctrl,BLOCKCEEL );	
-			TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_FRAME_CNT, (speedctrl));
+			TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_FRAME_CNT, (speedctrl));
 		}
 
 	}
-	TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_SIZE, (BLOCKSIZE(dev->cardid)));
-	TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_ADDR_HIGH, 0);
-	TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_ADDR_LOW, pchannel->dmaphy);
-	TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_GO, (1));
+	TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_SIZE, (BLOCKSIZE(dev->cardid)));
+	TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_ADDR_HIGH, 0);
+	TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_ADDR_LOW, pchannel->dmaphy);
+	TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_GO, (1));
 
-	TBS_PCIE_WRITE(Int_adapter, 0x04, (0x00000001));
+	//debug 
+	//tmp0 = TBS_PCIE_READ((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), 0X20);
+	//printk("0x20: %x \n", tmp0);
+
+	if(dev->cardid != 0x6032)
+		TBS_PCIE_WRITE(Int_adapter, 0x04, (0x00000001));
+
 	TBS_PCIE_WRITE(Int_adapter, 0x18+pchannel->channel_index*4, (1));
 }
 
@@ -2265,11 +2323,11 @@ static int tbsmod_open(struct inode *inode, struct file *filp)
 {
 	//struct tbs_pcie_dev *dev = (struct tbs_pcie_dev * )tbsmodsdev[iminor(inode)>>2];
 	//struct mod_channel *pchannel =(struct mod_channel *)&dev->channel[iminor(inode)&3];
-
-	struct tbs_pcie_dev *dev = (struct tbs_pcie_dev * )tbsmodsdev[iminor(inode)>>3];
-	struct mod_channel *pchannel =(struct mod_channel *)&dev->channel[iminor(inode)&7];
-	filp->private_data = pchannel;
 	u8 buff[4] = {0,0,0,0};
+	struct tbs_pcie_dev *dev = (struct tbs_pcie_dev * )tbsmodsdev[iminor(inode)>>5];
+	struct mod_channel *pchannel =(struct mod_channel *)&dev->channel[iminor(inode)&31];
+	filp->private_data = pchannel;
+	
 	/*
 	printk("%s %p\n", __func__, pchannel);
 	printk("%s devno:%d\n", __func__, pchannel->devno);
@@ -2286,6 +2344,7 @@ static int tbsmod_open(struct inode *inode, struct file *filp)
 	kfifo_reset(&pchannel->fifo);
 	spin_lock_init(&pchannel->adap_lock);
 	//enable rf 
+	
 	if((dev->cardid == 0x6004)||(dev->cardid == 0x6104)||(dev->cardid == 0x6014)||(dev->cardid == 0x6034)){
 		ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff);
 		buff[0] |= (1<<pchannel->channel_index);
@@ -2336,7 +2395,7 @@ static ssize_t tbsmod_write(struct file *file, const char __user *ptr, size_t si
 		i++;
 		if (i > 100)
 		{
-			printk(" tbsmod_write buffer fulled!\n" );
+			printk(" tbsmod_write buffer fulled!---%d\n",pchannel->channel_index  );
 			return 0;
 		}
 	}
@@ -2357,7 +2416,6 @@ void spi_read(struct tbs_pcie_dev *dev, struct mcu24cxx_info *info)
 }
 void spi_write(struct tbs_pcie_dev *dev, struct mcu24cxx_info *info)
 {
-	unsigned char tmpbuf[4];
 	TBS_PCIE_WRITE(info->bassaddr,info->reg,info->data);	
 	//printk("%s size:%x, reg: %x, val: %x\n", __func__, info->bassaddr, info->reg,info->data);
 }
@@ -2581,7 +2639,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case FE_GET_INFO:
 		memset(&finfo, 0, sizeof(struct dvb_frontend_info));
 		snprintf(finfo.name, 16, "TBS-%X:%d", dev->pdev->subsystem_vendor, dev->mod_index);
-		copy_to_user((unsigned long)arg, &finfo, sizeof(struct dvb_frontend_info));
+		copy_to_user((void __user *)arg, &finfo, sizeof(struct dvb_frontend_info));
 		break;
 
 	
@@ -2608,7 +2666,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case FE_ECP3FW_READ:
 		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
 		spi_read(dev, &wrinfo);
-		copy_to_user((unsigned long)arg, &wrinfo, sizeof(struct mcu24cxx_info ));
+		copy_to_user((void __user *)arg, &wrinfo, sizeof(struct mcu24cxx_info ));
 		break;
 	case FE_ECP3FW_WRITE:
 		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
@@ -2635,10 +2693,12 @@ static int tbsmod_release(struct inode *inode, struct file *file)
 	u8 buff[4] = {0,0,0,0};
 	
 	//printk("%s\n", __func__);
-	TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_GO, (0));
+	TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_GO, (0));
+	TBS_PCIE_WRITE(Int_adapter, 0x18+pchannel->channel_index*4, (0));
 	pchannel->dma_start_flag = 0;
 
 	//disable rf 
+	
 	if((dev->cardid == 0x6004)||(dev->cardid == 0x6104)||(dev->cardid == 0x6014)||(dev->cardid == 0x6034)){
 		ad9789_rd_nBytes(dev, 1, AD9789_CHANNEL_ENABLE, buff);
 		buff[0] &= (~(1<<pchannel->channel_index));		
@@ -2695,6 +2755,14 @@ static void tbs_adapters_init_dvbc(struct tbs_pcie_dev *dev)
 
 	AD9789_Configration_dvbc(dev);
 
+  //reset ip-core
+  tmpbuf[0] = 0;
+  TBS_PCIE_WRITE(0, 0x34, *(u32 *)&tmpbuf[0]);
+  msleep(100);
+  tmpbuf[0] = 1;
+  TBS_PCIE_WRITE(0, 0x34, *(u32 *)&tmpbuf[0]);
+  msleep(100);
+        
 	//read id (54425368)
 	id2 = TBS_PCIE_READ(0, SPI_RESET);
 	printk("chip id2: %x\n", __swab32(id2));
@@ -2715,36 +2783,21 @@ static void tbs_adapters_init_dvbc(struct tbs_pcie_dev *dev)
 static void tbs_adapters_init_dvbc_5862(struct tbs_pcie_dev *dev)
 {
 	unsigned char tmpbuf[4]={0};
-	int id2;
 	BOOL ret;
 	
+	TBS_PCIE_WRITE(Int_adapter, 0x04, (0x00000001));
 
-	//reset 5862
-	tmpbuf[0] = 1;
-	TBS_PCIE_WRITE(0, SPI_RESET, *(u32 *)&tmpbuf[0]);
-	msleep(100);
-	tmpbuf[0] = 0;
-	TBS_PCIE_WRITE(0, SPI_RESET, *(u32 *)&tmpbuf[0]);
-	msleep(100);
-	
-	ret = MAX2871ConfigrationDvbc(dev);
+	ret = AD4351_Configration_2304(dev);
 	if (ret == FALSE)
-		printk("configration MAX2871 false! \n");
-	
+		printk("configration 4351 false! \n");
+
 	spi_ad9789Enable(dev, 1);
 
-	// choose spi device for 9789_A
+	// choose spi device for 5862
 	tmpbuf[0] = 0;
 	TBS_PCIE_WRITE(0, SPI_DEVICE, *(u32 *)&tmpbuf[0]);
 
-
-	//read id (54425368)
-	id2 = TBS_PCIE_READ(0, SPI_RESET);
-	//printk("chip id2: %x\n", __swab32(id2));
-	printk("chip id2: %x\n", id2);
-
-
-	printk("TBS6008 DVBC Modulator init OK !\n");
+	printk("TBS6032 DVBC Modulator init OK !\n");
 
 	
 }
@@ -3022,10 +3075,12 @@ void channelprocess(struct tbs_pcie_dev *dev,u8 index){
 		int count = 0;
 		int ret;
 		u32 delay;
-		
+		//TBS_PCIE_READ((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), 0x00);
 		spin_lock(&pchannel->adap_lock);
-		TBS_PCIE_READ((DMA_BASEADDRESS(pchannel->channel_index)), 0x00);
-		TBS_PCIE_WRITE(Int_adapter, 0x00, (0x10<<index) );
+		TBS_PCIE_READ((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), 0x00);
+		if(dev->cardid != 0x6032)
+			TBS_PCIE_WRITE(Int_adapter, 0x00, (0x10<<index) );
+		//TBS_PCIE_WRITE(Int_adapter, 0x18+pchannel->channel_index*4, (0));
 		count = kfifo_len(&pchannel->fifo);
 		if (count >= BLOCKSIZE(dev->cardid)){
 			//printk("dma%d status 11 %d\n",pchannel->channel_index,count);
@@ -3050,63 +3105,162 @@ void channelprocess(struct tbs_pcie_dev *dev,u8 index){
 			delay = div_u64(1000000000ULL * BLOCKSIZE(dev->cardid), (pchannel->input_bitrate) * 1024*1024*3);
 		}
 		//printk("%s 0x18 delayshort: %d \n", __func__,delay);
-		TBS_PCIE_WRITE((DMA_BASEADDRESS(pchannel->channel_index)), DMA_DELAYSHORT, (delay));
+		TBS_PCIE_WRITE((DMA_BASEADDRESS(dev->cardid, pchannel->channel_index)), DMA_DELAYSHORT, (delay));
 		//TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
 		}
 		spin_unlock(&pchannel->adap_lock);
 }
 
-
 static irqreturn_t tbsmod_irq(int irq, void *dev_id)
 {
 	struct tbs_pcie_dev *dev = (struct tbs_pcie_dev *)dev_id;
-	u32 stat,tmp;
-	
-	stat = TBS_PCIE_READ(Int_adapter, 0x0c);
-	tmp = TBS_PCIE_READ(Int_adapter, 0); // clear total interrupts.
-	TBS_PCIE_WRITE(Int_adapter, 0, tmp);
+	u32 stat,stat16;
 
+	stat = TBS_PCIE_READ(Int_adapter, 0); // clear total interrupts.
+	//stat16 = TBS_PCIE_READ(Int_adapter, 0x0c);
+	stat16 = TBS_PCIE_READ(Int_adapter, 0x18);
 	TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
-	//printk("%s %x\n",__func__,stat);
-	if (!(stat & 0xff0)){
+
+
+	if((stat == 0x0) && (stat16 == 0x0))
+
+	{	
+		//printk("%s irq(0-15)---- %x,irq(16-31)---- %x \n", __func__,stat,stat16);
 		//TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
+
 		return IRQ_HANDLED;
 	}
+	
+	if(stat & 0xff0)
+	{
+		if (stat & 0x80){ //dma3 status
+			channelprocess(dev,3);
+		}
 
-	if (stat & 0x80){ //dma3 status
-		channelprocess(dev,3);
+		if (stat & 0x40){ //dma2 status
+			channelprocess(dev,2);
+		}
+
+		if (stat & 0x20){ //dma1 status
+			channelprocess(dev,1);
+		}
+
+		if (stat & 0x10){ //dma0 status
+			//printk("%s irq0---- %x \n", __func__,stat);
+			channelprocess(dev,0);
+		}
+		if (stat & 0x0100){ //dma4 status
+			channelprocess(dev,4);
+		}
+
+		if (stat & 0x0200){ //dma5 status
+			channelprocess(dev,5);
+		}
+
+		if (stat & 0x0400){ //dma6 status
+			channelprocess(dev,6);
+		}
+
+		if (stat & 0x0800){ //dma7 status
+			channelprocess(dev,7);
+		}
+	}
+	if(stat & 0x0ff000)
+	{
+		if (stat & 0x01000){ //dma8 status
+			channelprocess(dev,8);
+		}
+
+		if (stat & 0x02000){ //dma9 status
+			channelprocess(dev,9);
+		}
+
+		if (stat & 0x04000){ //dma10 status
+			channelprocess(dev,10);
+		}
+
+		if (stat & 0x08000){ //dma11 status
+			channelprocess(dev,11);
+		}
+		if (stat & 0x010000){ //dma12 status
+			channelprocess(dev,12);
+		}
+
+		if (stat & 0x020000){ //dma13 status
+			channelprocess(dev,13);
+		}
+
+		if (stat & 0x040000){ //dma14 status
+			channelprocess(dev,14);
+		}
+
+		if (stat & 0x080000){ //dma15 status
+			channelprocess(dev,15);
+		}
+	}
+	if(stat16 != 0)
+	{
+		if(stat16 & 0xff0000)
+		{
+			if (stat16 & 0x10000){ //dma16 status
+				channelprocess(dev,16);
+			}
+			if (stat16 & 0x20000){ //dma17 status
+				channelprocess(dev,17);
+			}
+			if (stat16 & 0x40000){ //dma18 status
+				channelprocess(dev,18);
+			}
+			if (stat16 & 0x80000){ //dma19 status
+				channelprocess(dev,19);
+			}
+			if (stat16 & 0x100000){ //dma20 status
+				channelprocess(dev,20);
+			}
+			if (stat16 & 0x200000){ //dma21 status
+				channelprocess(dev,21);
+			}
+			if (stat16 & 0x400000){ //dma22 status
+				channelprocess(dev,22);
+			}
+			if (stat16 & 0x800000){ //dma23 status
+				channelprocess(dev,23);
+			}
+		}
+		if(stat16 & 0xff000000)
+		{
+			if (stat16 & 0x1000000){ //dma24 status
+				channelprocess(dev,24);
+			}
+			if (stat16 & 0x2000000){ //dma25 status
+				channelprocess(dev,25);
+			}
+			if (stat16 & 0x4000000){ //dma26 status
+				channelprocess(dev,26);
+			}
+			if (stat16 & 0x8000000){ //dma27 status
+				channelprocess(dev,27);
+			}
+			if (stat16 & 0x10000000){ //dma28 status
+				channelprocess(dev,28);
+			}
+			if (stat16 & 0x20000000){ //dma29 status
+				channelprocess(dev,29);
+			}
+			if (stat16 & 0x40000000){ //dma30 status
+				channelprocess(dev,30);
+			}
+			if (stat16 & 0x80000000){ //dma31 status
+				channelprocess(dev,31);
+			}
+		}
 	}
 
-	if (stat & 0x40){ //dma2 status
-		channelprocess(dev,2);
-	}
-
-	if (stat & 0x20){ //dma1 status
-		channelprocess(dev,1);
-	}
-
-	if (stat & 0x10){ //dma0 status
-		channelprocess(dev,0);
-	}
-
-	if (stat & 0x0100){ //dma4 status
-		channelprocess(dev,4);
-	}
-
-	if (stat & 0x0200){ //dma5 status
-		channelprocess(dev,5);
-	}
-
-	if (stat & 0x0400){ //dma6 status
-		channelprocess(dev,6);
-	}
-
-	if (stat & 0x0800){ //dma7 status
-		channelprocess(dev,7);
-	}
+	//TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
 
 	return IRQ_HANDLED;
 }
+
 
 
 static void tbsmod_remove(struct pci_dev *pdev)
@@ -3199,6 +3353,11 @@ static int tbsmod_probe(struct pci_dev *pdev,
 		goto fail1;
 	}
 
+	if(!pdev->is_busmaster) {
+		pdev->is_busmaster=1;
+		pci_set_master(pdev);
+	}
+
 	dev->mmio = ioremap(pci_resource_start(dev->pdev, 0),
 						pci_resource_len(dev->pdev, 0));
 	if (!dev->mmio)
@@ -3228,8 +3387,9 @@ static int tbsmod_probe(struct pci_dev *pdev,
 
 	mutex_init(&dev->spi_mutex);
 	mutex_init(&dev->ioctl_mutex);
-	spin_lock_init(&dev->chip_lock);
-	
+	//spin_lock_init(&dev->chip_lock);
+	mutex_init(&dev->chip_lock);
+
 	for(index=0;index<sizeof(tbsmods);index++){
 		if(tbsmods[index] ==0 ){
 			tbsmods[index] = 1;
@@ -3264,6 +3424,19 @@ static int tbsmod_probe(struct pci_dev *pdev,
 	case 0x6034:
 		dev->cardid = 0x6034; 
 	break;
+	case 0x6032:
+		dev->cardid = 0x6032; 
+		if(pdev->subsystem_device == 0x008)
+			dev->mods_num = 8;
+		else if(pdev->subsystem_device == 0x0016)
+			dev->mods_num = 16;
+		else if(pdev->subsystem_device == 0x0024)
+			dev->mods_num = 24;
+		else if(pdev->subsystem_device == 0x0032)
+			dev->mods_num = 32;
+		else
+			printk("unknow card type!\n");
+	break;
 	default:
 		printk("unknow card\n");
 	break;
@@ -3278,7 +3451,7 @@ static int tbsmod_probe(struct pci_dev *pdev,
 		}
 		dev->channel[i].channel_index=i;
 		dev->channel[i].dev = dev;
-		if((dev->cardid == 0x6004)||(dev->cardid == 0x6014)||(dev->cardid == 0x6008))
+		if((dev->cardid == 0x6004)||(dev->cardid == 0x6014)||(dev->cardid == 0x6008)||(dev->cardid == 0x6032))
 			dev->channel[i].input_bitrate = 40;
 		else if(dev->cardid == 0x6104)
 			dev->channel[i].input_bitrate = 30;
@@ -3305,27 +3478,27 @@ static int tbsmod_probe(struct pci_dev *pdev,
 	switch(pdev->subsystem_vendor){
 	case 0x6004:
 		printk("tbsmod%d:tbs6004 dvbc card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
+		mutex_lock(&dev->chip_lock);
 		tbs_adapters_init_dvbc(dev);	
-		spin_unlock(&dev->chip_lock);
+		mutex_unlock(&dev->chip_lock);
 	break;
 	
 	case 0x6104:
 		printk("tbsmod%d:tbs6104 dvbt card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
+		mutex_lock(&dev->chip_lock);
 		tbs_adapters_init_dvbt(dev);
-		spin_unlock(&dev->chip_lock);
+		mutex_unlock(&dev->chip_lock);
 	break;
 	
 	case 0x6014:
 		printk("tbsmod%d:tbs6014 qamb card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
+		mutex_lock(&dev->chip_lock);
 		tbs_adapters_init_qamb(dev);
-		spin_unlock(&dev->chip_lock);
+		mutex_unlock(&dev->chip_lock);
 	break;
 
 	case 0x690b:
-		spin_lock(&dev->chip_lock);
+		mutex_lock(&dev->chip_lock);
 		printk("tbsmod%d:tbs690b asi card\n", dev->mod_index);
 		for(i=0;i<4;i++){
 		mpbuf[0] = i; //0--3 :select value
@@ -3340,27 +3513,32 @@ static int tbsmod_probe(struct pci_dev *pdev,
 		if(mpbuf[1]==0x01)
 			printk("GS2972 hardware is ok!\n");
 		}
-		spin_unlock(&dev->chip_lock);
+		mutex_unlock(&dev->chip_lock);
 	break;
 	case 0x6008:
 		printk("tbsmod%d:tbs6008 dvbc card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
-		//tbs_adapters_init_dvbc8(dev);	
-		tbs_adapters_init_dvbc_5862(dev);
-		spin_unlock(&dev->chip_lock);
+		mutex_lock(&dev->chip_lock);
+		tbs_adapters_init_dvbc8(dev);	
+		mutex_unlock(&dev->chip_lock);
 	break;
 
 	case 0x6214:
 		printk("tbsmod%d:tbs6214 isdbt card\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
+		mutex_lock(&dev->chip_lock);
 		tbs_adapters_init_isdbt(dev);
-		spin_unlock(&dev->chip_lock);
+		mutex_unlock(&dev->chip_lock);
 	break;
 	case 0x6034:
-		printk("tbsmod%d:tbs6214 atsc card!!\n", dev->mod_index);	
-		spin_lock(&dev->chip_lock);
+		mutex_lock(&dev->chip_lock);
 		tbs_adapters_init_atsc(dev);
-		spin_unlock(&dev->chip_lock);
+		mutex_unlock(&dev->chip_lock);
+	break;
+
+	case 0x6032:
+		printk("tbsmod%d:tbs6032 dvbc %d mods card\n", dev->mod_index,dev->mods_num);	
+		mutex_lock(&dev->chip_lock);
+		tbs_adapters_init_dvbc_5862(dev);
+		mutex_unlock(&dev->chip_lock);
 	break;
 
 	default:
@@ -3400,9 +3578,9 @@ static const struct pci_device_id tbsmod_id_table[] = {
 	MAKE_ENTRY(0x544d, 0x6178, 0x6104, 0x0001, "tbs6104 dvbt card"),
 	MAKE_ENTRY(0x544d, 0x6178, 0x6014, 0x0001, "tbs6014 qamb card"),
 	MAKE_ENTRY(0x544d, 0x6178, 0x6008, 0x0001, "tbs6008 dvbc card"),
-	MAKE_ENTRY(0x544d, 0x6178, 0x6008, 0x0010, "tbs6008 dvbc card"),
 	MAKE_ENTRY(0x544d, 0x6178, 0x6214, 0x0001, "tbs6214 isdtb card"),
 	MAKE_ENTRY(0x544d, 0x6178, 0x6034, 0x0001, "tbs6034 atsc card"),
+	MAKE_ENTRY(0x544d, 0x6178, 0x6032, PCI_ANY_ID, "tbs6032 dvbc card"),
 	{}};
 MODULE_DEVICE_TABLE(pci, tbsmod_id_table);
 

@@ -9,7 +9,7 @@
 # German Gomez <german.gomez@arm.com>, 2021
 
 skip_if_no_arm_spe_event() {
-	perf list | egrep -q 'arm_spe_[0-9]+//' && return 0
+	perf list | grep -E -q 'arm_spe_[0-9]+//' && return 0
 
 	# arm_spe event doesn't exist
 	return 2
@@ -23,17 +23,20 @@ glb_err=0
 cleanup_files()
 {
 	rm -f ${perfdata}
+	rm -f ${perfdata}.old
 	exit $glb_err
 }
 
 trap cleanup_files exit term int
 
 arm_spe_report() {
-	if [ $2 != 0 ]; then
+	if [ $2 = 0 ]; then
+		echo "$1: PASS"
+	elif [ $2 = 2 ]; then
+		echo "$1: SKIPPED"
+	else
 		echo "$1: FAIL"
 		glb_err=$2
-	else
-		echo "$1: PASS"
 	fi
 }
 
@@ -48,7 +51,7 @@ perf_script_samples() {
 	#	dd  3048 [002]          1    tlb-access:      ffffaa64999c __GI___libc_write+0x3c (/lib/aarch64-linux-gnu/libc-2.27.so)
 	#	dd  3048 [002]          1        memory:      ffffaa64999c __GI___libc_write+0x3c (/lib/aarch64-linux-gnu/libc-2.27.so)
 	perf script -F,-time -i ${perfdata} 2>&1 | \
-		egrep " +$1 +[0-9]+ .* +${events}:(.*:)? +" > /dev/null 2>&1
+		grep -E " +$1 +[0-9]+ .* +${events}:(.*:)? +" > /dev/null 2>&1
 }
 
 perf_report_samples() {
@@ -59,7 +62,7 @@ perf_report_samples() {
 	#    7.71%     7.71%  dd    libc-2.27.so      [.] getenv
 	#    2.59%     2.59%  dd    ld-2.27.so        [.] strcmp
 	perf report --stdio -i ${perfdata} 2>&1 | \
-		egrep " +[0-9]+\.[0-9]+% +[0-9]+\.[0-9]+% +$1 " > /dev/null 2>&1
+		grep -E " +[0-9]+\.[0-9]+% +[0-9]+\.[0-9]+% +$1 " > /dev/null 2>&1
 }
 
 arm_spe_snapshot_test() {
@@ -85,5 +88,26 @@ arm_spe_snapshot_test() {
 	arm_spe_report "SPE snapshot testing" $err
 }
 
+arm_spe_system_wide_test() {
+	echo "Recording trace with system-wide mode $perfdata"
+
+	perf record -o - -e dummy -a -B true > /dev/null 2>&1
+	if [ $? != 0 ]; then
+		arm_spe_report "SPE system-wide testing" 2
+		return
+	fi
+
+	perf record -o ${perfdata} -e arm_spe// -a --no-bpf-event \
+		-- dd if=/dev/zero of=/dev/null count=100000 > /dev/null 2>&1
+
+	perf_script_samples dd &&
+	perf_report_samples dd
+
+	err=$?
+	arm_spe_report "SPE system-wide testing" $err
+}
+
 arm_spe_snapshot_test
+arm_spe_system_wide_test
+
 exit $glb_err

@@ -4,7 +4,6 @@
 #include "mxl603.h"
 #include <media/dvb_frontend.h>
 
-
 struct mxl603_dev{
 	struct i2c_client *client;
 

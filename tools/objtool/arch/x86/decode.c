@@ -23,6 +23,11 @@
 #include <objtool/builtin.h>
 #include <arch/elf.h>
 
+int arch_ftrace_match(char *name)
+{
+	return !strcmp(name, "__fentry__");
+}
+
 static int is_x86_64(const struct elf *elf)
 {
 	switch (elf->ehdr.e_machine) {
@@ -71,6 +76,30 @@ unsigned long arch_dest_reloc_offset(int addend)
 unsigned long arch_jump_destination(struct instruction *insn)
 {
 	return insn->offset + insn->len + insn->immediate;
+}
+
+bool arch_pc_relative_reloc(struct reloc *reloc)
+{
+	/*
+	 * All relocation types where P (the address of the target)
+	 * is included in the computation.
+	 */
+	switch (reloc->type) {
+	case R_X86_64_PC8:
+	case R_X86_64_PC16:
+	case R_X86_64_PC32:
+	case R_X86_64_PC64:
+
+	case R_X86_64_PLT32:
+	case R_X86_64_GOTPC32:
+	case R_X86_64_GOTPCREL:
+		return true;
+
+	default:
+		break;
+	}
+
+	return false;
 }
 
 #define ADD_OP(op) \
@@ -581,7 +610,7 @@ int arch_decode_instruction(struct objtool_file *file, const struct section *sec
 		break;
 
 	case 0xc7: /* mov imm, r/m */
-		if (!noinstr)
+		if (!opts.noinstr)
 			break;
 
 		if (insn.length == 3+4+4 && !strncmp(sec->name, ".init.text", 10)) {
@@ -633,6 +662,12 @@ int arch_decode_instruction(struct objtool_file *file, const struct section *sec
 	case 0xca: /* retf */
 	case 0xcb: /* retf */
 		*type = INSN_CONTEXT_SWITCH;
+		break;
+
+	case 0xe0: /* loopne */
+	case 0xe1: /* loope */
+	case 0xe2: /* loop */
+		*type = INSN_JUMP_CONDITIONAL;
 		break;
 
 	case 0xe8:
@@ -786,4 +821,9 @@ int arch_decode_hint_reg(u8 sp_reg, int *base)
 bool arch_is_retpoline(struct symbol *sym)
 {
 	return !strncmp(sym->name, "__x86_indirect_", 15);
+}
+
+bool arch_is_rethunk(struct symbol *sym)
+{
+	return !strcmp(sym->name, "__x86_return_thunk");
 }

@@ -22,8 +22,7 @@
 #include <linux/regmap.h>
 #include <linux/slab.h>
 
-static int axp20x_i2c_probe(struct i2c_client *i2c,
-			    const struct i2c_device_id *id)
+static int axp20x_i2c_probe(struct i2c_client *i2c)
 {
 	struct axp20x_dev *axp20x;
 	int ret;
@@ -50,13 +49,11 @@ static int axp20x_i2c_probe(struct i2c_client *i2c,
 	return axp20x_device_probe(axp20x);
 }
 
-static int axp20x_i2c_remove(struct i2c_client *i2c)
+static void axp20x_i2c_remove(struct i2c_client *i2c)
 {
 	struct axp20x_dev *axp20x = i2c_get_clientdata(i2c);
 
 	axp20x_device_remove(axp20x);
-
-	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -102,7 +99,7 @@ static struct i2c_driver axp20x_i2c_driver = {
 		.of_match_table	= of_match_ptr(axp20x_i2c_of_match),
 		.acpi_match_table = ACPI_PTR(axp20x_i2c_acpi_match),
 	},
-	.probe		= axp20x_i2c_probe,
+	.probe_new	= axp20x_i2c_probe,
 	.remove		= axp20x_i2c_remove,
 	.id_table	= axp20x_i2c_id,
 };

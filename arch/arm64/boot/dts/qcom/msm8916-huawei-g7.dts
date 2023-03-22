@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2021 Stephan Gerhold
+/*
+ * Copyright (C) 2021 Stephan Gerhold
+ */
 
 /dts-v1/;
 
@@ -8,18 +10,14 @@
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/sound/apq8016-lpass.h>
 
 /*
  * Note: The original firmware from Huawei can only boot 32-bit kernels.
- * To boot arm64 kernels it is necessary to flash 64-bit TZ/HYP firmware
- * with EDL, e.g. taken from the DragonBoard 410c. This works because Huawei
- * forgot to set up (firmware) secure boot for some reason.
- *
- * Also note that Huawei no longer provides bootloader unlock codes.
- * This can be bypassed by patching the bootloader from a custom HYP firmware,
- * making it think the bootloader is unlocked.
- *
- * See: https://wiki.postmarketos.org/wiki/Huawei_Ascend_G7_(huawei-g7)
+ * To boot this device tree using arm64 it is necessary to flash 64-bit TZ/HYP
+ * firmware (e.g. taken from the DragonBoard 410c).
+ * See https://wiki.postmarketos.org/wiki/Huawei_Ascend_G7_(huawei-g7)
+ * for suggested installation instructions.
  */
 
 / {
@@ -43,7 +41,7 @@
 
 		label = "GPIO Buttons";
 
-		volume-up {
+		button-volume-up {
 			label = "Volume Up";
 			gpios = <&msmgpio 107 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
@@ -216,6 +214,10 @@
 	status = "okay";
 };
 
+&lpass {
+	status = "okay";
+};
+
 &pm8916_resin {
 	status = "okay";
 	linux,code = <KEY_VOLUMEDOWN>;
@@ -260,6 +262,40 @@
 	cd-gpios = <&msmgpio 56 GPIO_ACTIVE_LOW>;
 };
 
+&sound {
+	status = "okay";
+
+	model = "msm8916";
+	audio-routing =
+		"AMIC1", "MIC BIAS External1",
+		"AMIC2", "MIC BIAS External2",
+		"AMIC3", "MIC BIAS External1";
+
+	pinctrl-names = "default", "sleep";
+	pinctrl-0 = <&cdc_pdm_lines_act>;
+	pinctrl-1 = <&cdc_pdm_lines_sus>;
+
+	primary-dai-link {
+		link-name = "WCD";
+		cpu {
+			sound-dai = <&lpass MI2S_PRIMARY>;
+		};
+		codec {
+			sound-dai = <&lpass_codec 0>, <&wcd_codec 0>;
+		};
+	};
+
+	tertiary-dai-link {
+		link-name = "WCD-Capture";
+		cpu {
+			sound-dai = <&lpass MI2S_TERTIARY>;
+		};
+		codec {
+			sound-dai = <&lpass_codec 1>, <&wcd_codec 1>;
+		};
+	};
+};
+
 &usb {
 	status = "okay";
 	extcon = <&usb_id>, <&usb_id>;
@@ -267,6 +303,13 @@
 
 &usb_hs_phy {
 	extcon = <&usb_id>;
+};
+
+&wcd_codec {
+	qcom,micbias-lvl = <2800>;
+	qcom,mbhc-vthreshold-low = <75 150 237 450 500>;
+	qcom,mbhc-vthreshold-high = <75 150 237 450 500>;
+	qcom,hphl-jack-type-normally-open;
 };
 
 &smd_rpm_regulators {
@@ -373,7 +416,7 @@
 };
 
 &msmgpio {
-	accel_irq_default: accel-irq-default {
+	accel_irq_default: accel-irq-default-state {
 		pins = "gpio115";
 		function = "gpio";
 
@@ -381,7 +424,7 @@
 		bias-disable;
 	};
 
-	gpio_keys_default: gpio-keys-default {
+	gpio_keys_default: gpio-keys-default-state {
 		pins = "gpio107";
 		function = "gpio";
 
@@ -389,7 +432,7 @@
 		bias-pull-up;
 	};
 
-	gpio_leds_default: gpio-leds-default {
+	gpio_leds_default: gpio-leds-default-state {
 		pins = "gpio8", "gpio9", "gpio10";
 		function = "gpio";
 
@@ -397,7 +440,7 @@
 		bias-disable;
 	};
 
-	nfc_default: nfc-default {
+	nfc_default: nfc-default-state {
 		pins = "gpio2", "gpio20", "gpio21";
 		function = "gpio";
 
@@ -405,7 +448,7 @@
 		bias-disable;
 	};
 
-	mag_reset_default: mag-reset-default {
+	mag_reset_default: mag-reset-default-state {
 		pins = "gpio36";
 		function = "gpio";
 
@@ -413,7 +456,7 @@
 		bias-disable;
 	};
 
-	prox_irq_default: prox-irq-default {
+	prox_irq_default: prox-irq-default-state {
 		pins = "gpio113";
 		function = "gpio";
 
@@ -421,7 +464,7 @@
 		bias-disable;
 	};
 
-	reg_lcd_en_default: reg-lcd-en-default {
+	reg_lcd_en_default: reg-lcd-en-default-state {
 		pins = "gpio32", "gpio97";
 		function = "gpio";
 
@@ -429,7 +472,7 @@
 		bias-disable;
 	};
 
-	sdhc2_cd_default: sdhc2-cd-default {
+	sdhc2_cd_default: sdhc2-cd-default-state {
 		pins = "gpio56";
 		function = "gpio";
 
@@ -437,7 +480,7 @@
 		bias-disable;
 	};
 
-	ts_irq_default: ts-irq-default {
+	ts_irq_default: ts-irq-default-state {
 		pins = "gpio13";
 		function = "gpio";
 
@@ -445,7 +488,7 @@
 		bias-disable;
 	};
 
-	usb_id_default: usb-id-default {
+	usb_id_default: usb-id-default-state {
 		pins = "gpio117";
 		function = "gpio";
 

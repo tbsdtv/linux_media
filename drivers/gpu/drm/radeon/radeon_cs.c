@@ -400,8 +400,11 @@ static int cmp_size_smaller_first(void *priv, const struct list_head *a,
 	struct radeon_bo_list *lb = list_entry(b, struct radeon_bo_list, tv.head);
 
 	/* Sort A before B if A is smaller. */
-	return (int)la->robj->tbo.resource->num_pages -
-		(int)lb->robj->tbo.resource->num_pages;
+	if (la->robj->tbo.base.size > lb->robj->tbo.base.size)
+		return 1;
+	if (la->robj->tbo.base.size < lb->robj->tbo.base.size)
+		return -1;
+	return 0;
 }
 
 /**
@@ -535,6 +538,10 @@ static int radeon_bo_vm_update_pte(struct radeon_cs_parser *p,
 			return r;
 
 		radeon_sync_fence(&p->ib.sync, bo_va->last_pt_update);
+
+		r = dma_resv_reserve_fences(bo->tbo.base.resv, 1);
+		if (r)
+			return r;
 	}
 
 	return radeon_vm_clear_invalids(rdev, vm);

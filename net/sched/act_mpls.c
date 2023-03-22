@@ -14,8 +14,8 @@
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
 #include <net/tc_act/tc_mpls.h>
+#include <net/tc_wrapper.h>
 
-static unsigned int mpls_net_id;
 static struct tc_action_ops act_mpls_ops;
 
 #define ACT_MPLS_TTL_DEFAULT	255
@@ -50,8 +50,9 @@ static __be32 tcf_mpls_get_lse(struct mpls_shim_hdr *lse,
 	return cpu_to_be32(new_lse);
 }
 
-static int tcf_mpls_act(struct sk_buff *skb, const struct tc_action *a,
-			struct tcf_result *res)
+TC_INDIRECT_SCOPE int tcf_mpls_act(struct sk_buff *skb,
+				   const struct tc_action *a,
+				   struct tcf_result *res)
 {
 	struct tcf_mpls *m = to_mpls(a);
 	struct tcf_mpls_params *p;
@@ -133,6 +134,11 @@ static int valid_label(const struct nlattr *attr,
 {
 	const u32 *label = nla_data(attr);
 
+	if (nla_len(attr) != sizeof(*label)) {
+		NL_SET_ERR_MSG_MOD(extack, "Invalid MPLS label length");
+		return -EINVAL;
+	}
+
 	if (*label & ~MPLS_LABEL_MASK || *label == MPLS_LABEL_IMPLNULL) {
 		NL_SET_ERR_MSG_MOD(extack, "MPLS label out of range");
 		return -EINVAL;
@@ -144,7 +150,8 @@ static int valid_label(const struct nlattr *attr,
 static const struct nla_policy mpls_policy[TCA_MPLS_MAX + 1] = {
 	[TCA_MPLS_PARMS]	= NLA_POLICY_EXACT_LEN(sizeof(struct tc_mpls)),
 	[TCA_MPLS_PROTO]	= { .type = NLA_U16 },
-	[TCA_MPLS_LABEL]	= NLA_POLICY_VALIDATE_FN(NLA_U32, valid_label),
+	[TCA_MPLS_LABEL]	= NLA_POLICY_VALIDATE_FN(NLA_BINARY,
+							 valid_label),
 	[TCA_MPLS_TC]		= NLA_POLICY_RANGE(NLA_U8, 0, 7),
 	[TCA_MPLS_TTL]		= NLA_POLICY_MIN(NLA_U8, 1),
 	[TCA_MPLS_BOS]		= NLA_POLICY_RANGE(NLA_U8, 0, 1),
@@ -155,7 +162,7 @@ static int tcf_mpls_init(struct net *net, struct nlattr *nla,
 			 struct tcf_proto *tp, u32 flags,
 			 struct netlink_ext_ack *extack)
 {
-	struct tc_action_net *tn = net_generic(net, mpls_net_id);
+	struct tc_action_net *tn = net_generic(net, act_mpls_ops.net_id);
 	bool bind = flags & TCA_ACT_FLAGS_BIND;
 	struct nlattr *tb[TCA_MPLS_MAX + 1];
 	struct tcf_chain *goto_ch = NULL;
@@ -367,25 +374,9 @@ nla_put_failure:
 	return -EMSGSIZE;
 }
 
-static int tcf_mpls_walker(struct net *net, struct sk_buff *skb,
-			   struct netlink_callback *cb, int type,
-			   const struct tc_action_ops *ops,
-			   struct netlink_ext_ack *extack)
-{
-	struct tc_action_net *tn = net_generic(net, mpls_net_id);
-
-	return tcf_generic_walker(tn, skb, cb, type, ops, extack);
-}
-
-static int tcf_mpls_search(struct net *net, struct tc_action **a, u32 index)
-{
-	struct tc_action_net *tn = net_generic(net, mpls_net_id);
-
-	return tcf_idr_search(tn, a, index);
-}
-
 static int tcf_mpls_offload_act_setup(struct tc_action *act, void *entry_data,
-				      u32 *index_inc, bool bind)
+				      u32 *index_inc, bool bind,
+				      struct netlink_ext_ack *extack)
 {
 	if (bind) {
 		struct flow_action_entry *entry = entry_data;
@@ -410,7 +401,14 @@ static int tcf_mpls_offload_act_setup(struct tc_action *act, void *entry_data,
 			entry->mpls_mangle.bos = tcf_mpls_bos(act);
 			entry->mpls_mangle.ttl = tcf_mpls_ttl(act);
 			break;
+		case TCA_MPLS_ACT_DEC_TTL:
+			NL_SET_ERR_MSG_MOD(extack, "Offload not supported when \"dec_ttl\" option is used");
+			return -EOPNOTSUPP;
+		case TCA_MPLS_ACT_MAC_PUSH:
+			NL_SET_ERR_MSG_MOD(extack, "Offload not supported when \"mac_push\" option is used");
+			return -EOPNOTSUPP;
 		default:
+			NL_SET_ERR_MSG_MOD(extack, "Unsupported MPLS mode offload");
 			return -EOPNOTSUPP;
 		}
 		*index_inc = 1;
@@ -443,28 +441,26 @@ static struct tc_action_ops act_mpls_ops = {
 	.dump		=	tcf_mpls_dump,
 	.init		=	tcf_mpls_init,
 	.cleanup	=	tcf_mpls_cleanup,
-	.walk		=	tcf_mpls_walker,
-	.lookup		=	tcf_mpls_search,
 	.offload_act_setup =	tcf_mpls_offload_act_setup,
 	.size		=	sizeof(struct tcf_mpls),
 };
 
 static __net_init int mpls_init_net(struct net *net)
 {
-	struct tc_action_net *tn = net_generic(net, mpls_net_id);
+	struct tc_action_net *tn = net_generic(net, act_mpls_ops.net_id);
 
 	return tc_action_net_init(net, tn, &act_mpls_ops);
 }
 
 static void __net_exit mpls_exit_net(struct list_head *net_list)
 {
-	tc_action_net_exit(net_list, mpls_net_id);
+	tc_action_net_exit(net_list, act_mpls_ops.net_id);
 }
 
 static struct pernet_operations mpls_net_ops = {
 	.init = mpls_init_net,
 	.exit_batch = mpls_exit_net,
-	.id   = &mpls_net_id,
+	.id   = &act_mpls_ops.net_id,
 	.size = sizeof(struct tc_action_net),
 };
 

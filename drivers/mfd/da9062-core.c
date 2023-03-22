@@ -453,6 +453,7 @@ static const struct regmap_range da9061_aa_writeable_ranges[] = {
 	regmap_reg_range(DA9062AA_VBUCK1_B, DA9062AA_VBUCK4_B),
 	regmap_reg_range(DA9062AA_VBUCK3_B, DA9062AA_VBUCK3_B),
 	regmap_reg_range(DA9062AA_VLDO1_B, DA9062AA_VLDO4_B),
+	regmap_reg_range(DA9062AA_CONFIG_J, DA9062AA_CONFIG_J),
 	regmap_reg_range(DA9062AA_GP_ID_0, DA9062AA_GP_ID_19),
 };
 
@@ -620,9 +621,9 @@ static const struct of_device_id da9062_dt_ids[] = {
 };
 MODULE_DEVICE_TABLE(of, da9062_dt_ids);
 
-static int da9062_i2c_probe(struct i2c_client *i2c,
-	const struct i2c_device_id *id)
+static int da9062_i2c_probe(struct i2c_client *i2c)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	struct da9062 *chip;
 	unsigned int irq_base;
 	const struct mfd_cell *cell;
@@ -723,14 +724,12 @@ static int da9062_i2c_probe(struct i2c_client *i2c,
 	return ret;
 }
 
-static int da9062_i2c_remove(struct i2c_client *i2c)
+static void da9062_i2c_remove(struct i2c_client *i2c)
 {
 	struct da9062 *chip = i2c_get_clientdata(i2c);
 
 	mfd_remove_devices(chip->dev);
 	regmap_del_irq_chip(i2c->irq, chip->regmap_irq);
-
-	return 0;
 }
 
 static const struct i2c_device_id da9062_i2c_id[] = {
@@ -745,7 +744,7 @@ static struct i2c_driver da9062_i2c_driver = {
 		.name = "da9062",
 		.of_match_table = da9062_dt_ids,
 	},
-	.probe    = da9062_i2c_probe,
+	.probe_new = da9062_i2c_probe,
 	.remove   = da9062_i2c_remove,
 	.id_table = da9062_i2c_id,
 };

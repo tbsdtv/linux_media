@@ -37,6 +37,71 @@ bool usb_acpi_power_manageable(struct usb_device *hdev, int index)
 }
 EXPORT_SYMBOL_GPL(usb_acpi_power_manageable);
 
+#define UUID_USB_CONTROLLER_DSM "ce2ee385-00e6-48cb-9f05-2edb927c4899"
+#define USB_DSM_DISABLE_U1_U2_FOR_PORT	5
+
+/**
+ * usb_acpi_port_lpm_incapable - check if lpm should be disabled for a port.
+ * @hdev: USB device belonging to the usb hub
+ * @index: zero based port index
+ *
+ * Some USB3 ports may not support USB3 link power management U1/U2 states
+ * due to different retimer setup. ACPI provides _DSM method which returns 0x01
+ * if U1 and U2 states should be disabled. Evaluate _DSM with:
+ * Arg0: UUID = ce2ee385-00e6-48cb-9f05-2edb927c4899
+ * Arg1: Revision ID = 0
+ * Arg2: Function Index = 5
+ * Arg3: (empty)
+ *
+ * Return 1 if USB3 port is LPM incapable, negative on error, otherwise 0
+ */
+
+int usb_acpi_port_lpm_incapable(struct usb_device *hdev, int index)
+{
+	union acpi_object *obj;
+	acpi_handle port_handle;
+	int port1 = index + 1;
+	guid_t guid;
+	int ret;
+
+	ret = guid_parse(UUID_USB_CONTROLLER_DSM, &guid);
+	if (ret)
+		return ret;
+
+	port_handle = usb_get_hub_port_acpi_handle(hdev, port1);
+	if (!port_handle) {
+		dev_dbg(&hdev->dev, "port-%d no acpi handle\n", port1);
+		return -ENODEV;
+	}
+
+	if (!acpi_check_dsm(port_handle, &guid, 0,
+			    BIT(USB_DSM_DISABLE_U1_U2_FOR_PORT))) {
+		dev_dbg(&hdev->dev, "port-%d no _DSM function %d\n",
+			port1, USB_DSM_DISABLE_U1_U2_FOR_PORT);
+		return -ENODEV;
+	}
+
+	obj = acpi_evaluate_dsm(port_handle, &guid, 0,
+				USB_DSM_DISABLE_U1_U2_FOR_PORT, NULL);
+
+	if (!obj)
+		return -ENODEV;
+
+	if (obj->type != ACPI_TYPE_INTEGER) {
+		dev_dbg(&hdev->dev, "evaluate port-%d _DSM failed\n", port1);
+		ACPI_FREE(obj);
+		return -EINVAL;
+	}
+
+	if (obj->integer.value == 0x01)
+		ret = 1;
+
+	ACPI_FREE(obj);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(usb_acpi_port_lpm_incapable);
+
 /**
  * usb_acpi_set_power_state - control usb port's power via acpi power
  * resource
@@ -124,22 +189,6 @@ out:
  */
 #define USB_ACPI_LOCATION_VALID (1 << 31)
 
-static struct acpi_device *usb_acpi_find_port(struct acpi_device *parent,
-					      int raw)
-{
-	struct acpi_device *adev;
-
-	if (!parent)
-		return NULL;
-
-	list_for_each_entry(adev, &parent->children, node) {
-		if (acpi_device_adr(adev) == raw)
-			return adev;
-	}
-
-	return acpi_find_child_device(parent, raw, false);
-}
-
 static struct acpi_device *
 usb_acpi_get_companion_for_port(struct usb_port *port_dev)
 {
@@ -170,7 +219,7 @@ usb_acpi_get_companion_for_port(struct usb_port *port_dev)
 		port1 = port_dev->portnum;
 	}
 
-	return usb_acpi_find_port(adev, port1);
+	return acpi_find_child_by_adr(adev, port1);
 }
 
 static struct acpi_device *
@@ -205,8 +254,11 @@ usb_acpi_find_companion_for_device(struct usb_device *udev)
 	struct usb_hub *hub;
 
 	if (!udev->parent) {
-		/* root hub is only child (_ADR=0) under its parent, the HC */
-		adev = ACPI_COMPANION(udev->dev.parent);
+		/*
+		 * root hub is only child (_ADR=0) under its parent, the HC.
+		 * sysdev pointer is the HC as seen from firmware.
+		 */
+		adev = ACPI_COMPANION(udev->bus->sysdev);
 		return acpi_find_child_device(adev, 0, false);
 	}
 

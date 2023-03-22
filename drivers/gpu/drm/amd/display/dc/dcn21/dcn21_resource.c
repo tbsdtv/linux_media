@@ -94,8 +94,6 @@
  * macros to expend register list macro defined in HW object header file */
 
 /* DCN */
-/* TODO awful hack. fixup dcn20_dwb.h */
-#undef BASE_INNER
 #define BASE_INNER(seg) DMU_BASE__INST0_SEG ## seg
 
 #define BASE(seg) BASE_INNER(seg)
@@ -657,7 +655,6 @@ static const struct dc_debug_options debug_defaults_drv = {
 		.usbc_combo_phy_reset_wa = true,
 		.dmub_command_table = true,
 		.use_max_lb = true,
-		.optimize_edp_link_rate = true
 };
 
 static const struct dc_debug_options debug_defaults_diags = {
@@ -672,9 +669,18 @@ static const struct dc_debug_options debug_defaults_diags = {
 		.disable_pplib_wm_range = true,
 		.disable_stutter = true,
 		.disable_48mhz_pwrdwn = true,
-		.disable_psr = true,
 		.enable_tri_buf = true,
 		.use_max_lb = true
+};
+
+static const struct dc_panel_config panel_config_defaults = {
+		.psr = {
+			.disable_psr = false,
+			.disallow_psrsu = false,
+		},
+		.ilr = {
+			.optimize_edp_link_rate = true,
+		},
 };
 
 enum dcn20_clk_src_array_id {
@@ -1325,6 +1331,7 @@ static int map_transmitter_id_to_phy_instance(
 }
 
 static struct link_encoder *dcn21_link_encoder_create(
+	struct dc_context *ctx,
 	const struct encoder_init_data *enc_init_data)
 {
 	struct dcn21_link_encoder *enc21 =
@@ -1364,6 +1371,11 @@ static struct panel_cntl *dcn21_panel_cntl_create(const struct panel_cntl_init_d
 			&panel_cntl_mask);
 
 	return &panel_cntl->base;
+}
+
+static void dcn21_get_panel_config_defaults(struct dc_panel_config *panel_config)
+{
+	*panel_config = panel_config_defaults;
 }
 
 #define CTX ctx
@@ -1407,6 +1419,7 @@ static const struct resource_funcs dcn21_res_pool_funcs = {
 	.set_mcif_arb_params = dcn20_set_mcif_arb_params,
 	.find_first_free_match_stream_enc_for_link = dcn10_find_first_free_match_stream_enc_for_link,
 	.update_bw_bounding_box = dcn21_update_bw_bounding_box,
+	.get_panel_config_defaults = dcn21_get_panel_config_defaults,
 };
 
 static bool dcn21_resource_construct(
@@ -1490,7 +1503,7 @@ static bool dcn21_resource_construct(
 	dc->caps.color.mpc.ogam_rom_caps.hlg = 0;
 	dc->caps.color.mpc.ocsc = 1;
 
-	dc->caps.hdmi_frl_pcon_support = true;
+	dc->caps.dp_hdmi21_pcon_support = true;
 
 	if (dc->ctx->dce_environment == DCE_ENV_PRODUCTION_DRV)
 		dc->debug = debug_defaults_drv;

@@ -75,7 +75,7 @@ static int rtw_mac_pre_system_cfg(struct rtw_dev *rtwdev)
 
 	switch (rtw_hci_type(rtwdev)) {
 	case RTW_HCI_TYPE_PCIE:
-		rtw_write32_set(rtwdev, REG_HCI_OPT_CTRL, BIT_BT_DIG_CLK_EN);
+		rtw_write32_set(rtwdev, REG_HCI_OPT_CTRL, BIT_USB_SUS_DIS);
 		break;
 	case RTW_HCI_TYPE_USB:
 		break;
@@ -243,7 +243,7 @@ static int rtw_pwr_seq_parser(struct rtw_dev *rtwdev,
 
 static int rtw_mac_power_switch(struct rtw_dev *rtwdev, bool pwr_on)
 {
-	struct rtw_chip_info *chip = rtwdev->chip;
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	const struct rtw_pwr_seq_cmd **pwr_seq;
 	u8 rpwm;
 	bool cur_pwr;
@@ -587,7 +587,7 @@ static int
 download_firmware_to_mem(struct rtw_dev *rtwdev, const u8 *data,
 			 u32 src, u32 dst, u32 size)
 {
-	struct rtw_chip_info *chip = rtwdev->chip;
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	u32 desc_size = chip->tx_pkt_desc_sz;
 	u8 first_part;
 	u32 mem_offset;
@@ -906,12 +906,28 @@ out:
 	return ret;
 }
 
-int rtw_download_firmware(struct rtw_dev *rtwdev, struct rtw_fw_state *fw)
+static
+int _rtw_download_firmware(struct rtw_dev *rtwdev, struct rtw_fw_state *fw)
 {
 	if (rtw_chip_wcpu_11n(rtwdev))
 		return __rtw_download_firmware_legacy(rtwdev, fw);
 
 	return __rtw_download_firmware(rtwdev, fw);
+}
+
+int rtw_download_firmware(struct rtw_dev *rtwdev, struct rtw_fw_state *fw)
+{
+	int ret;
+
+	ret = _rtw_download_firmware(rtwdev, fw);
+	if (ret)
+		return ret;
+
+	if (rtw_hci_type(rtwdev) == RTW_HCI_TYPE_PCIE &&
+	    rtwdev->chip->id == RTW_CHIP_TYPE_8821C)
+		rtw_fw_set_recover_bt_device(rtwdev);
+
+	return 0;
 }
 
 static u32 get_priority_queues(struct rtw_dev *rtwdev, u32 queues)
@@ -934,7 +950,7 @@ static u32 get_priority_queues(struct rtw_dev *rtwdev, u32 queues)
 static void __rtw_mac_flush_prio_queue(struct rtw_dev *rtwdev,
 				       u32 prio_queue, bool drop)
 {
-	struct rtw_chip_info *chip = rtwdev->chip;
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	const struct rtw_prioq_addr *addr;
 	bool wsize;
 	u16 avail_page, rsvd_page;
@@ -996,7 +1012,7 @@ void rtw_mac_flush_queues(struct rtw_dev *rtwdev, u32 queues, bool drop)
 
 static int txdma_queue_mapping(struct rtw_dev *rtwdev)
 {
-	struct rtw_chip_info *chip = rtwdev->chip;
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	const struct rtw_rqpn *rqpn = NULL;
 	u16 txdma_pq_map = 0;
 
@@ -1032,13 +1048,16 @@ static int txdma_queue_mapping(struct rtw_dev *rtwdev)
 	if (rtw_chip_wcpu_11ac(rtwdev))
 		rtw_write32(rtwdev, REG_H2CQ_CSR, BIT_H2CQ_FULL);
 
+	if (rtw_hci_type(rtwdev) == RTW_HCI_TYPE_USB)
+		rtw_write8_set(rtwdev, REG_TXDMA_PQ_MAP, BIT_RXDMA_ARBBW_EN);
+
 	return 0;
 }
 
 static int set_trx_fifo_info(struct rtw_dev *rtwdev)
 {
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	struct rtw_fifo_conf *fifo = &rtwdev->fifo;
-	struct rtw_chip_info *chip = rtwdev->chip;
 	u16 cur_pg_addr;
 	u8 csi_buf_pg_num = chip->csi_buf_pg_num;
 
@@ -1092,8 +1111,8 @@ static int __priority_queue_cfg(struct rtw_dev *rtwdev,
 				const struct rtw_page_table *pg_tbl,
 				u16 pubq_num)
 {
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	struct rtw_fifo_conf *fifo = &rtwdev->fifo;
-	struct rtw_chip_info *chip = rtwdev->chip;
 
 	rtw_write16(rtwdev, REG_FIFOPAGE_INFO_1, pg_tbl->hq_num);
 	rtw_write16(rtwdev, REG_FIFOPAGE_INFO_2, pg_tbl->lq_num);
@@ -1123,8 +1142,8 @@ static int __priority_queue_cfg_legacy(struct rtw_dev *rtwdev,
 				       const struct rtw_page_table *pg_tbl,
 				       u16 pubq_num)
 {
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	struct rtw_fifo_conf *fifo = &rtwdev->fifo;
-	struct rtw_chip_info *chip = rtwdev->chip;
 	u32 val32;
 
 	val32 = BIT_RQPN_NE(pg_tbl->nq_num, pg_tbl->exq_num);
@@ -1149,8 +1168,8 @@ static int __priority_queue_cfg_legacy(struct rtw_dev *rtwdev,
 
 static int priority_queue_cfg(struct rtw_dev *rtwdev)
 {
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	struct rtw_fifo_conf *fifo = &rtwdev->fifo;
-	struct rtw_chip_info *chip = rtwdev->chip;
 	const struct rtw_page_table *pg_tbl = NULL;
 	u16 pubq_num;
 	int ret;
@@ -1277,7 +1296,7 @@ static int rtw_drv_info_cfg(struct rtw_dev *rtwdev)
 
 int rtw_mac_init(struct rtw_dev *rtwdev)
 {
-	struct rtw_chip_info *chip = rtwdev->chip;
+	const struct rtw_chip_info *chip = rtwdev->chip;
 	int ret;
 
 	ret = rtw_init_trx_cfg(rtwdev);

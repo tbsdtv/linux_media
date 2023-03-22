@@ -218,6 +218,15 @@ static const struct inv_mpu6050_hw hw_info[] = {
 		.startup_time = {INV_MPU6500_GYRO_STARTUP_TIME, INV_MPU6500_ACCEL_STARTUP_TIME},
 	},
 	{
+		.whoami = INV_ICM20608D_WHOAMI_VALUE,
+		.name = "ICM20608D",
+		.reg = &reg_set_6500,
+		.config = &chip_config_6500,
+		.fifo_size = 512,
+		.temp = {INV_ICM20608_TEMP_OFFSET, INV_ICM20608_TEMP_SCALE},
+		.startup_time = {INV_MPU6500_GYRO_STARTUP_TIME, INV_MPU6500_ACCEL_STARTUP_TIME},
+	},
+	{
 		.whoami = INV_ICM20609_WHOAMI_VALUE,
 		.name = "ICM20609",
 		.reg = &reg_set_6500,
@@ -1644,9 +1653,9 @@ error_power_off:
 	inv_mpu6050_set_power_itg(st, false);
 	return result;
 }
-EXPORT_SYMBOL_GPL(inv_mpu_core_probe);
+EXPORT_SYMBOL_NS_GPL(inv_mpu_core_probe, IIO_MPU6050);
 
-static int __maybe_unused inv_mpu_resume(struct device *dev)
+static int inv_mpu_resume(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct inv_mpu6050_state *st = iio_priv(indio_dev);
@@ -1678,7 +1687,7 @@ out_unlock:
 	return result;
 }
 
-static int __maybe_unused inv_mpu_suspend(struct device *dev)
+static int inv_mpu_suspend(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct inv_mpu6050_state *st = iio_priv(indio_dev);
@@ -1721,7 +1730,7 @@ out_unlock:
 	return result;
 }
 
-static int __maybe_unused inv_mpu_runtime_suspend(struct device *dev)
+static int inv_mpu_runtime_suspend(struct device *dev)
 {
 	struct inv_mpu6050_state *st = iio_priv(dev_get_drvdata(dev));
 	unsigned int sensors;
@@ -1746,7 +1755,7 @@ out_unlock:
 	return ret;
 }
 
-static int __maybe_unused inv_mpu_runtime_resume(struct device *dev)
+static int inv_mpu_runtime_resume(struct device *dev)
 {
 	struct inv_mpu6050_state *st = iio_priv(dev_get_drvdata(dev));
 	int ret;
@@ -1758,11 +1767,10 @@ static int __maybe_unused inv_mpu_runtime_resume(struct device *dev)
 	return inv_mpu6050_set_power_itg(st, true);
 }
 
-const struct dev_pm_ops inv_mpu_pmops = {
-	SET_SYSTEM_SLEEP_PM_OPS(inv_mpu_suspend, inv_mpu_resume)
-	SET_RUNTIME_PM_OPS(inv_mpu_runtime_suspend, inv_mpu_runtime_resume, NULL)
+EXPORT_NS_GPL_DEV_PM_OPS(inv_mpu_pmops, IIO_MPU6050) = {
+	SYSTEM_SLEEP_PM_OPS(inv_mpu_suspend, inv_mpu_resume)
+	RUNTIME_PM_OPS(inv_mpu_runtime_suspend, inv_mpu_runtime_resume, NULL)
 };
-EXPORT_SYMBOL_GPL(inv_mpu_pmops);
 
 MODULE_AUTHOR("Invensense Corporation");
 MODULE_DESCRIPTION("Invensense device MPU6050 driver");

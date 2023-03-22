@@ -13,6 +13,7 @@
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <linux/uaccess.h>
 #include <linux/termios.h>
 #include <linux/wwan.h>
 #include <net/rtnetlink.h>
@@ -317,6 +318,10 @@ static const struct {
 	[WWAN_PORT_FIREHOSE] = {
 		.name = "FIREHOSE",
 		.devsuf = "firehose",
+	},
+	[WWAN_PORT_XMMRPC] = {
+		.name = "XMMRPC",
+		.devsuf = "xmmrpc",
 	},
 };
 
@@ -1057,7 +1062,7 @@ static void wwan_create_default_link(struct wwan_device *wwandev,
 		goto unlock;
 	}
 
-	rtnl_configure_link(dev, NULL); /* Link initialized, notify new link */
+	rtnl_configure_link(dev, NULL, 0, NULL); /* Link initialized, notify new link */
 
 unlock:
 	rtnl_unlock();

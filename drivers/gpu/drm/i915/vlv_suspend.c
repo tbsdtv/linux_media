@@ -3,6 +3,7 @@
  * Copyright © 2020 Intel Corporation
  */
 
+#include <linux/string_helpers.h>
 #include <linux/kernel.h>
 
 #include <drm/drm_print.h>
@@ -193,7 +194,6 @@ static void vlv_restore_gunit_s0ix_state(struct drm_i915_private *i915)
 {
 	struct vlv_s0ix_state *s = i915->vlv_s0ix_state;
 	struct intel_uncore *uncore = &i915->uncore;
-	u32 val;
 	int i;
 
 	if (!s)
@@ -261,15 +261,11 @@ static void vlv_restore_gunit_s0ix_state(struct drm_i915_private *i915)
 	 * be restored, as they are used to control the s0ix suspend/resume
 	 * sequence by the caller.
 	 */
-	val = intel_uncore_read(uncore, VLV_GTLC_WAKE_CTRL);
-	val &= VLV_GTLC_ALLOWWAKEREQ;
-	val |= s->gtlc_wake_ctrl & ~VLV_GTLC_ALLOWWAKEREQ;
-	intel_uncore_write(uncore, VLV_GTLC_WAKE_CTRL, val);
+	intel_uncore_rmw(uncore, VLV_GTLC_WAKE_CTRL, ~VLV_GTLC_ALLOWWAKEREQ,
+			 s->gtlc_wake_ctrl & ~VLV_GTLC_ALLOWWAKEREQ);
 
-	val = intel_uncore_read(uncore, VLV_GTLC_SURVIVABILITY_REG);
-	val &= VLV_GFX_CLK_FORCE_ON_BIT;
-	val |= s->gtlc_survive & ~VLV_GFX_CLK_FORCE_ON_BIT;
-	intel_uncore_write(uncore, VLV_GTLC_SURVIVABILITY_REG, val);
+	intel_uncore_rmw(uncore, VLV_GTLC_SURVIVABILITY_REG, ~VLV_GFX_CLK_FORCE_ON_BIT,
+			 s->gtlc_survive & ~VLV_GFX_CLK_FORCE_ON_BIT);
 
 	intel_uncore_write(uncore, VLV_PMWGICZ, s->pmwgicz);
 
@@ -307,14 +303,10 @@ static int vlv_wait_for_pw_status(struct drm_i915_private *i915,
 static int vlv_force_gfx_clock(struct drm_i915_private *i915, bool force_on)
 {
 	struct intel_uncore *uncore = &i915->uncore;
-	u32 val;
 	int err;
 
-	val = intel_uncore_read(uncore, VLV_GTLC_SURVIVABILITY_REG);
-	val &= ~VLV_GFX_CLK_FORCE_ON_BIT;
-	if (force_on)
-		val |= VLV_GFX_CLK_FORCE_ON_BIT;
-	intel_uncore_write(uncore, VLV_GTLC_SURVIVABILITY_REG, val);
+	intel_uncore_rmw(uncore, VLV_GTLC_SURVIVABILITY_REG, VLV_GFX_CLK_FORCE_ON_BIT,
+			 force_on ? VLV_GFX_CLK_FORCE_ON_BIT : 0);
 
 	if (!force_on)
 		return 0;
@@ -339,11 +331,8 @@ static int vlv_allow_gt_wake(struct drm_i915_private *i915, bool allow)
 	u32 val;
 	int err;
 
-	val = intel_uncore_read(uncore, VLV_GTLC_WAKE_CTRL);
-	val &= ~VLV_GTLC_ALLOWWAKEREQ;
-	if (allow)
-		val |= VLV_GTLC_ALLOWWAKEREQ;
-	intel_uncore_write(uncore, VLV_GTLC_WAKE_CTRL, val);
+	intel_uncore_rmw(uncore, VLV_GTLC_WAKE_CTRL, VLV_GTLC_ALLOWWAKEREQ,
+			 allow ? VLV_GTLC_ALLOWWAKEREQ : 0);
 	intel_uncore_posting_read(uncore, VLV_GTLC_WAKE_CTRL);
 
 	mask = VLV_GTLC_ALLOWWAKEACK;
@@ -375,7 +364,7 @@ static void vlv_wait_for_gt_wells(struct drm_i915_private *dev_priv,
 	if (vlv_wait_for_pw_status(dev_priv, mask, val))
 		drm_dbg(&dev_priv->drm,
 			"timeout waiting for GT wells to go %s\n",
-			onoff(wait_for_on));
+			str_on_off(wait_for_on));
 }
 
 static void vlv_check_no_gt_access(struct drm_i915_private *i915)

@@ -68,12 +68,6 @@
 #include "policycap_names.h"
 #include "ima.h"
 
-struct convert_context_args {
-	struct selinux_state *state;
-	struct policydb *oldp;
-	struct policydb *newp;
-};
-
 struct selinux_policy_convert_data {
 	struct convert_context_args args;
 	struct sidtab_convert_params sidtab_params;
@@ -99,7 +93,7 @@ static void context_struct_compute_av(struct policydb *policydb,
 				      struct extended_perms *xperms);
 
 static int selinux_set_mapping(struct policydb *pol,
-			       struct security_class_mapping *map,
+			       const struct security_class_mapping *map,
 			       struct selinux_map *out_map)
 {
 	u16 i, j;
@@ -121,7 +115,7 @@ static int selinux_set_mapping(struct policydb *pol,
 	/* Store the raw class and permission values */
 	j = 0;
 	while (map[j].name) {
-		struct security_class_mapping *p_in = map + (j++);
+		const struct security_class_mapping *p_in = map + (j++);
 		struct selinux_mapping *p_out = out_map->mapping + j;
 
 		/* An empty class string skips ahead */
@@ -358,27 +352,27 @@ static int constraint_expr_eval(struct policydb *policydb,
 				l2 = &(tcontext->range.level[1]);
 				goto mls_ops;
 mls_ops:
-			switch (e->op) {
-			case CEXPR_EQ:
-				s[++sp] = mls_level_eq(l1, l2);
-				continue;
-			case CEXPR_NEQ:
-				s[++sp] = !mls_level_eq(l1, l2);
-				continue;
-			case CEXPR_DOM:
-				s[++sp] = mls_level_dom(l1, l2);
-				continue;
-			case CEXPR_DOMBY:
-				s[++sp] = mls_level_dom(l2, l1);
-				continue;
-			case CEXPR_INCOMP:
-				s[++sp] = mls_level_incomp(l2, l1);
-				continue;
-			default:
-				BUG();
-				return 0;
-			}
-			break;
+				switch (e->op) {
+				case CEXPR_EQ:
+					s[++sp] = mls_level_eq(l1, l2);
+					continue;
+				case CEXPR_NEQ:
+					s[++sp] = !mls_level_eq(l1, l2);
+					continue;
+				case CEXPR_DOM:
+					s[++sp] = mls_level_dom(l1, l2);
+					continue;
+				case CEXPR_DOMBY:
+					s[++sp] = mls_level_dom(l2, l1);
+					continue;
+				case CEXPR_INCOMP:
+					s[++sp] = mls_level_incomp(l2, l1);
+					continue;
+				default:
+					BUG();
+					return 0;
+				}
+				break;
 			default:
 				BUG();
 				return 0;
@@ -2014,17 +2008,22 @@ static inline int convert_context_handle_invalid_context(
 	return 0;
 }
 
-/*
- * Convert the values in the security context
- * structure `oldc' from the values specified
- * in the policy `p->oldp' to the values specified
- * in the policy `p->newp', storing the new context
- * in `newc'.  Verify that the context is valid
- * under the new policy.
+/**
+ * services_convert_context - Convert a security context across policies.
+ * @args: populated convert_context_args struct
+ * @oldc: original context
+ * @newc: converted context
+ * @gfp_flags: allocation flags
+ *
+ * Convert the values in the security context structure @oldc from the values
+ * specified in the policy @args->oldp to the values specified in the policy
+ * @args->newp, storing the new context in @newc, and verifying that the
+ * context is valid under the new policy.
  */
-static int convert_context(struct context *oldc, struct context *newc, void *p)
+int services_convert_context(struct convert_context_args *args,
+			     struct context *oldc, struct context *newc,
+			     gfp_t gfp_flags)
 {
-	struct convert_context_args *args;
 	struct ocontext *oc;
 	struct role_datum *role;
 	struct type_datum *typdatum;
@@ -2033,15 +2032,12 @@ static int convert_context(struct context *oldc, struct context *newc, void *p)
 	u32 len;
 	int rc;
 
-	args = p;
-
 	if (oldc->str) {
-		s = kstrdup(oldc->str, GFP_KERNEL);
+		s = kstrdup(oldc->str, gfp_flags);
 		if (!s)
 			return -ENOMEM;
 
-		rc = string_to_context_struct(args->newp, NULL, s,
-					      newc, SECSID_NULL);
+		rc = string_to_context_struct(args->newp, NULL, s, newc, SECSID_NULL);
 		if (rc == -EINVAL) {
 			/*
 			 * Retain string representation for later mapping.
@@ -2072,8 +2068,7 @@ static int convert_context(struct context *oldc, struct context *newc, void *p)
 
 	/* Convert the user. */
 	usrdatum = symtab_search(&args->newp->p_users,
-				 sym_name(args->oldp,
-					  SYM_USERS, oldc->user - 1));
+				 sym_name(args->oldp, SYM_USERS, oldc->user - 1));
 	if (!usrdatum)
 		goto bad;
 	newc->user = usrdatum->value;
@@ -2087,8 +2082,7 @@ static int convert_context(struct context *oldc, struct context *newc, void *p)
 
 	/* Convert the type. */
 	typdatum = symtab_search(&args->newp->p_types,
-				 sym_name(args->oldp,
-					  SYM_TYPES, oldc->type - 1));
+				 sym_name(args->oldp, SYM_TYPES, oldc->type - 1));
 	if (!typdatum)
 		goto bad;
 	newc->type = typdatum->value;
@@ -2122,8 +2116,7 @@ static int convert_context(struct context *oldc, struct context *newc, void *p)
 	/* Check the validity of the new context. */
 	if (!policydb_context_isvalid(args->newp, newc)) {
 		rc = convert_context_handle_invalid_context(args->state,
-							args->oldp,
-							oldc);
+							    args->oldp, oldc);
 		if (rc)
 			goto bad;
 	}
@@ -2332,21 +2325,21 @@ int security_load_policy(struct selinux_state *state, void *data, size_t len,
 		goto err_free_isids;
 	}
 
+	/*
+	 * Convert the internal representations of contexts
+	 * in the new SID table.
+	 */
+
 	convert_data = kmalloc(sizeof(*convert_data), GFP_KERNEL);
 	if (!convert_data) {
 		rc = -ENOMEM;
 		goto err_free_isids;
 	}
 
-	/*
-	 * Convert the internal representations of contexts
-	 * in the new SID table.
-	 */
 	convert_data->args.state = state;
 	convert_data->args.oldp = &oldpolicy->policydb;
 	convert_data->args.newp = &newpolicy->policydb;
 
-	convert_data->sidtab_params.func = convert_context;
 	convert_data->sidtab_params.args = &convert_data->args;
 	convert_data->sidtab_params.target = newpolicy->sidtab;
 
@@ -2980,7 +2973,6 @@ int security_fs_use(struct selinux_state *state, struct super_block *sb)
 	}
 
 retry:
-	rc = 0;
 	rcu_read_lock();
 	policy = rcu_dereference(state->policy);
 	policydb = &policy->policydb;
@@ -4049,6 +4041,7 @@ int security_read_policy(struct selinux_state *state,
 int security_read_state_kernel(struct selinux_state *state,
 			       void **data, size_t *len)
 {
+	int err;
 	struct selinux_policy *policy;
 
 	policy = rcu_dereference_protected(
@@ -4061,5 +4054,11 @@ int security_read_state_kernel(struct selinux_state *state,
 	if (!*data)
 		return -ENOMEM;
 
-	return __security_read_policy(policy, *data, len);
+	err = __security_read_policy(policy, *data, len);
+	if (err) {
+		vfree(*data);
+		*data = NULL;
+		*len = 0;
+	}
+	return err;
 }

@@ -368,10 +368,10 @@ static const struct fb_ops ssd1307fb_ops = {
 	.fb_fillrect	= ssd1307fb_fillrect,
 	.fb_copyarea	= ssd1307fb_copyarea,
 	.fb_imageblit	= ssd1307fb_imageblit,
+	.fb_mmap	= fb_deferred_io_mmap,
 };
 
-static void ssd1307fb_deferred_io(struct fb_info *info,
-				struct list_head *pagelist)
+static void ssd1307fb_deferred_io(struct fb_info *info, struct list_head *pagereflist)
 {
 	ssd1307fb_update_display(info->par);
 }
@@ -450,7 +450,7 @@ static int ssd1307fb_init(struct ssd1307fb_par *par)
 	if (ret < 0)
 		return ret;
 
-	/* Set Set Area Color Mode ON/OFF & Low Power Display Mode */
+	/* Set Area Color Mode ON/OFF & Low Power Display Mode */
 	if (par->area_color_enable || par->low_power) {
 		u32 mode;
 
@@ -803,10 +803,8 @@ static int ssd1307fb_probe(struct i2c_client *client)
 bl_init_error:
 	unregister_framebuffer(info);
 panel_init_error:
-	if (par->device_info->need_pwm) {
-		pwm_disable(par->pwm);
-		pwm_put(par->pwm);
-	}
+	pwm_disable(par->pwm);
+	pwm_put(par->pwm);
 regulator_enable_error:
 	if (par->vbat_reg)
 		regulator_disable(par->vbat_reg);
@@ -817,7 +815,7 @@ fb_alloc_error:
 	return ret;
 }
 
-static int ssd1307fb_remove(struct i2c_client *client)
+static void ssd1307fb_remove(struct i2c_client *client)
 {
 	struct fb_info *info = i2c_get_clientdata(client);
 	struct ssd1307fb_par *par = info->par;
@@ -827,17 +825,13 @@ static int ssd1307fb_remove(struct i2c_client *client)
 	backlight_device_unregister(info->bl_dev);
 
 	unregister_framebuffer(info);
-	if (par->device_info->need_pwm) {
-		pwm_disable(par->pwm);
-		pwm_put(par->pwm);
-	}
+	pwm_disable(par->pwm);
+	pwm_put(par->pwm);
 	if (par->vbat_reg)
 		regulator_disable(par->vbat_reg);
 	fb_deferred_io_cleanup(info);
 	__free_pages(__va(info->fix.smem_start), get_order(info->fix.smem_len));
 	framebuffer_release(info);
-
-	return 0;
 }
 
 static const struct i2c_device_id ssd1307fb_i2c_id[] = {

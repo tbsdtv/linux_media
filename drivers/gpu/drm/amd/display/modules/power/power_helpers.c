@@ -102,9 +102,18 @@ static const struct abm_parameters abm_settings_config1[abm_defines_max_level] =
 	{0x82,   0x4d,    0x20,       0x00,     0x00,        0xff,     0xb3, 0x70,     0x70,     0xcccc,  0xcccc},
 };
 
+static const struct abm_parameters abm_settings_config2[abm_defines_max_level] = {
+//  min_red  max_red  bright_pos  dark_pos  bright_gain  contrast  dev   min_knee  max_knee  blRed    blStart
+	{0xf0,   0xbf,    0x20,       0x00,     0x88,        0x99,     0xb3, 0x40,     0xe0,    0x0000,  0xcccc},
+	{0xd8,   0x85,    0x20,       0x00,     0x70,        0x90,     0xa8, 0x40,     0xc8,    0x0700,  0xb333},
+	{0xb8,   0x58,    0x20,       0x00,     0x64,        0x88,     0x78, 0x70,     0xa0,    0x7000,  0x9999},
+	{0x82,   0x40,    0x20,       0x00,     0x00,        0xb8,     0xb3, 0x70,     0x70,    0xc333,  0xb333},
+};
+
 static const struct abm_parameters * const abm_settings[] = {
 	abm_settings_config0,
 	abm_settings_config1,
+	abm_settings_config2,
 };
 
 #define NUM_AMBI_LEVEL    5
@@ -784,3 +793,126 @@ bool dmcu_load_iram(struct dmcu *dmcu,
 	return result;
 }
 
+/*
+ * is_psr_su_specific_panel() - check if sink is AMD vendor-specific PSR-SU
+ * supported eDP device.
+ *
+ * @link: dc link pointer
+ *
+ * Return: true if AMDGPU vendor specific PSR-SU eDP panel
+ */
+bool is_psr_su_specific_panel(struct dc_link *link)
+{
+	bool isPSRSUSupported = false;
+	struct dpcd_caps *dpcd_caps = &link->dpcd_caps;
+
+	if (dpcd_caps->edp_rev >= DP_EDP_14) {
+		if (dpcd_caps->psr_info.psr_version >= DP_PSR2_WITH_Y_COORD_ET_SUPPORTED)
+			isPSRSUSupported = true;
+		/*
+		 * Some panels will report PSR capabilities over additional DPCD bits.
+		 * Such panels are approved despite reporting only PSR v3, as long as
+		 * the additional bits are reported.
+		 */
+		if (dpcd_caps->sink_dev_id == DP_BRANCH_DEVICE_ID_001CF8) {
+			/*
+			 * This is the temporary workaround to disable PSRSU when system turned on
+			 * DSC function on the sepcific sink.
+			 */
+			if (dpcd_caps->psr_info.psr_version < DP_PSR2_WITH_Y_COORD_IS_SUPPORTED)
+				isPSRSUSupported = false;
+			else if (dpcd_caps->dsc_caps.dsc_basic_caps.fields.dsc_support.DSC_SUPPORT &&
+				((dpcd_caps->sink_dev_id_str[1] == 0x08 && dpcd_caps->sink_dev_id_str[0] == 0x08) ||
+				(dpcd_caps->sink_dev_id_str[1] == 0x08 && dpcd_caps->sink_dev_id_str[0] == 0x07)))
+				isPSRSUSupported = false;
+			else if (dpcd_caps->psr_info.force_psrsu_cap == 0x1)
+				isPSRSUSupported = true;
+		}
+	}
+
+	return isPSRSUSupported;
+}
+
+/**
+ * mod_power_calc_psr_configs() - calculate/update generic psr configuration fields.
+ * @psr_config: [output], psr configuration structure to be updated
+ * @link: [input] dc link pointer
+ * @stream: [input] dc stream state pointer
+ *
+ * calculate and update the psr configuration fields that are not DM specific, i.e. such
+ * fields which are based on DPCD caps or timing information. To setup PSR in DMUB FW,
+ * this helper is assumed to be called before the call of the DC helper dc_link_setup_psr().
+ *
+ * PSR config fields to be updated within the helper:
+ * - psr_rfb_setup_time
+ * - psr_sdp_transmit_line_num_deadline
+ * - line_time_in_us
+ * - su_y_granularity
+ * - su_granularity_required
+ * - psr_frame_capture_indication_req
+ * - psr_exit_link_training_required
+ *
+ * PSR config fields that are DM specific and NOT updated within the helper:
+ * - allow_smu_optimizations
+ * - allow_multi_disp_optimizations
+ */
+void mod_power_calc_psr_configs(struct psr_config *psr_config,
+		struct dc_link *link,
+		const struct dc_stream_state *stream)
+{
+	unsigned int num_vblank_lines = 0;
+	unsigned int vblank_time_in_us = 0;
+	unsigned int sdp_tx_deadline_in_us = 0;
+	unsigned int line_time_in_us = 0;
+	struct dpcd_caps *dpcd_caps = &link->dpcd_caps;
+	const int psr_setup_time_step_in_us = 55;	/* refer to eDP spec DPCD 0x071h */
+
+	/* timing parameters */
+	num_vblank_lines = stream->timing.v_total -
+			 stream->timing.v_addressable -
+			 stream->timing.v_border_top -
+			 stream->timing.v_border_bottom;
+
+	vblank_time_in_us = (stream->timing.h_total * num_vblank_lines * 1000) / (stream->timing.pix_clk_100hz / 10);
+
+	line_time_in_us = ((stream->timing.h_total * 1000) / (stream->timing.pix_clk_100hz / 10)) + 1;
+
+	/**
+	 * psr configuration fields
+	 *
+	 * as per eDP 1.5 pg. 377 of 459, DPCD 0x071h bits [3:1], psr setup time bits interpreted as below
+	 * 000b <--> 330 us (default)
+	 * 001b <--> 275 us
+	 * 010b <--> 220 us
+	 * 011b <--> 165 us
+	 * 100b <--> 110 us
+	 * 101b <--> 055 us
+	 * 110b <--> 000 us
+	 */
+	psr_config->psr_rfb_setup_time =
+		(6 - dpcd_caps->psr_info.psr_dpcd_caps.bits.PSR_SETUP_TIME) * psr_setup_time_step_in_us;
+
+	if (psr_config->psr_rfb_setup_time > vblank_time_in_us) {
+		link->psr_settings.psr_frame_capture_indication_req = true;
+		link->psr_settings.psr_sdp_transmit_line_num_deadline = num_vblank_lines;
+	} else {
+		sdp_tx_deadline_in_us = vblank_time_in_us - psr_config->psr_rfb_setup_time;
+
+		/* Set the last possible line SDP may be transmitted without violating the RFB setup time */
+		link->psr_settings.psr_frame_capture_indication_req = false;
+		link->psr_settings.psr_sdp_transmit_line_num_deadline = sdp_tx_deadline_in_us / line_time_in_us;
+	}
+
+	psr_config->psr_sdp_transmit_line_num_deadline = link->psr_settings.psr_sdp_transmit_line_num_deadline;
+	psr_config->line_time_in_us = line_time_in_us;
+	psr_config->su_y_granularity = dpcd_caps->psr_info.psr2_su_y_granularity_cap;
+	psr_config->su_granularity_required = dpcd_caps->psr_info.psr_dpcd_caps.bits.SU_GRANULARITY_REQUIRED;
+	psr_config->psr_frame_capture_indication_req = link->psr_settings.psr_frame_capture_indication_req;
+	psr_config->psr_exit_link_training_required =
+		!link->dpcd_caps.psr_info.psr_dpcd_caps.bits.LINK_TRAINING_ON_EXIT_NOT_REQUIRED;
+}
+
+bool mod_power_only_edp(const struct dc_state *context, const struct dc_stream_state *stream)
+{
+	return context && context->stream_count == 1 && dc_is_embedded_signal(stream->signal);
+}

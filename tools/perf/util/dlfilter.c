@@ -495,6 +495,8 @@ int dlfilter__do_filter_event(struct dlfilter *d,
 	ASSIGN(misc);
 	ASSIGN(raw_size);
 	ASSIGN(raw_data);
+	ASSIGN(machine_pid);
+	ASSIGN(vcpu);
 
 	if (sample->branch_stack) {
 		d_sample.brstack_nr = sample->branch_stack->nr;
@@ -577,7 +579,7 @@ static void list_filters(const char *dirname)
 		if (!get_filter_desc(dirname, entry->d_name, &desc, &long_desc))
 			continue;
 		printf("  %-36s %s\n", entry->d_name, desc ? desc : "");
-		if (verbose) {
+		if (verbose > 0) {
 			char *p = long_desc;
 			char *line;
 

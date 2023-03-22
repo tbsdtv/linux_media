@@ -34,6 +34,7 @@
 #include <linux/list.h>
 #include <linux/list_sort.h>
 #include <linux/export.h>
+#include <linux/fb.h>
 
 #include <video/of_display_timing.h>
 #include <video/of_videomode.h>
@@ -41,6 +42,7 @@
 
 #include <drm/drm_crtc.h>
 #include <drm/drm_device.h>
+#include <drm/drm_edid.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_print.h>
 
@@ -735,8 +737,8 @@ EXPORT_SYMBOL_GPL(of_get_drm_display_mode);
  * @dmode: will be set to the return value
  * @bus_flags: information about pixelclk, sync and DE polarity
  *
- * The Device Tree properties width-mm and height-mm will be read and set on
- * the display mode if they are present.
+ * The mandatory Device Tree properties width-mm and height-mm
+ * are read and set on the display mode.
  *
  * Returns:
  * Zero on success, negative error code on failure.
@@ -761,11 +763,11 @@ int of_get_drm_panel_display_mode(struct device_node *np,
 		drm_bus_flags_from_videomode(&vm, bus_flags);
 
 	ret = of_property_read_u32(np, "width-mm", &width_mm);
-	if (ret && ret != -EINVAL)
+	if (ret)
 		return ret;
 
 	ret = of_property_read_u32(np, "height-mm", &height_mm);
-	if (ret && ret != -EINVAL)
+	if (ret)
 		return ret;
 
 	dmode->width_mm = width_mm;
@@ -837,7 +839,9 @@ EXPORT_SYMBOL(drm_mode_vrefresh);
 void drm_mode_get_hv_timing(const struct drm_display_mode *mode,
 			    int *hdisplay, int *vdisplay)
 {
-	struct drm_display_mode adjusted = *mode;
+	struct drm_display_mode adjusted;
+
+	drm_mode_init(&adjusted, mode);
 
 	drm_mode_set_crtcinfo(&adjusted, CRTC_STEREO_DOUBLE_ONLY);
 	*hdisplay = adjusted.crtc_hdisplay;
@@ -940,6 +944,23 @@ void drm_mode_copy(struct drm_display_mode *dst, const struct drm_display_mode *
 	dst->head = head;
 }
 EXPORT_SYMBOL(drm_mode_copy);
+
+/**
+ * drm_mode_init - initialize the mode from another mode
+ * @dst: mode to overwrite
+ * @src: mode to copy
+ *
+ * Copy an existing mode into another mode, zeroing the
+ * list head of the destination mode. Typically used
+ * to guarantee the list head is not left with stack
+ * garbage in on-stack modes.
+ */
+void drm_mode_init(struct drm_display_mode *dst, const struct drm_display_mode *src)
+{
+	memset(dst, 0, sizeof(*dst));
+	drm_mode_copy(dst, src);
+}
+EXPORT_SYMBOL(drm_mode_init);
 
 /**
  * drm_mode_duplicate - allocate and duplicate an existing mode
@@ -1309,6 +1330,10 @@ void drm_mode_prune_invalid(struct drm_device *dev,
 	list_for_each_entry_safe(mode, t, mode_list, head) {
 		if (mode->status != MODE_OK) {
 			list_del(&mode->head);
+			if (mode->type & DRM_MODE_TYPE_USERDEF) {
+				drm_warn(dev, "User-defined mode not supported: "
+					 DRM_MODE_FMT "\n", DRM_MODE_ARG(mode));
+			}
 			if (verbose) {
 				drm_mode_debug_printmodeline(mode);
 				DRM_DEBUG_KMS("Not using %s mode: %s\n",
@@ -1725,10 +1750,77 @@ static int drm_mode_parse_cmdline_options(const char *str,
 	return 0;
 }
 
-static const char * const drm_named_modes_whitelist[] = {
-	"NTSC",
-	"PAL",
+struct drm_named_mode {
+	const char *name;
+	unsigned int pixel_clock_khz;
+	unsigned int xres;
+	unsigned int yres;
+	unsigned int flags;
 };
+
+#define NAMED_MODE(_name, _pclk, _x, _y, _flags)	\
+	{						\
+		.name = _name,				\
+		.pixel_clock_khz = _pclk,		\
+		.xres = _x,				\
+		.yres = _y,				\
+		.flags = _flags,			\
+	}
+
+static const struct drm_named_mode drm_named_modes[] = {
+	NAMED_MODE("NTSC", 13500, 720, 480, DRM_MODE_FLAG_INTERLACE),
+	NAMED_MODE("PAL", 13500, 720, 576, DRM_MODE_FLAG_INTERLACE),
+};
+
+static int drm_mode_parse_cmdline_named_mode(const char *name,
+					     unsigned int name_end,
+					     struct drm_cmdline_mode *cmdline_mode)
+{
+	unsigned int i;
+
+	if (!name_end)
+		return 0;
+
+	/* If the name starts with a digit, it's not a named mode */
+	if (isdigit(name[0]))
+		return 0;
+
+	/*
+	 * If there's an equal sign in the name, the command-line
+	 * contains only an option and no mode.
+	 */
+	if (strnchr(name, name_end, '='))
+		return 0;
+
+	/* The connection status extras can be set without a mode. */
+	if (name_end == 1 &&
+	    (name[0] == 'd' || name[0] == 'D' || name[0] == 'e'))
+		return 0;
+
+	/*
+	 * We're sure we're a named mode at this point, iterate over the
+	 * list of modes we're aware of.
+	 */
+	for (i = 0; i < ARRAY_SIZE(drm_named_modes); i++) {
+		const struct drm_named_mode *mode = &drm_named_modes[i];
+		int ret;
+
+		ret = str_has_prefix(name, mode->name);
+		if (ret != name_end)
+			continue;
+
+		strcpy(cmdline_mode->name, mode->name);
+		cmdline_mode->pixel_clock = mode->pixel_clock_khz;
+		cmdline_mode->xres = mode->xres;
+		cmdline_mode->yres = mode->yres;
+		cmdline_mode->interlace = !!(mode->flags & DRM_MODE_FLAG_INTERLACE);
+		cmdline_mode->specified = true;
+
+		return 1;
+	}
+
+	return -EINVAL;
+}
 
 /**
  * drm_mode_parse_command_line_for_connector - parse command line modeline for connector
@@ -1766,7 +1858,7 @@ bool drm_mode_parse_command_line_for_connector(const char *mode_option,
 	const char *bpp_ptr = NULL, *refresh_ptr = NULL, *extra_ptr = NULL;
 	const char *options_ptr = NULL;
 	char *bpp_end_ptr = NULL, *refresh_end_ptr = NULL;
-	int i, len, ret;
+	int len, ret;
 
 	memset(mode, 0, sizeof(*mode));
 	mode->panel_orientation = DRM_MODE_PANEL_ORIENTATION_UNKNOWN;
@@ -1776,19 +1868,23 @@ bool drm_mode_parse_command_line_for_connector(const char *mode_option,
 
 	name = mode_option;
 
-	/* Try to locate the bpp and refresh specifiers, if any */
-	bpp_ptr = strchr(name, '-');
-	if (bpp_ptr)
-		bpp_off = bpp_ptr - name;
-
-	refresh_ptr = strchr(name, '@');
-	if (refresh_ptr)
-		refresh_off = refresh_ptr - name;
-
 	/* Locate the start of named options */
 	options_ptr = strchr(name, ',');
 	if (options_ptr)
 		options_off = options_ptr - name;
+	else
+		options_off = strlen(name);
+
+	/* Try to locate the bpp and refresh specifiers, if any */
+	bpp_ptr = strnchr(name, options_off, '-');
+	while (bpp_ptr && !isdigit(bpp_ptr[1]))
+		bpp_ptr = strnchr(bpp_ptr + 1, options_off, '-');
+	if (bpp_ptr)
+		bpp_off = bpp_ptr - name;
+
+	refresh_ptr = strnchr(name, options_off, '@');
+	if (refresh_ptr)
+		refresh_off = refresh_ptr - name;
 
 	/* Locate the end of the name / resolution, and parse it */
 	if (bpp_ptr) {
@@ -1803,18 +1899,19 @@ bool drm_mode_parse_command_line_for_connector(const char *mode_option,
 		parse_extras = true;
 	}
 
-	/* First check for a named mode */
-	for (i = 0; i < ARRAY_SIZE(drm_named_modes_whitelist); i++) {
-		ret = str_has_prefix(name, drm_named_modes_whitelist[i]);
-		if (ret == mode_end) {
-			if (refresh_ptr)
-				return false; /* named + refresh is invalid */
+	if (!mode_end)
+		return false;
 
-			strcpy(mode->name, drm_named_modes_whitelist[i]);
-			mode->specified = true;
-			break;
-		}
-	}
+	ret = drm_mode_parse_cmdline_named_mode(name, mode_end, mode);
+	if (ret < 0)
+		return false;
+
+	/*
+	 * Having a mode that starts by a letter (and thus is named) and
+	 * an at-sign (used to specify a refresh rate) is disallowed.
+	 */
+	if (ret && refresh_ptr)
+		return false;
 
 	/* No named mode? Check for a normal mode argument, e.g. 1024x768 */
 	if (!mode->specified && isdigit(name[0])) {

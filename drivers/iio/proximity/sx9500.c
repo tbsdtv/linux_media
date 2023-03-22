@@ -901,8 +901,7 @@ static void sx9500_gpio_probe(struct i2c_client *client,
 	}
 }
 
-static int sx9500_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int sx9500_probe(struct i2c_client *client)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -979,7 +978,7 @@ out_trigger_unregister:
 	return ret;
 }
 
-static int sx9500_remove(struct i2c_client *client)
+static void sx9500_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct sx9500_data *data = iio_priv(indio_dev);
@@ -989,8 +988,6 @@ static int sx9500_remove(struct i2c_client *client)
 	if (client->irq > 0)
 		iio_trigger_unregister(data->trig);
 	kfree(data->buffer);
-
-	return 0;
 }
 
 static int sx9500_suspend(struct device *dev)
@@ -1058,7 +1055,7 @@ static struct i2c_driver sx9500_driver = {
 		.of_match_table = of_match_ptr(sx9500_of_match),
 		.pm = pm_sleep_ptr(&sx9500_pm_ops),
 	},
-	.probe		= sx9500_probe,
+	.probe_new	= sx9500_probe,
 	.remove		= sx9500_remove,
 	.id_table	= sx9500_id,
 };

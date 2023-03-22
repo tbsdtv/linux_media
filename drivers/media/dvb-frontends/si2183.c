@@ -1796,7 +1796,7 @@ err:
 	return ret;
 }
 
-static int si2183_remove(struct i2c_client *client)
+static void si2183_remove(struct i2c_client *client)
 {
 	struct si2183_dev *dev = i2c_get_clientdata(client);
 
@@ -1819,8 +1819,6 @@ static int si2183_remove(struct i2c_client *client)
 	dev->fe.demodulator_priv = NULL;
 
 	kfree(dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id si2183_id_table[] = {

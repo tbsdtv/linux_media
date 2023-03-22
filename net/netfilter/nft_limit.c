@@ -193,7 +193,8 @@ static int nft_limit_pkts_init(const struct nft_ctx *ctx,
 	return 0;
 }
 
-static int nft_limit_pkts_dump(struct sk_buff *skb, const struct nft_expr *expr)
+static int nft_limit_pkts_dump(struct sk_buff *skb,
+			       const struct nft_expr *expr, bool reset)
 {
 	const struct nft_limit_priv_pkts *priv = nft_expr_priv(expr);
 
@@ -212,6 +213,8 @@ static int nft_limit_pkts_clone(struct nft_expr *dst, const struct nft_expr *src
 {
 	struct nft_limit_priv_pkts *priv_dst = nft_expr_priv(dst);
 	struct nft_limit_priv_pkts *priv_src = nft_expr_priv(src);
+
+	priv_dst->cost = priv_src->cost;
 
 	return nft_limit_clone(&priv_dst->limit, &priv_src->limit);
 }
@@ -249,7 +252,7 @@ static int nft_limit_bytes_init(const struct nft_ctx *ctx,
 }
 
 static int nft_limit_bytes_dump(struct sk_buff *skb,
-				const struct nft_expr *expr)
+				const struct nft_expr *expr, bool reset)
 {
 	const struct nft_limit_priv *priv = nft_expr_priv(expr);
 

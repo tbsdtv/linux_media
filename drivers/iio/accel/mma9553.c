@@ -1073,9 +1073,9 @@ static const char *mma9553_match_acpi_device(struct device *dev)
 	return dev_name(dev);
 }
 
-static int mma9553_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int mma9553_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct mma9553_data *data;
 	struct iio_dev *indio_dev;
 	const char *name = NULL;
@@ -1148,7 +1148,7 @@ out_poweroff:
 	return ret;
 }
 
-static int mma9553_remove(struct i2c_client *client)
+static void mma9553_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct mma9553_data *data = iio_priv(indio_dev);
@@ -1161,8 +1161,6 @@ static int mma9553_remove(struct i2c_client *client)
 	mutex_lock(&data->mutex);
 	mma9551_set_device_state(data->client, false);
 	mutex_unlock(&data->mutex);
-
-	return 0;
 }
 
 static int mma9553_runtime_suspend(struct device *dev)
@@ -1248,7 +1246,7 @@ static struct i2c_driver mma9553_driver = {
 		   .acpi_match_table = ACPI_PTR(mma9553_acpi_match),
 		   .pm = pm_ptr(&mma9553_pm_ops),
 		   },
-	.probe = mma9553_probe,
+	.probe_new = mma9553_probe,
 	.remove = mma9553_remove,
 	.id_table = mma9553_id,
 };

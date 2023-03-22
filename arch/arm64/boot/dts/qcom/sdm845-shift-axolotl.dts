@@ -2,11 +2,13 @@
 /*
  * Copyright (c) 2022, Alexander Martinz <amartinz@shiftphones.com>
  * Copyright (c) 2022, Caleb Connolly <caleb@connolly.tech>
+ * Copyright (c) 2022, Dylan Van Assche <me@dylanvanassche.be>
  */
 
 /dts-v1/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include "sdm845.dtsi"
 #include "pm8998.dtsi"
@@ -21,6 +23,7 @@
 	aliases {
 		display0 = &framebuffer0;
 		serial0 = &uart9;
+		serial1 = &uart6;
 	};
 
 	chosen {
@@ -48,7 +51,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&volume_up_gpio>;
 
-		vol-up {
+		key-vol-up {
 			label = "volume_up";
 			linux,code = <KEY_VOLUMEUP>;
 			gpios = <&pm8998_gpio 6 GPIO_ACTIVE_LOW>;
@@ -468,7 +471,7 @@
 };
 
 &i2c5 {
-	status="okay";
+	status = "okay";
 
 	touchscreen@38 {
 		compatible = "focaltech,fts8719";
@@ -508,7 +511,7 @@
 };
 
 &pm8998_gpio {
-	volume_up_gpio: pm8998_gpio6 {
+	volume_up_gpio: pm8998-gpio6-state {
 		pinconf {
 			pins = "gpio6";
 			function = "normal";
@@ -526,6 +529,33 @@
 		debounce = <15625>;
 		bias-pull-up;
 		linux,code = <KEY_VOLUMEDOWN>;
+	};
+};
+
+&pmi8998_lpg {
+	status = "okay";
+
+	multi-led {
+		color = <LED_COLOR_ID_RGB>;
+		function = LED_FUNCTION_STATUS;
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		led@3 {
+			reg = <3>;
+			color = <LED_COLOR_ID_BLUE>;
+		};
+
+		led@4 {
+			reg = <4>;
+			color = <LED_COLOR_ID_GREEN>;
+		};
+
+		led@5 {
+			reg = <5>;
+			color = <LED_COLOR_ID_RED>;
+		};
 	};
 };
 
@@ -664,8 +694,16 @@
 &uart6 {
 	status = "okay";
 
+	pinctrl-0 = <&qup_uart6_4pin>;
+
 	bluetooth {
 		compatible = "qcom,wcn3990-bt";
+
+		/*
+		 * This path is relative to the qca/
+		 * subdir under lib/firmware.
+		 */
+		firmware-name = "axolotl/crnv21.bin";
 
 		vddio-supply = <&vreg_s4a_1p8>;
 		vddxo-supply = <&vreg_l7a_1p8>;

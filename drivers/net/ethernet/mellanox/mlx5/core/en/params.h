@@ -9,6 +9,7 @@
 struct mlx5e_xsk_param {
 	u16 headroom;
 	u16 chunk_size;
+	bool unaligned;
 };
 
 struct mlx5e_cq_param {
@@ -52,37 +53,26 @@ struct mlx5e_create_sq_param {
 	u8                          min_inline_mode;
 };
 
-static inline bool mlx5e_qid_get_ch_if_in_group(struct mlx5e_params *params,
-						u16 qid,
-						enum mlx5e_rq_group group,
-						u16 *ix)
-{
-	int nch = params->num_channels;
-	int ch = qid - nch * group;
+/* Striding RQ dynamic parameters */
 
-	if (ch < 0 || ch >= nch)
-		return false;
-
-	*ix = ch;
-	return true;
-}
-
-static inline void mlx5e_qid_get_ch_and_group(struct mlx5e_params *params,
-					      u16 qid,
-					      u16 *ix,
-					      enum mlx5e_rq_group *group)
-{
-	u16 nch = params->num_channels;
-
-	*ix = qid % nch;
-	*group = qid / nch;
-}
-
-static inline bool mlx5e_qid_validate(const struct mlx5e_profile *profile,
-				      struct mlx5e_params *params, u64 qid)
-{
-	return qid < params->num_channels * profile->rq_groups;
-}
+u8 mlx5e_mpwrq_page_shift(struct mlx5_core_dev *mdev, struct mlx5e_xsk_param *xsk);
+enum mlx5e_mpwrq_umr_mode
+mlx5e_mpwrq_umr_mode(struct mlx5_core_dev *mdev, struct mlx5e_xsk_param *xsk);
+u8 mlx5e_mpwrq_umr_entry_size(enum mlx5e_mpwrq_umr_mode mode);
+u8 mlx5e_mpwrq_log_wqe_sz(struct mlx5_core_dev *mdev, u8 page_shift,
+			  enum mlx5e_mpwrq_umr_mode umr_mode);
+u8 mlx5e_mpwrq_pages_per_wqe(struct mlx5_core_dev *mdev, u8 page_shift,
+			     enum mlx5e_mpwrq_umr_mode umr_mode);
+u16 mlx5e_mpwrq_umr_wqe_sz(struct mlx5_core_dev *mdev, u8 page_shift,
+			   enum mlx5e_mpwrq_umr_mode umr_mode);
+u8 mlx5e_mpwrq_umr_wqebbs(struct mlx5_core_dev *mdev, u8 page_shift,
+			  enum mlx5e_mpwrq_umr_mode umr_mode);
+u8 mlx5e_mpwrq_mtts_per_wqe(struct mlx5_core_dev *mdev, u8 page_shift,
+			    enum mlx5e_mpwrq_umr_mode umr_mode);
+u32 mlx5e_mpwrq_max_num_entries(struct mlx5_core_dev *mdev,
+				enum mlx5e_mpwrq_umr_mode umr_mode);
+u8 mlx5e_mpwrq_max_log_rq_pkts(struct mlx5_core_dev *mdev, u8 page_shift,
+			       enum mlx5e_mpwrq_umr_mode umr_mode);
 
 /* Parameter calculations */
 
@@ -92,25 +82,23 @@ void mlx5e_set_tx_cq_mode_params(struct mlx5e_params *params, u8 cq_period_mode)
 void mlx5e_set_rx_cq_mode_params(struct mlx5e_params *params, u8 cq_period_mode);
 
 bool slow_pci_heuristic(struct mlx5_core_dev *mdev);
-bool mlx5e_striding_rq_possible(struct mlx5_core_dev *mdev, struct mlx5e_params *params);
+int mlx5e_mpwrq_validate_regular(struct mlx5_core_dev *mdev, struct mlx5e_params *params);
+int mlx5e_mpwrq_validate_xsk(struct mlx5_core_dev *mdev, struct mlx5e_params *params,
+			     struct mlx5e_xsk_param *xsk);
 void mlx5e_build_rq_params(struct mlx5_core_dev *mdev, struct mlx5e_params *params);
 void mlx5e_set_rq_type(struct mlx5_core_dev *mdev, struct mlx5e_params *params);
 void mlx5e_init_rq_type_params(struct mlx5_core_dev *mdev, struct mlx5e_params *params);
 
-bool mlx5e_verify_rx_mpwqe_strides(struct mlx5_core_dev *mdev,
-				   u8 log_stride_sz, u8 log_num_strides);
 u16 mlx5e_get_linear_rq_headroom(struct mlx5e_params *params,
 				 struct mlx5e_xsk_param *xsk);
-u32 mlx5e_rx_get_min_frag_sz(struct mlx5e_params *params,
-			     struct mlx5e_xsk_param *xsk);
-u8 mlx5e_mpwqe_log_pkts_per_wqe(struct mlx5e_params *params,
-				struct mlx5e_xsk_param *xsk);
-bool mlx5e_rx_is_linear_skb(struct mlx5e_params *params,
+bool mlx5e_rx_is_linear_skb(struct mlx5_core_dev *mdev,
+			    struct mlx5e_params *params,
 			    struct mlx5e_xsk_param *xsk);
 bool mlx5e_rx_mpwqe_is_linear_skb(struct mlx5_core_dev *mdev,
 				  struct mlx5e_params *params,
 				  struct mlx5e_xsk_param *xsk);
-u8 mlx5e_mpwqe_get_log_rq_size(struct mlx5e_params *params,
+u8 mlx5e_mpwqe_get_log_rq_size(struct mlx5_core_dev *mdev,
+			       struct mlx5e_params *params,
 			       struct mlx5e_xsk_param *xsk);
 u8 mlx5e_shampo_get_log_hd_entry_size(struct mlx5_core_dev *mdev,
 				      struct mlx5e_params *params);
@@ -165,5 +153,19 @@ int mlx5e_build_channel_param(struct mlx5_core_dev *mdev,
 
 u16 mlx5e_calc_sq_stop_room(struct mlx5_core_dev *mdev, struct mlx5e_params *params);
 int mlx5e_validate_params(struct mlx5_core_dev *mdev, struct mlx5e_params *params);
+
+static inline void mlx5e_params_print_info(struct mlx5_core_dev *mdev,
+					   struct mlx5e_params *params)
+{
+	mlx5_core_info(mdev, "MLX5E: StrdRq(%d) RqSz(%ld) StrdSz(%ld) RxCqeCmprss(%d %s)\n",
+		       params->rq_wq_type == MLX5_WQ_TYPE_LINKED_LIST_STRIDING_RQ,
+		       params->rq_wq_type == MLX5_WQ_TYPE_LINKED_LIST_STRIDING_RQ ?
+		       BIT(mlx5e_mpwqe_get_log_rq_size(mdev, params, NULL)) :
+		       BIT(params->log_rq_mtu_frames),
+		       BIT(mlx5e_mpwqe_get_log_stride_size(mdev, params, NULL)),
+		       MLX5E_GET_PFLAG(params, MLX5E_PFLAG_RX_CQE_COMPRESS),
+		       MLX5_CAP_GEN(mdev, enhanced_cqe_compression) ?
+				       "enhanced" : "basic");
+};
 
 #endif /* __MLX5_EN_PARAMS_H__ */

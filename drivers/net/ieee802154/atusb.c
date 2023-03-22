@@ -191,7 +191,7 @@ static void atusb_work_urbs(struct work_struct *work)
 
 /* ----- Asynchronous USB -------------------------------------------------- */
 
-static void atusb_tx_done(struct atusb *atusb, u8 seq)
+static void atusb_tx_done(struct atusb *atusb, u8 seq, int reason)
 {
 	struct usb_device *usb_dev = atusb->usb_dev;
 	u8 expect = atusb->tx_ack_seq;
@@ -199,16 +199,17 @@ static void atusb_tx_done(struct atusb *atusb, u8 seq)
 	dev_dbg(&usb_dev->dev, "%s (0x%02x/0x%02x)\n", __func__, seq, expect);
 	if (seq == expect) {
 		/* TODO check for ifs handling in firmware */
-		ieee802154_xmit_complete(atusb->hw, atusb->tx_skb, false);
+		if (reason == IEEE802154_SUCCESS)
+			ieee802154_xmit_complete(atusb->hw, atusb->tx_skb, false);
+		else
+			ieee802154_xmit_error(atusb->hw, atusb->tx_skb, reason);
 	} else {
 		/* TODO I experience this case when atusb has a tx complete
 		 * irq before probing, we should fix the firmware it's an
 		 * unlikely case now that seq == expect is then true, but can
 		 * happen and fail with a tx_skb = NULL;
 		 */
-		ieee802154_wake_queue(atusb->hw);
-		if (atusb->tx_skb)
-			dev_kfree_skb_irq(atusb->tx_skb);
+		ieee802154_xmit_hw_error(atusb->hw, atusb->tx_skb);
 	}
 }
 
@@ -217,7 +218,8 @@ static void atusb_in_good(struct urb *urb)
 	struct usb_device *usb_dev = urb->dev;
 	struct sk_buff *skb = urb->context;
 	struct atusb *atusb = SKB_ATUSB(skb);
-	u8 len, lqi;
+	int result = IEEE802154_SUCCESS;
+	u8 len, lqi, trac;
 
 	if (!urb->actual_length) {
 		dev_dbg(&usb_dev->dev, "atusb_in: zero-sized URB ?\n");
@@ -226,8 +228,27 @@ static void atusb_in_good(struct urb *urb)
 
 	len = *skb->data;
 
-	if (urb->actual_length == 1) {
-		atusb_tx_done(atusb, len);
+	switch (urb->actual_length) {
+	case 2:
+		trac = TRAC_MASK(*(skb->data + 1));
+		switch (trac) {
+		case TRAC_SUCCESS:
+		case TRAC_SUCCESS_DATA_PENDING:
+			/* already IEEE802154_SUCCESS */
+			break;
+		case TRAC_CHANNEL_ACCESS_FAILURE:
+			result = IEEE802154_CHANNEL_ACCESS_FAILURE;
+			break;
+		case TRAC_NO_ACK:
+			result = IEEE802154_NO_ACK;
+			break;
+		default:
+			result = IEEE802154_SYSTEM_ERROR;
+		}
+
+		fallthrough;
+	case 1:
+		atusb_tx_done(atusb, len, result);
 		return;
 	}
 
@@ -614,36 +635,6 @@ static int hulusb_set_channel(struct ieee802154_hw *hw, u8 page, u8 channel)
 	if (rc < 0)
 		return rc;
 
-	/* This sets the symbol_duration according frequency on the 212.
-	 * TODO move this handling while set channel and page in cfg802154.
-	 * We can do that, this timings are according 802.15.4 standard.
-	 * If we do that in cfg802154, this is a more generic calculation.
-	 *
-	 * This should also protected from ifs_timer. Means cancel timer and
-	 * init with a new value. For now, this is okay.
-	 */
-	if (channel == 0) {
-		if (page == 0) {
-			/* SUB:0 and BPSK:0 -> BPSK-20 */
-			lp->hw->phy->symbol_duration = 50;
-		} else {
-			/* SUB:1 and BPSK:0 -> BPSK-40 */
-			lp->hw->phy->symbol_duration = 25;
-		}
-	} else {
-		if (page == 0)
-			/* SUB:0 and BPSK:1 -> OQPSK-100/200/400 */
-			lp->hw->phy->symbol_duration = 40;
-		else
-			/* SUB:1 and BPSK:1 -> OQPSK-250/500/1000 */
-			lp->hw->phy->symbol_duration = 16;
-	}
-
-	lp->hw->phy->lifs_period = IEEE802154_LIFS_PERIOD *
-				   lp->hw->phy->symbol_duration;
-	lp->hw->phy->sifs_period = IEEE802154_SIFS_PERIOD *
-				   lp->hw->phy->symbol_duration;
-
 	return atusb_write_subreg(lp, SR_CHANNEL, channel);
 }
 
@@ -869,7 +860,6 @@ static int atusb_get_and_conf_chip(struct atusb *atusb)
 		chip = "AT86RF230";
 		atusb->hw->phy->supported.channels[0] = 0x7FFF800;
 		atusb->hw->phy->current_channel = 11;	/* reset default */
-		atusb->hw->phy->symbol_duration = 16;
 		atusb->hw->phy->supported.tx_powers = atusb_powers;
 		atusb->hw->phy->supported.tx_powers_size = ARRAY_SIZE(atusb_powers);
 		hw->phy->supported.cca_ed_levels = atusb_ed_levels;
@@ -879,7 +869,6 @@ static int atusb_get_and_conf_chip(struct atusb *atusb)
 		chip = "AT86RF231";
 		atusb->hw->phy->supported.channels[0] = 0x7FFF800;
 		atusb->hw->phy->current_channel = 11;	/* reset default */
-		atusb->hw->phy->symbol_duration = 16;
 		atusb->hw->phy->supported.tx_powers = atusb_powers;
 		atusb->hw->phy->supported.tx_powers_size = ARRAY_SIZE(atusb_powers);
 		hw->phy->supported.cca_ed_levels = atusb_ed_levels;
@@ -891,7 +880,6 @@ static int atusb_get_and_conf_chip(struct atusb *atusb)
 		atusb->hw->phy->supported.channels[0] = 0x00007FF;
 		atusb->hw->phy->supported.channels[2] = 0x00007FF;
 		atusb->hw->phy->current_channel = 5;
-		atusb->hw->phy->symbol_duration = 25;
 		atusb->hw->phy->supported.lbt = NL802154_SUPPORTED_BOOL_BOTH;
 		atusb->hw->phy->supported.tx_powers = at86rf212_powers;
 		atusb->hw->phy->supported.tx_powers_size = ARRAY_SIZE(at86rf212_powers);

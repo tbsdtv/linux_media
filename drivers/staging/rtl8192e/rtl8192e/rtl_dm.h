@@ -42,9 +42,9 @@
 #define	 TX_POWER_ATHEROAP_THRESH_HIGH	   78
 #define		TX_POWER_ATHEROAP_THRESH_LOW		72
 
-#define			Current_Tx_Rate_Reg	 0x1e0
-#define			Initial_Tx_Rate_Reg	 0x1e1
-#define			Tx_Retry_Count_Reg	 0x1ac
+#define		CURRENT_TX_RATE_REG		0x1e0
+#define		INITIAL_TX_RATE_REG		0x1e1
+#define		TX_RETRY_COUNT_REG		0x1ac
 #define		RegC38_TH				 20
 
 #define		DM_Type_ByDriver		1
@@ -66,8 +66,8 @@ struct dig_t {
 
 	u8		dig_state;
 	u8		dig_highpwr_state;
-	u8		CurSTAConnectState;
-	u8		PreSTAConnectState;
+	u8		cur_sta_connect_state;
+	u8		pre_sta_connect_state;
 
 	u8		curpd_thstate;
 	u8		prepd_thstate;
@@ -152,9 +152,9 @@ enum dm_cck_rx_path_method {
 
 
 struct dcmd_txcmd {
-	u32	Op;
-	u32	Length;
-	u32	Value;
+	u32	op;
+	u32	length;
+	u32	value;
 };
 /*------------------------------Define structure----------------------------*/
 

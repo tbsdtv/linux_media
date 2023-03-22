@@ -8,9 +8,12 @@
 #include "qcom-msm8226.dtsi"
 #include "qcom-pm8226.dtsi"
 
+/delete-node/ &adsp_region;
+
 / {
 	model = "LG G Watch R";
 	compatible = "lg,lenok", "qcom,apq8026";
+	chassis-type = "watch";
 	qcom,board-id = <132 0x0a>;
 	qcom,msm-id = <199 0x20000>;
 
@@ -21,6 +24,13 @@
 
 	chosen {
 		stdout-path = "serial0:115200n8";
+	};
+
+	reserved-memory {
+		adsp_region: adsp@3300000 {
+			reg = <0x03300000 0x1400000>;
+			no-map;
+		};
 	};
 
 	vreg_wlan: wlan-regulator {
@@ -36,6 +46,10 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wlan_regulator_default_state>;
 	};
+};
+
+&adsp {
+	status = "okay";
 };
 
 &blsp1_i2c1 {
@@ -102,7 +116,7 @@
 };
 
 &rpm_requests {
-	pm8226-regulators {
+	regulators {
 		compatible = "qcom,rpm-pm8226-regulators";
 
 		pm8226_s3: s3 {
@@ -286,8 +300,8 @@
 		input-enable;
 	};
 
-	touch_pins: touch {
-		irq {
+	touch_pins: touch-state {
+		irq-pins {
 			pins = "gpio17";
 			function = "gpio";
 
@@ -296,7 +310,7 @@
 			input-enable;
 		};
 
-		reset {
+		reset-pins {
 			pins = "gpio16";
 			function = "gpio";
 

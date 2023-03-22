@@ -134,7 +134,7 @@
 				nvidia,tristate = <TEGRA_PIN_DISABLE>;
 				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
 				nvidia,lock = <0>;
-				nvidia,ioreset = <0>;
+				nvidia,io-reset = <0>;
 			};
 
 			/* SDMMC3 pinmux */
@@ -149,7 +149,6 @@
 			sdmmc3_cmd_pa7 {
 				nvidia,pins = "sdmmc3_cmd_pa7",
 						"sdmmc3_dat3_pb4",
-						"sdmmc3_dat2_pb5",
 						"sdmmc3_dat2_pb5",
 						"sdmmc3_dat1_pb6",
 						"sdmmc3_dat0_pb7",
@@ -622,7 +621,7 @@
 				nvidia,tristate = <TEGRA_PIN_ENABLE>;
 				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
 				nvidia,lock = <0>;
-				nvidia,ioreset = <0>;
+				nvidia,io-reset = <0>;
 			};
 
 			pu1 {
@@ -689,7 +688,7 @@
 				nvidia,tristate = <TEGRA_PIN_DISABLE>;
 				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
 				nvidia,lock = <0>;
-				nvidia,ioreset = <0>;
+				nvidia,io-reset = <0>;
 			};
 
 			vi_d10_pt2 {
@@ -864,7 +863,7 @@
 				nvidia,tristate = <TEGRA_PIN_DISABLE>;
 				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
 				nvidia,lock = <0>;
-				nvidia,ioreset = <0>;
+				nvidia,io-reset = <0>;
 			};
 
 			vi_mclk_pt1 {
@@ -2653,9 +2652,8 @@
 
 	extcon-keys {
 		compatible = "gpio-keys";
-		interrupt-parent = <&gpio>;
 
-		dock-insert {
+		switch-dock-insert {
 			label = "Chagall Dock";
 			gpios = <&gpio TEGRA_GPIO(S, 4) GPIO_ACTIVE_LOW>;
 			linux,input-type = <EV_SW>;
@@ -2665,7 +2663,7 @@
 			wakeup-source;
 		};
 
-		lineout-detect {
+		switch-lineout-detect {
 			label = "Audio dock line-out detect";
 			gpios = <&gpio TEGRA_GPIO(S, 3) GPIO_ACTIVE_LOW>;
 			linux,input-type = <EV_SW>;
@@ -2686,9 +2684,8 @@
 
 	gpio-keys {
 		compatible = "gpio-keys";
-		interrupt-parent = <&gpio>;
 
-		power {
+		key-power {
 			label = "Power";
 			gpios = <&gpio TEGRA_GPIO(V, 0) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_POWER>;
@@ -2697,7 +2694,7 @@
 			wakeup-source;
 		};
 
-		volume-up {
+		key-volume-up {
 			label = "Volume Up";
 			gpios = <&gpio TEGRA_GPIO(Q, 0) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
@@ -2706,7 +2703,7 @@
 			wakeup-source;
 		};
 
-		volume-down {
+		key-volume-down {
 			label = "Volume Down";
 			gpios = <&gpio TEGRA_GPIO(Q, 1) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEDOWN>;

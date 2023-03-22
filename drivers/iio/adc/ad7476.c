@@ -44,13 +44,12 @@ struct ad7476_state {
 	struct spi_transfer		xfer;
 	struct spi_message		msg;
 	/*
-	 * DMA (thus cache coherency maintenance) requires the
+	 * DMA (thus cache coherency maintenance) may require the
 	 * transfer buffers to live in their own cache lines.
 	 * Make the buffer large enough for one 16 bit sample and one 64 bit
 	 * aligned 64 bit timestamp.
 	 */
-	unsigned char data[ALIGN(2, sizeof(s64)) + sizeof(s64)]
-			____cacheline_aligned;
+	unsigned char data[ALIGN(2, sizeof(s64)) + sizeof(s64)] __aligned(IIO_DMA_MINALIGN);
 };
 
 enum ad7476_supported_device_ids {
@@ -369,16 +368,7 @@ static int ad7476_probe(struct spi_device *spi)
 	}
 
 	if (st->chip_info->has_vdrive) {
-		reg = devm_regulator_get(&spi->dev, "vdrive");
-		if (IS_ERR(reg))
-			return PTR_ERR(reg);
-
-		ret = regulator_enable(reg);
-		if (ret)
-			return ret;
-
-		ret = devm_add_action_or_reset(&spi->dev, ad7476_reg_disable,
-					       reg);
+		ret = devm_regulator_get_enable(&spi->dev, "vdrive");
 		if (ret)
 			return ret;
 	}

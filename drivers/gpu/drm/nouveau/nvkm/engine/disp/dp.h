@@ -1,44 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef __NVKM_DISP_DP_H__
 #define __NVKM_DISP_DP_H__
-#define nvkm_dp(p) container_of((p), struct nvkm_dp, outp)
 #include "outp.h"
-
-#include <core/notify.h>
-#include <subdev/bios.h>
-#include <subdev/bios/dp.h>
-
-struct nvkm_dp {
-	struct nvkm_outp outp;
-
-	struct nvbios_dpout info;
-	u8 version;
-
-	struct nvkm_i2c_aux *aux;
-
-	struct nvkm_notify hpd;
-	bool present;
-	u8 lttpr[6];
-	u8 lttprs;
-	u8 dpcd[16];
-
-	struct {
-		int dpcd; /* -1, or index into SUPPORTED_LINK_RATES table */
-		u32 rate;
-	} rate[8];
-	int rates;
-	int links;
-
-	struct mutex mutex;
-	struct {
-		atomic_t done;
-		bool mst;
-	} lt;
-};
 
 int nvkm_dp_new(struct nvkm_disp *, int index, struct dcb_output *,
 		struct nvkm_outp **);
 void nvkm_dp_disable(struct nvkm_outp *, struct nvkm_ior *);
+void nvkm_dp_enable(struct nvkm_outp *, bool auxpwr);
 
 /* DPCD Receiver Capabilities */
 #define DPCD_RC00_DPCD_REV                                              0x00000

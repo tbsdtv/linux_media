@@ -17,7 +17,7 @@
 #define MXC_JPEG_FMT_TYPE_RAW		1
 #define MXC_JPEG_DEFAULT_WIDTH		1280
 #define MXC_JPEG_DEFAULT_HEIGHT		720
-#define MXC_JPEG_DEFAULT_PFMT		V4L2_PIX_FMT_RGB24
+#define MXC_JPEG_DEFAULT_PFMT		V4L2_PIX_FMT_BGR24
 #define MXC_JPEG_MIN_WIDTH		64
 #define MXC_JPEG_MIN_HEIGHT		64
 #define MXC_JPEG_MAX_WIDTH		0x2000
@@ -45,10 +45,13 @@ enum mxc_jpeg_mode {
  * @subsampling: subsampling of jpeg components
  * @nc:		number of color components
  * @depth:	number of bits per pixel
- * @colplanes:	number of color planes (1 for packed formats)
+ * @mem_planes:	number of memory planes (1 for packed formats)
+ * @comp_planes:number of component planes, which includes the alpha plane (1 to 4).
  * @h_align:	horizontal alignment order (align to 2^h_align)
  * @v_align:	vertical alignment order (align to 2^v_align)
  * @flags:	flags describing format applicability
+ * @precision:  jpeg sample precision
+ * @is_rgb:     is an RGB pixel format
  */
 struct mxc_jpeg_fmt {
 	const char				*name;
@@ -56,10 +59,13 @@ struct mxc_jpeg_fmt {
 	enum v4l2_jpeg_chroma_subsampling	subsampling;
 	int					nc;
 	int					depth;
-	int					colplanes;
+	int					mem_planes;
+	int					comp_planes;
 	int					h_align;
 	int					v_align;
 	u32					flags;
+	u8					precision;
+	u8					is_rgb;
 };
 
 struct mxc_jpeg_desc {
@@ -82,6 +88,7 @@ struct mxc_jpeg_q_data {
 	int				h;
 	int				h_adjusted;
 	unsigned int			sequence;
+	struct v4l2_rect		crop;
 };
 
 struct mxc_jpeg_ctx {
@@ -90,9 +97,12 @@ struct mxc_jpeg_ctx {
 	struct mxc_jpeg_q_data		cap_q;
 	struct v4l2_fh			fh;
 	enum mxc_jpeg_enc_state		enc_state;
-	unsigned int			stopping;
-	unsigned int			stopped;
 	unsigned int			slot;
+	unsigned int			source_change;
+	bool				header_parsed;
+	struct v4l2_ctrl_handler	ctrl_handler;
+	u8				jpeg_quality;
+	struct delayed_work		task_timer;
 };
 
 struct mxc_jpeg_slot_data {
@@ -110,8 +120,8 @@ struct mxc_jpeg_dev {
 	spinlock_t			hw_lock; /* hardware access lock */
 	unsigned int			mode;
 	struct mutex			lock; /* v4l2 ioctls serialization */
-	struct clk			*clk_ipg;
-	struct clk			*clk_per;
+	struct clk_bulk_data		*clks;
+	int				num_clks;
 	struct platform_device		*pdev;
 	struct device			*dev;
 	void __iomem			*base_reg;

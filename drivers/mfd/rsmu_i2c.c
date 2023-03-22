@@ -106,9 +106,9 @@ static const struct regmap_config rsmu_sl_regmap_config = {
 	.can_multi_write = true,
 };
 
-static int rsmu_i2c_probe(struct i2c_client *client,
-			  const struct i2c_device_id *id)
+static int rsmu_i2c_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	const struct regmap_config *cfg;
 	struct rsmu_ddata *rsmu;
 	int ret;
@@ -146,13 +146,11 @@ static int rsmu_i2c_probe(struct i2c_client *client,
 	return rsmu_core_init(rsmu);
 }
 
-static int rsmu_i2c_remove(struct i2c_client *client)
+static void rsmu_i2c_remove(struct i2c_client *client)
 {
 	struct rsmu_ddata *rsmu = i2c_get_clientdata(client);
 
 	rsmu_core_exit(rsmu);
-
-	return 0;
 }
 
 static const struct i2c_device_id rsmu_i2c_id[] = {
@@ -182,7 +180,7 @@ static struct i2c_driver rsmu_i2c_driver = {
 		.name = "rsmu-i2c",
 		.of_match_table = of_match_ptr(rsmu_i2c_of_match),
 	},
-	.probe = rsmu_i2c_probe,
+	.probe_new = rsmu_i2c_probe,
 	.remove	= rsmu_i2c_remove,
 	.id_table = rsmu_i2c_id,
 };

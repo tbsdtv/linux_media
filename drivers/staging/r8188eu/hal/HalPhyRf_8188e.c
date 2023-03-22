@@ -69,7 +69,7 @@ void ODM_TxPwrTrackAdjust88E(struct odm_dm_struct *dm_odm, u8 Type,/*  0 = OFDM,
 /*-----------------------------------------------------------------------------
  * Function:	odm_TxPwrTrackSetPwr88E()
  *
- * Overview:	88E change all channel tx power accordign to flag.
+ * Overview:	88E change all channel tx power according to flag.
  *				OFDM & CCK are all different.
  *
  * Input:		NONE
@@ -463,6 +463,7 @@ void _PHY_SaveADDARegisters(struct adapter *adapt, u32 *ADDAReg, u32 *ADDABackup
 	}
 }
 
+/* FIXME: return an error to caller */
 static void _PHY_SaveMACRegisters(
 		struct adapter *adapt,
 		u32 *MACReg,
@@ -470,11 +471,20 @@ static void _PHY_SaveMACRegisters(
 	)
 {
 	u32 i;
+	int res;
 
-	for (i = 0; i < (IQK_MAC_REG_NUM - 1); i++)
-		MACBackup[i] = rtw_read8(adapt, MACReg[i]);
+	for (i = 0; i < (IQK_MAC_REG_NUM - 1); i++) {
+		u8 reg;
 
-	MACBackup[i] = rtw_read32(adapt, MACReg[i]);
+		res = rtw_read8(adapt, MACReg[i], &reg);
+		if (res)
+			return;
+
+		MACBackup[i] = reg;
+	}
+
+	res = rtw_read32(adapt, MACReg[i], MACBackup + i);
+	(void)res;
 }
 
 static void reload_adda_reg(struct adapter *adapt, u32 *ADDAReg, u32 *ADDABackup, u32 RegiesterNum)
@@ -573,7 +583,7 @@ static bool phy_SimularityCompare_8188E(
 			tmp2 = resulta[c2][i];
 		}
 
-		diff = (tmp1 > tmp2) ? (tmp1 - tmp2) : (tmp2 - tmp1);
+		diff = abs(tmp1 - tmp2);
 
 		if (diff > MAX_TOLERANCE) {
 			if ((i == 2 || i == 6) && !sim_bitmap) {
@@ -739,9 +749,12 @@ static void phy_LCCalibrate_8188E(struct adapter *adapt)
 {
 	u8 tmpreg;
 	u32 RF_Amode = 0, LC_Cal;
+	int res;
 
 	/* Check continuous TX and Packet TX */
-	tmpreg = rtw_read8(adapt, 0xd03);
+	res = rtw_read8(adapt, 0xd03, &tmpreg);
+	if (res)
+		return;
 
 	if ((tmpreg & 0x70) != 0)			/* Deal with contisuous TX case */
 		rtw_write8(adapt, 0xd03, tmpreg & 0x8F);	/* disable all continuous TX */
@@ -868,14 +881,6 @@ void PHY_IQCalibrate_8188E(struct adapter *adapt, bool recovery)
 	}
 	if (RegE94 != 0)
 		patha_fill_iqk(adapt, pathaok, result, final_candidate, (RegEA4 == 0));
-
-/* To Fix BSOD when final_candidate is 0xff */
-/* by sherry 20120321 */
-	if (final_candidate < 4) {
-		for (i = 0; i < IQK_Matrix_REG_NUM; i++)
-			dm_odm->RFCalibrateInfo.IQKMatrixRegSetting.Value[0][i] = result[final_candidate][i];
-		dm_odm->RFCalibrateInfo.IQKMatrixRegSetting.bIQKDone = true;
-	}
 
 	_PHY_SaveADDARegisters(adapt, IQK_BB_REG_92C, dm_odm->RFCalibrateInfo.IQK_BB_backup_recover, 9);
 }

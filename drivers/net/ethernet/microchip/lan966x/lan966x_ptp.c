@@ -3,6 +3,8 @@
 #include <linux/ptp_classify.h>
 
 #include "lan966x_main.h"
+#include "vcap_api.h"
+#include "vcap_api_client.h"
 
 #define LAN966X_MAX_PTP_ID	512
 
@@ -16,7 +18,18 @@
  */
 #define LAN966X_1PPB_FORMAT		3480517749LL
 
-#define TOD_ACC_PIN		0x5
+#define TOD_ACC_PIN		0x7
+
+/* This represents the base rule ID for the PTP rules that are added in the
+ * VCAP to trap frames to CPU. This number needs to be bigger than the maximum
+ * number of entries that can exist in the VCAP.
+ */
+#define LAN966X_VCAP_PTP_RULE_ID	1000000
+#define LAN966X_VCAP_L2_PTP_TRAP	(LAN966X_VCAP_PTP_RULE_ID + 0)
+#define LAN966X_VCAP_IPV4_EV_PTP_TRAP	(LAN966X_VCAP_PTP_RULE_ID + 1)
+#define LAN966X_VCAP_IPV4_GEN_PTP_TRAP	(LAN966X_VCAP_PTP_RULE_ID + 2)
+#define LAN966X_VCAP_IPV6_EV_PTP_TRAP	(LAN966X_VCAP_PTP_RULE_ID + 3)
+#define LAN966X_VCAP_IPV6_GEN_PTP_TRAP	(LAN966X_VCAP_PTP_RULE_ID + 4)
 
 enum {
 	PTP_PIN_ACTION_IDLE = 0,
@@ -35,18 +48,225 @@ static u64 lan966x_ptp_get_nominal_value(void)
 	return 0x304d4873ecade305;
 }
 
+static int lan966x_ptp_add_trap(struct lan966x_port *port,
+				int (*add_ptp_key)(struct vcap_rule *vrule,
+						   struct lan966x_port*),
+				u32 rule_id,
+				u16 proto)
+{
+	struct lan966x *lan966x = port->lan966x;
+	struct vcap_rule *vrule;
+	int err;
+
+	vrule = vcap_get_rule(lan966x->vcap_ctrl, rule_id);
+	if (vrule) {
+		u32 value, mask;
+
+		/* Just modify the ingress port mask and exit */
+		vcap_rule_get_key_u32(vrule, VCAP_KF_IF_IGR_PORT_MASK,
+				      &value, &mask);
+		mask &= ~BIT(port->chip_port);
+		vcap_rule_mod_key_u32(vrule, VCAP_KF_IF_IGR_PORT_MASK,
+				      value, mask);
+
+		err = vcap_mod_rule(vrule);
+		goto free_rule;
+	}
+
+	vrule = vcap_alloc_rule(lan966x->vcap_ctrl, port->dev,
+				LAN966X_VCAP_CID_IS2_L0,
+				VCAP_USER_PTP, 0, rule_id);
+	if (IS_ERR(vrule))
+		return PTR_ERR(vrule);
+
+	err = add_ptp_key(vrule, port);
+	if (err)
+		goto free_rule;
+
+	err = vcap_set_rule_set_actionset(vrule, VCAP_AFS_BASE_TYPE);
+	err |= vcap_rule_add_action_bit(vrule, VCAP_AF_CPU_COPY_ENA, VCAP_BIT_1);
+	err |= vcap_rule_add_action_u32(vrule, VCAP_AF_MASK_MODE, LAN966X_PMM_REPLACE);
+	err |= vcap_val_rule(vrule, proto);
+	if (err)
+		goto free_rule;
+
+	err = vcap_add_rule(vrule);
+
+free_rule:
+	/* Free the local copy of the rule */
+	vcap_free_rule(vrule);
+	return err;
+}
+
+static int lan966x_ptp_del_trap(struct lan966x_port *port,
+				u32 rule_id)
+{
+	struct lan966x *lan966x = port->lan966x;
+	struct vcap_rule *vrule;
+	u32 value, mask;
+	int err;
+
+	vrule = vcap_get_rule(lan966x->vcap_ctrl, rule_id);
+	if (!vrule)
+		return -EEXIST;
+
+	vcap_rule_get_key_u32(vrule, VCAP_KF_IF_IGR_PORT_MASK, &value, &mask);
+	mask |= BIT(port->chip_port);
+
+	/* No other port requires this trap, so it is safe to remove it */
+	if (mask == GENMASK(lan966x->num_phys_ports, 0)) {
+		err = vcap_del_rule(lan966x->vcap_ctrl, port->dev, rule_id);
+		goto free_rule;
+	}
+
+	vcap_rule_mod_key_u32(vrule, VCAP_KF_IF_IGR_PORT_MASK, value, mask);
+	err = vcap_mod_rule(vrule);
+
+free_rule:
+	vcap_free_rule(vrule);
+	return err;
+}
+
+static int lan966x_ptp_add_l2_key(struct vcap_rule *vrule,
+				  struct lan966x_port *port)
+{
+	return vcap_rule_add_key_u32(vrule, VCAP_KF_ETYPE, ETH_P_1588, ~0);
+}
+
+static int lan966x_ptp_add_ip_event_key(struct vcap_rule *vrule,
+					struct lan966x_port *port)
+{
+	return vcap_rule_add_key_u32(vrule, VCAP_KF_L4_DPORT, PTP_EV_PORT, ~0) ||
+	       vcap_rule_add_key_bit(vrule, VCAP_KF_TCP_IS, VCAP_BIT_0);
+}
+
+static int lan966x_ptp_add_ip_general_key(struct vcap_rule *vrule,
+					  struct lan966x_port *port)
+{
+	return vcap_rule_add_key_u32(vrule, VCAP_KF_L4_DPORT, PTP_GEN_PORT, ~0) ||
+	       vcap_rule_add_key_bit(vrule, VCAP_KF_TCP_IS, VCAP_BIT_0);
+}
+
+static int lan966x_ptp_add_l2_rule(struct lan966x_port *port)
+{
+	return lan966x_ptp_add_trap(port, lan966x_ptp_add_l2_key,
+				    LAN966X_VCAP_L2_PTP_TRAP, ETH_P_ALL);
+}
+
+static int lan966x_ptp_add_ipv4_rules(struct lan966x_port *port)
+{
+	int err;
+
+	err = lan966x_ptp_add_trap(port, lan966x_ptp_add_ip_event_key,
+				   LAN966X_VCAP_IPV4_EV_PTP_TRAP, ETH_P_IP);
+	if (err)
+		return err;
+
+	err = lan966x_ptp_add_trap(port, lan966x_ptp_add_ip_general_key,
+				   LAN966X_VCAP_IPV4_GEN_PTP_TRAP, ETH_P_IP);
+	if (err)
+		lan966x_ptp_del_trap(port, LAN966X_VCAP_IPV4_EV_PTP_TRAP);
+
+	return err;
+}
+
+static int lan966x_ptp_add_ipv6_rules(struct lan966x_port *port)
+{
+	int err;
+
+	err = lan966x_ptp_add_trap(port, lan966x_ptp_add_ip_event_key,
+				   LAN966X_VCAP_IPV6_EV_PTP_TRAP, ETH_P_IPV6);
+	if (err)
+		return err;
+
+	err = lan966x_ptp_add_trap(port, lan966x_ptp_add_ip_general_key,
+				   LAN966X_VCAP_IPV6_GEN_PTP_TRAP, ETH_P_IPV6);
+	if (err)
+		lan966x_ptp_del_trap(port, LAN966X_VCAP_IPV6_EV_PTP_TRAP);
+
+	return err;
+}
+
+static int lan966x_ptp_del_l2_rule(struct lan966x_port *port)
+{
+	return lan966x_ptp_del_trap(port, LAN966X_VCAP_L2_PTP_TRAP);
+}
+
+static int lan966x_ptp_del_ipv4_rules(struct lan966x_port *port)
+{
+	int err;
+
+	err = lan966x_ptp_del_trap(port, LAN966X_VCAP_IPV4_EV_PTP_TRAP);
+	err |= lan966x_ptp_del_trap(port, LAN966X_VCAP_IPV4_GEN_PTP_TRAP);
+
+	return err;
+}
+
+static int lan966x_ptp_del_ipv6_rules(struct lan966x_port *port)
+{
+	int err;
+
+	err = lan966x_ptp_del_trap(port, LAN966X_VCAP_IPV6_EV_PTP_TRAP);
+	err |= lan966x_ptp_del_trap(port, LAN966X_VCAP_IPV6_GEN_PTP_TRAP);
+
+	return err;
+}
+
+static int lan966x_ptp_add_traps(struct lan966x_port *port)
+{
+	int err;
+
+	err = lan966x_ptp_add_l2_rule(port);
+	if (err)
+		goto err_l2;
+
+	err = lan966x_ptp_add_ipv4_rules(port);
+	if (err)
+		goto err_ipv4;
+
+	err = lan966x_ptp_add_ipv6_rules(port);
+	if (err)
+		goto err_ipv6;
+
+	return err;
+
+err_ipv6:
+	lan966x_ptp_del_ipv4_rules(port);
+err_ipv4:
+	lan966x_ptp_del_l2_rule(port);
+err_l2:
+	return err;
+}
+
+int lan966x_ptp_del_traps(struct lan966x_port *port)
+{
+	int err;
+
+	err = lan966x_ptp_del_l2_rule(port);
+	err |= lan966x_ptp_del_ipv4_rules(port);
+	err |= lan966x_ptp_del_ipv6_rules(port);
+
+	return err;
+}
+
+int lan966x_ptp_setup_traps(struct lan966x_port *port, struct ifreq *ifr)
+{
+	struct hwtstamp_config cfg;
+
+	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
+		return -EFAULT;
+
+	if (cfg.rx_filter == HWTSTAMP_FILTER_NONE)
+		return lan966x_ptp_del_traps(port);
+	else
+		return lan966x_ptp_add_traps(port);
+}
+
 int lan966x_ptp_hwtstamp_set(struct lan966x_port *port, struct ifreq *ifr)
 {
 	struct lan966x *lan966x = port->lan966x;
 	struct hwtstamp_config cfg;
 	struct lan966x_phc *phc;
-
-	/* For now don't allow to run ptp on ports that are part of a bridge,
-	 * because in case of transparent clock the HW will still forward the
-	 * frames, so there would be duplicate frames
-	 */
-	if (lan966x->bridge_mask & BIT(port->chip_port))
-		return -EINVAL;
 
 	if (copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg)))
 		return -EFAULT;
@@ -321,6 +541,63 @@ irqreturn_t lan966x_ptp_irq_handler(int irq, void *args)
 	return IRQ_HANDLED;
 }
 
+irqreturn_t lan966x_ptp_ext_irq_handler(int irq, void *args)
+{
+	struct lan966x *lan966x = args;
+	struct lan966x_phc *phc;
+	unsigned long flags;
+	u64 time = 0;
+	time64_t s;
+	int pin, i;
+	s64 ns;
+
+	if (!(lan_rd(lan966x, PTP_PIN_INTR)))
+		return IRQ_NONE;
+
+	/* Go through all domains and see which pin generated the interrupt */
+	for (i = 0; i < LAN966X_PHC_COUNT; ++i) {
+		struct ptp_clock_event ptp_event = {0};
+
+		phc = &lan966x->phc[i];
+		pin = ptp_find_pin_unlocked(phc->clock, PTP_PF_EXTTS, 0);
+		if (pin == -1)
+			continue;
+
+		if (!(lan_rd(lan966x, PTP_PIN_INTR) & BIT(pin)))
+			continue;
+
+		spin_lock_irqsave(&lan966x->ptp_clock_lock, flags);
+
+		/* Enable to get the new interrupt.
+		 * By writing 1 it clears the bit
+		 */
+		lan_wr(BIT(pin), lan966x, PTP_PIN_INTR);
+
+		/* Get current time */
+		s = lan_rd(lan966x, PTP_TOD_SEC_MSB(pin));
+		s <<= 32;
+		s |= lan_rd(lan966x, PTP_TOD_SEC_LSB(pin));
+		ns = lan_rd(lan966x, PTP_TOD_NSEC(pin));
+		ns &= PTP_TOD_NSEC_TOD_NSEC;
+
+		spin_unlock_irqrestore(&lan966x->ptp_clock_lock, flags);
+
+		if ((ns & 0xFFFFFFF0) == 0x3FFFFFF0) {
+			s--;
+			ns &= 0xf;
+			ns += 999999984;
+		}
+		time = ktime_set(s, ns);
+
+		ptp_event.index = pin;
+		ptp_event.timestamp = time;
+		ptp_event.type = PTP_CLOCK_EXTTS;
+		ptp_clock_event(phc->clock, &ptp_event);
+	}
+
+	return IRQ_HANDLED;
+}
+
 static int lan966x_ptp_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 {
 	struct lan966x_phc *phc = container_of(ptp, struct lan966x_phc, info);
@@ -407,8 +684,7 @@ static int lan966x_ptp_settime64(struct ptp_clock_info *ptp,
 	return 0;
 }
 
-static int lan966x_ptp_gettime64(struct ptp_clock_info *ptp,
-				 struct timespec64 *ts)
+int lan966x_ptp_gettime64(struct ptp_clock_info *ptp, struct timespec64 *ts)
 {
 	struct lan966x_phc *phc = container_of(ptp, struct lan966x_phc, info);
 	struct lan966x *lan966x = phc->lan966x;
@@ -493,6 +769,207 @@ static int lan966x_ptp_adjtime(struct ptp_clock_info *ptp, s64 delta)
 	return 0;
 }
 
+static int lan966x_ptp_verify(struct ptp_clock_info *ptp, unsigned int pin,
+			      enum ptp_pin_function func, unsigned int chan)
+{
+	struct lan966x_phc *phc = container_of(ptp, struct lan966x_phc, info);
+	struct lan966x *lan966x = phc->lan966x;
+	struct ptp_clock_info *info;
+	int i;
+
+	/* Currently support only 1 channel */
+	if (chan != 0)
+		return -1;
+
+	switch (func) {
+	case PTP_PF_NONE:
+	case PTP_PF_PEROUT:
+	case PTP_PF_EXTTS:
+		break;
+	default:
+		return -1;
+	}
+
+	/* The PTP pins are shared by all the PHC. So it is required to see if
+	 * the pin is connected to another PHC. The pin is connected to another
+	 * PHC if that pin already has a function on that PHC.
+	 */
+	for (i = 0; i < LAN966X_PHC_COUNT; ++i) {
+		info = &lan966x->phc[i].info;
+
+		/* Ignore the check with ourself */
+		if (ptp == info)
+			continue;
+
+		if (info->pin_config[pin].func == PTP_PF_PEROUT ||
+		    info->pin_config[pin].func == PTP_PF_EXTTS)
+			return -1;
+	}
+
+	return 0;
+}
+
+static int lan966x_ptp_perout(struct ptp_clock_info *ptp,
+			      struct ptp_clock_request *rq, int on)
+{
+	struct lan966x_phc *phc = container_of(ptp, struct lan966x_phc, info);
+	struct lan966x *lan966x = phc->lan966x;
+	struct timespec64 ts_phase, ts_period;
+	unsigned long flags;
+	s64 wf_high, wf_low;
+	bool pps = false;
+	int pin;
+
+	if (rq->perout.flags & ~(PTP_PEROUT_DUTY_CYCLE |
+				 PTP_PEROUT_PHASE))
+		return -EOPNOTSUPP;
+
+	pin = ptp_find_pin(phc->clock, PTP_PF_PEROUT, rq->perout.index);
+	if (pin == -1 || pin >= LAN966X_PHC_PINS_NUM)
+		return -EINVAL;
+
+	if (!on) {
+		spin_lock_irqsave(&lan966x->ptp_clock_lock, flags);
+		lan_rmw(PTP_PIN_CFG_PIN_ACTION_SET(PTP_PIN_ACTION_IDLE) |
+			PTP_PIN_CFG_PIN_DOM_SET(phc->index) |
+			PTP_PIN_CFG_PIN_SYNC_SET(0),
+			PTP_PIN_CFG_PIN_ACTION |
+			PTP_PIN_CFG_PIN_DOM |
+			PTP_PIN_CFG_PIN_SYNC,
+			lan966x, PTP_PIN_CFG(pin));
+		spin_unlock_irqrestore(&lan966x->ptp_clock_lock, flags);
+		return 0;
+	}
+
+	if (rq->perout.period.sec == 1 &&
+	    rq->perout.period.nsec == 0)
+		pps = true;
+
+	if (rq->perout.flags & PTP_PEROUT_PHASE) {
+		ts_phase.tv_sec = rq->perout.phase.sec;
+		ts_phase.tv_nsec = rq->perout.phase.nsec;
+	} else {
+		ts_phase.tv_sec = rq->perout.start.sec;
+		ts_phase.tv_nsec = rq->perout.start.nsec;
+	}
+
+	if (ts_phase.tv_sec || (ts_phase.tv_nsec && !pps)) {
+		dev_warn(lan966x->dev,
+			 "Absolute time not supported!\n");
+		return -EINVAL;
+	}
+
+	if (rq->perout.flags & PTP_PEROUT_DUTY_CYCLE) {
+		struct timespec64 ts_on;
+
+		ts_on.tv_sec = rq->perout.on.sec;
+		ts_on.tv_nsec = rq->perout.on.nsec;
+
+		wf_high = timespec64_to_ns(&ts_on);
+	} else {
+		wf_high = 5000;
+	}
+
+	if (pps) {
+		spin_lock_irqsave(&lan966x->ptp_clock_lock, flags);
+		lan_wr(PTP_WF_LOW_PERIOD_PIN_WFL(ts_phase.tv_nsec),
+		       lan966x, PTP_WF_LOW_PERIOD(pin));
+		lan_wr(PTP_WF_HIGH_PERIOD_PIN_WFH(wf_high),
+		       lan966x, PTP_WF_HIGH_PERIOD(pin));
+		lan_rmw(PTP_PIN_CFG_PIN_ACTION_SET(PTP_PIN_ACTION_CLOCK) |
+			PTP_PIN_CFG_PIN_DOM_SET(phc->index) |
+			PTP_PIN_CFG_PIN_SYNC_SET(3),
+			PTP_PIN_CFG_PIN_ACTION |
+			PTP_PIN_CFG_PIN_DOM |
+			PTP_PIN_CFG_PIN_SYNC,
+			lan966x, PTP_PIN_CFG(pin));
+		spin_unlock_irqrestore(&lan966x->ptp_clock_lock, flags);
+		return 0;
+	}
+
+	ts_period.tv_sec = rq->perout.period.sec;
+	ts_period.tv_nsec = rq->perout.period.nsec;
+
+	wf_low = timespec64_to_ns(&ts_period);
+	wf_low -= wf_high;
+
+	spin_lock_irqsave(&lan966x->ptp_clock_lock, flags);
+	lan_wr(PTP_WF_LOW_PERIOD_PIN_WFL(wf_low),
+	       lan966x, PTP_WF_LOW_PERIOD(pin));
+	lan_wr(PTP_WF_HIGH_PERIOD_PIN_WFH(wf_high),
+	       lan966x, PTP_WF_HIGH_PERIOD(pin));
+	lan_rmw(PTP_PIN_CFG_PIN_ACTION_SET(PTP_PIN_ACTION_CLOCK) |
+		PTP_PIN_CFG_PIN_DOM_SET(phc->index) |
+		PTP_PIN_CFG_PIN_SYNC_SET(0),
+		PTP_PIN_CFG_PIN_ACTION |
+		PTP_PIN_CFG_PIN_DOM |
+		PTP_PIN_CFG_PIN_SYNC,
+		lan966x, PTP_PIN_CFG(pin));
+	spin_unlock_irqrestore(&lan966x->ptp_clock_lock, flags);
+
+	return 0;
+}
+
+static int lan966x_ptp_extts(struct ptp_clock_info *ptp,
+			     struct ptp_clock_request *rq, int on)
+{
+	struct lan966x_phc *phc = container_of(ptp, struct lan966x_phc, info);
+	struct lan966x *lan966x = phc->lan966x;
+	unsigned long flags;
+	int pin;
+	u32 val;
+
+	if (lan966x->ptp_ext_irq <= 0)
+		return -EOPNOTSUPP;
+
+	/* Reject requests with unsupported flags */
+	if (rq->extts.flags & ~(PTP_ENABLE_FEATURE |
+				PTP_RISING_EDGE |
+				PTP_STRICT_FLAGS))
+		return -EOPNOTSUPP;
+
+	pin = ptp_find_pin(phc->clock, PTP_PF_EXTTS, rq->extts.index);
+	if (pin == -1 || pin >= LAN966X_PHC_PINS_NUM)
+		return -EINVAL;
+
+	spin_lock_irqsave(&lan966x->ptp_clock_lock, flags);
+	lan_rmw(PTP_PIN_CFG_PIN_ACTION_SET(PTP_PIN_ACTION_SAVE) |
+		PTP_PIN_CFG_PIN_SYNC_SET(on ? 3 : 0) |
+		PTP_PIN_CFG_PIN_DOM_SET(phc->index) |
+		PTP_PIN_CFG_PIN_SELECT_SET(pin),
+		PTP_PIN_CFG_PIN_ACTION |
+		PTP_PIN_CFG_PIN_SYNC |
+		PTP_PIN_CFG_PIN_DOM |
+		PTP_PIN_CFG_PIN_SELECT,
+		lan966x, PTP_PIN_CFG(pin));
+
+	val = lan_rd(lan966x, PTP_PIN_INTR_ENA);
+	if (on)
+		val |= BIT(pin);
+	else
+		val &= ~BIT(pin);
+	lan_wr(val, lan966x, PTP_PIN_INTR_ENA);
+
+	spin_unlock_irqrestore(&lan966x->ptp_clock_lock, flags);
+
+	return 0;
+}
+
+static int lan966x_ptp_enable(struct ptp_clock_info *ptp,
+			      struct ptp_clock_request *rq, int on)
+{
+	switch (rq->type) {
+	case PTP_CLK_REQ_PEROUT:
+		return lan966x_ptp_perout(ptp, rq, on);
+	case PTP_CLK_REQ_EXTTS:
+		return lan966x_ptp_extts(ptp, rq, on);
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
 static struct ptp_clock_info lan966x_ptp_clock_info = {
 	.owner		= THIS_MODULE,
 	.name		= "lan966x ptp",
@@ -501,6 +978,11 @@ static struct ptp_clock_info lan966x_ptp_clock_info = {
 	.settime64	= lan966x_ptp_settime64,
 	.adjtime	= lan966x_ptp_adjtime,
 	.adjfine	= lan966x_ptp_adjfine,
+	.verify		= lan966x_ptp_verify,
+	.enable		= lan966x_ptp_enable,
+	.n_per_out	= LAN966X_PHC_PINS_NUM,
+	.n_ext_ts	= LAN966X_PHC_PINS_NUM,
+	.n_pins		= LAN966X_PHC_PINS_NUM,
 };
 
 static int lan966x_ptp_phc_init(struct lan966x *lan966x,
@@ -508,8 +990,19 @@ static int lan966x_ptp_phc_init(struct lan966x *lan966x,
 				struct ptp_clock_info *clock_info)
 {
 	struct lan966x_phc *phc = &lan966x->phc[index];
+	struct ptp_pin_desc *p;
+	int i;
+
+	for (i = 0; i < LAN966X_PHC_PINS_NUM; i++) {
+		p = &phc->pins[i];
+
+		snprintf(p->name, sizeof(p->name), "pin%d", i);
+		p->index = i;
+		p->func = PTP_PF_NONE;
+	}
 
 	phc->info = *clock_info;
+	phc->info.pin_config = &phc->pins[0];
 	phc->clock = ptp_clock_register(&phc->info, lan966x->dev);
 	if (IS_ERR(phc->clock))
 		return PTR_ERR(phc->clock);
@@ -580,6 +1073,9 @@ void lan966x_ptp_deinit(struct lan966x *lan966x)
 	struct lan966x_port *port;
 	int i;
 
+	if (!lan966x->ptp)
+		return;
+
 	for (i = 0; i < lan966x->num_phys_ports; i++) {
 		port = lan966x->ports[i];
 		if (!port)
@@ -615,4 +1111,10 @@ void lan966x_ptp_rxtstamp(struct lan966x *lan966x, struct sk_buff *skb,
 
 	shhwtstamps = skb_hwtstamps(skb);
 	shhwtstamps->hwtstamp = full_ts_in_ns;
+}
+
+u32 lan966x_ptp_get_period_ps(void)
+{
+	/* This represents the system clock period in picoseconds */
+	return 15125;
 }

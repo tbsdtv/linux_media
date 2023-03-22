@@ -127,7 +127,8 @@ enum{
 #define Dmaout_adapter6  0xa800
 #define Dmaout_adapter7  0xb800
 
-#define DMA_BASEADDRESS(_n) ((_n<4)?(0x8000+0x1000*_n):(0x8800+0x1000*(_n-4)))
+#define DMA_BASEADDRESS(_type,_n) ((_type == 0x6032)?(0x8000+0x200*_n):(0x8000+0x1000*_n))
+
 #define DMA_MASK(_n)	(0x18 + 4*_n )
 #define DMA_STATUS(_n) (0x0010<<_n)
 

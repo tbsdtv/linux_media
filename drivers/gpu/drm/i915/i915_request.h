@@ -196,6 +196,8 @@ struct i915_request {
 	struct dma_fence fence;
 	spinlock_t lock;
 
+	struct drm_i915_private *i915;
+
 	/**
 	 * Context and ring buffer related to this request
 	 * Contexts are refcounted, so when this request is associated with a
@@ -345,6 +347,11 @@ struct i915_request {
 #define	GUC_PRIO_INIT	0xff
 #define	GUC_PRIO_FINI	0xfe
 	u8 guc_prio;
+
+	/**
+	 * @hucq: wait queue entry used to wait on the HuC load to complete
+	 */
+	wait_queue_entry_t hucq;
 
 	I915_SELFTEST_DECLARE(struct {
 		struct list_head link;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 /* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2019-2021 Linaro Ltd.
+ * Copyright (C) 2019-2022 Linaro Ltd.
  */
 
 #include <linux/types.h>
@@ -23,8 +23,6 @@
 #include "ipa_gsi.h"
 #include "ipa_power.h"
 
-#define atomic_dec_not_zero(v)	atomic_add_unless((v), -1, 0)
-
 /* Hardware is told about receive buffers once a "batch" has been queued */
 #define IPA_REPLENISH_BATCH	16		/* Must be non-zero */
 
@@ -35,7 +33,6 @@
 #define IPA_ENDPOINT_QMAP_METADATA_MASK		0x000000ff /* host byte order */
 
 #define IPA_ENDPOINT_RESET_AGGR_RETRY_MAX	3
-#define IPA_AGGR_TIME_LIMIT			500	/* microseconds */
 
 /** enum ipa_status_opcode - status element opcode hardware values */
 enum ipa_status_opcode {
@@ -73,12 +70,22 @@ struct ipa_status {
 #define IPA_STATUS_FLAGS1_RT_RULE_ID_FMASK	GENMASK(31, 22)
 #define IPA_STATUS_FLAGS2_TAG_FMASK		GENMASK_ULL(63, 16)
 
-static u32 aggr_byte_limit_max(enum ipa_version version)
+/* Compute the aggregation size value to use for a given buffer size */
+static u32 ipa_aggr_size_kb(u32 rx_buffer_size, bool aggr_hard_limit)
 {
-	if (version < IPA_VERSION_4_5)
-		return field_max(aggr_byte_limit_fmask(true));
+	/* A hard aggregation limit will not be crossed; aggregation closes
+	 * if saving incoming data would cross the hard byte limit boundary.
+	 *
+	 * With a soft limit, aggregation closes *after* the size boundary
+	 * has been crossed.  In that case the limit must leave enough space
+	 * after that limit to receive a full MTU of data plus overhead.
+	 */
+	if (!aggr_hard_limit)
+		rx_buffer_size -= IPA_MTU + IPA_RX_BUFFER_OVERHEAD;
 
-	return field_max(aggr_byte_limit_fmask(false));
+	/* The byte limit is encoded as a number of kilobytes */
+
+	return rx_buffer_size / SZ_1K;
 }
 
 static bool ipa_endpoint_data_valid_one(struct ipa *ipa, u32 count,
@@ -93,7 +100,10 @@ static bool ipa_endpoint_data_valid_one(struct ipa *ipa, u32 count,
 		return true;
 
 	if (!data->toward_ipa) {
+		const struct ipa_endpoint_rx *rx_config;
+		const struct ipa_reg *reg;
 		u32 buffer_size;
+		u32 aggr_size;
 		u32 limit;
 
 		if (data->endpoint.filter_support) {
@@ -107,8 +117,10 @@ static bool ipa_endpoint_data_valid_one(struct ipa *ipa, u32 count,
 		if (data->ee_id != GSI_EE_AP)
 			return true;
 
-		buffer_size = data->endpoint.config.rx.buffer_size;
+		rx_config = &data->endpoint.config.rx;
+
 		/* The buffer size must hold an MTU plus overhead */
+		buffer_size = rx_config->buffer_size;
 		limit = IPA_MTU + IPA_RX_BUFFER_OVERHEAD;
 		if (buffer_size < limit) {
 			dev_err(dev, "RX buffer size too small for RX endpoint %u (%u < %u)\n",
@@ -116,29 +128,60 @@ static bool ipa_endpoint_data_valid_one(struct ipa *ipa, u32 count,
 			return false;
 		}
 
-		/* For an endpoint supporting receive aggregation, the
-		 * aggregation byte limit defines the point at which an
-		 * aggregation window will close.  It is programmed into the
-		 * IPA hardware as a number of KB.  We don't use "hard byte
-		 * limit" aggregation, so we need to supply enough space in
-		 * a receive buffer to hold a complete MTU plus normal skb
-		 * overhead *after* that aggregation byte limit has been
-		 * crossed.
-		 *
-		 * This check just ensures the receive buffer size doesn't
-		 * exceed what's representable in the aggregation limit field.
-		 */
-		if (data->endpoint.config.aggregation) {
-			limit += SZ_1K * aggr_byte_limit_max(ipa->version);
-			if (buffer_size > limit) {
-				dev_err(dev, "RX buffer size too large for aggregated RX endpoint %u (%u > %u)\n",
-					data->endpoint_id, buffer_size, limit);
+		if (!data->endpoint.config.aggregation) {
+			bool result = true;
 
-				return false;
+			/* No aggregation; check for bogus aggregation data */
+			if (rx_config->aggr_time_limit) {
+				dev_err(dev,
+					"time limit with no aggregation for RX endpoint %u\n",
+					data->endpoint_id);
+				result = false;
 			}
+
+			if (rx_config->aggr_hard_limit) {
+				dev_err(dev, "hard limit with no aggregation for RX endpoint %u\n",
+					data->endpoint_id);
+				result = false;
+			}
+
+			if (rx_config->aggr_close_eof) {
+				dev_err(dev, "close EOF with no aggregation for RX endpoint %u\n",
+					data->endpoint_id);
+				result = false;
+			}
+
+			return result;	/* Nothing more to check */
+		}
+
+		/* For an endpoint supporting receive aggregation, the byte
+		 * limit defines the point at which aggregation closes.  This
+		 * check ensures the receive buffer size doesn't result in a
+		 * limit that exceeds what's representable in the aggregation
+		 * byte limit field.
+		 */
+		aggr_size = ipa_aggr_size_kb(buffer_size - NET_SKB_PAD,
+					     rx_config->aggr_hard_limit);
+		reg = ipa_reg(ipa, ENDP_INIT_AGGR);
+
+		limit = ipa_reg_field_max(reg, BYTE_LIMIT);
+		if (aggr_size > limit) {
+			dev_err(dev, "aggregated size too large for RX endpoint %u (%u KB > %u KB)\n",
+				data->endpoint_id, aggr_size, limit);
+
+			return false;
 		}
 
 		return true;	/* Nothing more to check for RX */
+	}
+
+	/* Starting with IPA v4.5 sequencer replication is obsolete */
+	if (ipa->version >= IPA_VERSION_4_5) {
+		if (data->endpoint.config.tx.seq_rep_type) {
+			dev_err(dev, "no-zero seq_rep_type TX endpoint %u\n",
+				data->endpoint_id);
+			return false;
+		}
 	}
 
 	if (data->endpoint.config.status_enable) {
@@ -200,42 +243,47 @@ static bool ipa_endpoint_data_valid_one(struct ipa *ipa, u32 count,
 	return true;
 }
 
-static bool ipa_endpoint_data_valid(struct ipa *ipa, u32 count,
-				    const struct ipa_gsi_endpoint_data *data)
+/* Validate endpoint configuration data.  Return max defined endpoint ID */
+static u32 ipa_endpoint_max(struct ipa *ipa, u32 count,
+			    const struct ipa_gsi_endpoint_data *data)
 {
 	const struct ipa_gsi_endpoint_data *dp = data;
 	struct device *dev = &ipa->pdev->dev;
 	enum ipa_endpoint_name name;
+	u32 max;
 
 	if (count > IPA_ENDPOINT_COUNT) {
 		dev_err(dev, "too many endpoints specified (%u > %u)\n",
 			count, IPA_ENDPOINT_COUNT);
-		return false;
+		return 0;
 	}
 
 	/* Make sure needed endpoints have defined data */
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_COMMAND_TX])) {
 		dev_err(dev, "command TX endpoint not defined\n");
-		return false;
+		return 0;
 	}
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_LAN_RX])) {
 		dev_err(dev, "LAN RX endpoint not defined\n");
-		return false;
+		return 0;
 	}
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_MODEM_TX])) {
 		dev_err(dev, "AP->modem TX endpoint not defined\n");
-		return false;
+		return 0;
 	}
 	if (ipa_gsi_endpoint_data_empty(&data[IPA_ENDPOINT_AP_MODEM_RX])) {
 		dev_err(dev, "AP<-modem RX endpoint not defined\n");
-		return false;
+		return 0;
 	}
 
-	for (name = 0; name < count; name++, dp++)
+	max = 0;
+	for (name = 0; name < count; name++, dp++) {
 		if (!ipa_endpoint_data_valid_one(ipa, count, data, dp))
-			return false;
+			return 0;
+		max = max_t(u32, max, dp->endpoint_id);
+	}
 
-	return true;
+	return max;
 }
 
 /* Allocate a transaction to use on a non-command endpoint */
@@ -258,8 +306,10 @@ static struct gsi_trans *ipa_endpoint_trans_alloc(struct ipa_endpoint *endpoint,
 static bool
 ipa_endpoint_init_ctrl(struct ipa_endpoint *endpoint, bool suspend_delay)
 {
-	u32 offset = IPA_REG_ENDP_INIT_CTRL_N_OFFSET(endpoint->endpoint_id);
 	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
+	u32 field_id;
+	u32 offset;
 	bool state;
 	u32 mask;
 	u32 val;
@@ -269,9 +319,13 @@ ipa_endpoint_init_ctrl(struct ipa_endpoint *endpoint, bool suspend_delay)
 	else
 		WARN_ON(ipa->version >= IPA_VERSION_4_0);
 
-	mask = endpoint->toward_ipa ? ENDP_DELAY_FMASK : ENDP_SUSPEND_FMASK;
-
+	reg = ipa_reg(ipa, ENDP_INIT_CTRL);
+	offset = ipa_reg_n_offset(reg, endpoint->endpoint_id);
 	val = ioread32(ipa->reg_virt + offset);
+
+	field_id = endpoint->toward_ipa ? ENDP_DELAY : ENDP_SUSPEND;
+	mask = ipa_reg_bit(reg, field_id);
+
 	state = !!(val & mask);
 
 	/* Don't bother if it's already in the requested state */
@@ -296,27 +350,32 @@ ipa_endpoint_program_delay(struct ipa_endpoint *endpoint, bool enable)
 
 static bool ipa_endpoint_aggr_active(struct ipa_endpoint *endpoint)
 {
-	u32 mask = BIT(endpoint->endpoint_id);
+	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
-	u32 offset;
+	u32 unit = endpoint_id / 32;
+	const struct ipa_reg *reg;
 	u32 val;
 
-	WARN_ON(!(mask & ipa->available));
+	WARN_ON(!test_bit(endpoint_id, ipa->available));
 
-	offset = ipa_reg_state_aggr_active_offset(ipa->version);
-	val = ioread32(ipa->reg_virt + offset);
+	reg = ipa_reg(ipa, STATE_AGGR_ACTIVE);
+	val = ioread32(ipa->reg_virt + ipa_reg_n_offset(reg, unit));
 
-	return !!(val & mask);
+	return !!(val & BIT(endpoint_id % 32));
 }
 
 static void ipa_endpoint_force_close(struct ipa_endpoint *endpoint)
 {
-	u32 mask = BIT(endpoint->endpoint_id);
+	u32 endpoint_id = endpoint->endpoint_id;
+	u32 mask = BIT(endpoint_id % 32);
 	struct ipa *ipa = endpoint->ipa;
+	u32 unit = endpoint_id / 32;
+	const struct ipa_reg *reg;
 
-	WARN_ON(!(mask & ipa->available));
+	WARN_ON(!test_bit(endpoint_id, ipa->available));
 
-	iowrite32(mask, ipa->reg_virt + IPA_REG_AGGR_FORCE_CLOSE_OFFSET);
+	reg = ipa_reg(ipa, AGGR_FORCE_CLOSE);
+	iowrite32(mask, ipa->reg_virt + ipa_reg_n_offset(reg, unit));
 }
 
 /**
@@ -332,7 +391,7 @@ static void ipa_endpoint_suspend_aggr(struct ipa_endpoint *endpoint)
 {
 	struct ipa *ipa = endpoint->ipa;
 
-	if (!endpoint->data->aggregation)
+	if (!endpoint->config.aggregation)
 		return;
 
 	/* Nothing to do if the endpoint doesn't have aggregation open */
@@ -375,10 +434,10 @@ ipa_endpoint_program_suspend(struct ipa_endpoint *endpoint, bool enable)
  */
 void ipa_endpoint_modem_pause_all(struct ipa *ipa, bool enable)
 {
-	u32 endpoint_id;
+	u32 endpoint_id = 0;
 
-	for (endpoint_id = 0; endpoint_id < IPA_ENDPOINT_MAX; endpoint_id++) {
-		struct ipa_endpoint *endpoint = &ipa->endpoint[endpoint_id];
+	while (endpoint_id < ipa->endpoint_count) {
+		struct ipa_endpoint *endpoint = &ipa->endpoint[endpoint_id++];
 
 		if (endpoint->ee_id != GSI_EE_MODEM)
 			continue;
@@ -397,16 +456,14 @@ void ipa_endpoint_modem_pause_all(struct ipa *ipa, bool enable)
 /* Reset all modem endpoints to use the default exception endpoint */
 int ipa_endpoint_modem_exception_reset_all(struct ipa *ipa)
 {
-	u32 initialized = ipa->initialized;
 	struct gsi_trans *trans;
+	u32 endpoint_id;
 	u32 count;
 
-	/* We need one command per modem TX endpoint.  We can get an upper
-	 * bound on that by assuming all initialized endpoints are modem->IPA.
-	 * That won't happen, and we could be more precise, but this is fine
-	 * for now.  End the transaction with commands to clear the pipeline.
+	/* We need one command per modem TX endpoint, plus the commands
+	 * that clear the pipeline.
 	 */
-	count = hweight32(initialized) + ipa_cmd_pipeline_clear_count();
+	count = ipa->modem_tx_count + ipa_cmd_pipeline_clear_count();
 	trans = ipa_cmd_trans_alloc(ipa, count);
 	if (!trans) {
 		dev_err(&ipa->pdev->dev,
@@ -414,19 +471,18 @@ int ipa_endpoint_modem_exception_reset_all(struct ipa *ipa)
 		return -EBUSY;
 	}
 
-	while (initialized) {
-		u32 endpoint_id = __ffs(initialized);
+	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count) {
 		struct ipa_endpoint *endpoint;
+		const struct ipa_reg *reg;
 		u32 offset;
-
-		initialized ^= BIT(endpoint_id);
 
 		/* We only reset modem TX endpoints */
 		endpoint = &ipa->endpoint[endpoint_id];
 		if (!(endpoint->ee_id == GSI_EE_MODEM && endpoint->toward_ipa))
 			continue;
 
-		offset = IPA_REG_ENDP_STATUS_N_OFFSET(endpoint_id);
+		reg = ipa_reg(ipa, ENDP_STATUS);
+		offset = ipa_reg_n_offset(reg, endpoint_id);
 
 		/* Value written is 0, and all bits are updated.  That
 		 * means status is disabled on the endpoint, and as a
@@ -437,7 +493,6 @@ int ipa_endpoint_modem_exception_reset_all(struct ipa *ipa)
 
 	ipa_cmd_pipeline_clear_add(trans);
 
-	/* XXX This should have a 1 second timeout */
 	gsi_trans_commit_wait(trans);
 
 	ipa_cmd_pipeline_clear_wait(ipa);
@@ -447,22 +502,23 @@ int ipa_endpoint_modem_exception_reset_all(struct ipa *ipa)
 
 static void ipa_endpoint_init_cfg(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_CFG_N_OFFSET(endpoint->endpoint_id);
+	u32 endpoint_id = endpoint->endpoint_id;
+	struct ipa *ipa = endpoint->ipa;
 	enum ipa_cs_offload_en enabled;
+	const struct ipa_reg *reg;
 	u32 val = 0;
 
+	reg = ipa_reg(ipa, ENDP_INIT_CFG);
 	/* FRAG_OFFLOAD_EN is 0 */
-	if (endpoint->data->checksum) {
-		enum ipa_version version = endpoint->ipa->version;
+	if (endpoint->config.checksum) {
+		enum ipa_version version = ipa->version;
 
 		if (endpoint->toward_ipa) {
-			u32 checksum_offset;
+			u32 off;
 
 			/* Checksum header offset is in 4-byte units */
-			checksum_offset = sizeof(struct rmnet_map_header);
-			checksum_offset /= sizeof(u32);
-			val |= u32_encode_bits(checksum_offset,
-					       CS_METADATA_HDR_OFFSET_FMASK);
+			off = sizeof(struct rmnet_map_header) / sizeof(u32);
+			val |= ipa_reg_encode(reg, CS_METADATA_HDR_OFFSET, off);
 
 			enabled = version < IPA_VERSION_4_5
 					? IPA_CS_OFFLOAD_UL
@@ -475,24 +531,26 @@ static void ipa_endpoint_init_cfg(struct ipa_endpoint *endpoint)
 	} else {
 		enabled = IPA_CS_OFFLOAD_NONE;
 	}
-	val |= u32_encode_bits(enabled, CS_OFFLOAD_EN_FMASK);
+	val |= ipa_reg_encode(reg, CS_OFFLOAD_EN, enabled);
 	/* CS_GEN_QMB_MASTER_SEL is 0 */
 
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static void ipa_endpoint_init_nat(struct ipa_endpoint *endpoint)
 {
-	u32 offset;
+	u32 endpoint_id = endpoint->endpoint_id;
+	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val;
 
 	if (!endpoint->toward_ipa)
 		return;
 
-	offset = IPA_REG_ENDP_INIT_NAT_N_OFFSET(endpoint->endpoint_id);
-	val = u32_encode_bits(IPA_NAT_BYPASS, NAT_EN_FMASK);
+	reg = ipa_reg(ipa, ENDP_INIT_NAT);
+	val = ipa_reg_encode(reg, NAT_EN, IPA_NAT_BYPASS);
 
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static u32
@@ -501,7 +559,7 @@ ipa_qmap_header_size(enum ipa_version version, struct ipa_endpoint *endpoint)
 	u32 header_size = sizeof(struct rmnet_map_header);
 
 	/* Without checksum offload, we just have the MAP header */
-	if (!endpoint->data->checksum)
+	if (!endpoint->config.checksum)
 		return header_size;
 
 	if (version < IPA_VERSION_4_5) {
@@ -514,6 +572,50 @@ ipa_qmap_header_size(enum ipa_version version, struct ipa_endpoint *endpoint)
 	}
 
 	return header_size;
+}
+
+/* Encoded value for ENDP_INIT_HDR register HDR_LEN* field(s) */
+static u32 ipa_header_size_encode(enum ipa_version version,
+				  const struct ipa_reg *reg, u32 header_size)
+{
+	u32 field_max = ipa_reg_field_max(reg, HDR_LEN);
+	u32 val;
+
+	/* We know field_max can be used as a mask (2^n - 1) */
+	val = ipa_reg_encode(reg, HDR_LEN, header_size & field_max);
+	if (version < IPA_VERSION_4_5) {
+		WARN_ON(header_size > field_max);
+		return val;
+	}
+
+	/* IPA v4.5 adds a few more most-significant bits */
+	header_size >>= hweight32(field_max);
+	WARN_ON(header_size > ipa_reg_field_max(reg, HDR_LEN_MSB));
+	val |= ipa_reg_encode(reg, HDR_LEN_MSB, header_size);
+
+	return val;
+}
+
+/* Encoded value for ENDP_INIT_HDR register OFST_METADATA* field(s) */
+static u32 ipa_metadata_offset_encode(enum ipa_version version,
+				      const struct ipa_reg *reg, u32 offset)
+{
+	u32 field_max = ipa_reg_field_max(reg, HDR_OFST_METADATA);
+	u32 val;
+
+	/* We know field_max can be used as a mask (2^n - 1) */
+	val = ipa_reg_encode(reg, HDR_OFST_METADATA, offset);
+	if (version < IPA_VERSION_4_5) {
+		WARN_ON(offset > field_max);
+		return val;
+	}
+
+	/* IPA v4.5 adds a few more most-significant bits */
+	offset >>= hweight32(field_max);
+	WARN_ON(offset > ipa_reg_field_max(reg, HDR_OFST_METADATA_MSB));
+	val |= ipa_reg_encode(reg, HDR_OFST_METADATA_MSB, offset);
+
+	return val;
 }
 
 /**
@@ -539,36 +641,38 @@ ipa_qmap_header_size(enum ipa_version version, struct ipa_endpoint *endpoint)
  */
 static void ipa_endpoint_init_hdr(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_HDR_N_OFFSET(endpoint->endpoint_id);
+	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val = 0;
 
-	if (endpoint->data->qmap) {
+	reg = ipa_reg(ipa, ENDP_INIT_HDR);
+	if (endpoint->config.qmap) {
 		enum ipa_version version = ipa->version;
 		size_t header_size;
 
 		header_size = ipa_qmap_header_size(version, endpoint);
-		val = ipa_header_size_encoded(version, header_size);
+		val = ipa_header_size_encode(version, reg, header_size);
 
 		/* Define how to fill fields in a received QMAP header */
 		if (!endpoint->toward_ipa) {
-			u32 offset;	/* Field offset within header */
+			u32 off;     /* Field offset within header */
 
 			/* Where IPA will write the metadata value */
-			offset = offsetof(struct rmnet_map_header, mux_id);
-			val |= ipa_metadata_offset_encoded(version, offset);
+			off = offsetof(struct rmnet_map_header, mux_id);
+			val |= ipa_metadata_offset_encode(version, reg, off);
 
 			/* Where IPA will write the length */
-			offset = offsetof(struct rmnet_map_header, pkt_len);
+			off = offsetof(struct rmnet_map_header, pkt_len);
 			/* Upper bits are stored in HDR_EXT with IPA v4.5 */
 			if (version >= IPA_VERSION_4_5)
-				offset &= field_mask(HDR_OFST_PKT_SIZE_FMASK);
+				off &= ipa_reg_field_max(reg, HDR_OFST_PKT_SIZE);
 
-			val |= HDR_OFST_PKT_SIZE_VALID_FMASK;
-			val |= u32_encode_bits(offset, HDR_OFST_PKT_SIZE_FMASK);
+			val |= ipa_reg_bit(reg, HDR_OFST_PKT_SIZE_VALID);
+			val |= ipa_reg_encode(reg, HDR_OFST_PKT_SIZE, off);
 		}
 		/* For QMAP TX, metadata offset is 0 (modem assumes this) */
-		val |= HDR_OFST_METADATA_VALID_FMASK;
+		val |= ipa_reg_bit(reg, HDR_OFST_METADATA_VALID);
 
 		/* HDR_ADDITIONAL_CONST_LEN is 0; (RX only) */
 		/* HDR_A5_MUX is 0 */
@@ -576,230 +680,211 @@ static void ipa_endpoint_init_hdr(struct ipa_endpoint *endpoint)
 		/* HDR_METADATA_REG_VALID is 0 (TX only, version < v4.5) */
 	}
 
-	iowrite32(val, ipa->reg_virt + offset);
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static void ipa_endpoint_init_hdr_ext(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_HDR_EXT_N_OFFSET(endpoint->endpoint_id);
-	u32 pad_align = endpoint->data->rx.pad_align;
+	u32 pad_align = endpoint->config.rx.pad_align;
+	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val = 0;
 
-	val |= HDR_ENDIANNESS_FMASK;		/* big endian */
+	reg = ipa_reg(ipa, ENDP_INIT_HDR_EXT);
+	if (endpoint->config.qmap) {
+		/* We have a header, so we must specify its endianness */
+		val |= ipa_reg_bit(reg, HDR_ENDIANNESS);	/* big endian */
 
-	/* A QMAP header contains a 6 bit pad field at offset 0.  The RMNet
-	 * driver assumes this field is meaningful in packets it receives,
-	 * and assumes the header's payload length includes that padding.
-	 * The RMNet driver does *not* pad packets it sends, however, so
-	 * the pad field (although 0) should be ignored.
-	 */
-	if (endpoint->data->qmap && !endpoint->toward_ipa) {
-		val |= HDR_TOTAL_LEN_OR_PAD_VALID_FMASK;
-		/* HDR_TOTAL_LEN_OR_PAD is 0 (pad, not total_len) */
-		val |= HDR_PAYLOAD_LEN_INC_PADDING_FMASK;
-		/* HDR_TOTAL_LEN_OR_PAD_OFFSET is 0 */
+		/* A QMAP header contains a 6 bit pad field at offset 0.
+		 * The RMNet driver assumes this field is meaningful in
+		 * packets it receives, and assumes the header's payload
+		 * length includes that padding.  The RMNet driver does
+		 * *not* pad packets it sends, however, so the pad field
+		 * (although 0) should be ignored.
+		 */
+		if (!endpoint->toward_ipa) {
+			val |= ipa_reg_bit(reg, HDR_TOTAL_LEN_OR_PAD_VALID);
+			/* HDR_TOTAL_LEN_OR_PAD is 0 (pad, not total_len) */
+			val |= ipa_reg_bit(reg, HDR_PAYLOAD_LEN_INC_PADDING);
+			/* HDR_TOTAL_LEN_OR_PAD_OFFSET is 0 */
+		}
 	}
 
 	/* HDR_PAYLOAD_LEN_INC_PADDING is 0 */
 	if (!endpoint->toward_ipa)
-		val |= u32_encode_bits(pad_align, HDR_PAD_TO_ALIGNMENT_FMASK);
+		val |= ipa_reg_encode(reg, HDR_PAD_TO_ALIGNMENT, pad_align);
 
 	/* IPA v4.5 adds some most-significant bits to a few fields,
 	 * two of which are defined in the HDR (not HDR_EXT) register.
 	 */
 	if (ipa->version >= IPA_VERSION_4_5) {
 		/* HDR_TOTAL_LEN_OR_PAD_OFFSET is 0, so MSB is 0 */
-		if (endpoint->data->qmap && !endpoint->toward_ipa) {
-			u32 offset;
+		if (endpoint->config.qmap && !endpoint->toward_ipa) {
+			u32 mask = ipa_reg_field_max(reg, HDR_OFST_PKT_SIZE);
+			u32 off;     /* Field offset within header */
 
-			offset = offsetof(struct rmnet_map_header, pkt_len);
-			offset >>= hweight32(HDR_OFST_PKT_SIZE_FMASK);
-			val |= u32_encode_bits(offset,
-					       HDR_OFST_PKT_SIZE_MSB_FMASK);
+			off = offsetof(struct rmnet_map_header, pkt_len);
+			/* Low bits are in the ENDP_INIT_HDR register */
+			off >>= hweight32(mask);
+			val |= ipa_reg_encode(reg, HDR_OFST_PKT_SIZE_MSB, off);
 			/* HDR_ADDITIONAL_CONST_LEN is 0 so MSB is 0 */
 		}
 	}
-	iowrite32(val, ipa->reg_virt + offset);
+
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static void ipa_endpoint_init_hdr_metadata_mask(struct ipa_endpoint *endpoint)
 {
 	u32 endpoint_id = endpoint->endpoint_id;
+	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val = 0;
 	u32 offset;
 
 	if (endpoint->toward_ipa)
 		return;		/* Register not valid for TX endpoints */
 
-	offset = IPA_REG_ENDP_INIT_HDR_METADATA_MASK_N_OFFSET(endpoint_id);
+	reg = ipa_reg(ipa,  ENDP_INIT_HDR_METADATA_MASK);
+	offset = ipa_reg_n_offset(reg, endpoint_id);
 
 	/* Note that HDR_ENDIANNESS indicates big endian header fields */
-	if (endpoint->data->qmap)
+	if (endpoint->config.qmap)
 		val = (__force u32)cpu_to_be32(IPA_ENDPOINT_QMAP_METADATA_MASK);
 
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
+	iowrite32(val, ipa->reg_virt + offset);
 }
 
 static void ipa_endpoint_init_mode(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_MODE_N_OFFSET(endpoint->endpoint_id);
+	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
+	u32 offset;
 	u32 val;
 
 	if (!endpoint->toward_ipa)
 		return;		/* Register not valid for RX endpoints */
 
-	if (endpoint->data->dma_mode) {
-		enum ipa_endpoint_name name = endpoint->data->dma_endpoint;
-		u32 dma_endpoint_id;
+	reg = ipa_reg(ipa, ENDP_INIT_MODE);
+	if (endpoint->config.dma_mode) {
+		enum ipa_endpoint_name name = endpoint->config.dma_endpoint;
+		u32 dma_endpoint_id = ipa->name_map[name]->endpoint_id;
 
-		dma_endpoint_id = endpoint->ipa->name_map[name]->endpoint_id;
-
-		val = u32_encode_bits(IPA_DMA, MODE_FMASK);
-		val |= u32_encode_bits(dma_endpoint_id, DEST_PIPE_INDEX_FMASK);
+		val = ipa_reg_encode(reg, ENDP_MODE, IPA_DMA);
+		val |= ipa_reg_encode(reg, DEST_PIPE_INDEX, dma_endpoint_id);
 	} else {
-		val = u32_encode_bits(IPA_BASIC, MODE_FMASK);
+		val = ipa_reg_encode(reg, ENDP_MODE, IPA_BASIC);
 	}
 	/* All other bits unspecified (and 0) */
 
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
+	offset = ipa_reg_n_offset(reg, endpoint->endpoint_id);
+	iowrite32(val, ipa->reg_virt + offset);
 }
 
-/* Compute the aggregation size value to use for a given buffer size */
-static u32 ipa_aggr_size_kb(u32 rx_buffer_size)
+/* For IPA v4.5+, times are expressed using Qtime.  The AP uses one of two
+ * pulse generators (0 and 1) to measure elapsed time.  In ipa_qtime_config()
+ * they're configured to have granularity 100 usec and 1 msec, respectively.
+ *
+ * The return value is the positive or negative Qtime value to use to
+ * express the (microsecond) time provided.  A positive return value
+ * means pulse generator 0 can be used; otherwise use pulse generator 1.
+ */
+static int ipa_qtime_val(u32 microseconds, u32 max)
 {
-	/* We don't use "hard byte limit" aggregation, so we define the
-	 * aggregation limit such that our buffer has enough space *after*
-	 * that limit to receive a full MTU of data, plus overhead.
-	 */
-	rx_buffer_size -= IPA_MTU + IPA_RX_BUFFER_OVERHEAD;
+	u32 val;
 
-	return rx_buffer_size / SZ_1K;
-}
+	/* Use 100 microsecond granularity if possible */
+	val = DIV_ROUND_CLOSEST(microseconds, 100);
+	if (val <= max)
+		return (int)val;
 
-/* Encoded values for AGGR endpoint register fields */
-static u32 aggr_byte_limit_encoded(enum ipa_version version, u32 limit)
-{
-	if (version < IPA_VERSION_4_5)
-		return u32_encode_bits(limit, aggr_byte_limit_fmask(true));
+	/* Have to use pulse generator 1 (millisecond granularity) */
+	val = DIV_ROUND_CLOSEST(microseconds, 1000);
+	WARN_ON(val > max);
 
-	return u32_encode_bits(limit, aggr_byte_limit_fmask(false));
+	return (int)-val;
 }
 
 /* Encode the aggregation timer limit (microseconds) based on IPA version */
-static u32 aggr_time_limit_encoded(enum ipa_version version, u32 limit)
+static u32 aggr_time_limit_encode(struct ipa *ipa, const struct ipa_reg *reg,
+				  u32 microseconds)
 {
-	u32 gran_sel;
-	u32 fmask;
+	u32 max;
 	u32 val;
 
-	if (version < IPA_VERSION_4_5) {
-		/* We set aggregation granularity in ipa_hardware_config() */
-		limit = DIV_ROUND_CLOSEST(limit, IPA_AGGR_GRANULARITY);
+	if (!microseconds)
+		return 0;	/* Nothing to compute if time limit is 0 */
 
-		return u32_encode_bits(limit, aggr_time_limit_fmask(true));
+	max = ipa_reg_field_max(reg, TIME_LIMIT);
+	if (ipa->version >= IPA_VERSION_4_5) {
+		u32 gran_sel;
+		int ret;
+
+		/* Compute the Qtime limit value to use */
+		ret = ipa_qtime_val(microseconds, max);
+		if (ret < 0) {
+			val = -ret;
+			gran_sel = ipa_reg_bit(reg, AGGR_GRAN_SEL);
+		} else {
+			val = ret;
+			gran_sel = 0;
+		}
+
+		return gran_sel | ipa_reg_encode(reg, TIME_LIMIT, val);
 	}
 
-	/* IPA v4.5 expresses the time limit using Qtime.  The AP has
-	 * pulse generators 0 and 1 available, which were configured
-	 * in ipa_qtime_config() to have granularity 100 usec and
-	 * 1 msec, respectively.  Use pulse generator 0 if possible,
-	 * otherwise fall back to pulse generator 1.
-	 */
-	fmask = aggr_time_limit_fmask(false);
-	val = DIV_ROUND_CLOSEST(limit, 100);
-	if (val > field_max(fmask)) {
-		/* Have to use pulse generator 1 (millisecond granularity) */
-		gran_sel = AGGR_GRAN_SEL_FMASK;
-		val = DIV_ROUND_CLOSEST(limit, 1000);
-	} else {
-		/* We can use pulse generator 0 (100 usec granularity) */
-		gran_sel = 0;
-	}
+	/* We program aggregation granularity in ipa_hardware_config() */
+	val = DIV_ROUND_CLOSEST(microseconds, IPA_AGGR_GRANULARITY);
+	WARN(val > max, "aggr_time_limit too large (%u > %u usec)\n",
+	     microseconds, max * IPA_AGGR_GRANULARITY);
 
-	return gran_sel | u32_encode_bits(val, fmask);
-}
-
-static u32 aggr_sw_eof_active_encoded(enum ipa_version version, bool enabled)
-{
-	u32 val = enabled ? 1 : 0;
-
-	if (version < IPA_VERSION_4_5)
-		return u32_encode_bits(val, aggr_sw_eof_active_fmask(true));
-
-	return u32_encode_bits(val, aggr_sw_eof_active_fmask(false));
+	return ipa_reg_encode(reg, TIME_LIMIT, val);
 }
 
 static void ipa_endpoint_init_aggr(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_AGGR_N_OFFSET(endpoint->endpoint_id);
-	enum ipa_version version = endpoint->ipa->version;
+	u32 endpoint_id = endpoint->endpoint_id;
+	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val = 0;
 
-	if (endpoint->data->aggregation) {
+	reg = ipa_reg(ipa, ENDP_INIT_AGGR);
+	if (endpoint->config.aggregation) {
 		if (!endpoint->toward_ipa) {
-			const struct ipa_endpoint_rx_data *rx_data;
-			bool close_eof;
+			const struct ipa_endpoint_rx *rx_config;
+			u32 buffer_size;
 			u32 limit;
 
-			rx_data = &endpoint->data->rx;
-			val |= u32_encode_bits(IPA_ENABLE_AGGR, AGGR_EN_FMASK);
-			val |= u32_encode_bits(IPA_GENERIC, AGGR_TYPE_FMASK);
+			rx_config = &endpoint->config.rx;
+			val |= ipa_reg_encode(reg, AGGR_EN, IPA_ENABLE_AGGR);
+			val |= ipa_reg_encode(reg, AGGR_TYPE, IPA_GENERIC);
 
-			limit = ipa_aggr_size_kb(rx_data->buffer_size);
-			val |= aggr_byte_limit_encoded(version, limit);
+			buffer_size = rx_config->buffer_size;
+			limit = ipa_aggr_size_kb(buffer_size - NET_SKB_PAD,
+						 rx_config->aggr_hard_limit);
+			val |= ipa_reg_encode(reg, BYTE_LIMIT, limit);
 
-			limit = IPA_AGGR_TIME_LIMIT;
-			val |= aggr_time_limit_encoded(version, limit);
+			limit = rx_config->aggr_time_limit;
+			val |= aggr_time_limit_encode(ipa, reg, limit);
 
 			/* AGGR_PKT_LIMIT is 0 (unlimited) */
 
-			close_eof = rx_data->aggr_close_eof;
-			val |= aggr_sw_eof_active_encoded(version, close_eof);
-
-			/* AGGR_HARD_BYTE_LIMIT_ENABLE is 0 */
+			if (rx_config->aggr_close_eof)
+				val |= ipa_reg_bit(reg, SW_EOF_ACTIVE);
 		} else {
-			val |= u32_encode_bits(IPA_ENABLE_DEAGGR,
-					       AGGR_EN_FMASK);
-			val |= u32_encode_bits(IPA_QCMAP, AGGR_TYPE_FMASK);
+			val |= ipa_reg_encode(reg, AGGR_EN, IPA_ENABLE_DEAGGR);
+			val |= ipa_reg_encode(reg, AGGR_TYPE, IPA_QCMAP);
 			/* other fields ignored */
 		}
 		/* AGGR_FORCE_CLOSE is 0 */
 		/* AGGR_GRAN_SEL is 0 for IPA v4.5 */
 	} else {
-		val |= u32_encode_bits(IPA_BYPASS_AGGR, AGGR_EN_FMASK);
+		val |= ipa_reg_encode(reg, AGGR_EN, IPA_BYPASS_AGGR);
 		/* other fields ignored */
 	}
 
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
-}
-
-/* Return the Qtime-based head-of-line blocking timer value that
- * represents the given number of microseconds.  The result
- * includes both the timer value and the selected timer granularity.
- */
-static u32 hol_block_timer_qtime_val(struct ipa *ipa, u32 microseconds)
-{
-	u32 gran_sel;
-	u32 val;
-
-	/* IPA v4.5 expresses time limits using Qtime.  The AP has
-	 * pulse generators 0 and 1 available, which were configured
-	 * in ipa_qtime_config() to have granularity 100 usec and
-	 * 1 msec, respectively.  Use pulse generator 0 if possible,
-	 * otherwise fall back to pulse generator 1.
-	 */
-	val = DIV_ROUND_CLOSEST(microseconds, 100);
-	if (val > field_max(TIME_LIMIT_FMASK)) {
-		/* Have to use pulse generator 1 (millisecond granularity) */
-		gran_sel = GRAN_SEL_FMASK;
-		val = DIV_ROUND_CLOSEST(microseconds, 1000);
-	} else {
-		/* We can use pulse generator 0 (100 usec granularity) */
-		gran_sel = 0;
-	}
-
-	return gran_sel | u32_encode_bits(val, TIME_LIMIT_FMASK);
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 /* The head-of-line blocking timer is defined as a tick count.  For
@@ -807,12 +892,11 @@ static u32 hol_block_timer_qtime_val(struct ipa *ipa, u32 microseconds)
  * derived from the 19.2 MHz SoC XO clock.  For older IPA versions
  * each tick represents 128 cycles of the IPA core clock.
  *
- * Return the encoded value that should be written to that register
- * that represents the timeout period provided.  For IPA v4.2 this
- * encodes a base and scale value, while for earlier versions the
- * value is a simple tick count.
+ * Return the encoded value representing the timeout period provided
+ * that should be written to the ENDP_INIT_HOL_BLOCK_TIMER register.
  */
-static u32 hol_block_timer_val(struct ipa *ipa, u32 microseconds)
+static u32 hol_block_timer_encode(struct ipa *ipa, const struct ipa_reg *reg,
+				  u32 microseconds)
 {
 	u32 width;
 	u32 scale;
@@ -824,18 +908,34 @@ static u32 hol_block_timer_val(struct ipa *ipa, u32 microseconds)
 	if (!microseconds)
 		return 0;	/* Nothing to compute if timer period is 0 */
 
-	if (ipa->version >= IPA_VERSION_4_5)
-		return hol_block_timer_qtime_val(ipa, microseconds);
+	if (ipa->version >= IPA_VERSION_4_5) {
+		u32 max = ipa_reg_field_max(reg, TIMER_LIMIT);
+		u32 gran_sel;
+		int ret;
 
-	/* Use 64 bit arithmetic to avoid overflow... */
+		/* Compute the Qtime limit value to use */
+		ret = ipa_qtime_val(microseconds, max);
+		if (ret < 0) {
+			val = -ret;
+			gran_sel = ipa_reg_bit(reg, TIMER_GRAN_SEL);
+		} else {
+			val = ret;
+			gran_sel = 0;
+		}
+
+		return gran_sel | ipa_reg_encode(reg, TIMER_LIMIT, val);
+	}
+
+	/* Use 64 bit arithmetic to avoid overflow */
 	rate = ipa_core_clock_rate(ipa);
 	ticks = DIV_ROUND_CLOSEST(microseconds * rate, 128 * USEC_PER_SEC);
-	/* ...but we still need to fit into a 32-bit register */
-	WARN_ON(ticks > U32_MAX);
+
+	/* We still need the result to fit into the field */
+	WARN_ON(ticks > ipa_reg_field_max(reg, TIMER_BASE_VALUE));
 
 	/* IPA v3.5.1 through v4.1 just record the tick count */
 	if (ipa->version < IPA_VERSION_4_2)
-		return (u32)ticks;
+		return ipa_reg_encode(reg, TIMER_BASE_VALUE, (u32)ticks);
 
 	/* For IPA v4.2, the tick count is represented by base and
 	 * scale fields within the 32-bit timer register, where:
@@ -845,8 +945,8 @@ static u32 hol_block_timer_val(struct ipa *ipa, u32 microseconds)
 	 * count, and extract the number of bits in the base field
 	 * such that high bit is included.
 	 */
-	high = fls(ticks);		/* 1..32 */
-	width = HWEIGHT32(BASE_VALUE_FMASK);
+	high = fls(ticks);		/* 1..32 (or warning above) */
+	width = hweight32(ipa_reg_fmask(reg, TIMER_BASE_VALUE));
 	scale = high > width ? high - width : 0;
 	if (scale) {
 		/* If we're scaling, round up to get a closer result */
@@ -856,8 +956,8 @@ static u32 hol_block_timer_val(struct ipa *ipa, u32 microseconds)
 			scale++;
 	}
 
-	val = u32_encode_bits(scale, SCALE_FMASK);
-	val |= u32_encode_bits(ticks >> scale, BASE_VALUE_FMASK);
+	val = ipa_reg_encode(reg, TIMER_SCALE, scale);
+	val |= ipa_reg_encode(reg, TIMER_BASE_VALUE, (u32)ticks >> scale);
 
 	return val;
 }
@@ -868,28 +968,34 @@ static void ipa_endpoint_init_hol_block_timer(struct ipa_endpoint *endpoint,
 {
 	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
-	u32 offset;
+	const struct ipa_reg *reg;
 	u32 val;
 
 	/* This should only be changed when HOL_BLOCK_EN is disabled */
-	offset = IPA_REG_ENDP_INIT_HOL_BLOCK_TIMER_N_OFFSET(endpoint_id);
-	val = hol_block_timer_val(ipa, microseconds);
-	iowrite32(val, ipa->reg_virt + offset);
+	reg = ipa_reg(ipa, ENDP_INIT_HOL_BLOCK_TIMER);
+	val = hol_block_timer_encode(ipa, reg, microseconds);
+
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static void
 ipa_endpoint_init_hol_block_en(struct ipa_endpoint *endpoint, bool enable)
 {
 	u32 endpoint_id = endpoint->endpoint_id;
+	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 offset;
 	u32 val;
 
-	val = enable ? HOL_BLOCK_EN_FMASK : 0;
-	offset = IPA_REG_ENDP_INIT_HOL_BLOCK_EN_N_OFFSET(endpoint_id);
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
+	reg = ipa_reg(ipa, ENDP_INIT_HOL_BLOCK_EN);
+	offset = ipa_reg_n_offset(reg, endpoint_id);
+	val = enable ? ipa_reg_bit(reg, HOL_BLOCK_EN) : 0;
+
+	iowrite32(val, ipa->reg_virt + offset);
+
 	/* When enabling, the register must be written twice for IPA v4.5+ */
-	if (enable && endpoint->ipa->version >= IPA_VERSION_4_5)
-		iowrite32(val, endpoint->ipa->reg_virt + offset);
+	if (enable && ipa->version >= IPA_VERSION_4_5)
+		iowrite32(val, ipa->reg_virt + offset);
 }
 
 /* Assumes HOL_BLOCK is in disabled state */
@@ -907,10 +1013,10 @@ static void ipa_endpoint_init_hol_block_disable(struct ipa_endpoint *endpoint)
 
 void ipa_endpoint_modem_hol_block_clear_all(struct ipa *ipa)
 {
-	u32 i;
+	u32 endpoint_id = 0;
 
-	for (i = 0; i < IPA_ENDPOINT_MAX; i++) {
-		struct ipa_endpoint *endpoint = &ipa->endpoint[i];
+	while (endpoint_id < ipa->endpoint_count) {
+		struct ipa_endpoint *endpoint = &ipa->endpoint[endpoint_id++];
 
 		if (endpoint->toward_ipa || endpoint->ee_id != GSI_EE_MODEM)
 			continue;
@@ -922,46 +1028,58 @@ void ipa_endpoint_modem_hol_block_clear_all(struct ipa *ipa)
 
 static void ipa_endpoint_init_deaggr(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_DEAGGR_N_OFFSET(endpoint->endpoint_id);
+	u32 endpoint_id = endpoint->endpoint_id;
+	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val = 0;
 
 	if (!endpoint->toward_ipa)
 		return;		/* Register not valid for RX endpoints */
 
+	reg = ipa_reg(ipa, ENDP_INIT_DEAGGR);
 	/* DEAGGR_HDR_LEN is 0 */
 	/* PACKET_OFFSET_VALID is 0 */
 	/* PACKET_OFFSET_LOCATION is ignored (not valid) */
 	/* MAX_PACKET_LEN is 0 (not enforced) */
 
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static void ipa_endpoint_init_rsrc_grp(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_RSRC_GRP_N_OFFSET(endpoint->endpoint_id);
+	u32 resource_group = endpoint->config.resource_group;
+	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val;
 
-	val = rsrc_grp_encoded(ipa->version, endpoint->data->resource_group);
-	iowrite32(val, ipa->reg_virt + offset);
+	reg = ipa_reg(ipa, ENDP_INIT_RSRC_GRP);
+	val = ipa_reg_encode(reg, ENDP_RSRC_GRP, resource_group);
+
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static void ipa_endpoint_init_seq(struct ipa_endpoint *endpoint)
 {
-	u32 offset = IPA_REG_ENDP_INIT_SEQ_N_OFFSET(endpoint->endpoint_id);
-	u32 val = 0;
+	u32 endpoint_id = endpoint->endpoint_id;
+	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
+	u32 val;
 
 	if (!endpoint->toward_ipa)
 		return;		/* Register not valid for RX endpoints */
 
+	reg = ipa_reg(ipa, ENDP_INIT_SEQ);
+
 	/* Low-order byte configures primary packet processing */
-	val |= u32_encode_bits(endpoint->data->tx.seq_type, SEQ_TYPE_FMASK);
+	val = ipa_reg_encode(reg, SEQ_TYPE, endpoint->config.tx.seq_type);
 
-	/* Second byte configures replicated packet processing */
-	val |= u32_encode_bits(endpoint->data->tx.seq_rep_type,
-			       SEQ_REP_TYPE_FMASK);
+	/* Second byte (if supported) configures replicated packet processing */
+	if (ipa->version < IPA_VERSION_4_5)
+		val |= ipa_reg_encode(reg, SEQ_REP_TYPE,
+				      endpoint->config.tx.seq_rep_type);
 
-	iowrite32(val, endpoint->ipa->reg_virt + offset);
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 /**
@@ -982,7 +1100,7 @@ int ipa_endpoint_skb_tx(struct ipa_endpoint *endpoint, struct sk_buff *skb)
 	 * If not, see if we can linearize it before giving up.
 	 */
 	nr_frags = skb_shinfo(skb)->nr_frags;
-	if (1 + nr_frags > endpoint->trans_tre_max) {
+	if (nr_frags > endpoint->skb_frag_max) {
 		if (skb_linearize(skb))
 			return -E2BIG;
 		nr_frags = 0;
@@ -1011,30 +1129,29 @@ static void ipa_endpoint_status(struct ipa_endpoint *endpoint)
 {
 	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
+	const struct ipa_reg *reg;
 	u32 val = 0;
-	u32 offset;
 
-	offset = IPA_REG_ENDP_STATUS_N_OFFSET(endpoint_id);
-
-	if (endpoint->data->status_enable) {
-		val |= STATUS_EN_FMASK;
+	reg = ipa_reg(ipa, ENDP_STATUS);
+	if (endpoint->config.status_enable) {
+		val |= ipa_reg_bit(reg, STATUS_EN);
 		if (endpoint->toward_ipa) {
 			enum ipa_endpoint_name name;
 			u32 status_endpoint_id;
 
-			name = endpoint->data->tx.status_endpoint;
+			name = endpoint->config.tx.status_endpoint;
 			status_endpoint_id = ipa->name_map[name]->endpoint_id;
 
-			val |= u32_encode_bits(status_endpoint_id,
-					       STATUS_ENDP_FMASK);
+			val |= ipa_reg_encode(reg, STATUS_ENDP,
+					      status_endpoint_id);
 		}
 		/* STATUS_LOCATION is 0, meaning status element precedes
-		 * packet (not present for IPA v4.5)
+		 * packet (not present for IPA v4.5+)
 		 */
-		/* STATUS_PKT_SUPPRESS_FMASK is 0 (not present for v3.5.1) */
+		/* STATUS_PKT_SUPPRESS_FMASK is 0 (not present for v4.0+) */
 	}
 
-	iowrite32(val, ipa->reg_virt + offset);
+	iowrite32(val, ipa->reg_virt + ipa_reg_n_offset(reg, endpoint_id));
 }
 
 static int ipa_endpoint_replenish_one(struct ipa_endpoint *endpoint,
@@ -1046,7 +1163,7 @@ static int ipa_endpoint_replenish_one(struct ipa_endpoint *endpoint,
 	u32 len;
 	int ret;
 
-	buffer_size = endpoint->data->rx.buffer_size;
+	buffer_size = endpoint->config.rx.buffer_size;
 	page = dev_alloc_pages(get_order(buffer_size));
 	if (!page)
 		return -ENOMEM;
@@ -1057,7 +1174,7 @@ static int ipa_endpoint_replenish_one(struct ipa_endpoint *endpoint,
 
 	ret = gsi_trans_page_add(trans, page, len, offset);
 	if (ret)
-		__free_pages(page, get_order(buffer_size));
+		put_page(page);
 	else
 		trans->data = page;	/* transaction owns page now */
 
@@ -1163,7 +1280,7 @@ static void ipa_endpoint_skb_copy(struct ipa_endpoint *endpoint,
 static bool ipa_endpoint_skb_build(struct ipa_endpoint *endpoint,
 				   struct page *page, u32 len)
 {
-	u32 buffer_size = endpoint->data->rx.buffer_size;
+	u32 buffer_size = endpoint->config.rx.buffer_size;
 	struct sk_buff *skb;
 
 	/* Nothing to do if there's no netdev */
@@ -1270,7 +1387,7 @@ static bool ipa_endpoint_status_drop(struct ipa_endpoint *endpoint,
 static void ipa_endpoint_status_parse(struct ipa_endpoint *endpoint,
 				      struct page *page, u32 total_len)
 {
-	u32 buffer_size = endpoint->data->rx.buffer_size;
+	u32 buffer_size = endpoint->config.rx.buffer_size;
 	void *data = page_address(page) + NET_SKB_PAD;
 	u32 unused = buffer_size - total_len;
 	u32 resid = total_len;
@@ -1300,10 +1417,10 @@ static void ipa_endpoint_status_parse(struct ipa_endpoint *endpoint,
 		 * And if checksum offload is enabled a trailer containing
 		 * computed checksum information will be appended.
 		 */
-		align = endpoint->data->rx.pad_align ? : 1;
+		align = endpoint->config.rx.pad_align ? : 1;
 		len = le16_to_cpu(status->pkt_len);
 		len = sizeof(*status) + ALIGN(len, align);
-		if (endpoint->data->checksum)
+		if (endpoint->config.checksum)
 			len += sizeof(struct rmnet_map_dl_csum_trailer);
 
 		if (!ipa_endpoint_status_drop(endpoint, status)) {
@@ -1330,38 +1447,25 @@ static void ipa_endpoint_status_parse(struct ipa_endpoint *endpoint,
 	}
 }
 
-/* Complete a TX transaction, command or from ipa_endpoint_skb_tx() */
-static void ipa_endpoint_tx_complete(struct ipa_endpoint *endpoint,
-				     struct gsi_trans *trans)
-{
-}
-
-/* Complete transaction initiated in ipa_endpoint_replenish_one() */
-static void ipa_endpoint_rx_complete(struct ipa_endpoint *endpoint,
-				     struct gsi_trans *trans)
+void ipa_endpoint_trans_complete(struct ipa_endpoint *endpoint,
+				 struct gsi_trans *trans)
 {
 	struct page *page;
+
+	if (endpoint->toward_ipa)
+		return;
 
 	if (trans->cancelled)
 		goto done;
 
 	/* Parse or build a socket buffer using the actual received length */
 	page = trans->data;
-	if (endpoint->data->status_enable)
+	if (endpoint->config.status_enable)
 		ipa_endpoint_status_parse(endpoint, page, trans->len);
 	else if (ipa_endpoint_skb_build(endpoint, page, trans->len))
 		trans->data = NULL;	/* Pages have been consumed */
 done:
 	ipa_endpoint_replenish(endpoint);
-}
-
-void ipa_endpoint_trans_complete(struct ipa_endpoint *endpoint,
-				 struct gsi_trans *trans)
-{
-	if (endpoint->toward_ipa)
-		ipa_endpoint_tx_complete(endpoint, trans);
-	else
-		ipa_endpoint_rx_complete(endpoint, trans);
 }
 
 void ipa_endpoint_trans_release(struct ipa_endpoint *endpoint,
@@ -1380,26 +1484,25 @@ void ipa_endpoint_trans_release(struct ipa_endpoint *endpoint,
 	} else {
 		struct page *page = trans->data;
 
-		if (page) {
-			u32 buffer_size = endpoint->data->rx.buffer_size;
-
-			__free_pages(page, get_order(buffer_size));
-		}
+		if (page)
+			put_page(page);
 	}
 }
 
 void ipa_endpoint_default_route_set(struct ipa *ipa, u32 endpoint_id)
 {
+	const struct ipa_reg *reg;
 	u32 val;
 
+	reg = ipa_reg(ipa, ROUTE);
 	/* ROUTE_DIS is 0 */
-	val = u32_encode_bits(endpoint_id, ROUTE_DEF_PIPE_FMASK);
-	val |= ROUTE_DEF_HDR_TABLE_FMASK;
-	val |= u32_encode_bits(0, ROUTE_DEF_HDR_OFST_FMASK);
-	val |= u32_encode_bits(endpoint_id, ROUTE_FRAG_DEF_PIPE_FMASK);
-	val |= ROUTE_DEF_RETAIN_HDR_FMASK;
+	val = ipa_reg_encode(reg, ROUTE_DEF_PIPE, endpoint_id);
+	val |= ipa_reg_bit(reg, ROUTE_DEF_HDR_TABLE);
+	/* ROUTE_DEF_HDR_OFST is 0 */
+	val |= ipa_reg_encode(reg, ROUTE_FRAG_DEF_PIPE, endpoint_id);
+	val |= ipa_reg_bit(reg, ROUTE_DEF_RETAIN_HDR);
 
-	iowrite32(val, ipa->reg_virt + IPA_REG_ROUTE_OFFSET);
+	iowrite32(val, ipa->reg_virt + ipa_reg_offset(reg));
 }
 
 void ipa_endpoint_default_route_clear(struct ipa *ipa)
@@ -1515,7 +1618,7 @@ static void ipa_endpoint_reset(struct ipa_endpoint *endpoint)
 	 * All other cases just need to reset the underlying GSI channel.
 	 */
 	special = ipa->version < IPA_VERSION_4_0 && !endpoint->toward_ipa &&
-			endpoint->data->aggregation;
+			endpoint->config.aggregation;
 	if (special && ipa_endpoint_aggr_active(endpoint))
 		ret = ipa_endpoint_reset_rx_aggr(endpoint);
 	else
@@ -1549,8 +1652,12 @@ static void ipa_endpoint_program(struct ipa_endpoint *endpoint)
 	ipa_endpoint_init_hdr_metadata_mask(endpoint);
 	ipa_endpoint_init_mode(endpoint);
 	ipa_endpoint_init_aggr(endpoint);
-	if (!endpoint->toward_ipa)
-		ipa_endpoint_init_hol_block_disable(endpoint);
+	if (!endpoint->toward_ipa) {
+		if (endpoint->config.rx.holb_drop)
+			ipa_endpoint_init_hol_block_enable(endpoint, 0);
+		else
+			ipa_endpoint_init_hol_block_disable(endpoint);
+	}
 	ipa_endpoint_init_deaggr(endpoint);
 	ipa_endpoint_init_rsrc_grp(endpoint);
 	ipa_endpoint_init_seq(endpoint);
@@ -1559,6 +1666,7 @@ static void ipa_endpoint_program(struct ipa_endpoint *endpoint)
 
 int ipa_endpoint_enable_one(struct ipa_endpoint *endpoint)
 {
+	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
 	struct gsi *gsi = &ipa->gsi;
 	int ret;
@@ -1568,37 +1676,35 @@ int ipa_endpoint_enable_one(struct ipa_endpoint *endpoint)
 		dev_err(&ipa->pdev->dev,
 			"error %d starting %cX channel %u for endpoint %u\n",
 			ret, endpoint->toward_ipa ? 'T' : 'R',
-			endpoint->channel_id, endpoint->endpoint_id);
+			endpoint->channel_id, endpoint_id);
 		return ret;
 	}
 
 	if (!endpoint->toward_ipa) {
-		ipa_interrupt_suspend_enable(ipa->interrupt,
-					     endpoint->endpoint_id);
+		ipa_interrupt_suspend_enable(ipa->interrupt, endpoint_id);
 		ipa_endpoint_replenish_enable(endpoint);
 	}
 
-	ipa->enabled |= BIT(endpoint->endpoint_id);
+	__set_bit(endpoint_id, ipa->enabled);
 
 	return 0;
 }
 
 void ipa_endpoint_disable_one(struct ipa_endpoint *endpoint)
 {
-	u32 mask = BIT(endpoint->endpoint_id);
+	u32 endpoint_id = endpoint->endpoint_id;
 	struct ipa *ipa = endpoint->ipa;
 	struct gsi *gsi = &ipa->gsi;
 	int ret;
 
-	if (!(ipa->enabled & mask))
+	if (!test_bit(endpoint_id, ipa->enabled))
 		return;
 
-	ipa->enabled ^= mask;
+	__clear_bit(endpoint_id, endpoint->ipa->enabled);
 
 	if (!endpoint->toward_ipa) {
 		ipa_endpoint_replenish_disable(endpoint);
-		ipa_interrupt_suspend_disable(ipa->interrupt,
-					      endpoint->endpoint_id);
+		ipa_interrupt_suspend_disable(ipa->interrupt, endpoint_id);
 	}
 
 	/* Note that if stop fails, the channel's state is not well-defined */
@@ -1606,7 +1712,7 @@ void ipa_endpoint_disable_one(struct ipa_endpoint *endpoint)
 	if (ret)
 		dev_err(&ipa->pdev->dev,
 			"error %d attempting to stop endpoint %u\n", ret,
-			endpoint->endpoint_id);
+			endpoint_id);
 }
 
 void ipa_endpoint_suspend_one(struct ipa_endpoint *endpoint)
@@ -1615,7 +1721,7 @@ void ipa_endpoint_suspend_one(struct ipa_endpoint *endpoint)
 	struct gsi *gsi = &endpoint->ipa->gsi;
 	int ret;
 
-	if (!(endpoint->ipa->enabled & BIT(endpoint->endpoint_id)))
+	if (!test_bit(endpoint->endpoint_id, endpoint->ipa->enabled))
 		return;
 
 	if (!endpoint->toward_ipa) {
@@ -1635,7 +1741,7 @@ void ipa_endpoint_resume_one(struct ipa_endpoint *endpoint)
 	struct gsi *gsi = &endpoint->ipa->gsi;
 	int ret;
 
-	if (!(endpoint->ipa->enabled & BIT(endpoint->endpoint_id)))
+	if (!test_bit(endpoint->endpoint_id, endpoint->ipa->enabled))
 		return;
 
 	if (!endpoint->toward_ipa)
@@ -1682,7 +1788,7 @@ static void ipa_endpoint_setup_one(struct ipa_endpoint *endpoint)
 	if (endpoint->ee_id != GSI_EE_AP)
 		return;
 
-	endpoint->trans_tre_max = gsi_channel_trans_tre_max(gsi, channel_id);
+	endpoint->skb_frag_max = gsi->channel[channel_id].trans_tre_max - 1;
 	if (!endpoint->toward_ipa) {
 		/* RX transactions require a single TRE, so the maximum
 		 * backlog is the same as the maximum outstanding TREs.
@@ -1695,12 +1801,12 @@ static void ipa_endpoint_setup_one(struct ipa_endpoint *endpoint)
 
 	ipa_endpoint_program(endpoint);
 
-	endpoint->ipa->set_up |= BIT(endpoint->endpoint_id);
+	__set_bit(endpoint->endpoint_id, endpoint->ipa->set_up);
 }
 
 static void ipa_endpoint_teardown_one(struct ipa_endpoint *endpoint)
 {
-	endpoint->ipa->set_up &= ~BIT(endpoint->endpoint_id);
+	__clear_bit(endpoint->endpoint_id, endpoint->ipa->set_up);
 
 	if (!endpoint->toward_ipa)
 		cancel_delayed_work_sync(&endpoint->replenish_work);
@@ -1710,44 +1816,39 @@ static void ipa_endpoint_teardown_one(struct ipa_endpoint *endpoint)
 
 void ipa_endpoint_setup(struct ipa *ipa)
 {
-	u32 initialized = ipa->initialized;
+	u32 endpoint_id;
 
-	ipa->set_up = 0;
-	while (initialized) {
-		u32 endpoint_id = __ffs(initialized);
-
-		initialized ^= BIT(endpoint_id);
-
+	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count)
 		ipa_endpoint_setup_one(&ipa->endpoint[endpoint_id]);
-	}
 }
 
 void ipa_endpoint_teardown(struct ipa *ipa)
 {
-	u32 set_up = ipa->set_up;
+	u32 endpoint_id;
 
-	while (set_up) {
-		u32 endpoint_id = __fls(set_up);
-
-		set_up ^= BIT(endpoint_id);
-
+	for_each_set_bit(endpoint_id, ipa->set_up, ipa->endpoint_count)
 		ipa_endpoint_teardown_one(&ipa->endpoint[endpoint_id]);
-	}
-	ipa->set_up = 0;
+}
+
+void ipa_endpoint_deconfig(struct ipa *ipa)
+{
+	ipa->available_count = 0;
+	bitmap_free(ipa->available);
+	ipa->available = NULL;
 }
 
 int ipa_endpoint_config(struct ipa *ipa)
 {
 	struct device *dev = &ipa->pdev->dev;
-	u32 initialized;
+	const struct ipa_reg *reg;
+	u32 endpoint_id;
+	u32 tx_count;
+	u32 rx_count;
 	u32 rx_base;
-	u32 rx_mask;
-	u32 tx_mask;
-	int ret = 0;
-	u32 max;
+	u32 limit;
 	u32 val;
 
-	/* Prior to IPAv3.5, the FLAVOR_0 register was not supported.
+	/* Prior to IPA v3.5, the FLAVOR_0 register was not supported.
 	 * Furthermore, the endpoints were not grouped such that TX
 	 * endpoint numbers started with 0 and RX endpoints had numbers
 	 * higher than all TX endpoints, so we can't do the simple
@@ -1758,60 +1859,78 @@ int ipa_endpoint_config(struct ipa *ipa)
 	 * assume the configuration is valid.
 	 */
 	if (ipa->version < IPA_VERSION_3_5) {
-		ipa->available = ~0;
+		ipa->available = bitmap_zalloc(IPA_ENDPOINT_MAX, GFP_KERNEL);
+		if (!ipa->available)
+			return -ENOMEM;
+		ipa->available_count = IPA_ENDPOINT_MAX;
+
+		bitmap_set(ipa->available, 0, IPA_ENDPOINT_MAX);
+
 		return 0;
 	}
 
 	/* Find out about the endpoints supplied by the hardware, and ensure
-	 * the highest one doesn't exceed the number we support.
+	 * the highest one doesn't exceed the number supported by software.
 	 */
-	val = ioread32(ipa->reg_virt + IPA_REG_FLAVOR_0_OFFSET);
+	reg = ipa_reg(ipa, FLAVOR_0);
+	val = ioread32(ipa->reg_virt + ipa_reg_offset(reg));
 
-	/* Our RX is an IPA producer */
-	rx_base = u32_get_bits(val, IPA_PROD_LOWEST_FMASK);
-	max = rx_base + u32_get_bits(val, IPA_MAX_PROD_PIPES_FMASK);
-	if (max > IPA_ENDPOINT_MAX) {
-		dev_err(dev, "too many endpoints (%u > %u)\n",
-			max, IPA_ENDPOINT_MAX);
+	/* Our RX is an IPA producer; our TX is an IPA consumer. */
+	tx_count = ipa_reg_decode(reg, MAX_CONS_PIPES, val);
+	rx_count = ipa_reg_decode(reg, MAX_PROD_PIPES, val);
+	rx_base = ipa_reg_decode(reg, PROD_LOWEST, val);
+
+	limit = rx_base + rx_count;
+	if (limit > IPA_ENDPOINT_MAX) {
+		dev_err(dev, "too many endpoints, %u > %u\n",
+			limit, IPA_ENDPOINT_MAX);
 		return -EINVAL;
 	}
-	rx_mask = GENMASK(max - 1, rx_base);
 
-	/* Our TX is an IPA consumer */
-	max = u32_get_bits(val, IPA_MAX_CONS_PIPES_FMASK);
-	tx_mask = GENMASK(max - 1, 0);
+	/* Allocate and initialize the available endpoint bitmap */
+	ipa->available = bitmap_zalloc(limit, GFP_KERNEL);
+	if (!ipa->available)
+		return -ENOMEM;
+	ipa->available_count = limit;
 
-	ipa->available = rx_mask | tx_mask;
+	/* Mark all supported RX and TX endpoints as available */
+	bitmap_set(ipa->available, 0, tx_count);
+	bitmap_set(ipa->available, rx_base, rx_count);
 
-	/* Check for initialized endpoints not supported by the hardware */
-	if (ipa->initialized & ~ipa->available) {
-		dev_err(dev, "unavailable endpoint id(s) 0x%08x\n",
-			ipa->initialized & ~ipa->available);
-		ret = -EINVAL;		/* Report other errors too */
-	}
-
-	initialized = ipa->initialized;
-	while (initialized) {
-		u32 endpoint_id = __ffs(initialized);
+	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count) {
 		struct ipa_endpoint *endpoint;
 
-		initialized ^= BIT(endpoint_id);
+		if (endpoint_id >= limit) {
+			dev_err(dev, "invalid endpoint id, %u > %u\n",
+				endpoint_id, limit - 1);
+			goto err_free_bitmap;
+		}
+
+		if (!test_bit(endpoint_id, ipa->available)) {
+			dev_err(dev, "unavailable endpoint id %u\n",
+				endpoint_id);
+			goto err_free_bitmap;
+		}
 
 		/* Make sure it's pointing in the right direction */
 		endpoint = &ipa->endpoint[endpoint_id];
-		if ((endpoint_id < rx_base) != endpoint->toward_ipa) {
-			dev_err(dev, "endpoint id %u wrong direction\n",
-				endpoint_id);
-			ret = -EINVAL;
+		if (endpoint->toward_ipa) {
+			if (endpoint_id < tx_count)
+				continue;
+		} else if (endpoint_id >= rx_base) {
+			continue;
 		}
+
+		dev_err(dev, "endpoint id %u wrong direction\n", endpoint_id);
+		goto err_free_bitmap;
 	}
 
-	return ret;
-}
+	return 0;
 
-void ipa_endpoint_deconfig(struct ipa *ipa)
-{
-	ipa->available = 0;	/* Nothing more to do */
+err_free_bitmap:
+	ipa_endpoint_deconfig(ipa);
+
+	return -EINVAL;
 }
 
 static void ipa_endpoint_init_one(struct ipa *ipa, enum ipa_endpoint_name name,
@@ -1830,48 +1949,66 @@ static void ipa_endpoint_init_one(struct ipa *ipa, enum ipa_endpoint_name name,
 	endpoint->channel_id = data->channel_id;
 	endpoint->endpoint_id = data->endpoint_id;
 	endpoint->toward_ipa = data->toward_ipa;
-	endpoint->data = &data->endpoint.config;
+	endpoint->config = data->endpoint.config;
 
-	ipa->initialized |= BIT(endpoint->endpoint_id);
+	__set_bit(endpoint->endpoint_id, ipa->defined);
 }
 
 static void ipa_endpoint_exit_one(struct ipa_endpoint *endpoint)
 {
-	endpoint->ipa->initialized &= ~BIT(endpoint->endpoint_id);
+	__clear_bit(endpoint->endpoint_id, endpoint->ipa->defined);
 
 	memset(endpoint, 0, sizeof(*endpoint));
 }
 
 void ipa_endpoint_exit(struct ipa *ipa)
 {
-	u32 initialized = ipa->initialized;
+	u32 endpoint_id;
 
-	while (initialized) {
-		u32 endpoint_id = __fls(initialized);
+	ipa->filtered = 0;
 
-		initialized ^= BIT(endpoint_id);
-
+	for_each_set_bit(endpoint_id, ipa->defined, ipa->endpoint_count)
 		ipa_endpoint_exit_one(&ipa->endpoint[endpoint_id]);
-	}
+
+	bitmap_free(ipa->enabled);
+	ipa->enabled = NULL;
+	bitmap_free(ipa->set_up);
+	ipa->set_up = NULL;
+	bitmap_free(ipa->defined);
+	ipa->defined = NULL;
+
 	memset(ipa->name_map, 0, sizeof(ipa->name_map));
 	memset(ipa->channel_map, 0, sizeof(ipa->channel_map));
 }
 
 /* Returns a bitmask of endpoints that support filtering, or 0 on error */
-u32 ipa_endpoint_init(struct ipa *ipa, u32 count,
+int ipa_endpoint_init(struct ipa *ipa, u32 count,
 		      const struct ipa_gsi_endpoint_data *data)
 {
 	enum ipa_endpoint_name name;
-	u32 filter_map;
+	u32 filtered;
 
 	BUILD_BUG_ON(!IPA_REPLENISH_BATCH);
 
-	if (!ipa_endpoint_data_valid(ipa, count, data))
-		return 0;	/* Error */
+	/* Number of endpoints is one more than the maximum ID */
+	ipa->endpoint_count = ipa_endpoint_max(ipa, count, data) + 1;
+	if (!ipa->endpoint_count)
+		return -EINVAL;
 
-	ipa->initialized = 0;
+	/* Initialize endpoint state bitmaps */
+	ipa->defined = bitmap_zalloc(ipa->endpoint_count, GFP_KERNEL);
+	if (!ipa->defined)
+		return -ENOMEM;
 
-	filter_map = 0;
+	ipa->set_up = bitmap_zalloc(ipa->endpoint_count, GFP_KERNEL);
+	if (!ipa->set_up)
+		goto err_free_defined;
+
+	ipa->enabled = bitmap_zalloc(ipa->endpoint_count, GFP_KERNEL);
+	if (!ipa->enabled)
+		goto err_free_set_up;
+
+	filtered = 0;
 	for (name = 0; name < count; name++, data++) {
 		if (ipa_gsi_endpoint_data_empty(data))
 			continue;	/* Skip over empty slots */
@@ -1879,16 +2016,28 @@ u32 ipa_endpoint_init(struct ipa *ipa, u32 count,
 		ipa_endpoint_init_one(ipa, name, data);
 
 		if (data->endpoint.filter_support)
-			filter_map |= BIT(data->endpoint_id);
+			filtered |= BIT(data->endpoint_id);
+		if (data->ee_id == GSI_EE_MODEM && data->toward_ipa)
+			ipa->modem_tx_count++;
 	}
 
-	if (!ipa_filter_map_valid(ipa, filter_map))
-		goto err_endpoint_exit;
+	/* Make sure the set of filtered endpoints is valid */
+	if (!ipa_filtered_valid(ipa, filtered)) {
+		ipa_endpoint_exit(ipa);
 
-	return filter_map;	/* Non-zero bitmask */
+		return -EINVAL;
+	}
 
-err_endpoint_exit:
-	ipa_endpoint_exit(ipa);
+	ipa->filtered = filtered;
 
-	return 0;	/* Error */
+	return 0;
+
+err_free_set_up:
+	bitmap_free(ipa->set_up);
+	ipa->set_up = NULL;
+err_free_defined:
+	bitmap_free(ipa->defined);
+	ipa->defined = NULL;
+
+	return -ENOMEM;
 }

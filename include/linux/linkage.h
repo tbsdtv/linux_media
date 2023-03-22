@@ -69,8 +69,8 @@
 #endif
 
 #ifndef __ALIGN
-#define __ALIGN		.align 4,0x90
-#define __ALIGN_STR	".align 4,0x90"
+#define __ALIGN			.balign CONFIG_FUNCTION_ALIGNMENT
+#define __ALIGN_STR		__stringify(__ALIGN)
 #endif
 
 #ifdef __ASSEMBLY__
@@ -171,12 +171,9 @@
 
 /* SYM_ALIAS -- use only if you have to */
 #ifndef SYM_ALIAS
-#define SYM_ALIAS(alias, name, sym_type, linkage)			\
-	linkage(alias) ASM_NL						\
-	.set alias, name ASM_NL						\
-	.type alias sym_type ASM_NL					\
-	.set .L__sym_size_##alias, .L__sym_size_##name ASM_NL		\
-	.size alias, .L__sym_size_##alias
+#define SYM_ALIAS(alias, name, linkage)			\
+	linkage(alias) ASM_NL				\
+	.set alias, name ASM_NL
 #endif
 
 /* === code annotations === */
@@ -261,7 +258,7 @@
  */
 #ifndef SYM_FUNC_ALIAS
 #define SYM_FUNC_ALIAS(alias, name)					\
-	SYM_ALIAS(alias, name, SYM_T_FUNC, SYM_L_GLOBAL)
+	SYM_ALIAS(alias, name, SYM_L_GLOBAL)
 #endif
 
 /*
@@ -269,7 +266,7 @@
  */
 #ifndef SYM_FUNC_ALIAS_LOCAL
 #define SYM_FUNC_ALIAS_LOCAL(alias, name)				\
-	SYM_ALIAS(alias, name, SYM_T_FUNC, SYM_L_LOCAL)
+	SYM_ALIAS(alias, name, SYM_L_LOCAL)
 #endif
 
 /*
@@ -277,7 +274,7 @@
  */
 #ifndef SYM_FUNC_ALIAS_WEAK
 #define SYM_FUNC_ALIAS_WEAK(alias, name)				\
-	SYM_ALIAS(alias, name, SYM_T_FUNC, SYM_L_WEAK)
+	SYM_ALIAS(alias, name, SYM_L_WEAK)
 #endif
 
 /* SYM_CODE_START -- use for non-C (special) functions */

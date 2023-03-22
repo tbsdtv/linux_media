@@ -29,7 +29,6 @@ struct rxe_wr_opcode_info rxe_wr_opcode_info[] = {
 	[IB_WR_SEND]					= {
 		.name	= "IB_WR_SEND",
 		.mask	= {
-			[IB_QPT_SMI]	= WR_INLINE_MASK | WR_SEND_MASK,
 			[IB_QPT_GSI]	= WR_INLINE_MASK | WR_SEND_MASK,
 			[IB_QPT_RC]	= WR_INLINE_MASK | WR_SEND_MASK,
 			[IB_QPT_UC]	= WR_INLINE_MASK | WR_SEND_MASK,
@@ -39,7 +38,6 @@ struct rxe_wr_opcode_info rxe_wr_opcode_info[] = {
 	[IB_WR_SEND_WITH_IMM]				= {
 		.name	= "IB_WR_SEND_WITH_IMM",
 		.mask	= {
-			[IB_QPT_SMI]	= WR_INLINE_MASK | WR_SEND_MASK,
 			[IB_QPT_GSI]	= WR_INLINE_MASK | WR_SEND_MASK,
 			[IB_QPT_RC]	= WR_INLINE_MASK | WR_SEND_MASK,
 			[IB_QPT_UC]	= WR_INLINE_MASK | WR_SEND_MASK,
@@ -101,6 +99,18 @@ struct rxe_wr_opcode_info rxe_wr_opcode_info[] = {
 		.mask	= {
 			[IB_QPT_RC]	= WR_LOCAL_OP_MASK,
 			[IB_QPT_UC]	= WR_LOCAL_OP_MASK,
+		},
+	},
+	[IB_WR_FLUSH]					= {
+		.name   = "IB_WR_FLUSH",
+		.mask   = {
+			[IB_QPT_RC]	= WR_FLUSH_MASK,
+		},
+	},
+	[IB_WR_ATOMIC_WRITE]                       = {
+		.name   = "IB_WR_ATOMIC_WRITE",
+		.mask   = {
+			[IB_QPT_RC]     = WR_ATOMIC_WRITE_MASK,
 		},
 	},
 };
@@ -378,6 +388,29 @@ struct rxe_opcode_info rxe_opcode[RXE_NUM_OPCODE] = {
 			[RXE_IETH]	= RXE_BTH_BYTES,
 			[RXE_PAYLOAD]	= RXE_BTH_BYTES +
 					  RXE_IETH_BYTES,
+		}
+	},
+	[IB_OPCODE_RC_FLUSH]					= {
+		.name	= "IB_OPCODE_RC_FLUSH",
+		.mask	= RXE_FETH_MASK | RXE_RETH_MASK | RXE_FLUSH_MASK |
+			  RXE_START_MASK | RXE_END_MASK | RXE_REQ_MASK,
+		.length = RXE_BTH_BYTES + RXE_FETH_BYTES + RXE_RETH_BYTES,
+		.offset = {
+			[RXE_BTH]	= 0,
+			[RXE_FETH]	= RXE_BTH_BYTES,
+			[RXE_RETH]	= RXE_BTH_BYTES + RXE_FETH_BYTES,
+		}
+	},
+	[IB_OPCODE_RC_ATOMIC_WRITE]                        = {
+		.name   = "IB_OPCODE_RC_ATOMIC_WRITE",
+		.mask   = RXE_RETH_MASK | RXE_PAYLOAD_MASK | RXE_REQ_MASK |
+			  RXE_ATOMIC_WRITE_MASK | RXE_START_MASK |
+			  RXE_END_MASK,
+		.length = RXE_BTH_BYTES + RXE_RETH_BYTES,
+		.offset = {
+			[RXE_BTH]       = 0,
+			[RXE_RETH]      = RXE_BTH_BYTES,
+			[RXE_PAYLOAD]   = RXE_BTH_BYTES + RXE_RETH_BYTES,
 		}
 	},
 

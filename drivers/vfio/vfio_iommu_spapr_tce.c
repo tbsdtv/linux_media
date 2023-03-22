@@ -4,6 +4,7 @@
  *
  * Copyright (C) 2013 IBM Corp.  All rights reserved.
  *     Author: Alexey Kardashevskiy <aik@ozlabs.ru>
+ * Copyright Gavin Shan, IBM Corporation 2014.
  *
  * Derived from original vfio_iommu_type1.c:
  * Copyright (C) 2012 Red Hat, Inc.  All rights reserved.
@@ -378,8 +379,7 @@ static void tce_iommu_release(void *iommu_data)
 	kfree(container);
 }
 
-static void tce_iommu_unuse_page(struct tce_container *container,
-		unsigned long hpa)
+static void tce_iommu_unuse_page(unsigned long hpa)
 {
 	struct page *page;
 
@@ -474,7 +474,7 @@ static int tce_iommu_clear(struct tce_container *container,
 			continue;
 		}
 
-		tce_iommu_unuse_page(container, oldhpa);
+		tce_iommu_unuse_page(oldhpa);
 	}
 
 	iommu_tce_kill(tbl, firstentry, pages);
@@ -524,7 +524,7 @@ static long tce_iommu_build(struct tce_container *container,
 		ret = iommu_tce_xchg_no_kill(container->mm, tbl, entry + i,
 				&hpa, &dirtmp);
 		if (ret) {
-			tce_iommu_unuse_page(container, hpa);
+			tce_iommu_unuse_page(hpa);
 			pr_err("iommu_tce: %s failed ioba=%lx, tce=%lx, ret=%ld\n",
 					__func__, entry << tbl->it_page_shift,
 					tce, ret);
@@ -532,7 +532,7 @@ static long tce_iommu_build(struct tce_container *container,
 		}
 
 		if (dirtmp != DMA_NONE)
-			tce_iommu_unuse_page(container, hpa);
+			tce_iommu_unuse_page(hpa);
 
 		tce += IOMMU_PAGE_SIZE(tbl);
 	}
@@ -774,6 +774,57 @@ static long tce_iommu_create_default_window(struct tce_container *container)
 	return ret;
 }
 
+static long vfio_spapr_ioctl_eeh_pe_op(struct iommu_group *group,
+				       unsigned long arg)
+{
+	struct eeh_pe *pe;
+	struct vfio_eeh_pe_op op;
+	unsigned long minsz;
+
+	pe = eeh_iommu_group_to_pe(group);
+	if (!pe)
+		return -ENODEV;
+
+	minsz = offsetofend(struct vfio_eeh_pe_op, op);
+	if (copy_from_user(&op, (void __user *)arg, minsz))
+		return -EFAULT;
+	if (op.argsz < minsz || op.flags)
+		return -EINVAL;
+
+	switch (op.op) {
+	case VFIO_EEH_PE_DISABLE:
+		return eeh_pe_set_option(pe, EEH_OPT_DISABLE);
+	case VFIO_EEH_PE_ENABLE:
+		return eeh_pe_set_option(pe, EEH_OPT_ENABLE);
+	case VFIO_EEH_PE_UNFREEZE_IO:
+		return eeh_pe_set_option(pe, EEH_OPT_THAW_MMIO);
+	case VFIO_EEH_PE_UNFREEZE_DMA:
+		return eeh_pe_set_option(pe, EEH_OPT_THAW_DMA);
+	case VFIO_EEH_PE_GET_STATE:
+		return eeh_pe_get_state(pe);
+		break;
+	case VFIO_EEH_PE_RESET_DEACTIVATE:
+		return eeh_pe_reset(pe, EEH_RESET_DEACTIVATE, true);
+	case VFIO_EEH_PE_RESET_HOT:
+		return eeh_pe_reset(pe, EEH_RESET_HOT, true);
+	case VFIO_EEH_PE_RESET_FUNDAMENTAL:
+		return eeh_pe_reset(pe, EEH_RESET_FUNDAMENTAL, true);
+	case VFIO_EEH_PE_CONFIGURE:
+		return eeh_pe_configure(pe);
+	case VFIO_EEH_PE_INJECT_ERR:
+		minsz = offsetofend(struct vfio_eeh_pe_op, err.mask);
+		if (op.argsz < minsz)
+			return -EINVAL;
+		if (copy_from_user(&op, (void __user *)arg, minsz))
+			return -EFAULT;
+
+		return eeh_pe_inject_err(pe, op.err.type, op.err.func,
+					 op.err.addr, op.err.mask);
+	default:
+		return -EINVAL;
+	}
+}
+
 static long tce_iommu_ioctl(void *iommu_data,
 				 unsigned int cmd, unsigned long arg)
 {
@@ -786,14 +837,12 @@ static long tce_iommu_ioctl(void *iommu_data,
 		switch (arg) {
 		case VFIO_SPAPR_TCE_IOMMU:
 		case VFIO_SPAPR_TCE_v2_IOMMU:
-			ret = 1;
-			break;
+			return 1;
+		case VFIO_EEH:
+			return eeh_enabled();
 		default:
-			ret = vfio_spapr_iommu_eeh_ioctl(NULL, cmd, arg);
-			break;
+			return 0;
 		}
-
-		return (ret < 0) ? 0 : ret;
 	}
 
 	/*
@@ -1047,8 +1096,7 @@ static long tce_iommu_ioctl(void *iommu_data,
 
 		ret = 0;
 		list_for_each_entry(tcegrp, &container->group_list, next) {
-			ret = vfio_spapr_iommu_eeh_ioctl(tcegrp->grp,
-					cmd, arg);
+			ret = vfio_spapr_ioctl_eeh_pe_op(tcegrp->grp, arg);
 			if (ret)
 				return ret;
 		}
@@ -1266,7 +1314,10 @@ static int tce_iommu_attach_group(void *iommu_data,
 		goto unlock_exit;
 	}
 
-	/* Check if new group has the same iommu_ops (i.e. compatible) */
+	/*
+	 * Check if new group has the same iommu_table_group_ops
+	 * (i.e. compatible)
+	 */
 	list_for_each_entry(tcegrp, &container->group_list, next) {
 		struct iommu_table_group *table_group_tmp;
 

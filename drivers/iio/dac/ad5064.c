@@ -115,13 +115,13 @@ struct ad5064_state {
 	struct mutex lock;
 
 	/*
-	 * DMA (thus cache coherency maintenance) requires the
+	 * DMA (thus cache coherency maintenance) may require the
 	 * transfer buffers to live in their own cache lines.
 	 */
 	union {
 		u8 i2c[3];
 		__be32 spi;
-	} data ____cacheline_aligned;
+	} data __aligned(IIO_DMA_MINALIGN);
 };
 
 enum ad5064_type {
@@ -288,7 +288,7 @@ static ssize_t ad5064_write_dac_powerdown(struct iio_dev *indio_dev,
 	bool pwr_down;
 	int ret;
 
-	ret = strtobool(buf, &pwr_down);
+	ret = kstrtobool(buf, &pwr_down);
 	if (ret)
 		return ret;
 
@@ -993,9 +993,9 @@ static int ad5064_i2c_write(struct ad5064_state *st, unsigned int cmd,
 	return 0;
 }
 
-static int ad5064_i2c_probe(struct i2c_client *i2c,
-	const struct i2c_device_id *id)
+static int ad5064_i2c_probe(struct i2c_client *i2c)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	return ad5064_probe(&i2c->dev, id->driver_data, id->name,
 						ad5064_i2c_write);
 }
@@ -1056,7 +1056,7 @@ static struct i2c_driver ad5064_i2c_driver = {
 	.driver = {
 		   .name = "ad5064",
 	},
-	.probe = ad5064_i2c_probe,
+	.probe_new = ad5064_i2c_probe,
 	.id_table = ad5064_i2c_ids,
 };
 

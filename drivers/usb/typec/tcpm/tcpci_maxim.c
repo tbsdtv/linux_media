@@ -11,10 +11,9 @@
 #include <linux/module.h>
 #include <linux/regmap.h>
 #include <linux/usb/pd.h>
+#include <linux/usb/tcpci.h>
 #include <linux/usb/tcpm.h>
 #include <linux/usb/typec.h>
-
-#include "tcpci.h"
 
 #define PD_ACTIVITY_TIMEOUT_MS				10000
 
@@ -439,7 +438,7 @@ static int tcpci_init(struct tcpci *tcpci, struct tcpci_data *data)
 	return -1;
 }
 
-static int max_tcpci_probe(struct i2c_client *client, const struct i2c_device_id *i2c_id)
+static int max_tcpci_probe(struct i2c_client *client)
 {
 	int ret;
 	struct max_tcpci_chip *chip;
@@ -493,14 +492,12 @@ unreg_port:
 	return ret;
 }
 
-static int max_tcpci_remove(struct i2c_client *client)
+static void max_tcpci_remove(struct i2c_client *client)
 {
 	struct max_tcpci_chip *chip = i2c_get_clientdata(client);
 
 	if (!IS_ERR_OR_NULL(chip->tcpci))
 		tcpci_unregister_port(chip->tcpci);
-
-	return 0;
 }
 
 static const struct i2c_device_id max_tcpci_id[] = {
@@ -522,7 +519,7 @@ static struct i2c_driver max_tcpci_i2c_driver = {
 		.name = "maxtcpc",
 		.of_match_table = of_match_ptr(max_tcpci_of_match),
 	},
-	.probe = max_tcpci_probe,
+	.probe_new = max_tcpci_probe,
 	.remove = max_tcpci_remove,
 	.id_table = max_tcpci_id,
 };

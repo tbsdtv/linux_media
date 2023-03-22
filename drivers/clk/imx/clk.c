@@ -17,6 +17,9 @@
 DEFINE_SPINLOCK(imx_ccm_lock);
 EXPORT_SYMBOL_GPL(imx_ccm_lock);
 
+bool mcore_booted;
+EXPORT_SYMBOL_GPL(mcore_booted);
+
 void imx_unregister_clocks(struct clk *clks[], unsigned int count)
 {
 	unsigned int i;
@@ -107,8 +110,7 @@ struct clk_hw *imx_obtain_fixed_clock_hw(
 	return __clk_get_hw(clk);
 }
 
-struct clk_hw * imx_obtain_fixed_clk_hw(struct device_node *np,
-					const char *name)
+struct clk_hw *imx_get_clk_hw_by_name(struct device_node *np, const char *name)
 {
 	struct clk *clk;
 
@@ -118,7 +120,7 @@ struct clk_hw * imx_obtain_fixed_clk_hw(struct device_node *np,
 
 	return __clk_get_hw(clk);
 }
-EXPORT_SYMBOL_GPL(imx_obtain_fixed_clk_hw);
+EXPORT_SYMBOL_GPL(imx_get_clk_hw_by_name);
 
 /*
  * This fixups the register CCM_CSCMR1 write value.
@@ -173,6 +175,8 @@ void imx_register_uart_clocks(unsigned int clk_count)
 		int i;
 
 		imx_uart_clocks = kcalloc(clk_count, sizeof(struct clk *), GFP_KERNEL);
+		if (!imx_uart_clocks)
+			return;
 
 		if (!of_stdout)
 			return;

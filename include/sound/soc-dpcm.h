@@ -78,8 +78,6 @@ struct snd_soc_dpcm {
 	struct list_head list_be;
 	struct list_head list_fe;
 
-	/* hw params for this link - may be different for each link */
-	struct snd_pcm_hw_params hw_params;
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *debugfs_state;
 #endif
@@ -103,6 +101,8 @@ struct snd_soc_dpcm_runtime {
 	int trigger_pending; /* trigger cmd + 1 if pending, 0 if not */
 
 	int be_start; /* refcount protected by BE stream pcm lock */
+	int be_pause; /* refcount protected by BE stream pcm lock */
+	bool fe_pause; /* used to track STOP after PAUSE */
 };
 
 #define for_each_dpcm_fe(be, stream, _dpcm)				\

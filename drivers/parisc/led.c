@@ -137,6 +137,9 @@ static int start_task(void)
 
 	/* Create the work queue and queue the LED task */
 	led_wq = create_singlethread_workqueue("led_wq");	
+	if (!led_wq)
+		return -ENOMEM;
+
 	queue_delayed_work(led_wq, &led_task, 0);
 
 	return 0;
@@ -646,7 +649,7 @@ int lcd_print( const char *str )
 		cancel_delayed_work_sync(&led_task);
 
 	/* copy display string to buffer for procfs */
-	strlcpy(lcd_text, str, sizeof(lcd_text));
+	strscpy(lcd_text, str, sizeof(lcd_text));
 
 	/* Set LCD Cursor to 1st character */
 	gsc_writeb(lcd_info.reset_cmd1, LCD_CMD_REG);

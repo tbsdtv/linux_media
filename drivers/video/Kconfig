@@ -5,6 +5,16 @@
 
 menu "Graphics support"
 
+config APERTURE_HELPERS
+	bool
+	help
+	  Support tracking and hand-over of aperture ownership. Required
+	  by graphics drivers for firmware-provided framebuffers.
+
+config VIDEO_NOMODESET
+	bool
+	default n
+
 if HAS_IOMEM
 
 config HAVE_FB_ATMEL

@@ -880,8 +880,8 @@ The kernel interface functions are as follows:
 
      notify_end_rx can be NULL or it can be used to specify a function to be
      called when the call changes state to end the Tx phase.  This function is
-     called with the call-state spinlock held to prevent any reply or final ACK
-     from being delivered first.
+     called with a spinlock held to prevent the last DATA packet from being
+     transmitted until the function returns.
 
  (#) Receive data from a call::
 
@@ -1054,17 +1054,6 @@ The kernel interface functions are as follows:
      the peer into responding, which would then cause the value returned by the
      first function to change.  Note that this must be called in TASK_RUNNING
      state.
-
- (#) Get reply timestamp::
-
-	bool rxrpc_kernel_get_reply_time(struct socket *sock,
-					 struct rxrpc_call *call,
-					 ktime_t *_ts)
-
-     This allows the timestamp on the first DATA packet of the reply of a
-     client call to be queried, provided that it is still in the Rx ring.  If
-     successful, the timestamp will be stored into ``*_ts`` and true will be
-     returned; false will be returned otherwise.
 
  (#) Get remote client epoch::
 

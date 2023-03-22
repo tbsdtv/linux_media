@@ -90,13 +90,12 @@ properties:
             maximum: 5
 
           cpus:
-            $ref: /schemas/types.yaml#/definitions/phandle-array
             description:
               Should be a list of phandles to CPU nodes (as described in
               Documentation/devicetree/bindings/arm/cpus.yaml).
 
         required:
-          - fiq-index
+          - apple,fiq-index
           - cpus
 
 required:

@@ -17,6 +17,7 @@
 #include <linux/net_tstamp.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/hrtimer.h>
+#include <linux/debugfs.h>
 
 #include "sparx5_main_regs.h"
 
@@ -190,6 +191,7 @@ struct sparx5_port {
 	u8 ptp_cmd;
 	u16 ts_id;
 	struct sk_buff_head tx_skbs;
+	bool is_mrouter;
 };
 
 enum sparx5_core_clockfreq {
@@ -213,6 +215,15 @@ struct sparx5_skb_cb {
 	u8 pdu_w16_offset;
 	u16 ts_id;
 	unsigned long jiffies;
+};
+
+struct sparx5_mdb_entry {
+	struct list_head list;
+	DECLARE_BITMAP(port_mask, SPX5_PORTS);
+	unsigned char addr[ETH_ALEN];
+	bool cpu_copy;
+	u16 vid;
+	u16 pgid_idx;
 };
 
 #define SPARX5_PTP_TIMEOUT		msecs_to_jiffies(10)
@@ -256,6 +267,10 @@ struct sparx5 {
 	struct list_head mact_entries;
 	/* mac table list (mact_entries) mutex */
 	struct mutex mact_lock;
+	/* SW MDB table */
+	struct list_head mdb_entries;
+	/* mdb list mutex */
+	struct mutex mdb_lock;
 	struct delayed_work mact_work;
 	struct workqueue_struct *mact_queue;
 	/* Board specifics */
@@ -274,8 +289,12 @@ struct sparx5 {
 	struct mutex ptp_lock; /* lock for ptp interface state */
 	u16 ptp_skbs;
 	int ptp_irq;
+	/* VCAP */
+	struct vcap_control *vcap_ctrl;
 	/* PGID allocation map */
 	u8 pgid_map[PGID_TABLE_SIZE];
+	/* Common root for debugfs */
+	struct dentry *debugfs_root;
 };
 
 /* sparx5_switchdev.c */
@@ -291,7 +310,7 @@ struct frame_info {
 void sparx5_xtr_flush(struct sparx5 *sparx5, u8 grp);
 void sparx5_ifh_parse(u32 *ifh, struct frame_info *info);
 irqreturn_t sparx5_xtr_handler(int irq, void *_priv);
-int sparx5_port_xmit_impl(struct sk_buff *skb, struct net_device *dev);
+netdev_tx_t sparx5_port_xmit_impl(struct sk_buff *skb, struct net_device *dev);
 int sparx5_manual_injection_mode(struct sparx5 *sparx5);
 void sparx5_port_inj_timer_setup(struct sparx5_port *port);
 
@@ -307,8 +326,8 @@ int sparx5_mact_learn(struct sparx5 *sparx5, int port,
 		      const unsigned char mac[ETH_ALEN], u16 vid);
 bool sparx5_mact_getnext(struct sparx5 *sparx5,
 			 unsigned char mac[ETH_ALEN], u16 *vid, u32 *pcfg2);
-bool sparx5_mact_find(struct sparx5 *sparx5,
-		      const unsigned char mac[ETH_ALEN], u16 vid, u32 *pcfg2);
+int sparx5_mact_find(struct sparx5 *sparx5,
+		     const unsigned char mac[ETH_ALEN], u16 vid, u32 *pcfg2);
 int sparx5_mact_forget(struct sparx5 *sparx5,
 		       const unsigned char mac[ETH_ALEN], u16 vid);
 int sparx5_add_mact_entry(struct sparx5 *sparx5,
@@ -325,6 +344,7 @@ void sparx5_mact_init(struct sparx5 *sparx5);
 
 /* sparx5_vlan.c */
 void sparx5_pgid_update_mask(struct sparx5_port *port, int pgid, bool enable);
+void sparx5_pgid_clear(struct sparx5 *spx5, int pgid);
 void sparx5_pgid_read_mask(struct sparx5 *sparx5, int pgid, u32 portmask[3]);
 void sparx5_update_fwd(struct sparx5 *sparx5);
 void sparx5_vlan_init(struct sparx5 *sparx5);
@@ -341,6 +361,16 @@ int sparx5_config_dsm_calendar(struct sparx5 *sparx5);
 /* sparx5_ethtool.c */
 void sparx5_get_stats64(struct net_device *ndev, struct rtnl_link_stats64 *stats);
 int sparx_stats_init(struct sparx5 *sparx5);
+
+/* sparx5_dcb.c */
+#ifdef CONFIG_SPARX5_DCB
+int sparx5_dcb_init(struct sparx5 *sparx5);
+#else
+static inline int sparx5_dcb_init(struct sparx5 *sparx5)
+{
+	return 0;
+}
+#endif
 
 /* sparx5_netdev.c */
 void sparx5_set_port_ifh_timestamp(void *ifh_hdr, u64 timestamp);
@@ -366,6 +396,10 @@ int sparx5_ptp_txtstamp_request(struct sparx5_port *port,
 void sparx5_ptp_txtstamp_release(struct sparx5_port *port,
 				 struct sk_buff *skb);
 irqreturn_t sparx5_ptp_irq_handler(int irq, void *args);
+
+/* sparx5_vcap_impl.c */
+int sparx5_vcap_init(struct sparx5 *sparx5);
+void sparx5_vcap_destroy(struct sparx5 *sparx5);
 
 /* sparx5_pgid.c */
 enum sparx5_pgid_type {
@@ -403,6 +437,7 @@ static inline bool sparx5_is_baser(phy_interface_t interface)
 extern const struct phylink_mac_ops sparx5_phylink_mac_ops;
 extern const struct phylink_pcs_ops sparx5_phylink_pcs_ops;
 extern const struct ethtool_ops sparx5_ethtool_ops;
+extern const struct dcbnl_rtnl_ops sparx5_dcbnl_ops;
 
 /* Calculate raw offset */
 static inline __pure int spx5_offset(int id, int tinst, int tcnt,

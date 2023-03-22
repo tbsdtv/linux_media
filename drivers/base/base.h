@@ -146,7 +146,6 @@ static inline int driver_match_device(struct device_driver *drv,
 {
 	return drv->bus->match ? drv->bus->match(dev, drv) : 1;
 }
-extern bool driver_allows_async_probing(struct device_driver *drv);
 
 extern int driver_add_groups(struct device_driver *drv,
 			     const struct attribute_group **groups);
@@ -154,11 +153,11 @@ extern void driver_remove_groups(struct device_driver *drv,
 				 const struct attribute_group **groups);
 void device_driver_detach(struct device *dev);
 
-extern char *make_class_name(const char *name, struct kobject *kobj);
-
 extern int devres_release_all(struct device *dev);
 extern void device_block_probing(void);
 extern void device_unblock_probing(void);
+extern void deferred_probe_extend_timeout(void);
+extern void driver_deferred_probe_trigger(void);
 
 /* /sys/devices directory */
 extern struct kset *devices_kset;

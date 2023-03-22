@@ -27,12 +27,10 @@
  ******************************************************************************/
 
 #include <core/client.h>
-#include <core/notify.h>
 #include <core/ioctl.h>
 
 #include <nvif/client.h>
 #include <nvif/driver.h>
-#include <nvif/notify.h>
 #include <nvif/event.h>
 #include <nvif/ioctl.h>
 
@@ -72,38 +70,22 @@ nvkm_client_suspend(void *priv)
 }
 
 static int
-nvkm_client_ntfy(const void *header, u32 length, const void *data, u32 size)
+nvkm_client_event(u64 token, void *repv, u32 repc)
 {
-	const union {
-		struct nvif_notify_req_v0 v0;
-	} *args = header;
-	u8 route;
+	struct nvif_object *object = (void *)(unsigned long)token;
+	struct nvif_event *event = container_of(object, typeof(*event), object);
 
-	if (length == sizeof(args->v0) && args->v0.version == 0) {
-		route = args->v0.route;
-	} else {
-		WARN_ON(1);
-		return NVKM_NOTIFY_DROP;
-	}
+	if (event->func(event, repv, repc) == NVIF_EVENT_KEEP)
+		return NVKM_EVENT_KEEP;
 
-	switch (route) {
-	case NVDRM_NOTIFY_NVIF:
-		return nvif_notify(header, length, data, size);
-	case NVDRM_NOTIFY_USIF:
-		return usif_notify(header, length, data, size);
-	default:
-		WARN_ON(1);
-		break;
-	}
-
-	return NVKM_NOTIFY_DROP;
+	return NVKM_EVENT_DROP;
 }
 
 static int
 nvkm_client_driver_init(const char *name, u64 device, const char *cfg,
 			const char *dbg, void **ppriv)
 {
-	return nvkm_client_new(name, device, cfg, dbg, nvkm_client_ntfy,
+	return nvkm_client_new(name, device, cfg, dbg, nvkm_client_event,
 			       (struct nvkm_client **)ppriv);
 }
 

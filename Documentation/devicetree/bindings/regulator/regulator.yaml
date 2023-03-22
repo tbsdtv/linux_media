@@ -23,6 +23,7 @@ properties:
 
   regulator-microvolt-offset:
     description: Offset applied to voltages to compensate for voltage drops
+    $ref: "/schemas/types.yaml#/definitions/uint32"
 
   regulator-min-microamp:
     description: smallest current consumers may set
@@ -230,7 +231,7 @@ patternProperties:
   ".*-supply$":
     description: Input supply phandle(s) for this node
 
-  regulator-state-(standby|mem|disk):
+  "^regulator-state-(standby|mem|disk)$":
     type: object
     description:
       sub-nodes for regulator state in Standby, Suspend-to-RAM, and

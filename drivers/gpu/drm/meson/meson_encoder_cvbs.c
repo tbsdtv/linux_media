@@ -116,9 +116,10 @@ static int meson_encoder_cvbs_get_modes(struct drm_bridge *bridge,
 	return i;
 }
 
-static int meson_encoder_cvbs_mode_valid(struct drm_bridge *bridge,
-					const struct drm_display_info *display_info,
-					const struct drm_display_mode *mode)
+static enum drm_mode_status
+meson_encoder_cvbs_mode_valid(struct drm_bridge *bridge,
+			      const struct drm_display_info *display_info,
+			      const struct drm_display_mode *mode)
 {
 	if (meson_cvbs_get_mode(mode))
 		return MODE_OK;
@@ -238,6 +239,7 @@ int meson_encoder_cvbs_init(struct meson_drm *priv)
 	}
 
 	meson_encoder_cvbs->next_bridge = of_drm_find_bridge(remote);
+	of_node_put(remote);
 	if (!meson_encoder_cvbs->next_bridge) {
 		dev_err(priv->dev, "Failed to find CVBS Connector bridge\n");
 		return -EPROBE_DEFER;
@@ -280,5 +282,18 @@ int meson_encoder_cvbs_init(struct meson_drm *priv)
 	}
 	drm_connector_attach_encoder(connector, &meson_encoder_cvbs->encoder);
 
+	priv->encoders[MESON_ENC_CVBS] = meson_encoder_cvbs;
+
 	return 0;
+}
+
+void meson_encoder_cvbs_remove(struct meson_drm *priv)
+{
+	struct meson_encoder_cvbs *meson_encoder_cvbs;
+
+	if (priv->encoders[MESON_ENC_CVBS]) {
+		meson_encoder_cvbs = priv->encoders[MESON_ENC_CVBS];
+		drm_bridge_remove(&meson_encoder_cvbs->bridge);
+		drm_bridge_remove(meson_encoder_cvbs->next_bridge);
+	}
 }

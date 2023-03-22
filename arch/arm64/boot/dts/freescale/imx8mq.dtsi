@@ -63,6 +63,13 @@
 		clock-output-names = "osc_27m";
 	};
 
+	hdmi_phy_27m: clock-hdmi-phy-27m {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <27000000>;
+		clock-output-names = "hdmi_phy_27m";
+	};
+
 	clk_ext1: clock-ext1 {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
@@ -87,7 +94,7 @@
 	clk_ext4: clock-ext4 {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency= <133000000>;
+		clock-frequency = <133000000>;
 		clock-output-names = "clk_ext4";
 	};
 
@@ -172,6 +179,7 @@
 		A53_L2: l2-cache0 {
 			compatible = "cache";
 			cache-level = <2>;
+			cache-unified;
 			cache-size = <0x100000>;
 			cache-line-size = <64>;
 			cache-sets = <1024>;
@@ -313,7 +321,7 @@
 		arm,no-tick-in-suspend;
 	};
 
-	soc@0 {
+	soc: soc@0 {
 		compatible = "fsl,imx8mq-soc", "simple-bus";
 		#address-cells = <1>;
 		#size-cells = <1>;
@@ -322,7 +330,7 @@
 		nvmem-cells = <&imx8mq_uid>;
 		nvmem-cell-names = "soc_unique_id";
 
-		bus@30000000 { /* AIPS1 */
+		aips1: bus@30000000 { /* AIPS1 */
 			compatible = "fsl,aips-bus", "simple-bus";
 			reg = <0x30000000 0x400000>;
 			#address-cells = <1>;
@@ -500,7 +508,7 @@
 						      <0x00030005 0x00000053>,
 						      <0x00030006 0x0000005f>,
 						      <0x00030007 0x00000071>;
-				#thermal-sensor-cells =  <1>;
+				#thermal-sensor-cells = <1>;
 			};
 
 			wdog1: watchdog@30280000 {
@@ -527,7 +535,7 @@
 				status = "disabled";
 			};
 
-			sdma2: sdma@302c0000 {
+			sdma2: dma-controller@302c0000 {
 				compatible = "fsl,imx8mq-sdma","fsl,imx7d-sdma";
 				reg = <0x302c0000 0x10000>;
 				interrupts = <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>;
@@ -598,10 +606,11 @@
 				};
 			};
 
-			anatop: syscon@30360000 {
-				compatible = "fsl,imx8mq-anatop", "syscon";
+			anatop: clock-controller@30360000 {
+				compatible = "fsl,imx8mq-anatop";
 				reg = <0x30360000 0x10000>;
 				interrupts = <GIC_SPI 49 IRQ_TYPE_LEVEL_HIGH>;
+				#clock-cells = <1>;
 			};
 
 			snvs: snvs@30370000 {
@@ -777,7 +786,7 @@
 			};
 		};
 
-		bus@30400000 { /* AIPS2 */
+		aips2: bus@30400000 { /* AIPS2 */
 			compatible = "fsl,aips-bus", "simple-bus";
 			reg = <0x30400000 0x400000>;
 			#address-cells = <1>;
@@ -791,7 +800,7 @@
 				clocks = <&clk IMX8MQ_CLK_PWM1_ROOT>,
 				         <&clk IMX8MQ_CLK_PWM1_ROOT>;
 				clock-names = "ipg", "per";
-				#pwm-cells = <2>;
+				#pwm-cells = <3>;
 				status = "disabled";
 			};
 
@@ -802,7 +811,7 @@
 				clocks = <&clk IMX8MQ_CLK_PWM2_ROOT>,
 				         <&clk IMX8MQ_CLK_PWM2_ROOT>;
 				clock-names = "ipg", "per";
-				#pwm-cells = <2>;
+				#pwm-cells = <3>;
 				status = "disabled";
 			};
 
@@ -813,7 +822,7 @@
 				clocks = <&clk IMX8MQ_CLK_PWM3_ROOT>,
 				         <&clk IMX8MQ_CLK_PWM3_ROOT>;
 				clock-names = "ipg", "per";
-				#pwm-cells = <2>;
+				#pwm-cells = <3>;
 				status = "disabled";
 			};
 
@@ -824,7 +833,7 @@
 				clocks = <&clk IMX8MQ_CLK_PWM4_ROOT>,
 				         <&clk IMX8MQ_CLK_PWM4_ROOT>;
 				clock-names = "ipg", "per";
-				#pwm-cells = <2>;
+				#pwm-cells = <3>;
 				status = "disabled";
 			};
 
@@ -837,7 +846,7 @@
 			};
 		};
 
-		bus@30800000 { /* AIPS3 */
+		aips3: bus@30800000 { /* AIPS3 */
 			compatible = "fsl,aips-bus", "simple-bus";
 			reg = <0x30800000 0x400000>;
 			#address-cells = <1>;
@@ -1011,6 +1020,7 @@
 					compatible = "fsl,sec-v4.0-job-ring";
 					reg = <0x1000 0x1000>;
 					interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_HIGH>;
+					status = "disabled";
 				};
 
 				sec_jr1: jr@2000 {
@@ -1176,7 +1186,7 @@
 			};
 
 			csi1: csi@30a90000 {
-				compatible = "fsl,imx8mq-csi", "fsl,imx7-csi";
+				compatible = "fsl,imx8mq-csi";
 				reg = <0x30a90000 0x10000>;
 				interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clk IMX8MQ_CLK_CSI1_ROOT>;
@@ -1228,7 +1238,7 @@
 			};
 
 			csi2: csi@30b80000 {
-				compatible = "fsl,imx8mq-csi", "fsl,imx7-csi";
+				compatible = "fsl,imx8mq-csi";
 				reg = <0x30b80000 0x10000>;
 				interrupts = <GIC_SPI 43 IRQ_TYPE_LEVEL_HIGH>;
 				clocks = <&clk IMX8MQ_CLK_CSI2_ROOT>;
@@ -1294,7 +1304,7 @@
 				status = "disabled";
 			};
 
-			sdma1: sdma@30bd0000 {
+			sdma1: dma-controller@30bd0000 {
 				compatible = "fsl,imx8mq-sdma","fsl,imx7d-sdma";
 				reg = <0x30bd0000 0x10000>;
 				interrupts = <GIC_SPI 2 IRQ_TYPE_LEVEL_HIGH>;
@@ -1348,21 +1358,21 @@
 			noc_opp_table: opp-table {
 				compatible = "operating-points-v2";
 
-				opp-133M {
+				opp-133000000 {
 					opp-hz = /bits/ 64 <133333333>;
 				};
 
-				opp-400M {
+				opp-400000000 {
 					opp-hz = /bits/ 64 <400000000>;
 				};
 
-				opp-800M {
+				opp-800000000 {
 					opp-hz = /bits/ 64 <800000000>;
 				};
 			};
 		};
 
-		bus@32c00000 { /* AIPS4 */
+		aips4: bus@32c00000 { /* AIPS4 */
 			compatible = "fsl,aips-bus", "simple-bus";
 			reg = <0x32c00000 0x400000>;
 			#address-cells = <1>;

@@ -102,15 +102,10 @@ che non esistano.
 Sincronizzazione nel kernel Linux
 =================================
 
-Se posso darvi un suggerimento: non dormite mai con qualcuno più pazzo di
-voi. Ma se dovessi darvi un suggerimento sulla sincronizzazione:
-**mantenetela semplice**.
+Se dovessi darvi un suggerimento sulla sincronizzazione: **mantenetela
+semplice**.
 
 Siate riluttanti nell'introduzione di nuovi *lock*.
-
-Abbastanza strano, quest'ultimo è l'esatto opposto del mio suggerimento
-su quando **avete** dormito con qualcuno più pazzo di voi. E dovreste
-pensare a prendervi un cane bello grande.
 
 I due principali tipi di *lock* nel kernel: spinlock e mutex
 ------------------------------------------------------------
@@ -316,7 +311,7 @@ Pete Zaitcev ci offre il seguente riassunto:
 
 -  Se siete in un contesto utente (una qualsiasi chiamata di sistema)
    e volete sincronizzarvi con altri processi, usate i mutex. Potete trattenere
-   il mutex e dormire (``copy_from_user*(`` o ``kmalloc(x,GFP_KERNEL)``).
+   il mutex e dormire (``copy_from_user(`` o ``kmalloc(x,GFP_KERNEL)``).
 
 -  Altrimenti (== i dati possono essere manipolati da un'interruzione) usate
    spin_lock_irqsave() e spin_unlock_irqrestore().
@@ -979,9 +974,6 @@ fallisce nel trovare quello che vuole, quindi rilascia il *lock* di lettura,
 trattiene un *lock* di scrittura ed inserisce un oggetto; questo genere di
 codice presenta una corsa critica.
 
-Se non riuscite a capire il perché, per favore state alla larga dal mio
-codice.
-
 corsa fra temporizzatori: un passatempo del kernel
 --------------------------------------------------
 
@@ -998,7 +990,7 @@ potreste fare come segue::
 
             while (list) {
                     struct foo *next = list->next;
-                    del_timer(&list->timer);
+                    timer_delete(&list->timer);
                     kfree(list);
                     list = next;
             }
@@ -1011,7 +1003,7 @@ e prenderà il *lock* solo dopo spin_unlock_bh(), e cercherà
 di eliminare il suo oggetto (che però è già stato eliminato).
 
 Questo può essere evitato controllando il valore di ritorno di
-del_timer(): se ritorna 1, il temporizzatore è stato già
+timer_delete(): se ritorna 1, il temporizzatore è stato già
 rimosso. Se 0, significa (in questo caso) che il temporizzatore è in
 esecuzione, quindi possiamo fare come segue::
 
@@ -1020,7 +1012,7 @@ esecuzione, quindi possiamo fare come segue::
 
                     while (list) {
                             struct foo *next = list->next;
-                            if (!del_timer(&list->timer)) {
+                            if (!timer_delete(&list->timer)) {
                                     /* Give timer a chance to delete this */
                                     spin_unlock_bh(&list_lock);
                                     goto retry;
@@ -1034,10 +1026,8 @@ esecuzione, quindi possiamo fare come segue::
 Un altro problema è l'eliminazione dei temporizzatori che si riavviano
 da soli (chiamando add_timer() alla fine della loro esecuzione).
 Dato che questo è un problema abbastanza comune con una propensione
-alle corse critiche, dovreste usare del_timer_sync()
-(``include/linux/timer.h``) per gestire questo caso. Questa ritorna il
-numero di volte che il temporizzatore è stato interrotto prima che
-fosse in grado di fermarlo senza che si riavviasse.
+alle corse critiche, dovreste usare timer_delete_sync()
+(``include/linux/timer.h``) per gestire questo caso.
 
 Velocità della sincronizzazione
 ===============================
@@ -1382,7 +1372,7 @@ contesto, o trattenendo un qualsiasi *lock*.
 
 -  kfree()
 
--  add_timer() e del_timer()
+-  add_timer() e timer_delete()
 
 Riferimento per l'API dei Mutex
 ===============================

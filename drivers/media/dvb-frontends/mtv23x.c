@@ -2413,6 +2413,7 @@ static struct dvb_frontend_ops mtv23x_ops = {
 	.read_snr = mtv23x_read_snr,
 	.read_ber = mtv23x_read_ber,
 };
+
 static int mtv23x_probe(struct i2c_client*client,
 						const struct i2c_device_id *id)
 {
@@ -2469,14 +2470,13 @@ err:
 	dev_dbg(&client->dev,"failed = %d\n",ret);
 	return ret;
 }
-static int mtv23x_remove(struct i2c_client*client)
+
+static void mtv23x_remove(struct i2c_client*client)
 {
 	struct mtv23x_dev*dev = i2c_get_clientdata(client);
 
 	regmap_exit(dev->regmap);
 	kfree(dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id mtv23x_id_table[] ={
@@ -2503,4 +2503,3 @@ module_i2c_driver(mtv23x_driver);
 MODULE_AUTHOR("Davin <smiledavin@gmail.com>");
 MODULE_DESCRIPTION(" ISDB-T Demodulator driver");
 MODULE_LICENSE("GPL");
-

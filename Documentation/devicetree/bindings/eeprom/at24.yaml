@@ -10,6 +10,9 @@ title: I2C EEPROMs compatible with Atmel's AT24
 maintainers:
   - Bartosz Golaszewski <bgolaszewski@baylibre.com>
 
+allOf:
+  - $ref: /schemas/nvmem/nvmem.yaml
+
 select:
   properties:
     compatible:
@@ -120,7 +123,9 @@ properties:
           - const: giantec,gt24c32a
           - const: atmel,24c32
       - items:
-          - const: renesas,r1ex24128
+          - enum:
+              - renesas,r1ex24128
+              - samsung,s524ad0xd1
           - const: atmel,24c128
 
   label:
@@ -181,7 +186,7 @@ required:
   - compatible
   - reg
 
-additionalProperties: false
+unevaluatedProperties: false
 
 examples:
   - |

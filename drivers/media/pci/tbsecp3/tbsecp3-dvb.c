@@ -1330,6 +1330,50 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 	}
 
 	switch (dev->info->board_id) {
+	   case TBSECP3_BOARD_TBS6522H:
+	   	if(adapter->nr<2){ //for tuner0/1 dvbt/c/isdbt/atsc
+	   		adapter->fe = dvb_attach(cxd2878_attach, &cxd6802_parallel_cfg, i2c);
+		if (adapter->fe == NULL)
+		    goto frontend_atach_fail;
+	   	}else{ //for tuner2/3 dvbs/s2
+	   	 memset(&m88rs6060_config, 0, sizeof(m88rs6060_config));
+		 m88rs6060_config.fe = &adapter->fe;
+		 m88rs6060_config.clk = 27000000;
+		 m88rs6060_config.i2c_wr_max = 65;
+		 m88rs6060_config.ts_mode = MtFeTsOutMode_Parallel;
+		 m88rs6060_config.ts_pinswitch = 0;
+		 m88rs6060_config.HAS_CI = 0;
+		 m88rs6060_config.SetCIClock= NULL;
+		 m88rs6060_config.envelope_mode = 0;
+		 m88rs6060_config.demod_adr = 0x69; 
+		 m88rs6060_config.disable_22k = 0;
+		 m88rs6060_config.tuner_adr = 0x2c;
+		 m88rs6060_config.repeater_value = 0x12;
+		 m88rs6060_config.num = adapter->nr;
+		 m88rs6060_config.read_properties = ecp3_spi_read;
+		 m88rs6060_config.write_properties = ecp3_spi_write;
+		 m88rs6060_config.read_eeprom = ecp3_eeprom_read;
+		 m88rs6060_config.write_eeprom = ecp3_eeprom_write;
+		memset(&info, 0, sizeof(struct i2c_board_info));
+		strlcpy(info.type, "m88rs6060", I2C_NAME_SIZE);
+		info.addr = m88rs6060_config.demod_adr;
+		info.platform_data = &m88rs6060_config;
+		request_module(info.type);
+		client_demod = i2c_new_client_device(i2c, &info);
+		if (!i2c_client_has_driver(client_demod))
+				goto frontend_atach_fail;
+		if (!try_module_get(client_demod->dev.driver->owner)) {
+				i2c_unregister_device(client_demod);
+					goto frontend_atach_fail;
+					}
+		adapter->i2c_client_demod = client_demod;
+		if (tbsecp3_attach_sec(adapter, adapter->fe) == NULL) {
+			    dev_warn(&dev->pci_dev->dev,
+			    			    "error attaching lnb control on adapter %d\n",
+							    adapter->nr);
+			}		 
+	   	}
+	   break;
 	   case TBSECP3_BOARD_TBS6209SE:
 	   		tbs_octuples_reset_demod(adapter);
 	   		set_mac_address(adapter);		
@@ -1430,13 +1474,13 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 					goto frontend_atach_fail;
 					}
 		adapter->i2c_client_demod = client_demod;
-		if(m88rs6060_config.demod_adr!=0x6B){ 
+		//if(m88rs6060_config.demod_adr!=0x6B){ 
 		if (tbsecp3_attach_sec(adapter, adapter->fe) == NULL) {
 			    dev_warn(&dev->pci_dev->dev,
 			    			    "error attaching lnb control on adapter %d\n",
 							    adapter->nr);
 			}		    
-		}
+		//}
 		 if(dev->info->board_id == TBSECP3_BOARD_TBS6910SE){
 			tbsecp3_ca_init(adapter, adapter->nr);
 		 }
@@ -1624,6 +1668,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 
 		break;
 	case TBSECP3_BOARD_TBS6304X:
+	case TBSECP3_BOARD_TBS6304T:
 		adapter->fe = dvb_attach(tas2971_attach, &tbs6304x_demod_cfg, i2c);
 		if (adapter->fe == NULL)
 		    goto frontend_atach_fail;

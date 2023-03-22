@@ -26,7 +26,7 @@ echo "  main Makefile when optional -p is specified."
 echo "- Prints pass/fail dependency check for each tests/sub-test."
 echo "- Prints pass/fail targets and libraries."
 echo "- Default: runs dependency checks on all tests."
-echo "- Optional test name can be specified to check dependencies for it."
+echo "- Optional: test name can be specified to check dependencies for it."
 exit 1
 
 }
@@ -90,7 +90,7 @@ pass_libs=()
 pass_cnt=0
 
 # Get all TARGETS from selftests Makefile
-targets=$(egrep "^TARGETS +|^TARGETS =" Makefile | cut -d "=" -f2)
+targets=$(grep -E "^TARGETS +|^TARGETS =" Makefile | cut -d "=" -f2)
 
 # Single test case
 if [ $# -eq 2 ]

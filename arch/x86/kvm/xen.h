@@ -15,16 +15,19 @@
 extern struct static_key_false_deferred kvm_xen_enabled;
 
 int __kvm_xen_has_interrupt(struct kvm_vcpu *vcpu);
+void kvm_xen_inject_pending_events(struct kvm_vcpu *vcpu);
 int kvm_xen_vcpu_set_attr(struct kvm_vcpu *vcpu, struct kvm_xen_vcpu_attr *data);
 int kvm_xen_vcpu_get_attr(struct kvm_vcpu *vcpu, struct kvm_xen_vcpu_attr *data);
 int kvm_xen_hvm_set_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
 int kvm_xen_hvm_get_attr(struct kvm *kvm, struct kvm_xen_hvm_attr *data);
+int kvm_xen_hvm_evtchn_send(struct kvm *kvm, struct kvm_irq_routing_xen_evtchn *evt);
 int kvm_xen_write_hypercall_page(struct kvm_vcpu *vcpu, u64 data);
 int kvm_xen_hvm_config(struct kvm *kvm, struct kvm_xen_hvm_config *xhc);
 void kvm_xen_init_vm(struct kvm *kvm);
 void kvm_xen_destroy_vm(struct kvm *kvm);
-
-int kvm_xen_set_evtchn_fast(struct kvm_kernel_irq_routing_entry *e,
+void kvm_xen_init_vcpu(struct kvm_vcpu *vcpu);
+void kvm_xen_destroy_vcpu(struct kvm_vcpu *vcpu);
+int kvm_xen_set_evtchn_fast(struct kvm_xen_evtchn *xe,
 			    struct kvm *kvm);
 int kvm_xen_setup_evtchn(struct kvm *kvm,
 			 struct kvm_kernel_irq_routing_entry *e,
@@ -46,11 +49,33 @@ static inline bool kvm_xen_hypercall_enabled(struct kvm *kvm)
 static inline int kvm_xen_has_interrupt(struct kvm_vcpu *vcpu)
 {
 	if (static_branch_unlikely(&kvm_xen_enabled.key) &&
-	    vcpu->arch.xen.vcpu_info_set && vcpu->kvm->arch.xen.upcall_vector)
+	    vcpu->arch.xen.vcpu_info_cache.active &&
+	    vcpu->kvm->arch.xen.upcall_vector)
 		return __kvm_xen_has_interrupt(vcpu);
 
 	return 0;
 }
+
+static inline bool kvm_xen_has_pending_events(struct kvm_vcpu *vcpu)
+{
+	return static_branch_unlikely(&kvm_xen_enabled.key) &&
+		vcpu->arch.xen.evtchn_pending_sel;
+}
+
+static inline bool kvm_xen_timer_enabled(struct kvm_vcpu *vcpu)
+{
+	return !!vcpu->arch.xen.timer_virq;
+}
+
+static inline int kvm_xen_has_pending_timer(struct kvm_vcpu *vcpu)
+{
+	if (kvm_xen_hypercall_enabled(vcpu->kvm) && kvm_xen_timer_enabled(vcpu))
+		return atomic_read(&vcpu->arch.xen.timer_pending);
+
+	return 0;
+}
+
+void kvm_xen_inject_timer_irqs(struct kvm_vcpu *vcpu);
 #else
 static inline int kvm_xen_write_hypercall_page(struct kvm_vcpu *vcpu, u64 data)
 {
@@ -62,6 +87,14 @@ static inline void kvm_xen_init_vm(struct kvm *kvm)
 }
 
 static inline void kvm_xen_destroy_vm(struct kvm *kvm)
+{
+}
+
+static inline void kvm_xen_init_vcpu(struct kvm_vcpu *vcpu)
+{
+}
+
+static inline void kvm_xen_destroy_vcpu(struct kvm_vcpu *vcpu)
 {
 }
 
@@ -79,6 +112,29 @@ static inline int kvm_xen_has_interrupt(struct kvm_vcpu *vcpu)
 {
 	return 0;
 }
+
+static inline void kvm_xen_inject_pending_events(struct kvm_vcpu *vcpu)
+{
+}
+
+static inline bool kvm_xen_has_pending_events(struct kvm_vcpu *vcpu)
+{
+	return false;
+}
+
+static inline int kvm_xen_has_pending_timer(struct kvm_vcpu *vcpu)
+{
+	return 0;
+}
+
+static inline void kvm_xen_inject_timer_irqs(struct kvm_vcpu *vcpu)
+{
+}
+
+static inline bool kvm_xen_timer_enabled(struct kvm_vcpu *vcpu)
+{
+	return false;
+}
 #endif
 
 int kvm_xen_hypercall(struct kvm_vcpu *vcpu);
@@ -87,11 +143,11 @@ int kvm_xen_hypercall(struct kvm_vcpu *vcpu);
 #include <asm/xen/interface.h>
 #include <xen/interface/vcpu.h>
 
-void kvm_xen_update_runstate_guest(struct kvm_vcpu *vcpu, int state);
+void kvm_xen_update_runstate(struct kvm_vcpu *vcpu, int state);
 
 static inline void kvm_xen_runstate_set_running(struct kvm_vcpu *vcpu)
 {
-	kvm_xen_update_runstate_guest(vcpu, RUNSTATE_running);
+	kvm_xen_update_runstate(vcpu, RUNSTATE_running);
 }
 
 static inline void kvm_xen_runstate_set_preempted(struct kvm_vcpu *vcpu)
@@ -103,8 +159,10 @@ static inline void kvm_xen_runstate_set_preempted(struct kvm_vcpu *vcpu)
 	 * behalf of the vCPU. Only if the VMM does actually block
 	 * does it need to enter RUNSTATE_blocked.
 	 */
-	if (vcpu->preempted)
-		kvm_xen_update_runstate_guest(vcpu, RUNSTATE_runnable);
+	if (WARN_ON_ONCE(!vcpu->preempted))
+		return;
+
+	kvm_xen_update_runstate(vcpu, RUNSTATE_runnable);
 }
 
 /* 32-bit compatibility definitions, also used natively in 32-bit build */
@@ -148,5 +206,12 @@ struct compat_vcpu_runstate_info {
     uint64_t state_entry_time;
     uint64_t time[4];
 } __attribute__((packed));
+
+struct compat_sched_poll {
+	/* This is actually a guest virtual address which points to ports. */
+	uint32_t ports;
+	unsigned int nr_ports;
+	uint64_t timeout;
+};
 
 #endif /* __ARCH_X86_KVM_XEN_H__ */

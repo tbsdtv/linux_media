@@ -29,11 +29,12 @@ enum of_gpio_flags {
 	OF_GPIO_TRANSITORY = 0x8,
 	OF_GPIO_PULL_UP = 0x10,
 	OF_GPIO_PULL_DOWN = 0x20,
+	OF_GPIO_PULL_DISABLE = 0x40,
 };
 
 #ifdef CONFIG_OF_GPIO
 
-#include <linux/kernel.h>
+#include <linux/container_of.h>
 
 /*
  * OF GPIO chip for memory mapped banks

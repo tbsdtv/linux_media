@@ -99,24 +99,24 @@ static irqreturn_t pcf8523_irq(int irq, void *dev_id)
 static int pcf8523_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct pcf8523 *pcf8523 = dev_get_drvdata(dev);
-	u8 regs[7];
+	u8 regs[10];
 	int err;
 
-	err = regmap_bulk_read(pcf8523->regmap, PCF8523_REG_SECONDS, regs,
+	err = regmap_bulk_read(pcf8523->regmap, PCF8523_REG_CONTROL1, regs,
 			       sizeof(regs));
 	if (err < 0)
 		return err;
 
-	if (regs[0] & PCF8523_SECONDS_OS)
+	if ((regs[0] & PCF8523_CONTROL1_STOP) || (regs[3] & PCF8523_SECONDS_OS))
 		return -EINVAL;
 
-	tm->tm_sec = bcd2bin(regs[0] & 0x7f);
-	tm->tm_min = bcd2bin(regs[1] & 0x7f);
-	tm->tm_hour = bcd2bin(regs[2] & 0x3f);
-	tm->tm_mday = bcd2bin(regs[3] & 0x3f);
-	tm->tm_wday = regs[4] & 0x7;
-	tm->tm_mon = bcd2bin(regs[5] & 0x1f) - 1;
-	tm->tm_year = bcd2bin(regs[6]) + 100;
+	tm->tm_sec = bcd2bin(regs[3] & 0x7f);
+	tm->tm_min = bcd2bin(regs[4] & 0x7f);
+	tm->tm_hour = bcd2bin(regs[5] & 0x3f);
+	tm->tm_mday = bcd2bin(regs[6] & 0x3f);
+	tm->tm_wday = regs[7] & 0x7;
+	tm->tm_mon = bcd2bin(regs[8] & 0x1f) - 1;
+	tm->tm_year = bcd2bin(regs[9]) + 100;
 
 	return 0;
 }
@@ -390,8 +390,7 @@ static const struct regmap_config regmap_config = {
         .max_register = 0x13,
 };
 
-static int pcf8523_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int pcf8523_probe(struct i2c_client *client)
 {
 	struct pcf8523 *pcf8523;
 	struct rtc_device *rtc;
@@ -485,7 +484,7 @@ static struct i2c_driver pcf8523_driver = {
 		.name = "rtc-pcf8523",
 		.of_match_table = pcf8523_of_match,
 	},
-	.probe = pcf8523_probe,
+	.probe_new = pcf8523_probe,
 	.id_table = pcf8523_id,
 };
 module_i2c_driver(pcf8523_driver);

@@ -205,10 +205,10 @@ enum sam_status {
 };
 
 #define STATUS_MASK         0xfe
+
 /*
  *  SENSE KEYS
  */
-
 #define NO_SENSE            0x00
 #define RECOVERED_ERROR     0x01
 #define NOT_READY           0x02
@@ -223,7 +223,7 @@ enum sam_status {
 #define ABORTED_COMMAND     0x0b
 #define VOLUME_OVERFLOW     0x0d
 #define MISCOMPARE          0x0e
-
+#define COMPLETED	    0x0f
 
 /*
  *  DEVICE TYPES
@@ -307,7 +307,9 @@ enum zbc_zone_type {
 	ZBC_ZONE_TYPE_CONV		= 0x1,
 	ZBC_ZONE_TYPE_SEQWRITE_REQ	= 0x2,
 	ZBC_ZONE_TYPE_SEQWRITE_PREF	= 0x3,
-	/* 0x4 to 0xf are reserved */
+	ZBC_ZONE_TYPE_SEQ_OR_BEFORE_REQ	= 0x4,
+	ZBC_ZONE_TYPE_GAP		= 0x5,
+	/* 0x6 to 0xf are reserved */
 };
 
 /* Zone conditions of REPORT ZONES zone descriptors */
@@ -323,6 +325,11 @@ enum zbc_zone_cond {
 	ZBC_ZONE_COND_OFFLINE		= 0xf,
 };
 
+enum zbc_zone_alignment_method {
+	ZBC_CONSTANT_ZONE_LENGTH	= 0x1,
+	ZBC_CONSTANT_ZONE_START_OFFSET	= 0x8,
+};
+
 /* Version descriptor values for INQUIRY */
 enum scsi_version_descriptor {
 	SCSI_VERSION_DESCRIPTOR_FCP4	= 0x0a40,
@@ -334,5 +341,15 @@ enum scsi_version_descriptor {
 	SCSI_VERSION_DESCRIPTOR_SPC4	= 0x0460,
 	SCSI_VERSION_DESCRIPTOR_SRP	= 0x0940
 };
+
+enum scsi_support_opcode {
+	SCSI_SUPPORT_NO_INFO		= 0,
+	SCSI_SUPPORT_NOT_SUPPORTED	= 1,
+	SCSI_SUPPORT_FULL		= 3,
+	SCSI_SUPPORT_VENDOR		= 5,
+};
+
+#define SCSI_CONTROL_MASK 0
+#define SCSI_GROUP_NUMBER_MASK 0
 
 #endif /* _SCSI_PROTO_H_ */

@@ -39,8 +39,16 @@ static inline bool on_stack(struct stack_info *info,
  * Kernel uses the packed stack layout (-mpacked-stack).
  */
 struct stack_frame {
-	unsigned long empty1[5];
-	unsigned int  empty2[8];
+	union {
+		unsigned long empty[9];
+		struct {
+			unsigned long sie_control_block;
+			unsigned long sie_savearea;
+			unsigned long sie_reason;
+			unsigned long sie_flags;
+			unsigned long sie_control_block_phys;
+		};
+	};
 	unsigned long gprs[10];
 	unsigned long back_chain;
 };

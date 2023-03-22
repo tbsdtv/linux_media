@@ -30,10 +30,15 @@ do
 			resdir=`echo $i | sed -e 's,/$,,' -e 's,/[^/]*$,,'`
 			head -1 $resdir/log
 		fi
-		TORTURE_SUITE="`cat $i/../torture_suite`"
+		TORTURE_SUITE="`cat $i/../torture_suite`" ; export TORTURE_SUITE
 		configfile=`echo $i | sed -e 's,^.*/,,'`
 		rm -f $i/console.log.*.diags
-		kvm-recheck-${TORTURE_SUITE}.sh $i
+		case "${TORTURE_SUITE}" in
+		X*)
+			;;
+		*)
+			kvm-recheck-${TORTURE_SUITE}.sh $i
+		esac
 		if test -f "$i/qemu-retval" && test "`cat $i/qemu-retval`" -ne 0 && test "`cat $i/qemu-retval`" -ne 137
 		then
 			echo QEMU error, output:

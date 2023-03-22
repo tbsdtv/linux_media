@@ -36,10 +36,14 @@ test_cpp
 *.lskel.h
 /no_alu32
 /bpf_gcc
+/host-tools
 /tools
 /runqslower
 /bench
+/veristat
+/sign-file
 *.ko
 *.tmp
-xdpxceiver
+xskxceiver
 xdp_redirect_multi
+xdp_synproxy

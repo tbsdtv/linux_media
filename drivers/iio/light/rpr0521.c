@@ -927,8 +927,7 @@ static const struct regmap_config rpr0521_regmap_config = {
 	.volatile_reg	= rpr0521_is_volatile_reg,
 };
 
-static int rpr0521_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int rpr0521_probe(struct i2c_client *client)
 {
 	struct rpr0521_data *data;
 	struct iio_dev *indio_dev;
@@ -1041,7 +1040,7 @@ err_poweroff:
 	return ret;
 }
 
-static int rpr0521_remove(struct i2c_client *client)
+static void rpr0521_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 
@@ -1051,8 +1050,6 @@ static int rpr0521_remove(struct i2c_client *client)
 	pm_runtime_set_suspended(&client->dev);
 
 	rpr0521_poweroff(iio_priv(indio_dev));
-
-	return 0;
 }
 
 static int rpr0521_runtime_suspend(struct device *dev)
@@ -1124,7 +1121,7 @@ static struct i2c_driver rpr0521_driver = {
 		.pm	= pm_ptr(&rpr0521_pm_ops),
 		.acpi_match_table = ACPI_PTR(rpr0521_acpi_match),
 	},
-	.probe		= rpr0521_probe,
+	.probe_new	= rpr0521_probe,
 	.remove		= rpr0521_remove,
 	.id_table	= rpr0521_id,
 };

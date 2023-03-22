@@ -17,6 +17,8 @@
 #define BNXT_PTP_GRC_WIN_BASE	0x6000
 
 #define BNXT_MAX_PHC_DRIFT	31000000
+#define BNXT_CYCLES_SHIFT	23
+#define BNXT_DEVCLK_FREQ	1000000
 #define BNXT_LO_TIMER_MASK	0x0000ffffffffUL
 #define BNXT_HI_TIMER_MASK	0xffff00000000UL
 
@@ -88,8 +90,9 @@ struct bnxt_ptp_cfg {
 	u64			old_time;
 	unsigned long		next_period;
 	unsigned long		next_overflow_check;
-	/* 48-bit PHC overflows in 78 hours.  Check overflow every 19 hours. */
-	#define BNXT_PHC_OVERFLOW_PERIOD	(19 * 3600 * HZ)
+	u32			cmult;
+	/* a 23b shift cyclecounter will overflow in ~36 mins.  Check overflow every 18 mins. */
+	#define BNXT_PHC_OVERFLOW_PERIOD	(18 * 60 * HZ)
 
 	u16			tx_seqid;
 	u16			tx_hdr_off;
@@ -113,6 +116,7 @@ struct bnxt_ptp_cfg {
 					 BNXT_PTP_MSG_PDELAY_RESP)
 	u8			tx_tstamp_en:1;
 	int			rx_filter;
+	u32			tstamp_filters;
 
 	u32			refclk_regs[2];
 	u32			refclk_mapped_regs[2];
@@ -133,6 +137,7 @@ do {						\
 int bnxt_ptp_parse(struct sk_buff *skb, u16 *seq_id, u16 *hdr_off);
 void bnxt_ptp_update_current_time(struct bnxt *bp);
 void bnxt_ptp_pps_event(struct bnxt *bp, u32 data1, u32 data2);
+void bnxt_ptp_cfg_tstamp_filters(struct bnxt *bp);
 void bnxt_ptp_reapply_pps(struct bnxt *bp);
 int bnxt_hwtstamp_set(struct net_device *dev, struct ifreq *ifr);
 int bnxt_hwtstamp_get(struct net_device *dev, struct ifreq *ifr);

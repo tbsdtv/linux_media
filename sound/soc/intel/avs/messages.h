@@ -150,6 +150,8 @@ union avs_module_msg {
 	};
 } __packed;
 
+#define AVS_IPC_NOT_SUPPORTED 15
+
 union avs_reply_msg {
 	u64 val;
 	struct {
@@ -186,7 +188,9 @@ union avs_reply_msg {
 enum avs_notify_msg_type {
 	AVS_NOTIFY_PHRASE_DETECTED = 4,
 	AVS_NOTIFY_RESOURCE_EVENT = 5,
+	AVS_NOTIFY_LOG_BUFFER_STATUS = 6,
 	AVS_NOTIFY_FW_READY = 8,
+	AVS_NOTIFY_EXCEPTION_CAUGHT = 10,
 	AVS_NOTIFY_MODULE_EVENT = 12,
 };
 
@@ -202,9 +206,17 @@ union avs_notify_msg {
 				u32 msg_direction:1;
 				u32 msg_target:1;
 			};
+			struct {
+				u16 rsvd:12;
+				u16 core:4;
+			} log;
 		};
 		union {
 			u32 val;
+			struct {
+				u32 core_id:2;
+				u32 stack_dump_size:16;
+			} coredump;
 		} ext;
 	};
 } __packed;
@@ -324,11 +336,45 @@ int avs_ipc_set_d0ix(struct avs_dev *adev, bool enable_pg, bool streaming);
 #define AVS_BASEFW_INST_ID	0
 
 enum avs_basefw_runtime_param {
+	AVS_BASEFW_ENABLE_LOGS = 6,
 	AVS_BASEFW_FIRMWARE_CONFIG = 7,
 	AVS_BASEFW_HARDWARE_CONFIG = 8,
 	AVS_BASEFW_MODULES_INFO = 9,
 	AVS_BASEFW_LIBRARIES_INFO = 16,
+	AVS_BASEFW_SYSTEM_TIME = 20,
 };
+
+enum avs_log_enable {
+	AVS_LOG_DISABLE = 0,
+	AVS_LOG_ENABLE = 1
+};
+
+enum avs_skl_log_priority {
+	AVS_SKL_LOG_CRITICAL = 1,
+	AVS_SKL_LOG_HIGH,
+	AVS_SKL_LOG_MEDIUM,
+	AVS_SKL_LOG_LOW,
+	AVS_SKL_LOG_VERBOSE,
+};
+
+struct skl_log_state {
+	u32 enable;
+	u32 min_priority;
+} __packed;
+
+struct skl_log_state_info {
+	u32 core_mask;
+	struct skl_log_state logs_core[];
+} __packed;
+
+struct apl_log_state_info {
+	u32 aging_timer_period;
+	u32 fifo_full_timer_period;
+	u32 core_mask;
+	struct skl_log_state logs_core[];
+} __packed;
+
+int avs_ipc_set_enable_logs(struct avs_dev *adev, u8 *log_info, size_t size);
 
 struct avs_fw_version {
 	u16 major;
@@ -496,6 +542,13 @@ static inline bool avs_module_entry_is_loaded(struct avs_module_entry *mentry)
 }
 
 int avs_ipc_get_modules_info(struct avs_dev *adev, struct avs_mods_info **info);
+
+struct avs_sys_time {
+	u32 val_l;
+	u32 val_u;
+} __packed;
+
+int avs_ipc_set_system_time(struct avs_dev *adev);
 
 /* Module configuration */
 
@@ -748,5 +801,58 @@ int avs_ipc_copier_set_sink_format(struct avs_dev *adev, u16 module_id,
 				   u8 instance_id, u32 sink_id,
 				   const struct avs_audio_format *src_fmt,
 				   const struct avs_audio_format *sink_fmt);
+
+#define AVS_PROBE_INST_ID	0
+
+enum avs_probe_runtime_param {
+	AVS_PROBE_INJECTION_DMA = 1,
+	AVS_PROBE_INJECTION_DMA_DETACH,
+	AVS_PROBE_POINTS,
+	AVS_PROBE_POINTS_DISCONNECT,
+};
+
+struct avs_probe_dma {
+	union avs_connector_node_id node_id;
+	u32 dma_buffer_size;
+} __packed;
+
+enum avs_probe_type {
+	AVS_PROBE_TYPE_INPUT = 0,
+	AVS_PROBE_TYPE_OUTPUT,
+	AVS_PROBE_TYPE_INTERNAL
+};
+
+union avs_probe_point_id {
+	u32 value;
+	struct {
+		u32 module_id:16;
+		u32 instance_id:8;
+		u32 type:2;
+		u32 index:6;
+	} id;
+} __packed;
+
+enum avs_connection_purpose {
+	AVS_CONNECTION_PURPOSE_EXTRACT = 0,
+	AVS_CONNECTION_PURPOSE_INJECT,
+	AVS_CONNECTION_PURPOSE_INJECT_REEXTRACT,
+};
+
+struct avs_probe_point_desc {
+	union avs_probe_point_id id;
+	u32 purpose;
+	union avs_connector_node_id node_id;
+} __packed;
+
+int avs_ipc_probe_get_dma(struct avs_dev *adev, struct avs_probe_dma **dmas, size_t *num_dmas);
+int avs_ipc_probe_attach_dma(struct avs_dev *adev, struct avs_probe_dma *dmas, size_t num_dmas);
+int avs_ipc_probe_detach_dma(struct avs_dev *adev, union avs_connector_node_id *node_ids,
+			     size_t num_node_ids);
+int avs_ipc_probe_get_points(struct avs_dev *adev, struct avs_probe_point_desc **descs,
+			     size_t *num_descs);
+int avs_ipc_probe_connect_points(struct avs_dev *adev, struct avs_probe_point_desc *descs,
+				 size_t num_descs);
+int avs_ipc_probe_disconnect_points(struct avs_dev *adev, union avs_probe_point_id *ids,
+				    size_t num_ids);
 
 #endif /* __SOUND_SOC_INTEL_AVS_MSGS_H */

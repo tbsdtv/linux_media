@@ -8,7 +8,7 @@ $schema: "http://devicetree.org/meta-schemas/core.yaml#"
 title: Texas Instruments TAS2562 Smart PA
 
 maintainers:
-  - Dan Murphy <dmurphy@ti.com>
+  - Andrew Davis <afd@ti.com>
 
 description: |
   The TAS2562 is a mono, digital input Class-D audio amplifier optimized for
@@ -21,6 +21,9 @@ description: |
     https://www.ti.com/lit/gpn/tas2563
     https://www.ti.com/lit/gpn/tas2564
     https://www.ti.com/lit/gpn/tas2110
+
+allOf:
+  - $ref: dai-common.yaml#
 
 properties:
   compatible:
@@ -58,7 +61,7 @@ required:
   - compatible
   - reg
 
-additionalProperties: false
+unevaluatedProperties: false
 
 examples:
   - |
@@ -76,4 +79,3 @@ examples:
        ti,imon-slot-no = <0>;
      };
    };
-

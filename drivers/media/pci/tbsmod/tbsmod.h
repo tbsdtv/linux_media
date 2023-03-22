@@ -6,13 +6,13 @@
 
 #define	MAJORDEV	168
 
-#define CHANNELS	8
+#define CHANNELS	32
 #define	FIFOSIZE	(2048 * 1024)
 #define	DMASIZE		(32 * 1024)
 
-//#define BLOCKSIZE	(188*96)
-#define BLOCKSIZE(id) ((id==0x6008)?(188*32):(188*96))
-#define BLOCKCEEL	(96)
+#define BLOCKSIZE(id)	(188*32)
+//#define BLOCKSIZE(id) ((id==0x6008)?(188*32):(188*96))
+#define BLOCKCEEL	(32)
 
 struct mod_channel
 {
@@ -34,7 +34,8 @@ struct tbs_pcie_dev {
 	void __iomem		*mmio;
 	struct mutex           	spi_mutex; // lock spi access
 	struct mutex           	ioctl_mutex; // lock ioctls access
-	spinlock_t           	chip_lock; // lock chip access
+	//spinlock_t           	chip_lock; // lock chip access
+	struct mutex           	chip_lock; // lock chip access
 
 	u8 			modulation;
 	u32			frequency;

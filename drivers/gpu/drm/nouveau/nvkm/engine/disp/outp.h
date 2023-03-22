@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #ifndef __NVKM_DISP_OUTP_H__
 #define __NVKM_DISP_OUTP_H__
-#include <engine/disp.h>
+#include "priv.h"
 
 #include <subdev/bios.h>
 #include <subdev/bios/dcb.h>
+#include <subdev/bios/dp.h>
 
 struct nvkm_outp {
 	const struct nvkm_outp_func *func;
@@ -23,12 +24,52 @@ struct nvkm_outp {
 #define NVKM_OUTP_USER 2
 	u8 acquired:2;
 	struct nvkm_ior *ior;
+
+	union {
+		struct {
+			bool dual;
+			bool bpc8;
+		} lvds;
+
+		struct {
+			struct nvbios_dpout info;
+			u8 version;
+
+			struct nvkm_i2c_aux *aux;
+
+			bool enabled;
+			bool aux_pwr;
+			bool aux_pwr_pu;
+			u8 lttpr[6];
+			u8 lttprs;
+			u8 dpcd[16];
+
+			struct {
+				int dpcd; /* -1, or index into SUPPORTED_LINK_RATES table */
+				u32 rate;
+			} rate[8];
+			int rates;
+			int links;
+
+			struct mutex mutex;
+			struct {
+				atomic_t done;
+				u8 nr;
+				u8 bw;
+				bool mst;
+			} lt;
+		} dp;
+	};
+
+	struct nvkm_object object;
+	struct {
+		struct nvkm_head *head;
+	} asy;
 };
 
-int nvkm_outp_ctor(const struct nvkm_outp_func *, struct nvkm_disp *,
-		   int index, struct dcb_output *, struct nvkm_outp *);
-int nvkm_outp_new(struct nvkm_disp *, int index, struct dcb_output *,
-		  struct nvkm_outp **);
+int nvkm_outp_new_(const struct nvkm_outp_func *, struct nvkm_disp *, int index,
+		   struct dcb_output *, struct nvkm_outp **);
+int nvkm_outp_new(struct nvkm_disp *, int index, struct dcb_output *, struct nvkm_outp **);
 void nvkm_outp_del(struct nvkm_outp **);
 void nvkm_outp_init(struct nvkm_outp *);
 void nvkm_outp_fini(struct nvkm_outp *);

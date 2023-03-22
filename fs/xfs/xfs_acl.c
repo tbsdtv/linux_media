@@ -10,13 +10,14 @@
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
 #include "xfs_inode.h"
+#include "xfs_da_format.h"
+#include "xfs_da_btree.h"
 #include "xfs_attr.h"
 #include "xfs_trace.h"
 #include "xfs_error.h"
 #include "xfs_acl.h"
-#include "xfs_da_format.h"
-#include "xfs_da_btree.h"
 #include "xfs_trans.h"
+#include "xfs_xattr.h"
 
 #include <linux/posix_acl_xattr.h>
 
@@ -202,7 +203,7 @@ __xfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 		xfs_acl_to_disk(args.value, acl);
 	}
 
-	error = xfs_attr_set(&args);
+	error = xfs_attr_change(&args);
 	kmem_free(args.value);
 
 	/*
@@ -241,12 +242,13 @@ xfs_acl_set_mode(
 }
 
 int
-xfs_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
+xfs_set_acl(struct user_namespace *mnt_userns, struct dentry *dentry,
 	    struct posix_acl *acl, int type)
 {
 	umode_t mode;
 	bool set_mode = false;
 	int error = 0;
+	struct inode *inode = d_inode(dentry);
 
 	if (!acl)
 		goto set_acl;

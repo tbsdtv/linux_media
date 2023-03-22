@@ -325,9 +325,9 @@ static const struct iio_info cm3232_info = {
 	.attrs			= &cm3232_attribute_group,
 };
 
-static int cm3232_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int cm3232_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct cm3232_chip *chip;
 	struct iio_dev *indio_dev;
 	int ret;
@@ -357,7 +357,7 @@ static int cm3232_probe(struct i2c_client *client,
 	return iio_device_register(indio_dev);
 }
 
-static int cm3232_remove(struct i2c_client *client)
+static void cm3232_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 
@@ -365,8 +365,6 @@ static int cm3232_remove(struct i2c_client *client)
 		CM3232_CMD_ALS_DISABLE);
 
 	iio_device_unregister(indio_dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id cm3232_id[] = {
@@ -419,7 +417,7 @@ static struct i2c_driver cm3232_driver = {
 		.pm	= pm_sleep_ptr(&cm3232_pm_ops),
 	},
 	.id_table	= cm3232_id,
-	.probe		= cm3232_probe,
+	.probe_new	= cm3232_probe,
 	.remove		= cm3232_remove,
 };
 

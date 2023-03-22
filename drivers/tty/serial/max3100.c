@@ -292,9 +292,7 @@ static void max3100_work(struct work_struct *w)
 			} else if (!uart_circ_empty(xmit) &&
 				   !uart_tx_stopped(&s->port)) {
 				tx = xmit->buf[xmit->tail];
-				xmit->tail = (xmit->tail + 1) &
-					(UART_XMIT_SIZE - 1);
-				s->port.icount.tx++;
+				uart_xmit_advance(&s->port, 1);
 			}
 			if (tx != 0xffff) {
 				max3100_calc_parity(s, &tx);
@@ -418,7 +416,7 @@ static void max3100_set_mctrl(struct uart_port *port, unsigned int mctrl)
 
 static void
 max3100_set_termios(struct uart_port *port, struct ktermios *termios,
-		    struct ktermios *old)
+		    const struct ktermios *old)
 {
 	struct max3100_port *s = container_of(port,
 					      struct max3100_port,

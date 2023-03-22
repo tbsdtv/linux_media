@@ -35,11 +35,11 @@ of commands fits for the default topology:
 
         media-ctl -d platform:vimc -V '"Sensor A":0[fmt:SBGGR8_1X8/640x480]'
         media-ctl -d platform:vimc -V '"Debayer A":0[fmt:SBGGR8_1X8/640x480]'
-        media-ctl -d platform:vimc -V '"Sensor B":0[fmt:SBGGR8_1X8/640x480]'
-        media-ctl -d platform:vimc -V '"Debayer B":0[fmt:SBGGR8_1X8/640x480]'
-        v4l2-ctl -z platform:vimc -d "RGB/YUV Capture" -v width=1920,height=1440
+        media-ctl -d platform:vimc -V '"Scaler":0[fmt:RGB888_1X24/640x480]'
+        media-ctl -d platform:vimc -V '"Scaler":0[crop:(100,50)/400x150]'
+        media-ctl -d platform:vimc -V '"Scaler":1[fmt:RGB888_1X24/300x700]'
+        v4l2-ctl -z platform:vimc -d "RGB/YUV Capture" -v width=300,height=700
         v4l2-ctl -z platform:vimc -d "Raw Capture 0" -v pixelformat=BA81
-        v4l2-ctl -z platform:vimc -d "Raw Capture 1" -v pixelformat=BA81
 
 Subdevices
 ----------
@@ -52,6 +52,25 @@ vimc-sensor:
 	Exposes:
 
 	* 1 Pad source
+
+vimc-lens:
+	Ancillary lens for a sensor. Supports auto focus control. Linked to
+	a vimc-sensor using an ancillary link. The lens supports FOCUS_ABSOLUTE
+	control.
+
+.. code-block:: bash
+
+	media-ctl -p
+	...
+	- entity 28: Lens A (0 pad, 0 link)
+			type V4L2 subdev subtype Lens flags 0
+			device node name /dev/v4l-subdev6
+	- entity 29: Lens B (0 pad, 0 link)
+			type V4L2 subdev subtype Lens flags 0
+			device node name /dev/v4l-subdev7
+	v4l2-ctl -d /dev/v4l-subdev7 -C focus_absolute
+	focus_absolute: 0
+
 
 vimc-debayer:
 	Transforms images in bayer format into a non-bayer format.

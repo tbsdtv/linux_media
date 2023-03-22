@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 /* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2019-2021 Linaro Ltd.
+ * Copyright (C) 2019-2022 Linaro Ltd.
  */
 
 #include <linux/types.h>
@@ -75,6 +75,7 @@ ipa_mem_zero_region_add(struct gsi_trans *trans, enum ipa_mem_id mem_id)
 int ipa_mem_setup(struct ipa *ipa)
 {
 	dma_addr_t addr = ipa->zero_addr;
+	const struct ipa_reg *reg;
 	const struct ipa_mem *mem;
 	struct gsi_trans *trans;
 	u32 offset;
@@ -112,8 +113,10 @@ int ipa_mem_setup(struct ipa *ipa)
 	/* Tell the hardware where the processing context area is located */
 	mem = ipa_mem_find(ipa, IPA_MEM_MODEM_PROC_CTX);
 	offset = ipa->mem_offset + mem->offset;
-	val = proc_cntxt_base_addr_encoded(ipa->version, offset);
-	iowrite32(val, ipa->reg_virt + IPA_REG_LOCAL_PKT_PROC_CNTXT_OFFSET);
+
+	reg = ipa_reg(ipa, LOCAL_PKT_PROC_CNTXT);
+	val = ipa_reg_encode(reg, IPA_BASE_ADDR, offset);
+	iowrite32(val, ipa->reg_virt + ipa_reg_offset(reg));
 
 	return 0;
 }
@@ -195,8 +198,11 @@ static bool ipa_mem_id_required(struct ipa *ipa, enum ipa_mem_id mem_id)
 
 	case IPA_MEM_PDN_CONFIG:
 	case IPA_MEM_STATS_QUOTA_MODEM:
-	case IPA_MEM_STATS_TETHERING:
 		return ipa->version >= IPA_VERSION_4_0;
+
+	case IPA_MEM_STATS_TETHERING:
+		return ipa->version >= IPA_VERSION_4_0 &&
+			ipa->version != IPA_VERSION_5_0;
 
 	default:
 		return false;		/* Anything else is optional */
@@ -306,6 +312,7 @@ static bool ipa_mem_size_valid(struct ipa *ipa)
 int ipa_mem_config(struct ipa *ipa)
 {
 	struct device *dev = &ipa->pdev->dev;
+	const struct ipa_reg *reg;
 	const struct ipa_mem *mem;
 	dma_addr_t addr;
 	u32 mem_size;
@@ -314,12 +321,14 @@ int ipa_mem_config(struct ipa *ipa)
 	u32 i;
 
 	/* Check the advertised location and size of the shared memory area */
-	val = ioread32(ipa->reg_virt + IPA_REG_SHARED_MEM_SIZE_OFFSET);
+	reg = ipa_reg(ipa, SHARED_MEM_SIZE);
+	val = ioread32(ipa->reg_virt + ipa_reg_offset(reg));
 
 	/* The fields in the register are in 8 byte units */
-	ipa->mem_offset = 8 * u32_get_bits(val, SHARED_MEM_BADDR_FMASK);
+	ipa->mem_offset = 8 * ipa_reg_decode(reg, MEM_BADDR, val);
+
 	/* Make sure the end is within the region's mapped space */
-	mem_size = 8 * u32_get_bits(val, SHARED_MEM_SIZE_FMASK);
+	mem_size = 8 * ipa_reg_decode(reg, MEM_SIZE, val);
 
 	/* If the sizes don't match, issue a warning */
 	if (ipa->mem_offset + mem_size < ipa->mem_size) {
@@ -359,14 +368,6 @@ int ipa_mem_config(struct ipa *ipa)
 			*--canary = IPA_MEM_CANARY_VAL;
 		while (--canary_count);
 	}
-
-	/* Make sure filter and route table memory regions are valid */
-	if (!ipa_table_valid(ipa))
-		goto err_dma_free;
-
-	/* Validate memory-related properties relevant to immediate commands */
-	if (!ipa_cmd_data_valid(ipa))
-		goto err_dma_free;
 
 	/* Verify the microcontroller ring alignment (if defined) */
 	mem = ipa_mem_find(ipa, IPA_MEM_UC_EVENT_RING);
@@ -568,7 +569,7 @@ static int ipa_smem_init(struct ipa *ipa, u32 item, size_t size)
 	}
 
 	/* Align the address down and the size up to a page boundary */
-	addr = qcom_smem_virt_to_phys(virt) & PAGE_MASK;
+	addr = qcom_smem_virt_to_phys(virt);
 	phys = addr & PAGE_MASK;
 	size = PAGE_ALIGN(size + addr - phys);
 	iova = phys;	/* We just want a direct mapping */
@@ -618,6 +619,12 @@ int ipa_mem_init(struct ipa *ipa, const struct ipa_mem_data *mem_data)
 
 	ipa->mem_count = mem_data->local_count;
 	ipa->mem = mem_data->local;
+
+	/* Check the route and filter table memory regions */
+	if (!ipa_table_mem_valid(ipa, false))
+		return -EINVAL;
+	if (!ipa_table_mem_valid(ipa, true))
+		return -EINVAL;
 
 	ret = dma_set_mask_and_coherent(&ipa->pdev->dev, DMA_BIT_MASK(64));
 	if (ret) {

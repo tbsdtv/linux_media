@@ -323,7 +323,7 @@ static int max9867_startup(struct snd_pcm_substream *substream,
 static int max9867_dai_hw_params(struct snd_pcm_substream *substream,
 		struct snd_pcm_hw_params *params, struct snd_soc_dai *dai)
 {
-	int value;
+	int value, freq = 0;
 	unsigned long int rate, ratio;
 	struct snd_soc_component *component = dai->component;
 	struct max9867_priv *max9867 = snd_soc_component_get_drvdata(component);
@@ -373,6 +373,35 @@ static int max9867_dai_hw_params(struct snd_pcm_substream *substream,
 		}
 		regmap_update_bits(max9867->regmap, MAX9867_IFC1B,
 			MAX9867_IFC1B_BCLK_MASK, value);
+
+		/* Exact integer mode available for 8kHz and 16kHz sample rates
+		 * and certain PCLK (prescaled MCLK) values.
+		 */
+		if (params_rate(params) == 8000 ||
+		    params_rate(params) == 16000) {
+			switch (max9867->pclk) {
+			case 12000000:
+				freq = 0x08;
+				break;
+			case 13000000:
+				freq = 0x0A;
+				break;
+			case 16000000:
+				freq = 0x0C;
+				break;
+			case 19200000:
+				freq = 0x0E;
+				break;
+			}
+		}
+		if (freq && params_rate(params) == 16000)
+			freq++;
+
+		/* If exact integer mode not available, the freq value
+		 * remains zero, i.e. normal mode is used.
+		 */
+		regmap_update_bits(max9867->regmap, MAX9867_SYSCLK,
+				   MAX9867_FREQ_MASK, freq);
 	} else {
 		/*
 		 * digital pll locks on to any externally supplied LRCLK signal
@@ -428,8 +457,6 @@ static int max9867_set_dai_sysclk(struct snd_soc_dai *codec_dai,
 			 freq);
 	max9867->sysclk = freq;
 	value = value << MAX9867_PSCLK_SHIFT;
-	/* exact integer mode is not supported */
-	value &= ~MAX9867_FREQ_MASK;
 	regmap_update_bits(max9867->regmap, MAX9867_SYSCLK,
 			MAX9867_PSCLK_MASK, value);
 	return 0;
@@ -589,7 +616,6 @@ static const struct snd_soc_component_driver max9867_component = {
 	.idle_bias_on		= 1,
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static bool max9867_volatile_register(struct device *dev, unsigned int reg)
@@ -613,8 +639,7 @@ static const struct regmap_config max9867_regmap = {
 	.cache_type	= REGCACHE_RBTREE,
 };
 
-static int max9867_i2c_probe(struct i2c_client *i2c,
-		const struct i2c_device_id *id)
+static int max9867_i2c_probe(struct i2c_client *i2c)
 {
 	struct max9867_priv *max9867;
 	int ret, reg;
@@ -662,7 +687,7 @@ static struct i2c_driver max9867_i2c_driver = {
 		.name = "max9867",
 		.of_match_table = of_match_ptr(max9867_of_match),
 	},
-	.probe  = max9867_i2c_probe,
+	.probe_new  = max9867_i2c_probe,
 	.id_table = max9867_i2c_id,
 };
 

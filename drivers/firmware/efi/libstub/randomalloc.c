@@ -29,7 +29,7 @@ static unsigned long get_entry_num_slots(efi_memory_desc_t *md,
 		return 0;
 
 	region_end = min(md->phys_addr + md->num_pages * EFI_PAGE_SIZE - 1,
-			 (u64)ULONG_MAX);
+			 (u64)EFI_ALLOC_LIMIT);
 	if (region_end < size)
 		return 0;
 
@@ -53,23 +53,16 @@ static unsigned long get_entry_num_slots(efi_memory_desc_t *md,
 efi_status_t efi_random_alloc(unsigned long size,
 			      unsigned long align,
 			      unsigned long *addr,
-			      unsigned long random_seed)
+			      unsigned long random_seed,
+			      int memory_type)
 {
-	unsigned long map_size, desc_size, total_slots = 0, target_slot;
-	unsigned long buff_size;
+	unsigned long total_slots = 0, target_slot;
+	unsigned long total_mirrored_slots = 0;
+	struct efi_boot_memmap *map;
 	efi_status_t status;
-	efi_memory_desc_t *memory_map;
 	int map_offset;
-	struct efi_boot_memmap map;
 
-	map.map =	&memory_map;
-	map.map_size =	&map_size;
-	map.desc_size =	&desc_size;
-	map.desc_ver =	NULL;
-	map.key_ptr =	NULL;
-	map.buff_size =	&buff_size;
-
-	status = efi_get_memory_map(&map);
+	status = efi_get_memory_map(&map, false);
 	if (status != EFI_SUCCESS)
 		return status;
 
@@ -79,14 +72,20 @@ efi_status_t efi_random_alloc(unsigned long size,
 	size = round_up(size, EFI_ALLOC_ALIGN);
 
 	/* count the suitable slots in each memory map entry */
-	for (map_offset = 0; map_offset < map_size; map_offset += desc_size) {
-		efi_memory_desc_t *md = (void *)memory_map + map_offset;
+	for (map_offset = 0; map_offset < map->map_size; map_offset += map->desc_size) {
+		efi_memory_desc_t *md = (void *)map->map + map_offset;
 		unsigned long slots;
 
 		slots = get_entry_num_slots(md, size, ilog2(align));
 		MD_NUM_SLOTS(md) = slots;
 		total_slots += slots;
+		if (md->attribute & EFI_MEMORY_MORE_RELIABLE)
+			total_mirrored_slots += slots;
 	}
+
+	/* consider only mirrored slots for randomization if any exist */
+	if (total_mirrored_slots > 0)
+		total_slots = total_mirrored_slots;
 
 	/* find a random number between 0 and total_slots */
 	target_slot = (total_slots * (u64)(random_seed & U32_MAX)) >> 32;
@@ -102,10 +101,14 @@ efi_status_t efi_random_alloc(unsigned long size,
 	 * to calculate the randomly chosen address, and allocate it directly
 	 * using EFI_ALLOCATE_ADDRESS.
 	 */
-	for (map_offset = 0; map_offset < map_size; map_offset += desc_size) {
-		efi_memory_desc_t *md = (void *)memory_map + map_offset;
+	for (map_offset = 0; map_offset < map->map_size; map_offset += map->desc_size) {
+		efi_memory_desc_t *md = (void *)map->map + map_offset;
 		efi_physical_addr_t target;
 		unsigned long pages;
+
+		if (total_mirrored_slots > 0 &&
+		    !(md->attribute & EFI_MEMORY_MORE_RELIABLE))
+			continue;
 
 		if (target_slot >= MD_NUM_SLOTS(md)) {
 			target_slot -= MD_NUM_SLOTS(md);
@@ -116,13 +119,13 @@ efi_status_t efi_random_alloc(unsigned long size,
 		pages = size / EFI_PAGE_SIZE;
 
 		status = efi_bs_call(allocate_pages, EFI_ALLOCATE_ADDRESS,
-				     EFI_LOADER_DATA, pages, &target);
+				     memory_type, pages, &target);
 		if (status == EFI_SUCCESS)
 			*addr = target;
 		break;
 	}
 
-	efi_bs_call(free_pool, memory_map);
+	efi_bs_call(free_pool, map);
 
 	return status;
 }

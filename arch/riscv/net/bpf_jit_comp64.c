@@ -136,6 +136,25 @@ static bool in_auipc_jalr_range(s64 val)
 		val < ((1L << 31) - (1L << 11));
 }
 
+/* Emit fixed-length instructions for address */
+static int emit_addr(u8 rd, u64 addr, bool extra_pass, struct rv_jit_context *ctx)
+{
+	u64 ip = (u64)(ctx->insns + ctx->ninsns);
+	s64 off = addr - ip;
+	s64 upper = (off + (1 << 11)) >> 12;
+	s64 lower = off & 0xfff;
+
+	if (extra_pass && !in_auipc_jalr_range(off)) {
+		pr_err("bpf-jit: target offset 0x%llx is out of range\n", off);
+		return -ERANGE;
+	}
+
+	emit(rv_auipc(rd, upper), ctx);
+	emit(rv_addi(rd, rd, lower), ctx);
+	return 0;
+}
+
+/* Emit variable-length instructions for 32-bit and 64-bit imm */
 static void emit_imm(u8 rd, s64 val, struct rv_jit_context *ctx)
 {
 	/* Note that the immediate from the add is sign-extended,
@@ -453,6 +472,90 @@ static int emit_call(bool fixed, u64 addr, struct rv_jit_context *ctx)
 	rd = bpf_to_rv_reg(BPF_REG_0, ctx);
 	emit_mv(rd, RV_REG_A0, ctx);
 	return 0;
+}
+
+static void emit_atomic(u8 rd, u8 rs, s16 off, s32 imm, bool is64,
+			struct rv_jit_context *ctx)
+{
+	u8 r0;
+	int jmp_offset;
+
+	if (off) {
+		if (is_12b_int(off)) {
+			emit_addi(RV_REG_T1, rd, off, ctx);
+		} else {
+			emit_imm(RV_REG_T1, off, ctx);
+			emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
+		}
+		rd = RV_REG_T1;
+	}
+
+	switch (imm) {
+	/* lock *(u32/u64 *)(dst_reg + off16) <op>= src_reg */
+	case BPF_ADD:
+		emit(is64 ? rv_amoadd_d(RV_REG_ZERO, rs, rd, 0, 0) :
+		     rv_amoadd_w(RV_REG_ZERO, rs, rd, 0, 0), ctx);
+		break;
+	case BPF_AND:
+		emit(is64 ? rv_amoand_d(RV_REG_ZERO, rs, rd, 0, 0) :
+		     rv_amoand_w(RV_REG_ZERO, rs, rd, 0, 0), ctx);
+		break;
+	case BPF_OR:
+		emit(is64 ? rv_amoor_d(RV_REG_ZERO, rs, rd, 0, 0) :
+		     rv_amoor_w(RV_REG_ZERO, rs, rd, 0, 0), ctx);
+		break;
+	case BPF_XOR:
+		emit(is64 ? rv_amoxor_d(RV_REG_ZERO, rs, rd, 0, 0) :
+		     rv_amoxor_w(RV_REG_ZERO, rs, rd, 0, 0), ctx);
+		break;
+	/* src_reg = atomic_fetch_<op>(dst_reg + off16, src_reg) */
+	case BPF_ADD | BPF_FETCH:
+		emit(is64 ? rv_amoadd_d(rs, rs, rd, 0, 0) :
+		     rv_amoadd_w(rs, rs, rd, 0, 0), ctx);
+		if (!is64)
+			emit_zext_32(rs, ctx);
+		break;
+	case BPF_AND | BPF_FETCH:
+		emit(is64 ? rv_amoand_d(rs, rs, rd, 0, 0) :
+		     rv_amoand_w(rs, rs, rd, 0, 0), ctx);
+		if (!is64)
+			emit_zext_32(rs, ctx);
+		break;
+	case BPF_OR | BPF_FETCH:
+		emit(is64 ? rv_amoor_d(rs, rs, rd, 0, 0) :
+		     rv_amoor_w(rs, rs, rd, 0, 0), ctx);
+		if (!is64)
+			emit_zext_32(rs, ctx);
+		break;
+	case BPF_XOR | BPF_FETCH:
+		emit(is64 ? rv_amoxor_d(rs, rs, rd, 0, 0) :
+		     rv_amoxor_w(rs, rs, rd, 0, 0), ctx);
+		if (!is64)
+			emit_zext_32(rs, ctx);
+		break;
+	/* src_reg = atomic_xchg(dst_reg + off16, src_reg); */
+	case BPF_XCHG:
+		emit(is64 ? rv_amoswap_d(rs, rs, rd, 0, 0) :
+		     rv_amoswap_w(rs, rs, rd, 0, 0), ctx);
+		if (!is64)
+			emit_zext_32(rs, ctx);
+		break;
+	/* r0 = atomic_cmpxchg(dst_reg + off16, r0, src_reg); */
+	case BPF_CMPXCHG:
+		r0 = bpf_to_rv_reg(BPF_REG_0, ctx);
+		emit(is64 ? rv_addi(RV_REG_T2, r0, 0) :
+		     rv_addiw(RV_REG_T2, r0, 0), ctx);
+		emit(is64 ? rv_lr_d(r0, 0, rd, 0, 0) :
+		     rv_lr_w(r0, 0, rd, 0, 0), ctx);
+		jmp_offset = ninsns_rvoff(8);
+		emit(rv_bne(RV_REG_T2, r0, jmp_offset >> 1), ctx);
+		emit(is64 ? rv_sc_d(RV_REG_T3, rs, rd, 0, 0) :
+		     rv_sc_w(RV_REG_T3, rs, rd, 0, 0), ctx);
+		jmp_offset = ninsns_rvoff(-6);
+		emit(rv_bne(RV_REG_T3, 0, jmp_offset >> 1), ctx);
+		emit(rv_fence(0x3, 0x3), ctx);
+		break;
+	}
 }
 
 #define BPF_FIXUP_OFFSET_MASK   GENMASK(26, 0)
@@ -966,7 +1069,15 @@ out_be:
 		u64 imm64;
 
 		imm64 = (u64)insn1.imm << 32 | (u32)imm;
-		emit_imm(rd, imm64, ctx);
+		if (bpf_pseudo_func(insn)) {
+			/* fixed-length insns for extra jit pass */
+			ret = emit_addr(rd, imm64, extra_pass, ctx);
+			if (ret)
+				return ret;
+		} else {
+			emit_imm(rd, imm64, ctx);
+		}
+
 		return 1;
 	}
 
@@ -1146,30 +1257,8 @@ out_be:
 		break;
 	case BPF_STX | BPF_ATOMIC | BPF_W:
 	case BPF_STX | BPF_ATOMIC | BPF_DW:
-		if (insn->imm != BPF_ADD) {
-			pr_err("bpf-jit: not supported: atomic operation %02x ***\n",
-			       insn->imm);
-			return -EINVAL;
-		}
-
-		/* atomic_add: lock *(u32 *)(dst + off) += src
-		 * atomic_add: lock *(u64 *)(dst + off) += src
-		 */
-
-		if (off) {
-			if (is_12b_int(off)) {
-				emit_addi(RV_REG_T1, rd, off, ctx);
-			} else {
-				emit_imm(RV_REG_T1, off, ctx);
-				emit_add(RV_REG_T1, RV_REG_T1, rd, ctx);
-			}
-
-			rd = RV_REG_T1;
-		}
-
-		emit(BPF_SIZE(code) == BPF_W ?
-		     rv_amoadd_w(RV_REG_ZERO, rs, rd, 0, 0) :
-		     rv_amoadd_d(RV_REG_ZERO, rs, rd, 0, 0), ctx);
+		emit_atomic(rd, rs, off, imm,
+			    BPF_SIZE(code) == BPF_DW, ctx);
 		break;
 	default:
 		pr_err("bpf-jit: unknown opcode %02x\n", code);

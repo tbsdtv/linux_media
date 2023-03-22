@@ -6,7 +6,6 @@ menuconfig BLOCK
        bool "Enable the block layer" if EXPERT
        default y
        select SBITMAP
-       select SRCU
        help
 	 Provide block layer support for the kernel.
 
@@ -147,7 +146,6 @@ config BLK_CGROUP_FC_APPID
 config BLK_CGROUP_IOCOST
 	bool "Enable support for cost model based cgroup IO controller"
 	depends on BLK_CGROUP
-	select BLK_RQ_IO_DATA_LEN
 	select BLK_RQ_ALLOC_TIME
 	help
 	Enabling this option enables the .weight interface for cost

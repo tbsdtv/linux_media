@@ -37,6 +37,24 @@ struct landlock_inode_security {
 };
 
 /**
+ * struct landlock_file_security - File security blob
+ *
+ * This information is populated when opening a file in hook_file_open, and
+ * tracks the relevant Landlock access rights that were available at the time
+ * of opening the file. Other LSM hooks use these rights in order to authorize
+ * operations on already opened files.
+ */
+struct landlock_file_security {
+	/**
+	 * @allowed_access: Access rights that were available at the time of
+	 * opening the file. This is not necessarily the full set of access
+	 * rights available at that time, but it's the necessary subset as
+	 * needed to authorize later operations on the open file.
+	 */
+	access_mask_t allowed_access;
+};
+
+/**
  * struct landlock_superblock_security - Superblock security blob
  *
  * Enable hook_sb_delete() to wait for concurrent calls to release_inode().
@@ -50,14 +68,20 @@ struct landlock_superblock_security {
 	atomic_long_t inode_refs;
 };
 
-static inline struct landlock_inode_security *landlock_inode(
-		const struct inode *const inode)
+static inline struct landlock_file_security *
+landlock_file(const struct file *const file)
+{
+	return file->f_security + landlock_blob_sizes.lbs_file;
+}
+
+static inline struct landlock_inode_security *
+landlock_inode(const struct inode *const inode)
 {
 	return inode->i_security + landlock_blob_sizes.lbs_inode;
 }
 
-static inline struct landlock_superblock_security *landlock_superblock(
-		const struct super_block *const superblock)
+static inline struct landlock_superblock_security *
+landlock_superblock(const struct super_block *const superblock)
 {
 	return superblock->s_security + landlock_blob_sizes.lbs_superblock;
 }
@@ -65,6 +89,7 @@ static inline struct landlock_superblock_security *landlock_superblock(
 __init void landlock_add_fs_hooks(void);
 
 int landlock_append_fs_rule(struct landlock_ruleset *const ruleset,
-		const struct path *const path, u32 access_hierarchy);
+			    const struct path *const path,
+			    access_mask_t access_hierarchy);
 
 #endif /* _SECURITY_LANDLOCK_FS_H */

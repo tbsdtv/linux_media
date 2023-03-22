@@ -92,6 +92,8 @@ enum label_flags {
 	FLAG_STALE = 0x800,		/* replaced/removed */
 	FLAG_RENAMED = 0x1000,		/* label has renaming in it */
 	FLAG_REVOKED = 0x2000,		/* label has revocation in it */
+	FLAG_DEBUG1 = 0x4000,
+	FLAG_DEBUG2 = 0x8000,
 
 	/* These flags must correspond with PATH_flags */
 	/* TODO: add new path flags */
@@ -259,7 +261,7 @@ for ((I).i = (I).j = 0;							\
 	struct label_it i;						\
 	int ret = 0;							\
 	label_for_each(i, (L), profile) {				\
-		if (PROFILE_MEDIATES(profile, (C))) {			\
+		if (RULE_MEDIATES(&profile->rules, (C))) {		\
 			ret = 1;					\
 			break;						\
 		}							\
@@ -331,7 +333,7 @@ struct aa_label *aa_label_parse(struct aa_label *base, const char *str,
 static inline const char *aa_label_strn_split(const char *str, int n)
 {
 	const char *pos;
-	unsigned int state;
+	aa_state_t state;
 
 	state = aa_dfa_matchn_until(stacksplitdfa, DFA_START, str, n, &pos);
 	if (!ACCEPT_TABLE(stacksplitdfa)[state])
@@ -343,7 +345,7 @@ static inline const char *aa_label_strn_split(const char *str, int n)
 static inline const char *aa_label_str_split(const char *str)
 {
 	const char *pos;
-	unsigned int state;
+	aa_state_t state;
 
 	state = aa_dfa_match_until(stacksplitdfa, DFA_START, str, &pos);
 	if (!ACCEPT_TABLE(stacksplitdfa)[state])
@@ -355,9 +357,10 @@ static inline const char *aa_label_str_split(const char *str)
 
 
 struct aa_perms;
-int aa_label_match(struct aa_profile *profile, struct aa_label *label,
-		   unsigned int state, bool subns, u32 request,
-		   struct aa_perms *perms);
+struct aa_ruleset;
+int aa_label_match(struct aa_profile *profile, struct aa_ruleset *rules,
+		   struct aa_label *label, aa_state_t state, bool subns,
+		   u32 request, struct aa_perms *perms);
 
 
 /**

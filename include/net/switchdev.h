@@ -239,12 +239,16 @@ struct switchdev_notifier_info {
 	const void *ctx;
 };
 
+/* Remember to update br_switchdev_fdb_populate() when adding
+ * new members to this structure
+ */
 struct switchdev_notifier_fdb_info {
 	struct switchdev_notifier_info info; /* must be first */
 	const unsigned char *addr;
 	u16 vid;
 	u8 added_by_user:1,
 	   is_local:1,
+	   locked:1,
 	   offloaded:1;
 };
 

@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/arm/cpus.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: ARM CPUs bindings
+title: ARM CPUs
 
 maintainers:
   - Lorenzo Pieralisi <lorenzo.pieralisi@arm.com>
@@ -138,6 +138,7 @@ properties:
       - arm,cortex-a76
       - arm,cortex-a77
       - arm,cortex-a78
+      - arm,cortex-a78ae
       - arm,cortex-a510
       - arm,cortex-a710
       - arm,cortex-m0
@@ -173,14 +174,17 @@ properties:
       - nvidia,tegra194-carmel
       - qcom,krait
       - qcom,kryo
+      - qcom,kryo240
       - qcom,kryo250
       - qcom,kryo260
       - qcom,kryo280
+      - qcom,kryo360
       - qcom,kryo385
       - qcom,kryo468
       - qcom,kryo485
       - qcom,kryo560
       - qcom,kryo570
+      - qcom,kryo660
       - qcom,kryo685
       - qcom,kryo780
       - qcom,scorpion
@@ -221,6 +225,7 @@ properties:
           - qcom,kpss-acc-v1
           - qcom,kpss-acc-v2
           - qcom,msm8226-smp
+          - qcom,msm8909-smp
           # Only valid on ARM 32-bit, see above for ARM v8 64-bit
           - qcom,msm8916-smp
           - renesas,apmu

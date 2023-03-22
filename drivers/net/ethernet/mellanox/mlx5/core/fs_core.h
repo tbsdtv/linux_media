@@ -123,6 +123,7 @@ enum mlx5_flow_steering_mode {
 enum mlx5_flow_steering_capabilty {
 	MLX5_FLOW_STEERING_CAP_VLAN_PUSH_ON_RX = 1UL << 0,
 	MLX5_FLOW_STEERING_CAP_VLAN_POP_ON_TX = 1UL << 1,
+	MLX5_FLOW_STEERING_CAP_MATCH_RANGES = 1UL << 2,
 };
 
 struct mlx5_flow_steering {
@@ -226,6 +227,7 @@ struct fs_fte {
 	struct mlx5_fs_dr_rule		fs_dr_rule;
 	u32				val[MLX5_ST_SZ_DW_MATCH_PARAM];
 	u32				dests_size;
+	u32				fwd_dests;
 	u32				index;
 	struct mlx5_flow_context	flow_context;
 	struct mlx5_flow_act		action;

@@ -88,6 +88,9 @@
 #define NFP_NET_FL_BATCH	16	/* Add freelist in this Batch size */
 #define NFP_NET_XDP_MAX_COMPLETE 2048	/* XDP bufs to reclaim in NAPI poll */
 
+/* MC definitions */
+#define NFP_NET_CFG_MAC_MC_MAX	1024	/* The maximum number of MC address per port*/
+
 /* Offload definitions */
 #define NFP_NET_N_VXLAN_PORTS	(NFP_NET_CFG_VXLAN_SZ / sizeof(__be16))
 
@@ -115,13 +118,22 @@ struct nfp_nfdk_tx_buf;
 #define D_IDX(ring, idx)	((idx) & ((ring)->cnt - 1))
 
 /* Convenience macro for writing dma address into RX/TX descriptors */
-#define nfp_desc_set_dma_addr(desc, dma_addr)				\
+#define nfp_desc_set_dma_addr_40b(desc, dma_addr)			\
 	do {								\
-		__typeof(desc) __d = (desc);				\
+		__typeof__(desc) __d = (desc);				\
 		dma_addr_t __addr = (dma_addr);				\
 									\
 		__d->dma_addr_lo = cpu_to_le32(lower_32_bits(__addr));	\
 		__d->dma_addr_hi = upper_32_bits(__addr) & 0xff;	\
+	} while (0)
+
+#define nfp_desc_set_dma_addr_48b(desc, dma_addr)			\
+	do {								\
+		__typeof__(desc) __d = (desc);				\
+		dma_addr_t __addr = (dma_addr);				\
+									\
+		__d->dma_addr_hi = cpu_to_le16(upper_32_bits(__addr));	\
+		__d->dma_addr_lo = cpu_to_le32(lower_32_bits(__addr));	\
 	} while (0)
 
 /**
@@ -216,8 +228,8 @@ struct nfp_net_tx_ring {
 struct nfp_net_rx_desc {
 	union {
 		struct {
-			u8 dma_addr_hi;	/* High bits of the buf address */
-			__le16 reserved; /* Must be zero */
+			__le16 dma_addr_hi; /* High bits of the buf address */
+			u8 reserved; /* Must be zero */
 			u8 meta_len_dd; /* Must be zero */
 
 			__le32 dma_addr_lo; /* Low bits of the buffer address */
@@ -239,6 +251,8 @@ struct nfp_net_rx_desc {
 };
 
 #define NFP_NET_META_FIELD_MASK GENMASK(NFP_NET_META_FIELD_SIZE - 1, 0)
+#define NFP_NET_VLAN_CTAG	0
+#define NFP_NET_VLAN_STAG	1
 
 struct nfp_meta_parsed {
 	u8 hash_type;
@@ -247,6 +261,15 @@ struct nfp_meta_parsed {
 	u32 mark;
 	u32 portid;
 	__wsum csum;
+	struct {
+		bool stripped;
+		u8 tpid;
+		u16 tci;
+	} vlan;
+
+#ifdef CONFIG_NFP_NET_IPSEC
+	u32 ipsec_saidx;
+#endif
 };
 
 struct nfp_net_rx_hash {
@@ -456,6 +479,7 @@ struct nfp_stat_pair {
  * @rx_dma_off:		Offset at which DMA packets (for XDP headroom)
  * @rx_offset:		Offset in the RX buffers where packet data starts
  * @ctrl:		Local copy of the control register/word.
+ * @ctrl_w1:		Local copy of the control register/word1.
  * @fl_bufsz:		Currently configured size of the freelist buffers
  * @xdp_prog:		Installed XDP program
  * @tx_rings:		Array of pre-allocated TX ring structures
@@ -488,6 +512,7 @@ struct nfp_net_dp {
 	u32 rx_dma_off;
 
 	u32 ctrl;
+	u32 ctrl_w1;
 	u32 fl_bufsz;
 
 	struct bpf_prog *xdp_prog;
@@ -525,6 +550,7 @@ struct nfp_net_dp {
  * @id:			vNIC id within the PF (0 for VFs)
  * @fw_ver:		Firmware version
  * @cap:                Capabilities advertised by the Firmware
+ * @cap_w1:             Extended capabilities word advertised by the Firmware
  * @max_mtu:            Maximum support MTU advertised by the Firmware
  * @rss_hfunc:		RSS selected hash function
  * @rss_cfg:            RSS configuration
@@ -567,6 +593,7 @@ struct nfp_net_dp {
  * @qcp_cfg:            Pointer to QCP queue used for configuration notification
  * @tx_bar:             Pointer to mapped TX queues
  * @rx_bar:             Pointer to mapped FL/RX queues
+ * @xa_ipsec:           IPsec xarray SA data
  * @tlv_caps:		Parsed TLV capabilities
  * @ktls_tx_conn_cnt:	Number of offloaded kTLS TX connections
  * @ktls_rx_conn_cnt:	Number of offloaded kTLS RX connections
@@ -590,6 +617,9 @@ struct nfp_net_dp {
  * @vnic_no_name:	For non-port PF vNIC make ndo_get_phys_port_name return
  *			-EOPNOTSUPP to keep backwards compatibility (set by app)
  * @port:		Pointer to nfp_port structure if vNIC is a port
+ * @mc_lock:		Protect mc_addrs list
+ * @mc_addrs:		List of mc addrs to add/del to HW
+ * @mc_work:		Work to update mc addrs
  * @app_priv:		APP private data for this vNIC
  */
 struct nfp_net {
@@ -601,6 +631,7 @@ struct nfp_net {
 	u32 id;
 
 	u32 cap;
+	u32 cap_w1;
 	u32 max_mtu;
 
 	u8 rss_hfunc;
@@ -654,6 +685,10 @@ struct nfp_net {
 	u8 __iomem *tx_bar;
 	u8 __iomem *rx_bar;
 
+#ifdef CONFIG_NFP_NET_IPSEC
+	struct xarray xa_ipsec;
+#endif
+
 	struct nfp_net_tlv_caps tlv_caps;
 
 	unsigned int ktls_tx_conn_cnt;
@@ -685,6 +720,10 @@ struct nfp_net {
 	bool vnic_no_name;
 
 	struct nfp_port *port;
+
+	spinlock_t mc_lock;
+	struct list_head mc_addrs;
+	struct work_struct mc_work;
 
 	void *app_priv;
 };

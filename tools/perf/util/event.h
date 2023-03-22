@@ -12,11 +12,10 @@
 #include <perf/event.h>
 #include <linux/types.h>
 
-#include "perf_regs.h"
-
 struct dso;
 struct machine;
 struct perf_event_attr;
+struct perf_sample;
 
 #ifdef __LP64__
 /*
@@ -43,42 +42,6 @@ struct perf_event_attr;
 
 /* perf sample has 16 bits size limit */
 #define PERF_SAMPLE_MAX_SIZE (1 << 16)
-
-/* number of register is bound by the number of bits in regs_dump::mask (64) */
-#define PERF_SAMPLE_REGS_CACHE_SIZE (8 * sizeof(u64))
-
-struct regs_dump {
-	u64 abi;
-	u64 mask;
-	u64 *regs;
-
-	/* Cached values/mask filled by first register access. */
-	u64 cache_regs[PERF_SAMPLE_REGS_CACHE_SIZE];
-	u64 cache_mask;
-};
-
-struct stack_dump {
-	u16 offset;
-	u64 size;
-	char *data;
-};
-
-struct sample_read_value {
-	u64 value;
-	u64 id;
-};
-
-struct sample_read {
-	u64 time_enabled;
-	u64 time_running;
-	union {
-		struct {
-			u64 nr;
-			struct sample_read_value *values;
-		} group;
-		struct sample_read_value one;
-	};
-};
 
 struct ip_callchain {
 	u64 nr;
@@ -120,50 +83,6 @@ enum {
 	PERF_IP_FLAG_TRACE_END		|\
 	PERF_IP_FLAG_VMENTRY		|\
 	PERF_IP_FLAG_VMEXIT)
-
-#define MAX_INSN 16
-
-struct aux_sample {
-	u64 size;
-	void *data;
-};
-
-struct perf_sample {
-	u64 ip;
-	u32 pid, tid;
-	u64 time;
-	u64 addr;
-	u64 id;
-	u64 stream_id;
-	u64 period;
-	u64 weight;
-	u64 transaction;
-	u64 insn_cnt;
-	u64 cyc_cnt;
-	u32 cpu;
-	u32 raw_size;
-	u64 data_src;
-	u64 phys_addr;
-	u64 data_page_size;
-	u64 code_page_size;
-	u64 cgroup;
-	u32 flags;
-	u16 insn_len;
-	u8  cpumode;
-	u16 misc;
-	u16 ins_lat;
-	u16 p_stage_cyc;
-	bool no_hw_idx;		/* No hw_idx collected in branch_stack */
-	char insn[MAX_INSN];
-	void *raw_data;
-	struct ip_callchain *callchain;
-	struct branch_stack *branch_stack;
-	struct regs_dump  user_regs;
-	struct regs_dump  intr_regs;
-	struct stack_dump user_stack;
-	struct sample_read read;
-	struct aux_sample aux_sample;
-};
 
 #define PERF_MEM_DATA_SRC_NONE \
 	(PERF_MEM_S(OP, NA) |\
@@ -323,15 +242,6 @@ struct perf_synth_intel_iflag_chg {
 	u64	branch_ip; /* If via_branch */
 };
 
-/*
- * raw_data is always 4 bytes from an 8-byte boundary, so subtract 4 to get
- * 8-byte alignment.
- */
-static inline void *perf_sample__synth_ptr(struct perf_sample *sample)
-{
-	return sample->raw_data - 4;
-}
-
 static inline void *perf_synth__raw_data(void *p)
 {
 	return p + 4;
@@ -425,19 +335,8 @@ int perf_event__process(struct perf_tool *tool,
 			struct perf_sample *sample,
 			struct machine *machine);
 
-struct addr_location;
-
-int machine__resolve(struct machine *machine, struct addr_location *al,
-		     struct perf_sample *sample);
-
-void addr_location__put(struct addr_location *al);
-
-struct thread;
-
 bool is_bts_event(struct perf_event_attr *attr);
 bool sample_addr_correlates_sym(struct perf_event_attr *attr);
-void thread__resolve(struct thread *thread, struct addr_location *al,
-		     struct perf_sample *sample);
 
 const char *perf_event__name(unsigned int id);
 
@@ -461,10 +360,6 @@ size_t perf_event__fprintf(union perf_event *event, struct machine *machine, FIL
 int kallsyms__get_function_start(const char *kallsyms_filename,
 				 const char *symbol_name, u64 *addr);
 
-void *cpu_map_data__alloc(struct perf_cpu_map *map, size_t *size, u16 *type, int *max);
-void  cpu_map_data__synthesize(struct perf_record_cpu_map_data *data, struct perf_cpu_map *map,
-			       u16 type, int max);
-
 void event_attr_init(struct perf_event_attr *attr);
 
 int perf_event_paranoid(void);
@@ -481,5 +376,26 @@ void arch_perf_parse_sample_weight(struct perf_sample *data, const __u64 *array,
 void arch_perf_synthesize_sample_weight(const struct perf_sample *data, __u64 *array, u64 type);
 const char *arch_perf_header_entry(const char *se_header);
 int arch_support_sort_key(const char *sort_key);
+
+static inline bool perf_event_header__cpumode_is_guest(u8 cpumode)
+{
+	return cpumode == PERF_RECORD_MISC_GUEST_KERNEL ||
+	       cpumode == PERF_RECORD_MISC_GUEST_USER;
+}
+
+static inline bool perf_event_header__misc_is_guest(u16 misc)
+{
+	return perf_event_header__cpumode_is_guest(misc & PERF_RECORD_MISC_CPUMODE_MASK);
+}
+
+static inline bool perf_event_header__is_guest(const struct perf_event_header *header)
+{
+	return perf_event_header__misc_is_guest(header->misc);
+}
+
+static inline bool perf_event__is_guest(const union perf_event *event)
+{
+	return perf_event_header__is_guest(&event->header);
+}
 
 #endif /* __PERF_RECORD_H */

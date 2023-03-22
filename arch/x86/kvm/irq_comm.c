@@ -181,7 +181,7 @@ int kvm_arch_set_irq_inatomic(struct kvm_kernel_irq_routing_entry *e,
 		if (!level)
 			return -1;
 
-		return kvm_xen_set_evtchn_fast(e, kvm);
+		return kvm_xen_set_evtchn_fast(&e->xen_evtchn, kvm);
 #endif
 	default:
 		break;
@@ -426,8 +426,9 @@ void kvm_scan_ioapic_routes(struct kvm_vcpu *vcpu,
 			kvm_set_msi_irq(vcpu->kvm, entry, &irq);
 
 			if (irq.trig_mode &&
-			    kvm_apic_match_dest(vcpu, NULL, APIC_DEST_NOSHORT,
-						irq.dest_id, irq.dest_mode))
+			    (kvm_apic_match_dest(vcpu, NULL, APIC_DEST_NOSHORT,
+						 irq.dest_id, irq.dest_mode) ||
+			     kvm_apic_pending_eoi(vcpu, irq.vector)))
 				__set_bit(irq.vector, ioapic_handled_vectors);
 		}
 	}

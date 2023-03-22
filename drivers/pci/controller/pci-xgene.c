@@ -14,7 +14,6 @@
 #include <linux/init.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_irq.h>
 #include <linux/of_pci.h>
 #include <linux/pci.h>
 #include <linux/pci-acpi.h>
@@ -641,7 +640,7 @@ static const struct of_device_id xgene_pcie_match_table[] = {
 static struct platform_driver xgene_pcie_driver = {
 	.driver = {
 		.name = "xgene-pcie",
-		.of_match_table = of_match_ptr(xgene_pcie_match_table),
+		.of_match_table = xgene_pcie_match_table,
 		.suppress_bind_attrs = true,
 	},
 	.probe = xgene_pcie_probe,

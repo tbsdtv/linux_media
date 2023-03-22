@@ -1030,6 +1030,8 @@ static int da9121_assign_chip_model(struct i2c_client *i2c,
 		chip->variant_id = DA9121_TYPE_DA9142;
 		regmap = &da9121_2ch_regmap_config;
 		break;
+	default:
+		return -EINVAL;
 	}
 
 	/* Set these up for of_regulator_match call which may want .of_map_modes */
@@ -1126,8 +1128,7 @@ static inline int da9121_of_get_id(struct device *dev)
 	return (uintptr_t)id->data;
 }
 
-static int da9121_i2c_probe(struct i2c_client *i2c,
-			    const struct i2c_device_id *id)
+static int da9121_i2c_probe(struct i2c_client *i2c)
 {
 	struct da9121 *chip;
 	const int mask_all[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
@@ -1162,7 +1163,7 @@ error:
 	return ret;
 }
 
-static int da9121_i2c_remove(struct i2c_client *i2c)
+static void da9121_i2c_remove(struct i2c_client *i2c)
 {
 	struct da9121 *chip = i2c_get_clientdata(i2c);
 	const int mask_all[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
@@ -1174,7 +1175,6 @@ static int da9121_i2c_remove(struct i2c_client *i2c)
 	ret = regmap_bulk_write(chip->regmap, DA9121_REG_SYS_MASK_0, mask_all, 4);
 	if (ret != 0)
 		dev_err(chip->dev, "Failed to set IRQ masks: %d\n", ret);
-	return 0;
 }
 
 static const struct i2c_device_id da9121_i2c_id[] = {
@@ -1196,7 +1196,7 @@ static struct i2c_driver da9121_regulator_driver = {
 		.name = "da9121",
 		.of_match_table = of_match_ptr(da9121_dt_ids),
 	},
-	.probe = da9121_i2c_probe,
+	.probe_new = da9121_i2c_probe,
 	.remove = da9121_i2c_remove,
 	.id_table = da9121_i2c_id,
 };

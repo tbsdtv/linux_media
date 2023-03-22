@@ -60,6 +60,10 @@
 #define EM_RISCV	243
 #endif
 
+#ifndef EM_LOONGARCH
+#define EM_LOONGARCH	258
+#endif
+
 static uint32_t (*r)(const uint32_t *);
 static uint16_t (*r2)(const uint16_t *);
 static uint64_t (*r8)(const uint64_t *);
@@ -300,6 +304,7 @@ static int do_file(char const *const fname, void *addr)
 	switch (r2(&ehdr->e_machine)) {
 	case EM_386:
 	case EM_AARCH64:
+	case EM_LOONGARCH:
 	case EM_RISCV:
 	case EM_S390:
 	case EM_X86_64:

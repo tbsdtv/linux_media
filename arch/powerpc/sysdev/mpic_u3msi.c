@@ -5,9 +5,9 @@
  */
 
 #include <linux/irq.h>
+#include <linux/irqdomain.h>
 #include <linux/msi.h>
 #include <asm/mpic.h>
-#include <asm/prom.h>
 #include <asm/hw_irq.h>
 #include <asm/ppc-pci.h>
 #include <asm/msi_bitmap.h>
@@ -78,7 +78,7 @@ static u64 find_u4_magic_addr(struct pci_dev *pdev, unsigned int hwirq)
 
 	/* U4 PCIe MSIs need to write to the special register in
 	 * the bridge that generates interrupts. There should be
-	 * theorically a register at 0xf8005000 where you just write
+	 * theoretically a register at 0xf8005000 where you just write
 	 * the MSI number and that triggers the right interrupt, but
 	 * unfortunately, this is busted in HW, the bridge endian swaps
 	 * the value and hits the wrong nibble in the register.
@@ -108,6 +108,7 @@ static void u3msi_teardown_msi_irqs(struct pci_dev *pdev)
 		hwirq = virq_to_hw(entry->irq);
 		irq_set_msi_desc(entry->irq, NULL);
 		irq_dispose_mapping(entry->irq);
+		entry->irq = 0;
 		msi_bitmap_free_hwirqs(&msi_mpic->msi_bitmap, hwirq, 1);
 	}
 }

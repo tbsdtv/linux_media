@@ -13,10 +13,12 @@
 
 from __future__ import print_function
 
+import io
 import os
 import sys
 import struct
 import argparse
+import contextlib
 
 from libxed import LibXED
 from ctypes import create_string_buffer, addressof
@@ -39,6 +41,11 @@ glb_src			= False
 glb_source_file_name	= None
 glb_line_number		= None
 glb_dso			= None
+glb_stash_dict		= {}
+glb_output		= None
+glb_output_pos		= 0
+glb_cpu			= -1
+glb_time		= 0
 
 def get_optional_null(perf_dict, field):
 	if field in perf_dict:
@@ -70,6 +77,7 @@ def trace_begin():
 	ap.add_argument("--insn-trace", action='store_true')
 	ap.add_argument("--src-trace", action='store_true')
 	ap.add_argument("--all-switch-events", action='store_true')
+	ap.add_argument("--interleave", type=int, nargs='?', const=4, default=0)
 	global glb_args
 	global glb_insn
 	global glb_src
@@ -94,17 +102,51 @@ def trace_begin():
 	perf_set_itrace_options(perf_script_context, itrace)
 
 def trace_end():
+	if glb_args.interleave:
+		flush_stashed_output()
 	print("End")
 
 def trace_unhandled(event_name, context, event_fields_dict):
 		print(' '.join(['%s=%s'%(k,str(v))for k,v in sorted(event_fields_dict.items())]))
+
+def stash_output():
+	global glb_stash_dict
+	global glb_output_pos
+	output_str = glb_output.getvalue()[glb_output_pos:]
+	n = len(output_str)
+	if n:
+		glb_output_pos += n
+		if glb_cpu not in glb_stash_dict:
+			glb_stash_dict[glb_cpu] = []
+		glb_stash_dict[glb_cpu].append(output_str)
+
+def flush_stashed_output():
+	global glb_stash_dict
+	while glb_stash_dict:
+		cpus = list(glb_stash_dict.keys())
+		# Output at most glb_args.interleave output strings per cpu
+		for cpu in cpus:
+			items = glb_stash_dict[cpu]
+			countdown = glb_args.interleave
+			while len(items) and countdown:
+				sys.stdout.write(items[0])
+				del items[0]
+				countdown -= 1
+			if not items:
+				del glb_stash_dict[cpu]
 
 def print_ptwrite(raw_buf):
 	data = struct.unpack_from("<IQ", raw_buf)
 	flags = data[0]
 	payload = data[1]
 	exact_ip = flags & 1
-	print("IP: %u payload: %#x" % (exact_ip, payload), end=' ')
+	try:
+		s = payload.to_bytes(8, "little").decode("ascii").rstrip("\x00")
+		if not s.isprintable():
+			s = ""
+	except:
+		s = ""
+	print("IP: %u payload: %#x" % (exact_ip, payload), s, end=' ')
 
 def print_cbr(raw_buf):
 	data = struct.unpack_from("<BBBBII", raw_buf)
@@ -191,7 +233,12 @@ def common_start_str(comm, sample):
 	cpu = sample["cpu"]
 	pid = sample["pid"]
 	tid = sample["tid"]
-	return "%16s %5u/%-5u [%03u] %9u.%09u  " % (comm, pid, tid, cpu, ts / 1000000000, ts %1000000000)
+	if "machine_pid" in sample:
+		machine_pid = sample["machine_pid"]
+		vcpu = sample["vcpu"]
+		return "VM:%5d VCPU:%03d %16s %5u/%-5u [%03u] %9u.%09u  " % (machine_pid, vcpu, comm, pid, tid, cpu, ts / 1000000000, ts %1000000000)
+	else:
+		return "%16s %5u/%-5u [%03u] %9u.%09u  " % (comm, pid, tid, cpu, ts / 1000000000, ts %1000000000)
 
 def print_common_start(comm, sample, name):
 	flags_disp = get_optional_null(sample, "flags_disp")
@@ -364,24 +411,61 @@ def do_process_event(param_dict):
 		print_common_start(comm, sample, name)
 		print_common_ip(param_dict, sample, symbol, dso)
 
+def interleave_events(param_dict):
+	global glb_cpu
+	global glb_time
+	global glb_output
+	global glb_output_pos
+
+	sample  = param_dict["sample"]
+	glb_cpu = sample["cpu"]
+	ts      = sample["time"]
+
+	if glb_time != ts:
+		glb_time = ts
+		flush_stashed_output()
+
+	glb_output_pos = 0
+	with contextlib.redirect_stdout(io.StringIO()) as glb_output:
+		do_process_event(param_dict)
+
+	stash_output()
+
 def process_event(param_dict):
 	try:
-		do_process_event(param_dict)
+		if glb_args.interleave:
+			interleave_events(param_dict)
+		else:
+			do_process_event(param_dict)
 	except broken_pipe_exception:
 		# Stop python printing broken pipe errors and traceback
 		sys.stdout = open(os.devnull, 'w')
 		sys.exit(1)
 
 def auxtrace_error(typ, code, cpu, pid, tid, ip, ts, msg, cpumode, *x):
+	if glb_args.interleave:
+		flush_stashed_output()
+	if len(x) >= 2 and x[0]:
+		machine_pid = x[0]
+		vcpu = x[1]
+	else:
+		machine_pid = 0
+		vcpu = -1
 	try:
-		print("%16s %5u/%-5u [%03u] %9u.%09u  error type %u code %u: %s ip 0x%16x" %
-			("Trace error", pid, tid, cpu, ts / 1000000000, ts %1000000000, typ, code, msg, ip))
+		if machine_pid:
+			print("VM:%5d VCPU:%03d %16s %5u/%-5u [%03u] %9u.%09u  error type %u code %u: %s ip 0x%16x" %
+				(machine_pid, vcpu, "Trace error", pid, tid, cpu, ts / 1000000000, ts %1000000000, typ, code, msg, ip))
+		else:
+			print("%16s %5u/%-5u [%03u] %9u.%09u  error type %u code %u: %s ip 0x%16x" %
+				("Trace error", pid, tid, cpu, ts / 1000000000, ts %1000000000, typ, code, msg, ip))
 	except broken_pipe_exception:
 		# Stop python printing broken pipe errors and traceback
 		sys.stdout = open(os.devnull, 'w')
 		sys.exit(1)
 
 def context_switch(ts, cpu, pid, tid, np_pid, np_tid, machine_pid, out, out_preempt, *x):
+	if glb_args.interleave:
+		flush_stashed_output()
 	if out:
 		out_str = "Switch out "
 	else:
@@ -390,14 +474,21 @@ def context_switch(ts, cpu, pid, tid, np_pid, np_tid, machine_pid, out, out_pree
 		preempt_str = "preempt"
 	else:
 		preempt_str = ""
+	if len(x) >= 2 and x[0]:
+		machine_pid = x[0]
+		vcpu = x[1]
+	else:
+		vcpu = None;
 	if machine_pid == -1:
 		machine_str = ""
-	else:
+	elif vcpu is None:
 		machine_str = "machine PID %d" % machine_pid
+	else:
+		machine_str = "machine PID %d VCPU %d" % (machine_pid, vcpu)
 	switch_str = "%16s %5d/%-5d [%03u] %9u.%09u %5d/%-5d %s %s" % \
 		(out_str, pid, tid, cpu, ts / 1000000000, ts %1000000000, np_pid, np_tid, machine_str, preempt_str)
 	if glb_args.all_switch_events:
-		print(switch_str);
+		print(switch_str)
 	else:
 		global glb_switch_str
 		glb_switch_str[cpu] = switch_str

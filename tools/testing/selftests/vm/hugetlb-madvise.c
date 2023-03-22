@@ -12,14 +12,13 @@
  * directory.
  */
 
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/mman.h>
-#define __USE_GNU
 #include <fcntl.h>
 
-#define USAGE	"USAGE: %s <hugepagefile_name>\n"
 #define MIN_FREE_PAGES	20
 #define NR_HUGE_PAGES	10	/* common number of pages to map/allocate */
 
@@ -89,10 +88,11 @@ void write_fault_pages(void *addr, unsigned long nr_pages)
 
 void read_fault_pages(void *addr, unsigned long nr_pages)
 {
-	unsigned long i, tmp;
+	unsigned long dummy = 0;
+	unsigned long i;
 
 	for (i = 0; i < nr_pages; i++)
-		tmp += *((unsigned long *)(addr + (i * huge_page_size)));
+		dummy += *((unsigned long *)(addr + (i * huge_page_size)));
 }
 
 int main(int argc, char **argv)
@@ -101,11 +101,6 @@ int main(int argc, char **argv)
 	void *addr, *addr2;
 	int fd;
 	int ret;
-
-	if (argc != 2) {
-		printf(USAGE, argv[0]);
-		exit(1);
-	}
 
 	huge_page_size = default_huge_page_size();
 	if (!huge_page_size) {
@@ -124,9 +119,9 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	fd = open(argv[1], O_CREAT | O_RDWR, 0755);
+	fd = memfd_create(argv[0], MFD_HUGETLB);
 	if (fd < 0) {
-		perror("Open failed");
+		perror("memfd_create() failed");
 		exit(1);
 	}
 
@@ -199,7 +194,7 @@ int main(int argc, char **argv)
 			exit(1);
 	}
 
-	/* addr + length should be aligned up to huge page size */
+	/* addr + length should be aligned down to huge page size */
 	if (madvise(addr,
 			((NR_HUGE_PAGES - 1) * huge_page_size) + base_page_size,
 			MADV_DONTNEED)) {
@@ -207,10 +202,11 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	/* should free all pages in mapping */
-	validate_free_pages(free_hugepages);
+	/* should free all but last page in mapping */
+	validate_free_pages(free_hugepages - 1);
 
 	(void)munmap(addr, NR_HUGE_PAGES * huge_page_size);
+	validate_free_pages(free_hugepages);
 
 	/*
 	 * Test MADV_DONTNEED on anonymous private mapping
@@ -405,6 +401,5 @@ int main(int argc, char **argv)
 	(void)munmap(addr2, NR_HUGE_PAGES * huge_page_size);
 
 	close(fd);
-	unlink(argv[1]);
 	return 0;
 }

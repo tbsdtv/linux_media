@@ -14,6 +14,7 @@
 #define TCC_SHIFT 24
 #define TCC_MASK	(0x3fULL<<24)
 #define TCC_PROGRAMMABLE	BIT(30)
+#define TCC_LOCKED		BIT(31)
 
 static struct thermal_cooling_device *tcc_cdev;
 
@@ -81,6 +82,10 @@ static const struct x86_cpu_id tcc_ids[] __initconst = {
 	X86_MATCH_INTEL_FAM6_MODEL(COMETLAKE, NULL),
 	X86_MATCH_INTEL_FAM6_MODEL(ALDERLAKE, NULL),
 	X86_MATCH_INTEL_FAM6_MODEL(ALDERLAKE_L, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(ALDERLAKE_N, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(RAPTORLAKE, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(RAPTORLAKE_P, NULL),
+	X86_MATCH_INTEL_FAM6_MODEL(RAPTORLAKE_S, NULL),
 	{}
 };
 
@@ -104,6 +109,15 @@ static int __init tcc_cooling_init(void)
 
 	if (!(val & TCC_PROGRAMMABLE))
 		return -ENODEV;
+
+	err = rdmsrl_safe(MSR_IA32_TEMPERATURE_TARGET, &val);
+	if (err)
+		return err;
+
+	if (val & TCC_LOCKED) {
+		pr_info("TCC Offset locked\n");
+		return -ENODEV;
+	}
 
 	pr_info("Programmable TCC Offset detected\n");
 

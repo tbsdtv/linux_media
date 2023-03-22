@@ -144,7 +144,9 @@ static int rtw_debugfs_get_rf_read(struct seq_file *m, void *v)
 	addr = debugfs_priv->rf_addr;
 	mask = debugfs_priv->rf_mask;
 
+	mutex_lock(&rtwdev->mutex);
 	val = rtw_read_rf(rtwdev, path, addr, mask);
+	mutex_unlock(&rtwdev->mutex);
 
 	seq_printf(m, "rf_read path:%d addr:0x%08x mask:0x%08x val=0x%08x\n",
 		   path, addr, mask, val);
@@ -269,11 +271,7 @@ static int rtw_debugfs_get_rsvd_page(struct seq_file *m, void *v)
 	for (i = 0 ; i < buf_size ; i += 8) {
 		if (i % page_size == 0)
 			seq_printf(m, "PAGE %d\n", (i + offset) / page_size);
-		seq_printf(m, "%2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
-			   *(buf + i), *(buf + i + 1),
-			   *(buf + i + 2), *(buf + i + 3),
-			   *(buf + i + 4), *(buf + i + 5),
-			   *(buf + i + 6), *(buf + i + 7));
+		seq_printf(m, "%8ph\n", buf + i);
 	}
 	vfree(buf);
 
@@ -394,7 +392,9 @@ static ssize_t rtw_debugfs_set_h2c(struct file *filp,
 		return -EINVAL;
 	}
 
+	mutex_lock(&rtwdev->mutex);
 	rtw_fw_h2c_cmd_dbg(rtwdev, param);
+	mutex_unlock(&rtwdev->mutex);
 
 	return count;
 }
@@ -418,7 +418,9 @@ static ssize_t rtw_debugfs_set_rf_write(struct file *filp,
 		return count;
 	}
 
+	mutex_lock(&rtwdev->mutex);
 	rtw_write_rf(rtwdev, path, addr, mask, val);
+	mutex_unlock(&rtwdev->mutex);
 	rtw_dbg(rtwdev, RTW_DBG_DEBUGFS,
 		"write_rf path:%d addr:0x%08x mask:0x%08x, val:0x%08x\n",
 		path, addr, mask, val);
@@ -523,6 +525,8 @@ static int rtw_debug_get_rf_dump(struct seq_file *m, void *v)
 	u32 addr, offset, data;
 	u8 path;
 
+	mutex_lock(&rtwdev->mutex);
+
 	for (path = 0; path < rtwdev->hal.rf_path_num; path++) {
 		seq_printf(m, "RF path:%d\n", path);
 		for (addr = 0; addr < 0x100; addr += 4) {
@@ -536,6 +540,8 @@ static int rtw_debug_get_rf_dump(struct seq_file *m, void *v)
 		}
 		seq_puts(m, "\n");
 	}
+
+	mutex_unlock(&rtwdev->mutex);
 
 	return 0;
 }
@@ -625,11 +631,13 @@ static int rtw_debugfs_get_tx_pwr_tbl(struct seq_file *m, void *v)
 	struct rtw_debugfs_priv *debugfs_priv = m->private;
 	struct rtw_dev *rtwdev = debugfs_priv->rtwdev;
 	struct rtw_hal *hal = &rtwdev->hal;
-	u8 path, rate;
+	u8 path, rate, bw, ch, regd;
 	struct rtw_power_params pwr_param = {0};
-	u8 bw = hal->current_band_width;
-	u8 ch = hal->current_channel;
-	u8 regd = rtw_regd_get(rtwdev);
+
+	mutex_lock(&rtwdev->mutex);
+	bw = hal->current_band_width;
+	ch = hal->current_channel;
+	regd = rtw_regd_get(rtwdev);
 
 	seq_printf(m, "channel: %u\n", ch);
 	seq_printf(m, "bandwidth: %u\n", bw);
@@ -671,6 +679,7 @@ static int rtw_debugfs_get_tx_pwr_tbl(struct seq_file *m, void *v)
 	}
 
 	mutex_unlock(&hal->tx_power_mutex);
+	mutex_unlock(&rtwdev->mutex);
 
 	return 0;
 }
@@ -832,7 +841,9 @@ static int rtw_debugfs_get_coex_info(struct seq_file *m, void *v)
 	struct rtw_debugfs_priv *debugfs_priv = m->private;
 	struct rtw_dev *rtwdev = debugfs_priv->rtwdev;
 
+	mutex_lock(&rtwdev->mutex);
 	rtw_coex_display_coex_info(rtwdev, m);
+	mutex_unlock(&rtwdev->mutex);
 
 	return 0;
 }
@@ -1027,6 +1038,8 @@ static void dump_gapk_status(struct rtw_dev *rtwdev, struct seq_file *m)
 		   dm_info->dm_flags & BIT(RTW_DM_CAP_TXGAPK) ? '-' : '+',
 		   rtw_dm_cap_strs[RTW_DM_CAP_TXGAPK]);
 
+	mutex_lock(&rtwdev->mutex);
+
 	for (path = 0; path < rtwdev->hal.rf_path_num; path++) {
 		val = rtw_read_rf(rtwdev, path, RF_GAINTX, RFREG_MASK);
 		seq_printf(m, "path %d:\n0x%x = 0x%x\n", path, RF_GAINTX, val);
@@ -1036,6 +1049,7 @@ static void dump_gapk_status(struct rtw_dev *rtwdev, struct seq_file *m)
 				   txgapk->rf3f_fs[path][i], i);
 		seq_puts(m, "\n");
 	}
+	mutex_unlock(&rtwdev->mutex);
 }
 
 static int rtw_debugfs_get_dm_cap(struct seq_file *m, void *v)

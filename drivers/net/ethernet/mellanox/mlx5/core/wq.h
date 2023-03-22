@@ -123,7 +123,7 @@ static inline void mlx5_wq_cyc_push(struct mlx5_wq_cyc *wq)
 	wq->cur_sz++;
 }
 
-static inline void mlx5_wq_cyc_push_n(struct mlx5_wq_cyc *wq, u8 n)
+static inline void mlx5_wq_cyc_push_n(struct mlx5_wq_cyc *wq, u16 n)
 {
 	wq->wqe_ctr += n;
 	wq->cur_sz += n;
@@ -238,6 +238,23 @@ static inline struct mlx5_cqe64 *mlx5_cqwq_get_cqe(struct mlx5_cqwq *wq)
 		return NULL;
 
 	/* ensure cqe content is read after cqe ownership bit */
+	dma_rmb();
+
+	return cqe;
+}
+
+static inline
+struct mlx5_cqe64 *mlx5_cqwq_get_cqe_enahnced_comp(struct mlx5_cqwq *wq)
+{
+	u8 sw_validity_iteration_count = mlx5_cqwq_get_wrap_cnt(wq) & 0xff;
+	u32 ci = mlx5_cqwq_get_ci(wq);
+	struct mlx5_cqe64 *cqe;
+
+	cqe = mlx5_cqwq_get_wqe(wq, ci);
+	if (cqe->validity_iteration_count != sw_validity_iteration_count)
+		return NULL;
+
+	/* ensure cqe content is read after cqe ownership bit/validity byte */
 	dma_rmb();
 
 	return cqe;

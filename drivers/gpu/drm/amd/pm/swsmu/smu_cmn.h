@@ -42,6 +42,9 @@ int smu_cmn_send_smc_msg(struct smu_context *smu,
 			 enum smu_message_type msg,
 			 uint32_t *read_arg);
 
+int smu_cmn_send_debug_smc_msg(struct smu_context *smu,
+			 uint32_t msg);
+
 int smu_cmn_wait_for_response(struct smu_context *smu);
 
 int smu_cmn_to_asic_specific_index(struct smu_context *smu,
@@ -98,6 +101,8 @@ int smu_cmn_write_pptable(struct smu_context *smu);
 int smu_cmn_get_metrics_table(struct smu_context *smu,
 			      void *metrics_table,
 			      bool bypass_cache);
+
+int smu_cmn_get_combo_pptable(struct smu_context *smu);
 
 void smu_cmn_init_soft_gpu_metrics(void *table, uint8_t frev, uint8_t crev);
 

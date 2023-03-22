@@ -1308,8 +1308,7 @@ static const struct dvb_frontend_ops mxl692_ops = {
 	.read_snr             = mxl692_read_snr,
 };
 
-static int mxl692_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int mxl692_probe(struct i2c_client *client)
 {
 	struct mxl692_config *config = client->dev.platform_data;
 	struct mxl692_dev *dev;
@@ -1337,15 +1336,13 @@ err:
 	return -ENODEV;
 }
 
-static int mxl692_remove(struct i2c_client *client)
+static void mxl692_remove(struct i2c_client *client)
 {
 	struct mxl692_dev *dev = i2c_get_clientdata(client);
 
 	dev->fe.demodulator_priv = NULL;
 	i2c_set_clientdata(client, NULL);
 	kfree(dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id mxl692_id_table[] = {
@@ -1358,7 +1355,7 @@ static struct i2c_driver mxl692_driver = {
 	.driver = {
 		.name	= "mxl692",
 	},
-	.probe		= mxl692_probe,
+	.probe_new	= mxl692_probe,
 	.remove		= mxl692_remove,
 	.id_table	= mxl692_id_table,
 };

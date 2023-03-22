@@ -368,7 +368,7 @@ static const unsigned int buzz_keymap[] = {
 };
 
 /* The Navigation controller is a partial DS3 and uses the same HID report
- * and hence the same keymap indices, however not not all axes/buttons
+ * and hence the same keymap indices, however not all axes/buttons
  * are physically present. We use the same axis and button mapping as
  * the DS3, which uses the Linux gamepad spec.
  */
@@ -2355,11 +2355,13 @@ static void motion_send_output_report(struct sony_sc *sc)
 	hid_hw_output_report(hdev, (u8 *)report, MOTION_REPORT_0x02_SIZE);
 }
 
+#ifdef CONFIG_SONY_FF
 static inline void sony_send_output_report(struct sony_sc *sc)
 {
 	if (sc->send_output_report)
 		sc->send_output_report(sc);
 }
+#endif
 
 static void sony_state_worker(struct work_struct *work)
 {

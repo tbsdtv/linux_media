@@ -1,5 +1,3 @@
-
-
 #include "mxl603_priv.h"
 
 static const struct dvb_tuner_ops si2168_ops;
@@ -28,6 +26,7 @@ static int reg_read(struct i2c_client *client,u8 reg_addr,u8 *val)
 	return 0 ;	
 
 }
+
 static int reg_write(struct i2c_client *client,u8 reg_addr,u8 val)
 {
 	int ret;
@@ -41,6 +40,7 @@ static int reg_write(struct i2c_client *client,u8 reg_addr,u8 val)
 	}
 	return 0;
 }
+
 static int mxl603_ctrl_programRegisters(struct i2c_client *client, PMXL603_REG_CTRL_INFO_T ctrlRegInfoPtr)
 {
 	struct mxl603_dev* dev = i2c_get_clientdata(client);
@@ -72,6 +72,7 @@ static int mxl603_ctrl_programRegisters(struct i2c_client *client, PMXL603_REG_C
 	return ret;
 
 }
+
 static int mxl603_init(struct dvb_frontend *fe)
 {
 	struct i2c_client*client = fe->tuner_priv;
@@ -110,7 +111,6 @@ static int mxl603_init(struct dvb_frontend *fe)
 	  {0x00, 0xFF, 0x00},
 	  {0,	 0,    0}
 	};
-
 
 	 /*reset the chip*/
 	ret = reg_write(dev->client,AIC_RESET_REG, 0x00);
@@ -208,6 +208,7 @@ err:
 	pr_err("%s_failed = %d",__FUNCTION__,ret);
 	return ret;
 }
+
 static int mxl603_set_params(struct dvb_frontend *fe)
 {
 	struct i2c_client *client =fe->tuner_priv;
@@ -483,7 +484,6 @@ static int mxl603_get_status(struct dvb_frontend *fe,u32*status)
 
 }
 
-
 static const struct dvb_tuner_ops mxl603_ops ={
 	.info = {
 		.name = "MaxLinear tuner MXL603",
@@ -495,6 +495,7 @@ static const struct dvb_tuner_ops mxl603_ops ={
 	.get_status = mxl603_get_status,
 
 };
+
 static int mxl603_probe(struct i2c_client *client,
 		const struct i2c_device_id *id)
 {
@@ -554,16 +555,15 @@ err:
 	pr_err("%s___failed=%d\n",__FUNCTION__, ret);
 	return ret;
 }
-static int mxl603_remove(struct i2c_client *client)
+
+static void mxl603_remove(struct i2c_client *client)
 {
 	struct mxl603_dev *dev = i2c_get_clientdata(client);
 
 	kfree(dev);
-	
-	return 0;
 }
 
- static const struct i2c_device_id mxl603_id_table[] = {
+static const struct i2c_device_id mxl603_id_table[] = {
 	{"mxl603", 0},
 	{}
 };
@@ -583,4 +583,3 @@ module_i2c_driver(mxl603_driver);
 MODULE_AUTHOR("Davin <smiledavin@gmail.com>");
 MODULE_DESCRIPTION("Panasonic MN88436 ATSC/QAMB demodulator driver");
 MODULE_LICENSE("GPL");
-

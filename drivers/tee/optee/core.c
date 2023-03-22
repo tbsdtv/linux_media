@@ -171,6 +171,7 @@ void optee_remove_common(struct optee *optee)
 	optee_unregister_devices();
 
 	optee_notif_uninit(optee);
+	optee_shm_arg_cache_uninit(optee);
 	teedev_close_context(optee->ctx);
 	/*
 	 * The two devices have to be unregistered before we can free the
@@ -187,7 +188,7 @@ void optee_remove_common(struct optee *optee)
 static int smc_abi_rc;
 static int ffa_abi_rc;
 
-static int optee_core_init(void)
+static int __init optee_core_init(void)
 {
 	/*
 	 * The kernel may have crashed at the same time that all available
@@ -209,7 +210,7 @@ static int optee_core_init(void)
 }
 module_init(optee_core_init);
 
-static void optee_core_exit(void)
+static void __exit optee_core_exit(void)
 {
 	if (!smc_abi_rc)
 		optee_smc_abi_unregister();

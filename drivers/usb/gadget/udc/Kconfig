@@ -33,7 +33,7 @@ menu "USB Peripheral Controller"
 config USB_AT91
 	tristate "Atmel AT91 USB Device Port"
 	depends on ARCH_AT91
-	depends on OF || COMPILE_TEST
+	depends on OF
 	help
 	   Many Atmel AT91 processors (such as the AT91RM2000) have a
 	   full speed USB Device Port with support for five configurable
@@ -59,8 +59,8 @@ config USB_ATMEL_USBA
 	tristate "Atmel USBA"
 	depends on ARCH_AT91
 	help
-	  USBA is the integrated high-speed USB Device controller on
-	  the AT32AP700x, some AT91SAM9 and AT91CAP9 processors from Atmel.
+	  USBA is the integrated high-speed USB Device controller on some
+	  AT91SAM9 and AT91CAP9 processors from Atmel.
 
 	  The fifo_mode parameter is used to select endpoint allocation mode.
 	  fifo_mode = 0 is used to let the driver autoconfigure the endpoints.
@@ -107,17 +107,6 @@ config USB_FUSB300
 	depends on !PHYS_ADDR_T_64BIT && HAS_DMA
 	help
 	   Faraday usb device controller FUSB300 driver
-
-config USB_FOTG210_UDC
-	depends on HAS_DMA
-	tristate "Faraday FOTG210 USB Peripheral Controller"
-	help
-	   Faraday USB2.0 OTG controller which can be configured as
-	   high speed or full speed USB device. This driver supppors
-	   Bulk Transfer so far.
-
-	   Say "y" to link the driver statically, or "m" to build a
-	   dynamically linked module called "fotg210_udc".
 
 config USB_GR_UDC
 	tristate "Aeroflex Gaisler GRUSBDC USB Peripheral Controller Driver"
@@ -311,7 +300,7 @@ source "drivers/usb/gadget/udc/bdc/Kconfig"
 
 config USB_AMD5536UDC
 	tristate "AMD5536 UDC"
-	depends on USB_PCI
+	depends on USB_PCI && HAS_DMA
 	select USB_SNP_CORE
 	help
 	   The AMD5536 UDC is part of the AMD Geode CS5536, an x86 southbridge.
@@ -430,7 +419,7 @@ config USB_EG20T
 config USB_GADGET_XILINX
 	tristate "Xilinx USB Driver"
 	depends on HAS_DMA
-	depends on OF || COMPILE_TEST
+	depends on OF
 	help
 	  USB peripheral controller driver for Xilinx USB2 device.
 	  Xilinx USB2 device is a soft IP which supports both full
@@ -462,6 +451,19 @@ config USB_TEGRA_XUDC
 	 Say "y" to link the driver statically, or "m" to build a
 	 dynamically linked module called "tegra_xudc" and force all
 	 gadget drivers to also be dynamically linked.
+
+config USB_ASPEED_UDC
+	tristate "Aspeed UDC driver support"
+	depends on ARCH_ASPEED || COMPILE_TEST
+	depends on USB_LIBCOMPOSITE
+	help
+	  Enables Aspeed USB2.0 Device Controller driver for AST260x
+	  family SoCs. The controller supports 1 control endpoint and
+	  4 programmable endpoints.
+
+	  Say "y" to link the driver statically, or "m" to build a
+	  dynamically linked module called "aspeed_udc" and force all
+	  gadget drivers to also be dynamically linked.
 
 source "drivers/usb/gadget/udc/aspeed-vhub/Kconfig"
 

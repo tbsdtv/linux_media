@@ -14,6 +14,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/string_helpers.h>
 
 #define GCCR		0x000	/* controller configuration */
 #define GPLR		0x004	/* pin level r/o */
@@ -220,10 +221,8 @@ static void mrfld_irq_ack(struct irq_data *d)
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
 }
 
-static void mrfld_irq_unmask_mask(struct irq_data *d, bool unmask)
+static void mrfld_irq_unmask_mask(struct mrfld_gpio *priv, u32 gpio, bool unmask)
 {
-	struct mrfld_gpio *priv = irq_data_get_irq_chip_data(d);
-	u32 gpio = irqd_to_hwirq(d);
 	void __iomem *gimr = gpio_reg(&priv->chip, gpio, GIMR);
 	unsigned long flags;
 	u32 value;
@@ -241,12 +240,20 @@ static void mrfld_irq_unmask_mask(struct irq_data *d, bool unmask)
 
 static void mrfld_irq_mask(struct irq_data *d)
 {
-	mrfld_irq_unmask_mask(d, false);
+	struct mrfld_gpio *priv = irq_data_get_irq_chip_data(d);
+	u32 gpio = irqd_to_hwirq(d);
+
+	mrfld_irq_unmask_mask(priv, gpio, false);
+	gpiochip_disable_irq(&priv->chip, gpio);
 }
 
 static void mrfld_irq_unmask(struct irq_data *d)
 {
-	mrfld_irq_unmask_mask(d, true);
+	struct mrfld_gpio *priv = irq_data_get_irq_chip_data(d);
+	u32 gpio = irqd_to_hwirq(d);
+
+	gpiochip_enable_irq(&priv->chip, gpio);
+	mrfld_irq_unmask_mask(priv, gpio, true);
 }
 
 static int mrfld_irq_set_type(struct irq_data *d, unsigned int type)
@@ -325,17 +332,19 @@ static int mrfld_irq_set_wake(struct irq_data *d, unsigned int on)
 
 	raw_spin_unlock_irqrestore(&priv->lock, flags);
 
-	dev_dbg(priv->dev, "%sable wake for gpio %u\n", on ? "en" : "dis", gpio);
+	dev_dbg(priv->dev, "%s wake for gpio %u\n", str_enable_disable(on), gpio);
 	return 0;
 }
 
-static struct irq_chip mrfld_irqchip = {
+static const struct irq_chip mrfld_irqchip = {
 	.name		= "gpio-merrifield",
 	.irq_ack	= mrfld_irq_ack,
 	.irq_mask	= mrfld_irq_mask,
 	.irq_unmask	= mrfld_irq_unmask,
 	.irq_set_type	= mrfld_irq_set_type,
 	.irq_set_wake	= mrfld_irq_set_wake,
+	.flags		= IRQCHIP_IMMUTABLE,
+	GPIOCHIP_IRQ_RESOURCE_HELPERS,
 };
 
 static void mrfld_irq_handler(struct irq_desc *desc)
@@ -482,7 +491,7 @@ static int mrfld_gpio_probe(struct pci_dev *pdev, const struct pci_device_id *id
 		return retval;
 
 	girq = &priv->chip.irq;
-	girq->chip = &mrfld_irqchip;
+	gpio_irq_chip_set_chip(girq, &mrfld_irqchip);
 	girq->init_hw = mrfld_irq_init_hw;
 	girq->parent_handler = mrfld_irq_handler;
 	girq->num_parents = 1;

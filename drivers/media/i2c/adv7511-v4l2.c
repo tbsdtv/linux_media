@@ -943,8 +943,8 @@ static int adv7511_isr(struct v4l2_subdev *sd, u32 status, bool *handled)
 		v4l2_dbg(1, debug, sd, "%s: cec msg len %d\n", __func__,
 			 msg.len);
 
-		if (msg.len > 16)
-			msg.len = 16;
+		if (msg.len > CEC_MAX_MSG_SIZE)
+			msg.len = CEC_MAX_MSG_SIZE;
 
 		if (msg.len) {
 			u8 i;
@@ -1763,7 +1763,7 @@ static void adv7511_init_setup(struct v4l2_subdev *sd)
 	adv7511_cec_write(sd, 0x4e, ratio << 2);
 }
 
-static int adv7511_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int adv7511_probe(struct i2c_client *client)
 {
 	struct adv7511_state *state;
 	struct adv7511_platform_data *pdata = client->dev.platform_data;
@@ -1923,7 +1923,7 @@ err_hdl:
 
 /* ----------------------------------------------------------------------- */
 
-static int adv7511_remove(struct i2c_client *client)
+static void adv7511_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct adv7511_state *state = get_adv7511_state(sd);
@@ -1943,7 +1943,6 @@ static int adv7511_remove(struct i2c_client *client)
 	v4l2_device_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);
 	v4l2_ctrl_handler_free(sd->ctrl_handler);
-	return 0;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -1958,7 +1957,7 @@ static struct i2c_driver adv7511_driver = {
 	.driver = {
 		.name = "adv7511-v4l2",
 	},
-	.probe = adv7511_probe,
+	.probe_new = adv7511_probe,
 	.remove = adv7511_remove,
 	.id_table = adv7511_id,
 };

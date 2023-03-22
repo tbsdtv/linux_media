@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 
 /* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
- * Copyright (C) 2018-2020 Linaro Ltd.
+ * Copyright (C) 2018-2022 Linaro Ltd.
  */
 #ifndef _IPA_H_
 #define _IPA_H_
@@ -39,11 +39,15 @@ struct ipa_interrupt;
  * @power:		IPA power information
  * @table_addr:		DMA address of filter/route table content
  * @table_virt:		Virtual address of filter/route table content
+ * @route_count:	Total number of entries in a routing table
+ * @modem_route_count:	Number of modem entries in a routing table
+ * @filter_count:	Maximum number of entries in a filter table
  * @interrupt:		IPA Interrupt information
  * @uc_powered:		true if power is active by proxy for microcontroller
  * @uc_loaded:		true after microcontroller has reported it's ready
  * @reg_addr:		DMA address used for IPA register access
  * @reg_virt:		Virtual address used for IPA register access
+ * @regs:		IPA register definitions
  * @mem_addr:		DMA address of IPA-local memory space
  * @mem_virt:		Virtual address of IPA-local memory space
  * @mem_offset:		Offset from @mem_virt used for access to IPA memory
@@ -57,11 +61,14 @@ struct ipa_interrupt;
  * @zero_addr:		DMA address of preallocated zero-filled memory
  * @zero_virt:		Virtual address of preallocated zero-filled memory
  * @zero_size:		Size (bytes) of preallocated zero-filled memory
- * @available:		Bit mask indicating endpoints hardware supports
- * @filter_map:		Bit mask indicating endpoints that support filtering
- * @initialized:	Bit mask indicating endpoints initialized
- * @set_up:		Bit mask indicating endpoints set up
- * @enabled:		Bit mask indicating endpoints enabled
+ * @endpoint_count:	Number of defined bits in most bitmaps below
+ * @available_count:	Number of defined bits in the available bitmap
+ * @defined:		Bitmap of endpoints defined in config data
+ * @available:		Bitmap of endpoints supported by hardware
+ * @filtered:		Bitmap of endpoints that support filtering
+ * @set_up:		Bitmap of endpoints that are set up for use
+ * @enabled:		Bitmap of currently enabled endpoints
+ * @modem_tx_count:	Number of defined modem TX endoints
  * @endpoint:		Array of endpoint information
  * @channel_map:	Mapping of GSI channel to IPA endpoint
  * @name_map:		Mapping of IPA endpoint name to IPA endpoint
@@ -82,6 +89,9 @@ struct ipa {
 
 	dma_addr_t table_addr;
 	__le64 *table_virt;
+	u32 route_count;
+	u32 modem_route_count;
+	u32 filter_count;
 
 	struct ipa_interrupt *interrupt;
 	bool uc_powered;
@@ -89,6 +99,7 @@ struct ipa {
 
 	dma_addr_t reg_addr;
 	void __iomem *reg_virt;
+	const struct ipa_regs *regs;
 
 	dma_addr_t mem_addr;
 	void *mem_virt;
@@ -107,13 +118,16 @@ struct ipa {
 	void *zero_virt;
 	size_t zero_size;
 
-	/* Bit masks indicating endpoint state */
-	u32 available;		/* supported by hardware */
-	u32 filter_map;
-	u32 initialized;
-	u32 set_up;
-	u32 enabled;
+	/* Bitmaps indicating endpoint state */
+	u32 endpoint_count;
+	u32 available_count;
+	unsigned long *defined;		/* Defined in configuration data */
+	unsigned long *available;	/* Supported by hardware */
+	u64 filtered;			/* Support filtering (AP and modem) */
+	unsigned long *set_up;
+	unsigned long *enabled;
 
+	u32 modem_tx_count;
 	struct ipa_endpoint endpoint[IPA_ENDPOINT_MAX];
 	struct ipa_endpoint *channel_map[GSI_CHANNEL_COUNT_MAX];
 	struct ipa_endpoint *name_map[IPA_ENDPOINT_COUNT];

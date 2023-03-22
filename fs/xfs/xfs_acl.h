@@ -11,16 +11,18 @@ struct posix_acl;
 
 #ifdef CONFIG_XFS_POSIX_ACL
 extern struct posix_acl *xfs_get_acl(struct inode *inode, int type, bool rcu);
-extern int xfs_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
+extern int xfs_set_acl(struct user_namespace *mnt_userns, struct dentry *dentry,
 		       struct posix_acl *acl, int type);
 extern int __xfs_set_acl(struct inode *inode, struct posix_acl *acl, int type);
 void xfs_forget_acl(struct inode *inode, const char *name);
 #else
-static inline struct posix_acl *xfs_get_acl(struct inode *inode, int type, bool rcu)
+#define xfs_get_acl NULL
+#define xfs_set_acl NULL
+static inline int __xfs_set_acl(struct inode *inode, struct posix_acl *acl,
+				int type)
 {
-	return NULL;
+	return 0;
 }
-# define xfs_set_acl					NULL
 static inline void xfs_forget_acl(struct inode *inode, const char *name)
 {
 }

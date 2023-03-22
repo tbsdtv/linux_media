@@ -9,6 +9,17 @@
 #include <linux/compat.h>
 #include <linux/fileattr.h>
 
+static ssize_t fuse_send_ioctl(struct fuse_mount *fm, struct fuse_args *args)
+{
+	ssize_t ret = fuse_simple_request(fm, args);
+
+	/* Translate ENOSYS, which shouldn't be returned from fs */
+	if (ret == -ENOSYS)
+		ret = -ENOTTY;
+
+	return ret;
+}
+
 /*
  * CUSE servers compiled on 32bit broke on 64bit kernels because the
  * ABI was defined to be 'struct iovec' which is different on 32bit
@@ -244,7 +255,7 @@ long fuse_do_ioctl(struct file *file, unsigned int cmd, unsigned long arg,
 		ap.args.in_pages = true;
 
 		err = -EFAULT;
-		iov_iter_init(&ii, WRITE, in_iov, in_iovs, in_size);
+		iov_iter_init(&ii, ITER_SOURCE, in_iov, in_iovs, in_size);
 		for (i = 0; iov_iter_count(&ii) && !WARN_ON(i >= ap.num_pages); i++) {
 			c = copy_page_from_iter(ap.pages[i], 0, PAGE_SIZE, &ii);
 			if (c != PAGE_SIZE && iov_iter_count(&ii))
@@ -259,7 +270,7 @@ long fuse_do_ioctl(struct file *file, unsigned int cmd, unsigned long arg,
 	ap.args.out_pages = true;
 	ap.args.out_argvar = true;
 
-	transferred = fuse_simple_request(fm, &ap.args);
+	transferred = fuse_send_ioctl(fm, &ap.args);
 	err = transferred;
 	if (transferred < 0)
 		goto out;
@@ -313,7 +324,7 @@ long fuse_do_ioctl(struct file *file, unsigned int cmd, unsigned long arg,
 		goto out;
 
 	err = -EFAULT;
-	iov_iter_init(&ii, READ, out_iov, out_iovs, transferred);
+	iov_iter_init(&ii, ITER_DEST, out_iov, out_iovs, transferred);
 	for (i = 0; iov_iter_count(&ii) && !WARN_ON(i >= ap.num_pages); i++) {
 		c = copy_page_to_iter(ap.pages[i], 0, PAGE_SIZE, &ii);
 		if (c != PAGE_SIZE && iov_iter_count(&ii))
@@ -393,7 +404,7 @@ static int fuse_priv_ioctl(struct inode *inode, struct fuse_file *ff,
 	args.out_args[1].size = inarg.out_size;
 	args.out_args[1].value = ptr;
 
-	err = fuse_simple_request(fm, &args);
+	err = fuse_send_ioctl(fm, &args);
 	if (!err) {
 		if (outarg.result < 0)
 			err = outarg.result;

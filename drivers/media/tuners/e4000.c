@@ -609,8 +609,7 @@ static const struct dvb_tuner_ops e4000_dvb_tuner_ops = {
 	.get_if_frequency = e4000_dvb_get_if_frequency,
 };
 
-static int e4000_probe(struct i2c_client *client,
-		       const struct i2c_device_id *id)
+static int e4000_probe(struct i2c_client *client)
 {
 	struct e4000_dev *dev;
 	struct e4000_config *cfg = client->dev.platform_data;
@@ -706,7 +705,7 @@ err:
 	return ret;
 }
 
-static int e4000_remove(struct i2c_client *client)
+static void e4000_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct e4000_dev *dev = container_of(sd, struct e4000_dev, sd);
@@ -717,8 +716,6 @@ static int e4000_remove(struct i2c_client *client)
 	v4l2_ctrl_handler_free(&dev->hdl);
 #endif
 	kfree(dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id e4000_id_table[] = {
@@ -732,7 +729,7 @@ static struct i2c_driver e4000_driver = {
 		.name	= "e4000",
 		.suppress_bind_attrs = true,
 	},
-	.probe		= e4000_probe,
+	.probe_new	= e4000_probe,
 	.remove		= e4000_remove,
 	.id_table	= e4000_id_table,
 };

@@ -121,7 +121,7 @@
 	pinctrl-0 = <&nor_pins>;
 	pinctrl-names = "default";
 
-	spi-flash@0 {
+	flash@0 {
 		#address-cells = <1>;
 		#size-cells = <1>;
 		compatible = "jedec,spi-nor";
@@ -131,10 +131,6 @@
 };
 
 &usb {
-	phys = <&usb2_phy1>;
-	phy-names = "usb2-phy1";
-};
-
-&usb2_phy0 {
-	status = "disabled";
+	phys = <&usb2_phy0>, <&usb2_phy1>;
+	phy-names = "usb2-phy0", "usb2-phy1";
 };

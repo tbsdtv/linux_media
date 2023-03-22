@@ -187,14 +187,10 @@ static int attiny_update_status(struct backlight_device *bl)
 {
 	struct attiny_lcd *state = bl_get_data(bl);
 	struct regmap *regmap = state->regmap;
-	int brightness = bl->props.brightness;
+	int brightness = backlight_get_brightness(bl);
 	int ret, i;
 
 	mutex_lock(&state->lock);
-
-	if (bl->props.power != FB_BLANK_UNBLANK ||
-	    bl->props.fb_blank != FB_BLANK_UNBLANK)
-		brightness = 0;
 
 	for (i = 0; i < 10; i++) {
 		ret = regmap_write(regmap, REG_PWM, brightness);
@@ -286,8 +282,7 @@ static int attiny_i2c_read(struct i2c_client *client, u8 reg, unsigned int *buf)
 /*
  * I2C driver interface functions
  */
-static int attiny_i2c_probe(struct i2c_client *i2c,
-		const struct i2c_device_id *id)
+static int attiny_i2c_probe(struct i2c_client *i2c)
 {
 	struct backlight_properties props = { };
 	struct regulator_config config = { };
@@ -364,7 +359,6 @@ static int attiny_i2c_probe(struct i2c_client *i2c,
 	state->gc.parent = &i2c->dev;
 	state->gc.label = i2c->name;
 	state->gc.owner = THIS_MODULE;
-	state->gc.of_node = i2c->dev.of_node;
 	state->gc.base = -1;
 	state->gc.ngpio = NUM_GPIO;
 
@@ -386,13 +380,11 @@ error:
 	return ret;
 }
 
-static int attiny_i2c_remove(struct i2c_client *client)
+static void attiny_i2c_remove(struct i2c_client *client)
 {
 	struct attiny_lcd *state = i2c_get_clientdata(client);
 
 	mutex_destroy(&state->lock);
-
-	return 0;
 }
 
 static const struct of_device_id attiny_dt_ids[] = {
@@ -406,7 +398,7 @@ static struct i2c_driver attiny_regulator_driver = {
 		.name = "rpi_touchscreen_attiny",
 		.of_match_table = of_match_ptr(attiny_dt_ids),
 	},
-	.probe = attiny_i2c_probe,
+	.probe_new = attiny_i2c_probe,
 	.remove	= attiny_i2c_remove,
 };
 

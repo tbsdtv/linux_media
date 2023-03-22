@@ -148,7 +148,6 @@ static int probe_common(struct virtio_device *vdev)
 		.cleanup = virtio_cleanup,
 		.priv = (unsigned long)vi,
 		.name = vi->name,
-		.quality = 1000,
 	};
 	vdev->priv = vi;
 
@@ -158,6 +157,8 @@ static int probe_common(struct virtio_device *vdev)
 		err = PTR_ERR(vi->vq);
 		goto err_find;
 	}
+
+	virtio_device_ready(vdev);
 
 	/* we always have a pending entropy request */
 	request_entropy(vi);

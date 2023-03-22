@@ -13,10 +13,10 @@
 #include <linux/of_platform.h>
 #include <linux/slab.h>
 #include <linux/debugfs.h>
+#include <linux/of_irq.h>
 
 #include <asm/dcr.h>
 #include <asm/machdep.h>
-#include <asm/prom.h>
 
 #include "cell.h"
 
@@ -223,6 +223,7 @@ static int setup_msi_msg_address(struct pci_dev *dev, struct msi_msg *msg)
 	if (!prop) {
 		dev_dbg(&dev->dev,
 			"axon_msi: no msi-address-(32|64) properties found\n");
+		of_node_put(dn);
 		return -ENOENT;
 	}
 
@@ -288,6 +289,7 @@ static void axon_msi_teardown_msi_irqs(struct pci_dev *dev)
 	msi_for_each_desc(entry, &dev->dev, MSI_DESC_ASSOCIATED) {
 		irq_set_msi_desc(entry->irq, NULL);
 		irq_dispose_mapping(entry->irq);
+		entry->irq = 0;
 	}
 }
 

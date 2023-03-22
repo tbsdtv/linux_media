@@ -14,6 +14,7 @@
 #include "xfs_inode.h"
 #include "xfs_quota.h"
 #include "xfs_qm.h"
+#include "xfs_bmap.h"
 #include "scrub/scrub.h"
 #include "scrub/common.h"
 
@@ -84,7 +85,7 @@ xchk_quota_item(
 	int			error = 0;
 
 	if (xchk_should_terminate(sc, &error))
-		return -ECANCELED;
+		return error;
 
 	/*
 	 * Except for the root dquot, the actual dquot we got must either have
@@ -185,15 +186,16 @@ xchk_quota_data_fork(
 
 	/* Check for data fork problems that apply only to quota files. */
 	max_dqid_off = ((xfs_dqid_t)-1) / qi->qi_dqperchunk;
-	ifp = XFS_IFORK_PTR(sc->ip, XFS_DATA_FORK);
+	ifp = xfs_ifork_ptr(sc->ip, XFS_DATA_FORK);
 	for_each_xfs_iext(ifp, &icur, &irec) {
 		if (xchk_should_terminate(sc, &error))
 			break;
+
 		/*
-		 * delalloc extents or blocks mapped above the highest
+		 * delalloc/unwritten extents or blocks mapped above the highest
 		 * quota id shouldn't happen.
 		 */
-		if (isnullstartblock(irec.br_startblock) ||
+		if (!xfs_bmap_is_written_extent(&irec) ||
 		    irec.br_startoff > max_dqid_off ||
 		    irec.br_startoff + irec.br_blockcount - 1 > max_dqid_off) {
 			xchk_fblock_set_corrupt(sc, XFS_DATA_FORK,

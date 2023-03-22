@@ -480,10 +480,10 @@ static int ata_dev_get_GTF(struct ata_device *dev, struct ata_acpi_gtf **gtf)
  * RETURNS:
  * Determined xfermask.
  */
-unsigned long ata_acpi_gtm_xfermask(struct ata_device *dev,
-				    const struct ata_acpi_gtm *gtm)
+unsigned int ata_acpi_gtm_xfermask(struct ata_device *dev,
+				   const struct ata_acpi_gtm *gtm)
 {
-	unsigned long xfer_mask = 0;
+	unsigned int xfer_mask = 0;
 	unsigned int type;
 	int unit;
 	u8 mode;
@@ -525,7 +525,7 @@ int ata_acpi_cbl_80wire(struct ata_port *ap, const struct ata_acpi_gtm *gtm)
 	struct ata_device *dev;
 
 	ata_for_each_dev(dev, &ap->link, ENABLED) {
-		unsigned long xfer_mask, udma_mask;
+		unsigned int xfer_mask, udma_mask;
 
 		xfer_mask = ata_acpi_gtm_xfermask(dev, gtm);
 		ata_unpack_xfermask(xfer_mask, NULL, NULL, &udma_mask);
@@ -992,7 +992,7 @@ int ata_acpi_on_devcfg(struct ata_device *dev)
 
  acpi_err:
 	/* ignore evaluation failure if we can continue safely */
-	if (rc == -EINVAL && !nr_executed && !(ap->pflags & ATA_PFLAG_FROZEN))
+	if (rc == -EINVAL && !nr_executed && !ata_port_is_frozen(ap))
 		return 0;
 
 	/* fail and let EH retry once more for unknown IO errors */
@@ -1007,7 +1007,7 @@ int ata_acpi_on_devcfg(struct ata_device *dev)
 	/* We can safely continue if no _GTF command has been executed
 	 * and port is not frozen.
 	 */
-	if (!nr_executed && !(ap->pflags & ATA_PFLAG_FROZEN))
+	if (!nr_executed && !ata_port_is_frozen(ap))
 		return 0;
 
 	return rc;

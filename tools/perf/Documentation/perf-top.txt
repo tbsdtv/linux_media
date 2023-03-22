@@ -41,7 +41,7 @@ Default is to monitor all CPUS.
 	(use 'perf list' to list all events) or a raw PMU event in the form
 	of rN where N is a hexadecimal value that represents the raw register
 	encoding with the layout of the event control registers as described
-	by entries in /sys/bus/event_sources/devices/cpu/format/*.
+	by entries in /sys/bus/event_source/devices/cpu/format/*.
 
 -E <entries>::
 --entries=<entries>::
@@ -50,9 +50,6 @@ Default is to monitor all CPUS.
 -f <count>::
 --count-filter=<count>::
 	Only display functions with more events than this.
-
---group::
-        Put the counters into a counter group.
 
 --group-sort-idx::
 	Sort the output by the event at the index n in group. If n is invalid,
@@ -313,10 +310,10 @@ use '-e e1 -e e2 -G foo,foo' or just use '-e e1 -e e2 -G foo'.
 
 		perf top -e cycles,probe:icmp_rcv --switch-on=probe:icmp_rcv
 
-	   Alternatively one can ask for --group and then two overhead columns
+	   Alternatively one can ask for a group and then two overhead columns
            will appear, the first for cycles and the second for the switch-on event.
 
-		perf top --group -e cycles,probe:icmp_rcv --switch-on=probe:icmp_rcv
+		perf top -e '{cycles,probe:icmp_rcv}' --switch-on=probe:icmp_rcv
 
 	This may be interesting to measure a workload only after some initialization
 	phase is over, i.e. insert a perf probe at that point and use the above

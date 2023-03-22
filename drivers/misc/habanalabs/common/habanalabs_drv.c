@@ -9,10 +9,14 @@
 #define pr_fmt(fmt)		"habanalabs: " fmt
 
 #include "habanalabs.h"
+#include "../include/hw_ip/pci/pci_general.h"
 
 #include <linux/pci.h>
 #include <linux/aer.h>
 #include <linux/module.h>
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/habanalabs.h>
 
 #define HL_DRIVER_AUTHOR	"HabanaLabs Kernel Driver Team"
 
@@ -27,7 +31,10 @@ static struct class *hl_class;
 static DEFINE_IDR(hl_devs_idr);
 static DEFINE_MUTEX(hl_devs_idr_lock);
 
-static int timeout_locked = 30;
+#define HL_DEFAULT_TIMEOUT_LOCKED	30	/* 30 seconds */
+#define GAUDI_DEFAULT_TIMEOUT_LOCKED	600	/* 10 minutes */
+
+static int timeout_locked = HL_DEFAULT_TIMEOUT_LOCKED;
 static int reset_on_lockup = 1;
 static int memory_scrub;
 static ulong boot_error_status_mask = ULONG_MAX;
@@ -54,10 +61,13 @@ MODULE_PARM_DESC(boot_error_status_mask,
 #define PCI_IDS_GAUDI			0x1000
 #define PCI_IDS_GAUDI_SEC		0x1010
 
+#define PCI_IDS_GAUDI2			0x1020
+
 static const struct pci_device_id ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_HABANALABS, PCI_IDS_GOYA), },
 	{ PCI_DEVICE(PCI_VENDOR_ID_HABANALABS, PCI_IDS_GAUDI), },
 	{ PCI_DEVICE(PCI_VENDOR_ID_HABANALABS, PCI_IDS_GAUDI_SEC), },
+	{ PCI_DEVICE(PCI_VENDOR_ID_HABANALABS, PCI_IDS_GAUDI2), },
 	{ 0, }
 };
 MODULE_DEVICE_TABLE(pci, ids);
@@ -65,16 +75,17 @@ MODULE_DEVICE_TABLE(pci, ids);
 /*
  * get_asic_type - translate device id to asic type
  *
- * @device: id of the PCI device
+ * @hdev: pointer to habanalabs device structure.
  *
- * Translate device id to asic type.
+ * Translate device id and revision id to asic type.
  * In case of unidentified device, return -1
  */
-static enum hl_asic_type get_asic_type(u16 device)
+static enum hl_asic_type get_asic_type(struct hl_device *hdev)
 {
-	enum hl_asic_type asic_type;
+	struct pci_dev *pdev = hdev->pdev;
+	enum hl_asic_type asic_type = ASIC_INVALID;
 
-	switch (device) {
+	switch (pdev->device) {
 	case PCI_IDS_GOYA:
 		asic_type = ASIC_GOYA;
 		break;
@@ -84,8 +95,19 @@ static enum hl_asic_type get_asic_type(u16 device)
 	case PCI_IDS_GAUDI_SEC:
 		asic_type = ASIC_GAUDI_SEC;
 		break;
+	case PCI_IDS_GAUDI2:
+		switch (pdev->revision) {
+		case REV_ID_A:
+			asic_type = ASIC_GAUDI2;
+			break;
+		case REV_ID_B:
+			asic_type = ASIC_GAUDI2B;
+			break;
+		default:
+			break;
+		}
+		break;
 	default:
-		asic_type = ASIC_INVALID;
 		break;
 	}
 
@@ -134,23 +156,47 @@ int hl_device_open(struct inode *inode, struct file *filp)
 	hpriv->hdev = hdev;
 	filp->private_data = hpriv;
 	hpriv->filp = filp;
+
+	mutex_init(&hpriv->notifier_event.lock);
 	mutex_init(&hpriv->restore_phase_mutex);
+	mutex_init(&hpriv->ctx_lock);
 	kref_init(&hpriv->refcount);
 	nonseekable_open(inode, filp);
 
-	hl_cb_mgr_init(&hpriv->cb_mgr);
 	hl_ctx_mgr_init(&hpriv->ctx_mgr);
-	hl_ts_mgr_init(&hpriv->ts_mem_mgr);
+	hl_mem_mgr_init(hpriv->hdev->dev, &hpriv->mem_mgr);
 
 	hpriv->taskpid = get_task_pid(current, PIDTYPE_PID);
 
 	mutex_lock(&hdev->fpriv_list_lock);
 
 	if (!hl_device_operational(hdev, &status)) {
-		dev_err_ratelimited(hdev->dev,
+		dev_dbg_ratelimited(hdev->dev,
 			"Can't open %s because it is %s\n",
 			dev_name(hdev->dev), hdev->status[status]);
-		rc = -EPERM;
+
+		if (status == HL_DEVICE_STATUS_IN_RESET ||
+					status == HL_DEVICE_STATUS_IN_RESET_AFTER_DEVICE_RELEASE)
+			rc = -EAGAIN;
+		else
+			rc = -EPERM;
+
+		goto out_err;
+	}
+
+	if (hdev->is_in_dram_scrub) {
+		dev_dbg_ratelimited(hdev->dev,
+			"Can't open %s during dram scrub\n",
+			dev_name(hdev->dev));
+		rc = -EAGAIN;
+		goto out_err;
+	}
+
+	if (hdev->compute_ctx_in_release) {
+		dev_dbg_ratelimited(hdev->dev,
+			"Can't open %s because another user is still releasing it\n",
+			dev_name(hdev->dev));
+		rc = -EAGAIN;
 		goto out_err;
 	}
 
@@ -171,10 +217,14 @@ int hl_device_open(struct inode *inode, struct file *filp)
 	list_add(&hpriv->dev_node, &hdev->fpriv_list);
 	mutex_unlock(&hdev->fpriv_list_lock);
 
+	hdev->asic_funcs->send_device_activity(hdev, true);
+
 	hl_debugfs_add_file(hpriv);
 
-	atomic_set(&hdev->last_error.cs_write_disable, 0);
-	atomic_set(&hdev->last_error.razwi_write_disable, 0);
+	atomic_set(&hdev->captured_err_info.cs_timeout.write_enable, 1);
+	atomic_set(&hdev->captured_err_info.razwi_info_recorded, 0);
+	atomic_set(&hdev->captured_err_info.pgf_info_recorded, 0);
+	hdev->captured_err_info.undef_opcode.write_enable = true;
 
 	hdev->open_counter++;
 	hdev->last_successful_open_jif = jiffies;
@@ -184,11 +234,12 @@ int hl_device_open(struct inode *inode, struct file *filp)
 
 out_err:
 	mutex_unlock(&hdev->fpriv_list_lock);
-	hl_cb_mgr_fini(hpriv->hdev, &hpriv->cb_mgr);
-	hl_ts_mgr_fini(hpriv->hdev, &hpriv->ts_mem_mgr);
+	hl_mem_mgr_fini(&hpriv->mem_mgr);
 	hl_ctx_mgr_fini(hpriv->hdev, &hpriv->ctx_mgr);
 	filp->private_data = NULL;
+	mutex_destroy(&hpriv->ctx_lock);
 	mutex_destroy(&hpriv->restore_phase_mutex);
+	mutex_destroy(&hpriv->notifier_event.lock);
 	put_pid(hpriv->taskpid);
 
 	kfree(hpriv);
@@ -222,15 +273,17 @@ int hl_device_open_ctrl(struct inode *inode, struct file *filp)
 	hpriv->hdev = hdev;
 	filp->private_data = hpriv;
 	hpriv->filp = filp;
+
+	mutex_init(&hpriv->notifier_event.lock);
 	nonseekable_open(inode, filp);
 
-	hpriv->taskpid = find_get_pid(current->pid);
+	hpriv->taskpid = get_task_pid(current, PIDTYPE_PID);
 
 	mutex_lock(&hdev->fpriv_ctrl_list_lock);
 
-	if (!hl_device_operational(hdev, NULL)) {
-		dev_err_ratelimited(hdev->dev_ctrl,
-			"Can't open %s because it is disabled or in reset\n",
+	if (!hl_ctrl_device_operational(hdev, NULL)) {
+		dev_dbg_ratelimited(hdev->dev_ctrl,
+			"Can't open %s because it is disabled\n",
 			dev_name(hdev->dev_ctrl));
 		rc = -EPERM;
 		goto out_err;
@@ -253,41 +306,65 @@ out_err:
 
 static void set_driver_behavior_per_device(struct hl_device *hdev)
 {
-	hdev->pldm = 0;
+	hdev->nic_ports_mask = 0;
 	hdev->fw_components = FW_TYPE_ALL_TYPES;
+	hdev->mmu_enable = MMU_EN_ALL;
 	hdev->cpu_queues_enable = 1;
-	hdev->heartbeat = 1;
-	hdev->mmu_enable = 1;
-	hdev->sram_scrambler_enable = 1;
-	hdev->dram_scrambler_enable = 1;
-	hdev->bmc_enable = 1;
+	hdev->pldm = 0;
 	hdev->hard_reset_on_fw_events = 1;
+	hdev->bmc_enable = 1;
 	hdev->reset_on_preboot_fail = 1;
-	hdev->reset_if_device_not_idle = 1;
-
-	hdev->reset_pcilink = 0;
-	hdev->axi_drain = 0;
+	hdev->heartbeat = 1;
 }
 
 static void copy_kernel_module_params_to_device(struct hl_device *hdev)
 {
+	hdev->asic_prop.fw_security_enabled = is_asic_secured(hdev->asic_type);
+
 	hdev->major = hl_major;
 	hdev->memory_scrub = memory_scrub;
 	hdev->reset_on_lockup = reset_on_lockup;
 	hdev->boot_error_status_mask = boot_error_status_mask;
+}
 
-	if (timeout_locked)
-		hdev->timeout_jiffies = msecs_to_jiffies(timeout_locked * 1000);
-	else
-		hdev->timeout_jiffies = MAX_SCHEDULE_TIMEOUT;
+static void fixup_device_params_per_asic(struct hl_device *hdev, int timeout)
+{
+	switch (hdev->asic_type) {
+	case ASIC_GAUDI:
+	case ASIC_GAUDI_SEC:
+		/* If user didn't request a different timeout than the default one, we have
+		 * a different default timeout for Gaudi
+		 */
+		if (timeout == HL_DEFAULT_TIMEOUT_LOCKED)
+			hdev->timeout_jiffies = msecs_to_jiffies(GAUDI_DEFAULT_TIMEOUT_LOCKED *
+										MSEC_PER_SEC);
 
+		hdev->reset_upon_device_release = 0;
+		break;
+
+	case ASIC_GOYA:
+		hdev->reset_upon_device_release = 0;
+		break;
+
+	default:
+		hdev->reset_upon_device_release = 1;
+		break;
+	}
 }
 
 static int fixup_device_params(struct hl_device *hdev)
 {
-	hdev->asic_prop.fw_security_enabled = is_asic_secured(hdev->asic_type);
+	int tmp_timeout;
+
+	tmp_timeout = timeout_locked;
 
 	hdev->fw_poll_interval_usec = HL_FW_STATUS_POLL_INTERVAL_USEC;
+	hdev->fw_comms_poll_interval_usec = HL_FW_STATUS_POLL_INTERVAL_USEC;
+
+	if (tmp_timeout)
+		hdev->timeout_jiffies = msecs_to_jiffies(tmp_timeout * MSEC_PER_SEC);
+	else
+		hdev->timeout_jiffies = MAX_SCHEDULE_TIMEOUT;
 
 	hdev->stop_on_err = true;
 	hdev->reset_info.curr_reset_cause = HL_RESET_CAUSE_UNKNOWN;
@@ -296,8 +373,17 @@ static int fixup_device_params(struct hl_device *hdev)
 	/* Enable only after the initialization of the device */
 	hdev->disabled = true;
 
-	/* Set default DMA mask to 32 bits */
-	hdev->dma_mask = 32;
+	if (!(hdev->fw_components & FW_TYPE_PREBOOT_CPU) &&
+			(hdev->fw_components & ~FW_TYPE_PREBOOT_CPU)) {
+		pr_err("Preboot must be set along with other components");
+		return -EINVAL;
+	}
+
+	/* If CPU queues not enabled, no way to do heartbeat */
+	if (!hdev->cpu_queues_enable)
+		hdev->heartbeat = 0;
+
+	fixup_device_params_per_asic(hdev, tmp_timeout);
 
 	return 0;
 }
@@ -323,7 +409,7 @@ static int create_hdev(struct hl_device **dev, struct pci_dev *pdev)
 	if (!hdev)
 		return -ENOMEM;
 
-	/* can be NULL in case of simulator device */
+	/* Will be NULL in case of simulator device */
 	hdev->pdev = pdev;
 
 	/* Assign status description string */
@@ -333,11 +419,14 @@ static int create_hdev(struct hl_device **dev, struct pci_dev *pdev)
 	strncpy(hdev->status[HL_DEVICE_STATUS_NEEDS_RESET], "needs reset", HL_STR_MAX);
 	strncpy(hdev->status[HL_DEVICE_STATUS_IN_DEVICE_CREATION],
 					"in device creation", HL_STR_MAX);
+	strncpy(hdev->status[HL_DEVICE_STATUS_IN_RESET_AFTER_DEVICE_RELEASE],
+					"in reset after device release", HL_STR_MAX);
+
 
 	/* First, we must find out which ASIC are we handling. This is needed
 	 * to configure the behavior of the driver (kernel parameters)
 	 */
-	hdev->asic_type = get_asic_type(pdev->device);
+	hdev->asic_type = get_asic_type(hdev);
 	if (hdev->asic_type == ASIC_INVALID) {
 		dev_err(&pdev->dev, "Unsupported ASIC\n");
 		rc = -ENODEV;
@@ -516,15 +605,16 @@ hl_pci_err_detected(struct pci_dev *pdev, pci_channel_state_t state)
 
 	switch (state) {
 	case pci_channel_io_normal:
+		dev_warn(hdev->dev, "PCI normal state error detected\n");
 		return PCI_ERS_RESULT_CAN_RECOVER;
 
 	case pci_channel_io_frozen:
-		dev_warn(hdev->dev, "frozen state error detected\n");
+		dev_warn(hdev->dev, "PCI frozen state error detected\n");
 		result = PCI_ERS_RESULT_NEED_RESET;
 		break;
 
 	case pci_channel_io_perm_failure:
-		dev_warn(hdev->dev, "failure state error detected\n");
+		dev_warn(hdev->dev, "PCI failure state error detected\n");
 		result = PCI_ERS_RESULT_DISCONNECT;
 		break;
 
@@ -560,6 +650,10 @@ static void hl_pci_err_resume(struct pci_dev *pdev)
  */
 static pci_ers_result_t hl_pci_err_slot_reset(struct pci_dev *pdev)
 {
+	struct hl_device *hdev = pci_get_drvdata(pdev);
+
+	dev_warn(hdev->dev, "PCI slot reset detected\n");
+
 	return PCI_ERS_RESULT_RECOVERED;
 }
 

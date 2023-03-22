@@ -7,10 +7,11 @@
 #include "fs_cmd.h"
 #include "mlx5dr.h"
 #include "fs_dr.h"
+#include "dr_types.h"
 
-static bool mlx5_dr_is_fw_table(u32 flags)
+static bool dr_is_fw_term_table(struct mlx5_flow_table *ft)
 {
-	if (flags & MLX5_FLOW_TABLE_TERMINATION)
+	if (ft->flags & MLX5_FLOW_TABLE_TERMINATION)
 		return true;
 
 	return false;
@@ -44,11 +45,10 @@ static int set_miss_action(struct mlx5_flow_root_namespace *ns,
 	err = mlx5dr_table_set_miss_action(ft->fs_dr_table.dr_table, action);
 	if (err && action) {
 		err = mlx5dr_action_destroy(action);
-		if (err) {
-			action = NULL;
-			mlx5_core_err(ns->dev, "Failed to destroy action (%d)\n",
-				      err);
-		}
+		if (err)
+			mlx5_core_err(ns->dev,
+				      "Failed to destroy action (%d)\n", err);
+		action = NULL;
 	}
 	ft->fs_dr_table.miss_action = action;
 	if (old_miss_action) {
@@ -63,16 +63,16 @@ static int set_miss_action(struct mlx5_flow_root_namespace *ns,
 
 static int mlx5_cmd_dr_create_flow_table(struct mlx5_flow_root_namespace *ns,
 					 struct mlx5_flow_table *ft,
-					 unsigned int size,
+					 struct mlx5_flow_table_attr *ft_attr,
 					 struct mlx5_flow_table *next_ft)
 {
 	struct mlx5dr_table *tbl;
 	u32 flags;
 	int err;
 
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->create_flow_table(ns, ft,
-								    size,
+								    ft_attr,
 								    next_ft);
 	flags = ft->flags;
 	/* turn off encap/decap if not supported for sw-str by fw */
@@ -80,7 +80,8 @@ static int mlx5_cmd_dr_create_flow_table(struct mlx5_flow_root_namespace *ns,
 		flags = ft->flags & ~(MLX5_FLOW_TABLE_TUNNEL_EN_REFORMAT |
 				      MLX5_FLOW_TABLE_TUNNEL_EN_DECAP);
 
-	tbl = mlx5dr_table_create(ns->fs_dr_domain.dr_domain, ft->level, flags);
+	tbl = mlx5dr_table_create(ns->fs_dr_domain.dr_domain, ft->level, flags,
+				  ft_attr->uid);
 	if (!tbl) {
 		mlx5_core_err(ns->dev, "Failed creating dr flow_table\n");
 		return -EINVAL;
@@ -109,7 +110,7 @@ static int mlx5_cmd_dr_destroy_flow_table(struct mlx5_flow_root_namespace *ns,
 	struct mlx5dr_action *action = ft->fs_dr_table.miss_action;
 	int err;
 
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->destroy_flow_table(ns, ft);
 
 	err = mlx5dr_table_destroy(ft->fs_dr_table.dr_table);
@@ -134,7 +135,7 @@ static int mlx5_cmd_dr_modify_flow_table(struct mlx5_flow_root_namespace *ns,
 					 struct mlx5_flow_table *ft,
 					 struct mlx5_flow_table *next_ft)
 {
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->modify_flow_table(ns, ft, next_ft);
 
 	return set_miss_action(ns, ft, next_ft);
@@ -153,7 +154,7 @@ static int mlx5_cmd_dr_create_flow_group(struct mlx5_flow_root_namespace *ns,
 					    match_criteria_enable);
 	struct mlx5dr_match_parameters mask;
 
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->create_flow_group(ns, ft, in,
 								    fg);
 
@@ -178,7 +179,7 @@ static int mlx5_cmd_dr_destroy_flow_group(struct mlx5_flow_root_namespace *ns,
 					  struct mlx5_flow_table *ft,
 					  struct mlx5_flow_group *fg)
 {
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->destroy_flow_group(ns, ft, fg);
 
 	return mlx5dr_matcher_destroy(fg->fs_dr_matcher.dr_matcher);
@@ -209,9 +210,20 @@ static struct mlx5dr_action *create_ft_action(struct mlx5dr_domain *domain,
 {
 	struct mlx5_flow_table *dest_ft = dst->dest_attr.ft;
 
-	if (mlx5_dr_is_fw_table(dest_ft->flags))
+	if (mlx5dr_is_fw_table(dest_ft))
 		return mlx5dr_action_create_dest_flow_fw_table(domain, dest_ft);
 	return mlx5dr_action_create_dest_table(dest_ft->fs_dr_table.dr_table);
+}
+
+static struct mlx5dr_action *create_range_action(struct mlx5dr_domain *domain,
+						 struct mlx5_flow_rule *dst)
+{
+	return mlx5dr_action_create_dest_match_range(domain,
+						     dst->dest_attr.range.field,
+						     dst->dest_attr.range.hit_ft,
+						     dst->dest_attr.range.miss_ft,
+						     dst->dest_attr.range.min,
+						     dst->dest_attr.range.max);
 }
 
 static struct mlx5dr_action *create_action_push_vlan(struct mlx5dr_domain *domain,
@@ -260,7 +272,7 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 	int err = 0;
 	int i;
 
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->create_fte(ns, ft, group, fte);
 
 	actions = kcalloc(MLX5_FLOW_CONTEXT_ACTION_MAX, sizeof(*actions),
@@ -467,6 +479,15 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 				fs_dr_actions[fs_dr_num_actions++] = tmp_action;
 				term_actions[num_term_actions++].dest = tmp_action;
 				break;
+			case MLX5_FLOW_DESTINATION_TYPE_RANGE:
+				tmp_action = create_range_action(domain, dst);
+				if (!tmp_action) {
+					err = -ENOMEM;
+					goto free_actions;
+				}
+				fs_dr_actions[fs_dr_num_actions++] = tmp_action;
+				term_actions[num_term_actions++].dest = tmp_action;
+				break;
 			default:
 				err = -EOPNOTSUPP;
 				goto free_actions;
@@ -499,6 +520,27 @@ static int mlx5_cmd_dr_create_fte(struct mlx5_flow_root_namespace *ns,
 			fs_dr_actions[fs_dr_num_actions++] = tmp_action;
 			actions[num_actions++] = tmp_action;
 		}
+	}
+
+	if (fte->action.action & MLX5_FLOW_CONTEXT_ACTION_EXECUTE_ASO) {
+		if (fte->action.exe_aso.type != MLX5_EXE_ASO_FLOW_METER) {
+			err = -EOPNOTSUPP;
+			goto free_actions;
+		}
+
+		tmp_action =
+			mlx5dr_action_create_aso(domain,
+						 fte->action.exe_aso.object_id,
+						 fte->action.exe_aso.return_reg_id,
+						 fte->action.exe_aso.type,
+						 fte->action.exe_aso.flow_meter.init_color,
+						 fte->action.exe_aso.flow_meter.meter_idx);
+		if (!tmp_action) {
+			err = -ENOMEM;
+			goto free_actions;
+		}
+		fs_dr_actions[fs_dr_num_actions++] = tmp_action;
+		actions[num_actions++] = tmp_action;
 	}
 
 	params.match_sz = match_sz;
@@ -681,7 +723,7 @@ static int mlx5_cmd_dr_delete_fte(struct mlx5_flow_root_namespace *ns,
 	int err;
 	int i;
 
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->delete_fte(ns, ft, fte);
 
 	err = mlx5dr_rule_destroy(rule->dr_rule);
@@ -706,7 +748,7 @@ static int mlx5_cmd_dr_update_fte(struct mlx5_flow_root_namespace *ns,
 	struct fs_fte fte_tmp = {};
 	int ret;
 
-	if (mlx5_dr_is_fw_table(ft->flags))
+	if (dr_is_fw_term_table(ft))
 		return mlx5_fs_cmd_get_fw_cmds()->update_fte(ns, ft, group, modify_mask, fte);
 
 	/* Backup current dr rule details */
@@ -759,11 +801,19 @@ static int mlx5_cmd_dr_destroy_ns(struct mlx5_flow_root_namespace *ns)
 static u32 mlx5_cmd_dr_get_capabilities(struct mlx5_flow_root_namespace *ns,
 					enum fs_flow_table_type ft_type)
 {
+	u32 steering_caps = 0;
+
 	if (ft_type != FS_FT_FDB ||
 	    MLX5_CAP_GEN(ns->dev, steering_format_version) == MLX5_STEERING_FORMAT_CONNECTX_5)
 		return 0;
 
-	return MLX5_FLOW_STEERING_CAP_VLAN_PUSH_ON_RX | MLX5_FLOW_STEERING_CAP_VLAN_POP_ON_TX;
+	steering_caps |= MLX5_FLOW_STEERING_CAP_VLAN_PUSH_ON_RX;
+	steering_caps |= MLX5_FLOW_STEERING_CAP_VLAN_POP_ON_TX;
+
+	if (mlx5dr_supp_match_ranges(ns->dev))
+		steering_caps |= MLX5_FLOW_STEERING_CAP_MATCH_RANGES;
+
+	return steering_caps;
 }
 
 bool mlx5_fs_dr_is_supported(struct mlx5_core_dev *dev)

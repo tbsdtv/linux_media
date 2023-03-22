@@ -46,16 +46,19 @@ struct instruction {
 	enum insn_type type;
 	unsigned long immediate;
 
-	u8 dead_end	: 1,
-	   ignore	: 1,
-	   ignore_alts	: 1,
-	   hint		: 1,
-	   retpoline_safe : 1,
-	   noendbr	: 1;
-		/* 2 bit hole */
+	u16 dead_end		: 1,
+	   ignore		: 1,
+	   ignore_alts		: 1,
+	   hint			: 1,
+	   save			: 1,
+	   restore		: 1,
+	   retpoline_safe	: 1,
+	   noendbr		: 1,
+	   entry		: 1;
+		/* 7 bit hole */
+
 	s8 instr;
 	u8 visited;
-	/* u8 hole */
 
 	struct alt_group *alt_group;
 	struct symbol *call_dest;
@@ -64,10 +67,25 @@ struct instruction {
 	struct reloc *jump_table;
 	struct reloc *reloc;
 	struct list_head alts;
-	struct symbol *func;
+	struct symbol *sym;
 	struct list_head stack_ops;
 	struct cfi_state *cfi;
 };
+
+static inline struct symbol *insn_func(struct instruction *insn)
+{
+	struct symbol *sym = insn->sym;
+
+	if (sym && sym->type != STT_FUNC)
+		sym = NULL;
+
+	return sym;
+}
+
+#define VISITED_BRANCH		0x01
+#define VISITED_BRANCH_UACCESS	0x02
+#define VISITED_BRANCH_MASK	0x03
+#define VISITED_ENTRY		0x04
 
 static inline bool is_static_jump(struct instruction *insn)
 {

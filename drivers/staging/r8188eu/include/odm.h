@@ -80,7 +80,6 @@ struct odm_rate_adapt {
 #define HP_THERMAL_NUM		8
 
 #define AVG_THERMAL_NUM		8
-#define IQK_Matrix_REG_NUM	8
 
 struct odm_phy_dbg_info {
 	/* ODM Write,debug info */
@@ -96,22 +95,6 @@ struct odm_per_pkt_info {
 	bool	bPacketMatchBSSID;
 	bool	bPacketToSelf;
 	bool	bPacketBeacon;
-};
-
-enum odm_ability {
-	/*  BB Team */
-	ODM_DIG			= 0x00000001,
-	ODM_HIGH_POWER		= 0x00000002,
-	ODM_CCK_CCA_TH		= 0x00000004,
-	ODM_FA_STATISTICS	= 0x00000008,
-	ODM_RAMASK		= 0x00000010,
-	ODM_RSSI_MONITOR	= 0x00000020,
-	ODM_SW_ANTDIV		= 0x00000040,
-	ODM_HW_ANTDIV		= 0x00000080,
-	ODM_BB_PWRSV		= 0x00000100,
-	ODM_2TPATHDIV		= 0x00000200,
-	ODM_1TPATHDIV		= 0x00000400,
-	ODM_PSD2AFH		= 0x00000800
 };
 
 /*  2011/10/20 MH Define Common info enum for all team. */
@@ -135,20 +118,8 @@ enum odm_ability_def {
 	ODM_BB_PWR_TRA			= BIT(8),
 };
 
-# define ODM_ITRF_USB 0x2
-
-/*  ODM_CMNINFO_OP_MODE */
-enum odm_operation_mode {
-	ODM_NO_LINK		= BIT(0),
-	ODM_LINK		= BIT(1),
-	ODM_SCAN		= BIT(2),
-	ODM_POWERSAVE		= BIT(3),
-	ODM_AP_MODE		= BIT(4),
-	ODM_CLIENT_MODE		= BIT(5),
-	ODM_AD_HOC		= BIT(6),
-	ODM_WIFI_DIRECT		= BIT(7),
-	ODM_WIFI_DISPLAY	= BIT(8),
-};
+#define ODM_ITRF_USB	0x2
+#define ODM_CE		0x04
 
 /*  ODM_CMNINFO_WM_MODE */
 enum odm_wireless_mode {
@@ -192,11 +163,6 @@ struct odm_ra_info {
 	u8 PTSmoothFactor;
 };
 
-struct ijk_matrix_regs_set {
-	bool	bIQKDone;
-	s32	Value[1][IQK_Matrix_REG_NUM];
-};
-
 struct odm_rf_cal {
 	/* for tx power tracking */
 	u32	RegA24; /*  for TempCCK */
@@ -234,7 +200,6 @@ struct odm_rf_cal {
 
 	u8	ThermalValue_HP[HP_THERMAL_NUM];
 	u8	ThermalValue_HP_index;
-	struct ijk_matrix_regs_set IQKMatrixRegSetting;
 
 	u8	Delta_IQK;
 	u8	Delta_LCK;

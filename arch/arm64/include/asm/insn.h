@@ -13,31 +13,6 @@
 #include <asm/insn-def.h>
 
 #ifndef __ASSEMBLY__
-/*
- * ARM Architecture Reference Manual for ARMv8 Profile-A, Issue A.a
- * Section C3.1 "A64 instruction index by encoding":
- * AArch64 main encoding table
- *  Bit position
- *   28 27 26 25	Encoding Group
- *   0  0  -  -		Unallocated
- *   1  0  0  -		Data processing, immediate
- *   1  0  1  -		Branch, exception generation and system instructions
- *   -  1  -  0		Loads and stores
- *   -  1  0  1		Data processing - register
- *   0  1  1  1		Data processing - SIMD and floating point
- *   1  1  1  1		Data processing - SIMD and floating point
- * "-" means "don't care"
- */
-enum aarch64_insn_encoding_class {
-	AARCH64_INSN_CLS_UNKNOWN,	/* UNALLOCATED */
-	AARCH64_INSN_CLS_SVE,		/* SVE instructions */
-	AARCH64_INSN_CLS_DP_IMM,	/* Data processing - immediate */
-	AARCH64_INSN_CLS_DP_REG,	/* Data processing - register */
-	AARCH64_INSN_CLS_DP_FPSIMD,	/* Data processing - SIMD and FP */
-	AARCH64_INSN_CLS_LDST,		/* Loads and stores */
-	AARCH64_INSN_CLS_BR_SYS,	/* Branch, exception generation and
-					 * system instructions */
-};
 
 enum aarch64_insn_hint_cr_op {
 	AARCH64_INSN_HINT_NOP	= 0x0 << 5,
@@ -201,6 +176,8 @@ enum aarch64_insn_size_type {
 enum aarch64_insn_ldst_type {
 	AARCH64_INSN_LDST_LOAD_REG_OFFSET,
 	AARCH64_INSN_LDST_STORE_REG_OFFSET,
+	AARCH64_INSN_LDST_LOAD_IMM_OFFSET,
+	AARCH64_INSN_LDST_STORE_IMM_OFFSET,
 	AARCH64_INSN_LDST_LOAD_PAIR_PRE_INDEX,
 	AARCH64_INSN_LDST_STORE_PAIR_PRE_INDEX,
 	AARCH64_INSN_LDST_LOAD_PAIR_POST_INDEX,
@@ -324,6 +301,23 @@ static __always_inline u32 aarch64_insn_get_##abbr##_value(void)	\
 	return (val);							\
 }
 
+/*
+ * ARM Architecture Reference Manual for ARMv8 Profile-A, Issue A.a
+ * Section C3.1 "A64 instruction index by encoding":
+ * AArch64 main encoding table
+ *  Bit position
+ *   28 27 26 25	Encoding Group
+ *   0  0  -  -		Unallocated
+ *   1  0  0  -		Data processing, immediate
+ *   1  0  1  -		Branch, exception generation and system instructions
+ *   -  1  -  0		Loads and stores
+ *   -  1  0  1		Data processing - register
+ *   0  1  1  1		Data processing - SIMD and floating point
+ *   1  1  1  1		Data processing - SIMD and floating point
+ * "-" means "don't care"
+ */
+__AARCH64_INSN_FUNCS(class_branch_sys,	0x1c000000, 0x14000000)
+
 __AARCH64_INSN_FUNCS(adr,	0x9F000000, 0x10000000)
 __AARCH64_INSN_FUNCS(adrp,	0x9F000000, 0x90000000)
 __AARCH64_INSN_FUNCS(prfm,	0x3FC00000, 0x39800000)
@@ -335,6 +329,7 @@ __AARCH64_INSN_FUNCS(load_pre,	0x3FE00C00, 0x38400C00)
 __AARCH64_INSN_FUNCS(store_post,	0x3FE00C00, 0x38000400)
 __AARCH64_INSN_FUNCS(load_post,	0x3FE00C00, 0x38400400)
 __AARCH64_INSN_FUNCS(str_reg,	0x3FE0EC00, 0x38206800)
+__AARCH64_INSN_FUNCS(str_imm,	0x3FC00000, 0x39000000)
 __AARCH64_INSN_FUNCS(ldadd,	0x3F20FC00, 0x38200000)
 __AARCH64_INSN_FUNCS(ldclr,	0x3F20FC00, 0x38201000)
 __AARCH64_INSN_FUNCS(ldeor,	0x3F20FC00, 0x38202000)
@@ -342,6 +337,7 @@ __AARCH64_INSN_FUNCS(ldset,	0x3F20FC00, 0x38203000)
 __AARCH64_INSN_FUNCS(swp,	0x3F20FC00, 0x38208000)
 __AARCH64_INSN_FUNCS(cas,	0x3FA07C00, 0x08A07C00)
 __AARCH64_INSN_FUNCS(ldr_reg,	0x3FE0EC00, 0x38606800)
+__AARCH64_INSN_FUNCS(ldr_imm,	0x3FC00000, 0x39400000)
 __AARCH64_INSN_FUNCS(ldr_lit,	0xBF000000, 0x18000000)
 __AARCH64_INSN_FUNCS(ldrsw_lit,	0xFF000000, 0x98000000)
 __AARCH64_INSN_FUNCS(exclusive,	0x3F800000, 0x08000000)
@@ -427,58 +423,122 @@ __AARCH64_INSN_FUNCS(pssbb,	0xFFFFFFFF, 0xD503349F)
 
 #undef	__AARCH64_INSN_FUNCS
 
-bool aarch64_insn_is_steppable_hint(u32 insn);
-bool aarch64_insn_is_branch_imm(u32 insn);
-
-static inline bool aarch64_insn_is_adr_adrp(u32 insn)
+static __always_inline bool aarch64_insn_is_steppable_hint(u32 insn)
 {
-	return aarch64_insn_is_adr(insn) || aarch64_insn_is_adrp(insn);
+	if (!aarch64_insn_is_hint(insn))
+		return false;
+
+	switch (insn & 0xFE0) {
+	case AARCH64_INSN_HINT_XPACLRI:
+	case AARCH64_INSN_HINT_PACIA_1716:
+	case AARCH64_INSN_HINT_PACIB_1716:
+	case AARCH64_INSN_HINT_PACIAZ:
+	case AARCH64_INSN_HINT_PACIASP:
+	case AARCH64_INSN_HINT_PACIBZ:
+	case AARCH64_INSN_HINT_PACIBSP:
+	case AARCH64_INSN_HINT_BTI:
+	case AARCH64_INSN_HINT_BTIC:
+	case AARCH64_INSN_HINT_BTIJ:
+	case AARCH64_INSN_HINT_BTIJC:
+	case AARCH64_INSN_HINT_NOP:
+		return true;
+	default:
+		return false;
+	}
 }
 
-static inline bool aarch64_insn_is_dsb(u32 insn)
+static __always_inline bool aarch64_insn_is_branch(u32 insn)
 {
-	return aarch64_insn_is_dsb_base(insn) || aarch64_insn_is_dsb_nxs(insn);
+	/* b, bl, cb*, tb*, ret*, b.cond, br*, blr* */
+
+	return aarch64_insn_is_b(insn) ||
+	       aarch64_insn_is_bl(insn) ||
+	       aarch64_insn_is_cbz(insn) ||
+	       aarch64_insn_is_cbnz(insn) ||
+	       aarch64_insn_is_tbz(insn) ||
+	       aarch64_insn_is_tbnz(insn) ||
+	       aarch64_insn_is_ret(insn) ||
+	       aarch64_insn_is_ret_auth(insn) ||
+	       aarch64_insn_is_br(insn) ||
+	       aarch64_insn_is_br_auth(insn) ||
+	       aarch64_insn_is_blr(insn) ||
+	       aarch64_insn_is_blr_auth(insn) ||
+	       aarch64_insn_is_bcond(insn);
 }
 
-static inline bool aarch64_insn_is_barrier(u32 insn)
+static __always_inline bool aarch64_insn_is_branch_imm(u32 insn)
 {
-	return aarch64_insn_is_dmb(insn) || aarch64_insn_is_dsb(insn) ||
-	       aarch64_insn_is_isb(insn) || aarch64_insn_is_sb(insn) ||
-	       aarch64_insn_is_clrex(insn) || aarch64_insn_is_ssbb(insn) ||
+	return aarch64_insn_is_b(insn) ||
+	       aarch64_insn_is_bl(insn) ||
+	       aarch64_insn_is_tbz(insn) ||
+	       aarch64_insn_is_tbnz(insn) ||
+	       aarch64_insn_is_cbz(insn) ||
+	       aarch64_insn_is_cbnz(insn) ||
+	       aarch64_insn_is_bcond(insn);
+}
+
+static __always_inline bool aarch64_insn_is_adr_adrp(u32 insn)
+{
+	return aarch64_insn_is_adr(insn) ||
+	       aarch64_insn_is_adrp(insn);
+}
+
+static __always_inline bool aarch64_insn_is_dsb(u32 insn)
+{
+	return aarch64_insn_is_dsb_base(insn) ||
+	       aarch64_insn_is_dsb_nxs(insn);
+}
+
+static __always_inline bool aarch64_insn_is_barrier(u32 insn)
+{
+	return aarch64_insn_is_dmb(insn) ||
+	       aarch64_insn_is_dsb(insn) ||
+	       aarch64_insn_is_isb(insn) ||
+	       aarch64_insn_is_sb(insn) ||
+	       aarch64_insn_is_clrex(insn) ||
+	       aarch64_insn_is_ssbb(insn) ||
 	       aarch64_insn_is_pssbb(insn);
 }
 
-static inline bool aarch64_insn_is_store_single(u32 insn)
+static __always_inline bool aarch64_insn_is_store_single(u32 insn)
 {
 	return aarch64_insn_is_store_imm(insn) ||
 	       aarch64_insn_is_store_pre(insn) ||
 	       aarch64_insn_is_store_post(insn);
 }
 
-static inline bool aarch64_insn_is_store_pair(u32 insn)
+static __always_inline bool aarch64_insn_is_store_pair(u32 insn)
 {
 	return aarch64_insn_is_stp(insn) ||
 	       aarch64_insn_is_stp_pre(insn) ||
 	       aarch64_insn_is_stp_post(insn);
 }
 
-static inline bool aarch64_insn_is_load_single(u32 insn)
+static __always_inline bool aarch64_insn_is_load_single(u32 insn)
 {
 	return aarch64_insn_is_load_imm(insn) ||
 	       aarch64_insn_is_load_pre(insn) ||
 	       aarch64_insn_is_load_post(insn);
 }
 
-static inline bool aarch64_insn_is_load_pair(u32 insn)
+static __always_inline bool aarch64_insn_is_load_pair(u32 insn)
 {
 	return aarch64_insn_is_ldp(insn) ||
 	       aarch64_insn_is_ldp_pre(insn) ||
 	       aarch64_insn_is_ldp_post(insn);
 }
 
+static __always_inline bool aarch64_insn_uses_literal(u32 insn)
+{
+	/* ldr/ldrsw (literal), prfm */
+
+	return aarch64_insn_is_ldr_lit(insn) ||
+	       aarch64_insn_is_ldrsw_lit(insn) ||
+	       aarch64_insn_is_adr_adrp(insn) ||
+	       aarch64_insn_is_prfm_lit(insn);
+}
+
 enum aarch64_insn_encoding_class aarch64_get_insn_class(u32 insn);
-bool aarch64_insn_uses_literal(u32 insn);
-bool aarch64_insn_is_branch(u32 insn);
 u64 aarch64_insn_decode_immediate(enum aarch64_insn_imm_type type, u32 insn);
 u32 aarch64_insn_encode_immediate(enum aarch64_insn_imm_type type,
 				  u32 insn, u64 imm);
@@ -492,8 +552,18 @@ u32 aarch64_insn_gen_comp_branch_imm(unsigned long pc, unsigned long addr,
 				     enum aarch64_insn_branch_type type);
 u32 aarch64_insn_gen_cond_branch_imm(unsigned long pc, unsigned long addr,
 				     enum aarch64_insn_condition cond);
-u32 aarch64_insn_gen_hint(enum aarch64_insn_hint_cr_op op);
-u32 aarch64_insn_gen_nop(void);
+
+static __always_inline u32
+aarch64_insn_gen_hint(enum aarch64_insn_hint_cr_op op)
+{
+	return aarch64_insn_get_hint_value() | op;
+}
+
+static __always_inline u32 aarch64_insn_gen_nop(void)
+{
+	return aarch64_insn_gen_hint(AARCH64_INSN_HINT_NOP);
+}
+
 u32 aarch64_insn_gen_branch_reg(enum aarch64_insn_register reg,
 				enum aarch64_insn_branch_type type);
 u32 aarch64_insn_gen_load_store_reg(enum aarch64_insn_register reg,
@@ -501,6 +571,14 @@ u32 aarch64_insn_gen_load_store_reg(enum aarch64_insn_register reg,
 				    enum aarch64_insn_register offset,
 				    enum aarch64_insn_size_type size,
 				    enum aarch64_insn_ldst_type type);
+u32 aarch64_insn_gen_load_store_imm(enum aarch64_insn_register reg,
+				    enum aarch64_insn_register base,
+				    unsigned int imm,
+				    enum aarch64_insn_size_type size,
+				    enum aarch64_insn_ldst_type type);
+u32 aarch64_insn_gen_load_literal(unsigned long pc, unsigned long addr,
+				  enum aarch64_insn_register reg,
+				  bool is64bit);
 u32 aarch64_insn_gen_load_store_pair(enum aarch64_insn_register reg1,
 				     enum aarch64_insn_register reg2,
 				     enum aarch64_insn_register base,
@@ -568,10 +646,6 @@ u32 aarch64_insn_gen_extr(enum aarch64_insn_variant variant,
 			  enum aarch64_insn_register Rn,
 			  enum aarch64_insn_register Rd,
 			  u8 lsb);
-u32 aarch64_insn_gen_prefetch(enum aarch64_insn_register base,
-			      enum aarch64_insn_prfm_type type,
-			      enum aarch64_insn_prfm_target target,
-			      enum aarch64_insn_prfm_policy policy);
 #ifdef CONFIG_ARM64_LSE_ATOMICS
 u32 aarch64_insn_gen_atomic_ld_op(enum aarch64_insn_register result,
 				  enum aarch64_insn_register address,

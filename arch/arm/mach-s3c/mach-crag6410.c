@@ -14,6 +14,7 @@
 #include <linux/fb.h>
 #include <linux/io.h>
 #include <linux/init.h>
+#include <linux/input-event-codes.h>
 #include <linux/gpio.h>
 #include <linux/gpio/machine.h>
 #include <linux/leds.h>
@@ -47,7 +48,7 @@
 #include "map.h"
 #include "regs-gpio.h"
 #include "gpio-samsung.h"
-#include <mach/irqs.h>
+#include "irqs.h"
 
 #include "fb.h"
 #include "sdhci.h"

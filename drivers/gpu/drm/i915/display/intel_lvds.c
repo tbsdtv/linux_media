@@ -39,6 +39,7 @@
 #include <drm/drm_edid.h>
 
 #include "i915_drv.h"
+#include "i915_reg.h"
 #include "intel_atomic.h"
 #include "intel_backlight.h"
 #include "intel_connector.h"
@@ -78,9 +79,9 @@ struct intel_lvds_encoder {
 	struct intel_connector *attached_connector;
 };
 
-static struct intel_lvds_encoder *to_lvds_encoder(struct drm_encoder *encoder)
+static struct intel_lvds_encoder *to_lvds_encoder(struct intel_encoder *encoder)
 {
-	return container_of(encoder, struct intel_lvds_encoder, base.base);
+	return container_of(encoder, struct intel_lvds_encoder, base);
 }
 
 bool intel_lvds_port_enabled(struct drm_i915_private *dev_priv,
@@ -103,7 +104,7 @@ static bool intel_lvds_get_hw_state(struct intel_encoder *encoder,
 				    enum pipe *pipe)
 {
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(&encoder->base);
+	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(encoder);
 	intel_wakeref_t wakeref;
 	bool ret;
 
@@ -123,7 +124,7 @@ static void intel_lvds_get_config(struct intel_encoder *encoder,
 				  struct intel_crtc_state *pipe_config)
 {
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
-	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(&encoder->base);
+	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(encoder);
 	u32 tmp, flags = 0;
 
 	pipe_config->output_types |= BIT(INTEL_OUTPUT_LVDS);
@@ -229,7 +230,7 @@ static void intel_pre_enable_lvds(struct intel_atomic_state *state,
 				  const struct intel_crtc_state *pipe_config,
 				  const struct drm_connector_state *conn_state)
 {
-	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(&encoder->base);
+	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(encoder);
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_crtc *crtc = to_intel_crtc(pipe_config->uapi.crtc);
 	const struct drm_display_mode *adjusted_mode = &pipe_config->hw.adjusted_mode;
@@ -312,7 +313,7 @@ static void intel_enable_lvds(struct intel_atomic_state *state,
 			      const struct drm_connector_state *conn_state)
 {
 	struct drm_device *dev = encoder->base.dev;
-	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(&encoder->base);
+	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(encoder);
 	struct drm_i915_private *dev_priv = to_i915(dev);
 
 	intel_de_write(dev_priv, lvds_encoder->reg,
@@ -334,7 +335,7 @@ static void intel_disable_lvds(struct intel_atomic_state *state,
 			       const struct intel_crtc_state *old_crtc_state,
 			       const struct drm_connector_state *old_conn_state)
 {
-	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(&encoder->base);
+	struct intel_lvds_encoder *lvds_encoder = to_lvds_encoder(encoder);
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 
 	intel_de_write(dev_priv, PP_CONTROL(0),
@@ -389,7 +390,8 @@ intel_lvds_mode_valid(struct drm_connector *connector,
 		      struct drm_display_mode *mode)
 {
 	struct intel_connector *intel_connector = to_intel_connector(connector);
-	struct drm_display_mode *fixed_mode = intel_connector->panel.fixed_mode;
+	const struct drm_display_mode *fixed_mode =
+		intel_panel_fixed_mode(intel_connector, mode);
 	int max_pixclk = to_i915(connector->dev)->max_dotclk_freq;
 	enum drm_mode_status status;
 
@@ -412,7 +414,7 @@ static int intel_lvds_compute_config(struct intel_encoder *intel_encoder,
 {
 	struct drm_i915_private *dev_priv = to_i915(intel_encoder->base.dev);
 	struct intel_lvds_encoder *lvds_encoder =
-		to_lvds_encoder(&intel_encoder->base);
+		to_lvds_encoder(intel_encoder);
 	struct intel_connector *intel_connector =
 		lvds_encoder->attached_connector;
 	struct drm_display_mode *adjusted_mode = &pipe_config->hw.adjusted_mode;
@@ -475,19 +477,12 @@ static int intel_lvds_compute_config(struct intel_encoder *intel_encoder,
 static int intel_lvds_get_modes(struct drm_connector *connector)
 {
 	struct intel_connector *intel_connector = to_intel_connector(connector);
-	struct drm_device *dev = connector->dev;
-	struct drm_display_mode *mode;
 
 	/* use cached edid if we have one */
 	if (!IS_ERR_OR_NULL(intel_connector->edid))
 		return drm_add_edid_modes(connector, intel_connector->edid);
 
-	mode = drm_mode_duplicate(dev, intel_connector->panel.fixed_mode);
-	if (mode == NULL)
-		return 0;
-
-	drm_mode_probed_add(connector, mode);
-	return 1;
+	return intel_panel_get_modes(intel_connector);
 }
 
 static const struct drm_connector_helper_funcs intel_lvds_connector_helper_funcs = {
@@ -781,21 +776,23 @@ bool intel_is_dual_link_lvds(struct drm_i915_private *dev_priv)
 {
 	struct intel_encoder *encoder = intel_get_lvds_encoder(dev_priv);
 
-	return encoder && to_lvds_encoder(&encoder->base)->is_dual_link;
+	return encoder && to_lvds_encoder(encoder)->is_dual_link;
 }
 
 static bool compute_is_dual_link_lvds(struct intel_lvds_encoder *lvds_encoder)
 {
-	struct drm_device *dev = lvds_encoder->base.base.dev;
+	struct drm_i915_private *dev_priv = to_i915(lvds_encoder->base.base.dev);
+	struct intel_connector *connector = lvds_encoder->attached_connector;
+	const struct drm_display_mode *fixed_mode =
+		intel_panel_preferred_fixed_mode(connector);
 	unsigned int val;
-	struct drm_i915_private *dev_priv = to_i915(dev);
 
 	/* use the module option value if specified */
 	if (dev_priv->params.lvds_channel_mode > 0)
 		return dev_priv->params.lvds_channel_mode == 2;
 
 	/* single channel LVDS is limited to 112 MHz */
-	if (lvds_encoder->attached_connector->panel.fixed_mode->clock > 112999)
+	if (fixed_mode->clock > 112999)
 		return true;
 
 	if (dmi_check_system(intel_dual_link_lvds))
@@ -813,9 +810,14 @@ static bool compute_is_dual_link_lvds(struct intel_lvds_encoder *lvds_encoder)
 	else
 		val &= ~(LVDS_DETECTED | LVDS_PIPE_SEL_MASK);
 	if (val == 0)
-		val = dev_priv->vbt.bios_lvds_val;
+		val = connector->panel.vbt.bios_lvds_val;
 
 	return (val & LVDS_CLKB_POWER_MASK) == LVDS_CLKB_POWER_UP;
+}
+
+static void intel_lvds_add_properties(struct drm_connector *connector)
+{
+	intel_attach_scaling_mode_property(connector);
 }
 
 /**
@@ -827,28 +829,24 @@ static bool compute_is_dual_link_lvds(struct intel_lvds_encoder *lvds_encoder)
  */
 void intel_lvds_init(struct drm_i915_private *dev_priv)
 {
-	struct drm_device *dev = &dev_priv->drm;
 	struct intel_lvds_encoder *lvds_encoder;
 	struct intel_encoder *intel_encoder;
 	struct intel_connector *intel_connector;
 	struct drm_connector *connector;
 	struct drm_encoder *encoder;
-	struct drm_display_mode *fixed_mode = NULL;
-	struct drm_display_mode *downclock_mode = NULL;
 	struct edid *edid;
 	i915_reg_t lvds_reg;
 	u32 lvds;
 	u8 pin;
-	u32 allowed_scalers;
 
 	/* Skip init on machines we know falsely report LVDS */
 	if (dmi_check_system(intel_no_lvds)) {
-		drm_WARN(dev, !dev_priv->vbt.int_lvds_support,
+		drm_WARN(&dev_priv->drm, !dev_priv->display.vbt.int_lvds_support,
 			 "Useless DMI match. Internal LVDS support disabled by VBT\n");
 		return;
 	}
 
-	if (!dev_priv->vbt.int_lvds_support) {
+	if (!dev_priv->display.vbt.int_lvds_support) {
 		drm_dbg_kms(&dev_priv->drm,
 			    "Internal LVDS support disabled by VBT\n");
 		return;
@@ -892,10 +890,10 @@ void intel_lvds_init(struct drm_i915_private *dev_priv)
 	intel_encoder = &lvds_encoder->base;
 	encoder = &intel_encoder->base;
 	connector = &intel_connector->base;
-	drm_connector_init(dev, &intel_connector->base, &intel_lvds_connector_funcs,
+	drm_connector_init(&dev_priv->drm, &intel_connector->base, &intel_lvds_connector_funcs,
 			   DRM_MODE_CONNECTOR_LVDS);
 
-	drm_encoder_init(dev, &intel_encoder->base, &intel_lvds_enc_funcs,
+	drm_encoder_init(&dev_priv->drm, &intel_encoder->base, &intel_lvds_enc_funcs,
 			 DRM_MODE_ENCODER_LVDS, "LVDS");
 
 	intel_encoder->enable = intel_enable_lvds;
@@ -926,17 +924,10 @@ void intel_lvds_init(struct drm_i915_private *dev_priv)
 
 	drm_connector_helper_add(connector, &intel_lvds_connector_helper_funcs);
 	connector->display_info.subpixel_order = SubPixelHorizontalRGB;
-	connector->interlace_allowed = false;
-	connector->doublescan_allowed = false;
 
 	lvds_encoder->reg = lvds_reg;
 
-	/* create the scaling mode property */
-	allowed_scalers = BIT(DRM_MODE_SCALE_ASPECT);
-	allowed_scalers |= BIT(DRM_MODE_SCALE_FULLSCREEN);
-	allowed_scalers |= BIT(DRM_MODE_SCALE_CENTER);
-	drm_connector_attach_scaling_mode_property(connector, allowed_scalers);
-	connector->state->scaling_mode = DRM_MODE_SCALE_ASPECT;
+	intel_lvds_add_properties(connector);
 
 	intel_lvds_pps_get_hw_state(dev_priv, &lvds_encoder->init_pps);
 	lvds_encoder->init_lvds_val = lvds;
@@ -953,7 +944,7 @@ void intel_lvds_init(struct drm_i915_private *dev_priv)
 	 * Attempt to get the fixed panel mode from DDC.  Assume that the
 	 * preferred mode is the right one.
 	 */
-	mutex_lock(&dev->mode_config.mutex);
+	mutex_lock(&dev_priv->drm.mode_config.mutex);
 	if (vga_switcheroo_handler_flags() & VGA_SWITCHEROO_CAN_SWITCH_DDC)
 		edid = drm_get_edid_switcheroo(connector,
 				    intel_gmbus_get_adapter(dev_priv, pin));
@@ -973,35 +964,32 @@ void intel_lvds_init(struct drm_i915_private *dev_priv)
 	}
 	intel_connector->edid = edid;
 
-	fixed_mode = intel_panel_edid_fixed_mode(intel_connector);
-	if (fixed_mode)
-		goto out;
+	intel_bios_init_panel(dev_priv, &intel_connector->panel, NULL,
+			      IS_ERR(edid) ? NULL : edid);
+
+	/* Try EDID first */
+	intel_panel_add_edid_fixed_modes(intel_connector, true);
 
 	/* Failed to get EDID, what about VBT? */
-	fixed_mode = intel_panel_vbt_fixed_mode(intel_connector);
-	if (fixed_mode)
-		goto out;
+	if (!intel_panel_preferred_fixed_mode(intel_connector))
+		intel_panel_add_vbt_lfp_fixed_mode(intel_connector);
 
 	/*
-	 * If we didn't get EDID, try checking if the panel is already turned
-	 * on.  If so, assume that whatever is currently programmed is the
-	 * correct mode.
+	 * If we didn't get a fixed mode from EDID or VBT, try checking
+	 * if the panel is already turned on.  If so, assume that
+	 * whatever is currently programmed is the correct mode.
 	 */
-	fixed_mode = intel_encoder_current_mode(intel_encoder);
-	if (fixed_mode) {
-		drm_dbg_kms(&dev_priv->drm, "using current (BIOS) mode: ");
-		drm_mode_debug_printmodeline(fixed_mode);
-		fixed_mode->type |= DRM_MODE_TYPE_PREFERRED;
-	}
+	if (!intel_panel_preferred_fixed_mode(intel_connector))
+		intel_panel_add_encoder_fixed_mode(intel_connector, intel_encoder);
+
+	mutex_unlock(&dev_priv->drm.mode_config.mutex);
 
 	/* If we still don't have a mode after all that, give up. */
-	if (!fixed_mode)
+	if (!intel_panel_preferred_fixed_mode(intel_connector))
 		goto failed;
 
-out:
-	mutex_unlock(&dev->mode_config.mutex);
+	intel_panel_init(intel_connector);
 
-	intel_panel_init(&intel_connector->panel, fixed_mode, downclock_mode);
 	intel_backlight_setup(intel_connector, INVALID_PIPE);
 
 	lvds_encoder->is_dual_link = compute_is_dual_link_lvds(lvds_encoder);
@@ -1013,8 +1001,6 @@ out:
 	return;
 
 failed:
-	mutex_unlock(&dev->mode_config.mutex);
-
 	drm_dbg_kms(&dev_priv->drm, "No LVDS modes found, disabling.\n");
 	drm_connector_cleanup(connector);
 	drm_encoder_cleanup(encoder);

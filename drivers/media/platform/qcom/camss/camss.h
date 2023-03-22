@@ -69,9 +69,7 @@ struct resources_icc {
 enum pm_domain {
 	PM_DOMAIN_VFE0 = 0,
 	PM_DOMAIN_VFE1 = 1,
-	PM_DOMAIN_GEN1_COUNT = 2,	/* CAMSS series of ISPs */
 	PM_DOMAIN_VFELITE = 2,		/* VFELITE / TOP GDSC */
-	PM_DOMAIN_GEN2_COUNT = 3,	/* Titan series of ISPs */
 };
 
 enum camss_version {
@@ -99,10 +97,12 @@ struct camss {
 	struct csid_device *csid;
 	struct ispif_device *ispif;
 	int vfe_num;
+	int vfe_lite_num;
 	struct vfe_device *vfe;
 	atomic_t ref_count;
-	struct device *genpd[PM_DOMAIN_GEN2_COUNT];
-	struct device_link *genpd_link[PM_DOMAIN_GEN2_COUNT];
+	int genpd_num;
+	struct device **genpd;
+	struct device_link **genpd_link;
 	struct icc_path *icc_path[ICC_SM8250_COUNT];
 	struct icc_bw_tbl icc_bw_tbl[ICC_SM8250_COUNT];
 };

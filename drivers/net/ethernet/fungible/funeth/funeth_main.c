@@ -330,8 +330,7 @@ static int fun_alloc_queue_irqs(struct net_device *dev, unsigned int ntx,
 			return PTR_ERR(irq);
 
 		fp->num_tx_irqs++;
-		netif_tx_napi_add(dev, &irq->napi, fun_txq_napi_poll,
-				  NAPI_POLL_WEIGHT);
+		netif_napi_add_tx(dev, &irq->napi, fun_txq_napi_poll);
 	}
 
 	for (i = fp->num_rx_irqs; i < nrx; i++) {
@@ -340,8 +339,7 @@ static int fun_alloc_queue_irqs(struct net_device *dev, unsigned int ntx,
 			return PTR_ERR(irq);
 
 		fp->num_rx_irqs++;
-		netif_napi_add(dev, &irq->napi, fun_rxq_napi_poll,
-			       NAPI_POLL_WEIGHT);
+		netif_napi_add(dev, &irq->napi, fun_rxq_napi_poll);
 	}
 
 	netif_info(fp, intr, dev, "Reserved %u/%u IRQs for Tx/Rx queues\n",
@@ -1180,13 +1178,6 @@ static int fun_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 	}
 }
 
-static struct devlink_port *fun_get_devlink_port(struct net_device *netdev)
-{
-	struct funeth_priv *fp = netdev_priv(netdev);
-
-	return &fp->dl_port;
-}
-
 static int fun_init_vports(struct fun_ethdev *ed, unsigned int n)
 {
 	if (ed->num_vports)
@@ -1352,13 +1343,13 @@ static const struct net_device_ops fun_netdev_ops = {
 	.ndo_set_vf_vlan	= fun_set_vf_vlan,
 	.ndo_set_vf_rate	= fun_set_vf_rate,
 	.ndo_get_vf_config	= fun_get_vf_config,
-	.ndo_get_devlink_port	= fun_get_devlink_port,
 };
 
 #define GSO_ENCAP_FLAGS (NETIF_F_GSO_GRE | NETIF_F_GSO_IPXIP4 | \
 			 NETIF_F_GSO_IPXIP6 | NETIF_F_GSO_UDP_TUNNEL | \
 			 NETIF_F_GSO_UDP_TUNNEL_CSUM)
-#define TSO_FLAGS (NETIF_F_TSO | NETIF_F_TSO6 | NETIF_F_TSO_ECN)
+#define TSO_FLAGS (NETIF_F_TSO | NETIF_F_TSO6 | NETIF_F_TSO_ECN | \
+		   NETIF_F_GSO_UDP_L4)
 #define VLAN_FEAT (NETIF_F_SG | NETIF_F_HW_CSUM | TSO_FLAGS | \
 		   GSO_ENCAP_FLAGS | NETIF_F_HIGHDMA)
 
@@ -1761,6 +1752,7 @@ static int fun_create_netdev(struct fun_ethdev *ed, unsigned int portid)
 		goto free_rss;
 
 	SET_NETDEV_DEV(netdev, fdev->dev);
+	SET_NETDEV_DEVLINK_PORT(netdev, &fp->dl_port);
 	netdev->netdev_ops = &fun_netdev_ops;
 
 	netdev->hw_features = NETIF_F_SG | NETIF_F_RXHASH | NETIF_F_RXCSUM;
@@ -1801,17 +1793,12 @@ static int fun_create_netdev(struct fun_ethdev *ed, unsigned int portid)
 	rc = register_netdev(netdev);
 	if (rc)
 		goto unreg_devlink;
-
-	if (fp->dl_port.devlink)
-		devlink_port_type_eth_set(&fp->dl_port, netdev);
-
 	return 0;
 
 unreg_devlink:
 	ed->netdevs[portid] = NULL;
 	fun_ktls_cleanup(fp);
-	if (fp->dl_port.devlink)
-		devlink_port_unregister(&fp->dl_port);
+	devlink_port_unregister(&fp->dl_port);
 free_stats:
 	fun_free_stats_area(fp);
 free_rss:
@@ -1830,11 +1817,8 @@ static void fun_destroy_netdev(struct net_device *netdev)
 	struct funeth_priv *fp;
 
 	fp = netdev_priv(netdev);
-	if (fp->dl_port.devlink) {
-		devlink_port_type_clear(&fp->dl_port);
-		devlink_port_unregister(&fp->dl_port);
-	}
 	unregister_netdev(netdev);
+	devlink_port_unregister(&fp->dl_port);
 	fun_ktls_cleanup(fp);
 	fun_free_stats_area(fp);
 	fun_free_rss(fp);

@@ -9,6 +9,7 @@
 		simple-audio-card,bitclock-master = <&dailink_master>;
 		simple-audio-card,format = "i2s";
 		simple-audio-card,frame-master = <&dailink_master>;
+		simple-audio-card,mclk-fs = <256>;
 		simple-audio-card,name = "imx8mm-wm8904";
 		simple-audio-card,routing =
 			"Headphone Jack", "HPOUTL",
@@ -114,7 +115,7 @@
 	status = "okay";
 };
 
-/* VERDIN I2S_1 */
+/* Verdin I2S_1 */
 &sai2 {
 	status = "okay";
 };

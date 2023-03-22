@@ -30,7 +30,7 @@ static ssize_t usbip_status_show(struct device *dev,
 	status = sdev->ud.status;
 	spin_unlock_irq(&sdev->ud.lock);
 
-	return snprintf(buf, PAGE_SIZE, "%d\n", status);
+	return sysfs_emit(buf, "%d\n", status);
 }
 static DEVICE_ATTR_RO(usbip_status);
 
@@ -117,6 +117,8 @@ static ssize_t usbip_sockfd_store(struct device *dev, struct device_attribute *a
 
 	} else {
 		dev_info(dev, "stub down\n");
+
+		mutex_lock(&sdev->ud.sysfs_lock);
 
 		spin_lock_irq(&sdev->ud.lock);
 		if (sdev->ud.status != SDEV_ST_USED)
@@ -393,7 +395,6 @@ static int stub_probe(struct usb_device *udev)
 
 err_port:
 	dev_set_drvdata(&udev->dev, NULL);
-	usb_put_dev(udev);
 
 	/* we already have busid_priv, just lock busid_lock */
 	spin_lock(&busid_priv->busid_lock);
@@ -408,6 +409,7 @@ call_put_busid_priv:
 	put_busid_priv(busid_priv);
 
 sdev_free:
+	usb_put_dev(udev);
 	stub_device_free(sdev);
 
 	return rc;

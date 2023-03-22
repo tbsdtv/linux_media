@@ -58,18 +58,16 @@ static int ad5686_i2c_write(struct ad5686_state *st,
 	return (ret != 3) ? -EIO : 0;
 }
 
-static int ad5686_i2c_probe(struct i2c_client *i2c,
-			    const struct i2c_device_id *id)
+static int ad5686_i2c_probe(struct i2c_client *i2c)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	return ad5686_probe(&i2c->dev, id->driver_data, id->name,
 			    ad5686_i2c_write, ad5686_i2c_read);
 }
 
-static int ad5686_i2c_remove(struct i2c_client *i2c)
+static void ad5686_i2c_remove(struct i2c_client *i2c)
 {
 	ad5686_remove(&i2c->dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id ad5686_i2c_id[] = {
@@ -115,7 +113,7 @@ static struct i2c_driver ad5686_i2c_driver = {
 		.name = "ad5696",
 		.of_match_table = ad5686_of_match,
 	},
-	.probe = ad5686_i2c_probe,
+	.probe_new = ad5686_i2c_probe,
 	.remove = ad5686_i2c_remove,
 	.id_table = ad5686_i2c_id,
 };

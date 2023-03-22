@@ -16,6 +16,7 @@
 #include <sound/soc-acpi.h>
 
 struct snd_sof_dsp_ops;
+struct snd_sof_dev;
 
 /**
  * enum sof_fw_state - DSP firmware state definitions
@@ -47,18 +48,21 @@ enum sof_dsp_power_states {
 	SOF_DSP_PM_D3,
 };
 
+/* Definitions for multiple IPCs */
+enum sof_ipc_type {
+	SOF_IPC,
+	SOF_INTEL_IPC4,
+	SOF_IPC_TYPE_COUNT
+};
+
 /*
  * SOF Platform data.
  */
 struct snd_sof_pdata {
-	const struct firmware *fw;
 	const char *name;
 	const char *platform;
 
 	struct device *dev;
-
-	/* indicate how many first bytes shouldn't be loaded into DSP memory. */
-	size_t fw_offset;
 
 	/*
 	 * notification callback used if the hardware initialization
@@ -78,11 +82,17 @@ struct snd_sof_pdata {
 	const char *tplg_filename_prefix;
 	const char *tplg_filename;
 
+	/* loadable external libraries available under this directory */
+	const char *fw_lib_prefix;
+
 	/* machine */
 	struct platform_device *pdev_mach;
 	const struct snd_soc_acpi_mach *machine;
+	const struct snd_sof_of_mach *of_machine;
 
 	void *hw_pdata;
+
+	enum sof_ipc_type ipc_type;
 };
 
 /*
@@ -92,6 +102,7 @@ struct snd_sof_pdata {
 struct sof_dev_desc {
 	/* list of machines using this configuration */
 	struct snd_soc_acpi_mach *machines;
+	struct snd_sof_of_mach *of_machines;
 
 	/* alternate list of machines using this configuration */
 	struct snd_soc_acpi_mach *alt_machines;
@@ -115,14 +126,21 @@ struct sof_dev_desc {
 	/* defaults for no codec mode */
 	const char *nocodec_tplg_filename;
 
-	/* defaults paths for firmware and topology files */
-	const char *default_fw_path;
-	const char *default_tplg_path;
+	/* information on supported IPCs */
+	unsigned int ipc_supported_mask;
+	enum sof_ipc_type ipc_default;
+
+	/* defaults paths for firmware, library and topology files */
+	const char *default_fw_path[SOF_IPC_TYPE_COUNT];
+	const char *default_lib_path[SOF_IPC_TYPE_COUNT];
+	const char *default_tplg_path[SOF_IPC_TYPE_COUNT];
 
 	/* default firmware name */
-	const char *default_fw_filename;
+	const char *default_fw_filename[SOF_IPC_TYPE_COUNT];
 
-	const struct snd_sof_dsp_ops *ops;
+	struct snd_sof_dsp_ops *ops;
+	int (*ops_init)(struct snd_sof_dev *sdev);
+	void (*ops_free)(struct snd_sof_dev *sdev);
 };
 
 int sof_dai_get_mclk(struct snd_soc_pcm_runtime *rtd);

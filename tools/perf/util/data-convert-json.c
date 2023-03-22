@@ -27,6 +27,10 @@
 #include "util/thread.h"
 #include "util/tool.h"
 
+#ifdef HAVE_LIBTRACEEVENT
+#include <traceevent/event-parse.h>
+#endif
+
 struct convert_json {
 	struct perf_tool tool;
 	FILE *out;
@@ -149,6 +153,7 @@ static int process_sample_event(struct perf_tool *tool,
 	struct convert_json *c = container_of(tool, struct convert_json, tool);
 	FILE *out = c->out;
 	struct addr_location al, tal;
+	u64 sample_type = __evlist__combined_sample_type(evsel->evlist);
 	u8 cpumode = PERF_RECORD_MISC_USER;
 
 	if (machine__resolve(machine, &al, sample) < 0) {
@@ -168,7 +173,9 @@ static int process_sample_event(struct perf_tool *tool,
 	output_json_key_format(out, true, 3, "pid", "%i", al.thread->pid_);
 	output_json_key_format(out, true, 3, "tid", "%i", al.thread->tid);
 
-	if (al.thread->cpu >= 0)
+	if ((sample_type & PERF_SAMPLE_CPU))
+		output_json_key_format(out, true, 3, "cpu", "%i", sample->cpu);
+	else if (al.thread->cpu >= 0)
 		output_json_key_format(out, true, 3, "cpu", "%i", al.thread->cpu);
 
 	output_json_key_string(out, true, 3, "comm", thread__comm_str(al.thread));
@@ -214,6 +221,27 @@ static int process_sample_event(struct perf_tool *tool,
 	}
 	output_json_format(out, false, 3, "]");
 
+#ifdef HAVE_LIBTRACEEVENT
+	if (sample->raw_data) {
+		int i;
+		struct tep_format_field **fields;
+
+		fields = tep_event_fields(evsel->tp_format);
+		if (fields) {
+			i = 0;
+			while (fields[i]) {
+				struct trace_seq s;
+
+				trace_seq_init(&s);
+				tep_print_field(&s, sample->raw_data, fields[i]);
+				output_json_key_string(out, true, 3, fields[i]->name, s.buffer);
+
+				i++;
+			}
+			free(fields);
+		}
+	}
+#endif
 	output_json_format(out, false, 2, "}");
 	return 0;
 }
@@ -290,7 +318,9 @@ int bt_convert__perf2json(const char *input_name, const char *output_name,
 			.exit           = perf_event__process_exit,
 			.fork           = perf_event__process_fork,
 			.lost           = perf_event__process_lost,
+#ifdef HAVE_LIBTRACEEVENT
 			.tracing_data   = perf_event__process_tracing_data,
+#endif
 			.build_id       = perf_event__process_build_id,
 			.id_index       = perf_event__process_id_index,
 			.auxtrace_info  = perf_event__process_auxtrace_info,

@@ -279,7 +279,6 @@ static int cxd2878_atsc_SlaveRWriteRegister (struct cxd2878_dev*dev,
     for(;;){
    	
 	ret = cxd2878_rdm(dev,dev->slvr,0x0A,rdata,6);
-	
 	if(rdata[0]==0x00){
 		msleep(10);
 		waittime += 10;

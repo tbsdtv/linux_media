@@ -188,9 +188,9 @@ static int si2157_find_and_load_firmware(struct dvb_frontend *fe)
 	/* Update the part id based on device's report */
 	dev->part_id = part_id;
 
-	dev_info(&client->dev,
-		 "found a 'Silicon Labs Si21%d-%c%c%c ROM 0x%02x'\n",
-		 part_id, cmd.args[1], cmd.args[3], cmd.args[4], rom_id);
+	//dev_info(&client->dev,
+	//	 "found a 'Silicon Labs Si21%d-%c%c%c ROM 0x%02x'\n",
+	//	 part_id, cmd.args[1], cmd.args[3], cmd.args[4], rom_id);
 
 	if (fw_name)
 		ret = si2157_load_firmware(fe, fw_name);
@@ -288,8 +288,8 @@ static int si2157_init(struct dvb_frontend *fe)
 	if (ret)
 		goto err;
 
-	dev_info(&client->dev, "firmware version: %c.%c.%d\n",
-			cmd.args[6], cmd.args[7], cmd.args[8]);
+	//dev_info(&client->dev, "firmware version: %c.%c.%d\n",
+	//		cmd.args[6], cmd.args[7], cmd.args[8]);
 
 	/* enable tuner status flags */
 	memcpy(cmd.args, "\x14\x00\x01\x05\x01\x00", 6);
@@ -890,9 +890,9 @@ err:
 	dev_dbg(&client->dev, "failed=%d\n", ret);
 }
 
-static int si2157_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int si2157_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct si2157_config *cfg = client->dev.platform_data;
 	struct dvb_frontend *fe = cfg->fe;
 	struct si2157_dev *dev;
@@ -966,7 +966,7 @@ err:
 	return ret;
 }
 
-static int si2157_remove(struct i2c_client *client)
+static void si2157_remove(struct i2c_client *client)
 {
 	struct si2157_dev *dev = i2c_get_clientdata(client);
 	struct dvb_frontend *fe = dev->fe;
@@ -984,8 +984,6 @@ static int si2157_remove(struct i2c_client *client)
 	memset(&fe->ops.tuner_ops, 0, sizeof(struct dvb_tuner_ops));
 	fe->tuner_priv = NULL;
 	kfree(dev);
-
-	return 0;
 }
 
 /*
@@ -1007,7 +1005,7 @@ static struct i2c_driver si2157_driver = {
 		.name		     = "si2157",
 		.suppress_bind_attrs = true,
 	},
-	.probe		= si2157_probe,
+	.probe_new	= si2157_probe,
 	.remove		= si2157_remove,
 	.id_table	= si2157_id_table,
 };

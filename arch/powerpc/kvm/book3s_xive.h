@@ -285,13 +285,6 @@ static inline u32 __xive_read_eq(__be32 *qpage, u32 msk, u32 *idx, u32 *toggle)
 	return cur & 0x7fffffff;
 }
 
-extern unsigned long xive_rm_h_xirr(struct kvm_vcpu *vcpu);
-extern unsigned long xive_rm_h_ipoll(struct kvm_vcpu *vcpu, unsigned long server);
-extern int xive_rm_h_ipi(struct kvm_vcpu *vcpu, unsigned long server,
-			 unsigned long mfrr);
-extern int xive_rm_h_cppr(struct kvm_vcpu *vcpu, unsigned long cppr);
-extern int xive_rm_h_eoi(struct kvm_vcpu *vcpu, unsigned long xirr);
-
 /*
  * Common Xive routines for XICS-over-XIVE and XIVE native
  */
@@ -306,8 +299,7 @@ int kvmppc_xive_select_target(struct kvm *kvm, u32 *server, u8 prio);
 int kvmppc_xive_attach_escalation(struct kvm_vcpu *vcpu, u8 prio,
 				  bool single_escalation);
 struct kvmppc_xive *kvmppc_xive_get_device(struct kvm *kvm, u32 type);
-void xive_cleanup_single_escalation(struct kvm_vcpu *vcpu,
-				    struct kvmppc_xive_vcpu *xc, int irq);
+void xive_cleanup_single_escalation(struct kvm_vcpu *vcpu, int irq);
 int kvmppc_xive_compute_vp_id(struct kvmppc_xive *xive, u32 cpu, u32 *vp);
 int kvmppc_xive_set_nr_servers(struct kvmppc_xive *xive, u64 addr);
 bool kvmppc_xive_check_save_restore(struct kvm_vcpu *vcpu);

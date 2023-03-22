@@ -191,7 +191,7 @@
 		backlight = <&lcd_bl>;
 
 		port {
-			panel_0: endpoint@0 {
+			panel_0: endpoint {
 				remote-endpoint = <&lcdc_0>;
 			};
 		};
@@ -718,4 +718,8 @@
 
 &pruss_tm {
 	status = "okay";
+};
+
+&wkup_m3_ipc {
+	firmware-name = "am335x-evm-scale-data.bin";
 };

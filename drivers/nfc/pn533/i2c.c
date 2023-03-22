@@ -163,8 +163,7 @@ static const struct pn533_phy_ops i2c_phy_ops = {
 };
 
 
-static int pn533_i2c_probe(struct i2c_client *client,
-			       const struct i2c_device_id *id)
+static int pn533_i2c_probe(struct i2c_client *client)
 {
 	struct pn533_i2c_phy *phy;
 	struct pn533 *priv;
@@ -227,7 +226,7 @@ nfc_alloc_err:
 	return r;
 }
 
-static int pn533_i2c_remove(struct i2c_client *client)
+static void pn533_i2c_remove(struct i2c_client *client)
 {
 	struct pn533_i2c_phy *phy = i2c_get_clientdata(client);
 
@@ -235,8 +234,6 @@ static int pn533_i2c_remove(struct i2c_client *client)
 
 	pn53x_unregister_nfc(phy->priv);
 	pn53x_common_clean(phy->priv);
-
-	return 0;
 }
 
 static const struct of_device_id of_pn533_i2c_match[] __maybe_unused = {
@@ -262,7 +259,7 @@ static struct i2c_driver pn533_i2c_driver = {
 		   .name = PN533_I2C_DRIVER_NAME,
 		   .of_match_table = of_match_ptr(of_pn533_i2c_match),
 		  },
-	.probe = pn533_i2c_probe,
+	.probe_new = pn533_i2c_probe,
 	.id_table = pn533_i2c_id_table,
 	.remove = pn533_i2c_remove,
 };

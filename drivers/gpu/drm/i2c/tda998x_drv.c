@@ -7,6 +7,7 @@
 #include <linux/component.h>
 #include <linux/gpio/consumer.h>
 #include <linux/hdmi.h>
+#include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/platform_data/tda9950.h>
 #include <linux/irq.h>
@@ -1095,11 +1096,11 @@ static int tda998x_audio_hw_params(struct device *dev, void *data,
 
 	if (!spdif &&
 	    (daifmt->bit_clk_inv || daifmt->frame_clk_inv ||
-	     daifmt->bit_clk_master || daifmt->frame_clk_master)) {
+	     daifmt->bit_clk_provider || daifmt->frame_clk_provider)) {
 		dev_err(dev, "%s: Bad flags %d %d %d %d\n", __func__,
 			daifmt->bit_clk_inv, daifmt->frame_clk_inv,
-			daifmt->bit_clk_master,
-			daifmt->frame_clk_master);
+			daifmt->bit_clk_provider,
+			daifmt->frame_clk_provider);
 		return -EINVAL;
 	}
 
@@ -1173,6 +1174,8 @@ static int tda998x_audio_codec_init(struct tda998x_priv *priv,
 	struct hdmi_codec_pdata codec_data = {
 		.ops = &audio_codec_ops,
 		.max_i2s_channels = 2,
+		.no_i2s_capture = 1,
+		.no_spdif_capture = 1,
 	};
 
 	if (priv->audio_port_enable[AUDIO_ROUTE_I2S])
@@ -2075,11 +2078,10 @@ tda998x_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	return ret;
 }
 
-static int tda998x_remove(struct i2c_client *client)
+static void tda998x_remove(struct i2c_client *client)
 {
 	component_del(&client->dev, &tda998x_ops);
 	tda998x_destroy(&client->dev);
-	return 0;
 }
 
 #ifdef CONFIG_OF

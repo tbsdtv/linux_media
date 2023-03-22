@@ -44,6 +44,4 @@ struct mxl603_config{
 
 };
 
-
-
 #endif

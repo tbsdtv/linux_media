@@ -106,8 +106,7 @@ static const struct iio_info mc3230_info = {
 	.read_raw	= mc3230_read_raw,
 };
 
-static int mc3230_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int mc3230_probe(struct i2c_client *client)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -151,13 +150,13 @@ static int mc3230_probe(struct i2c_client *client,
 	return ret;
 }
 
-static int mc3230_remove(struct i2c_client *client)
+static void mc3230_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 
 	iio_device_unregister(indio_dev);
 
-	return mc3230_set_opcon(iio_priv(indio_dev), MC3230_MODE_OPCON_STANDBY);
+	mc3230_set_opcon(iio_priv(indio_dev), MC3230_MODE_OPCON_STANDBY);
 }
 
 static int mc3230_suspend(struct device *dev)
@@ -191,7 +190,7 @@ static struct i2c_driver mc3230_driver = {
 		.name = "mc3230",
 		.pm = pm_sleep_ptr(&mc3230_pm_ops),
 	},
-	.probe		= mc3230_probe,
+	.probe_new	= mc3230_probe,
 	.remove		= mc3230_remove,
 	.id_table	= mc3230_i2c_id,
 };

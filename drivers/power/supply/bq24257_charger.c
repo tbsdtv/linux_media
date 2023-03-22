@@ -287,7 +287,7 @@ static int bq24257_set_input_current_limit(struct bq24257_device *bq,
 {
 	/*
 	 * Address the case where the user manually sets an input current limit
-	 * while the charger auto-detection mechanism is is active. In this
+	 * while the charger auto-detection mechanism is active. In this
 	 * case we want to abort and go straight to the user-specified value.
 	 */
 	if (bq->iilimit_autoset_enable)
@@ -947,9 +947,9 @@ static int bq24257_fw_probe(struct bq24257_device *bq)
 	return 0;
 }
 
-static int bq24257_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int bq24257_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct i2c_adapter *adapter = client->adapter;
 	struct device *dev = &client->dev;
 	const struct acpi_device_id *acpi_id;
@@ -1077,7 +1077,7 @@ static int bq24257_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int bq24257_remove(struct i2c_client *client)
+static void bq24257_remove(struct i2c_client *client)
 {
 	struct bq24257_device *bq = i2c_get_clientdata(client);
 
@@ -1085,8 +1085,6 @@ static int bq24257_remove(struct i2c_client *client)
 		cancel_delayed_work_sync(&bq->iilimit_setup_work);
 
 	bq24257_field_write(bq, F_RESET, 1); /* reset to defaults */
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1169,7 +1167,7 @@ static struct i2c_driver bq24257_driver = {
 		.acpi_match_table = ACPI_PTR(bq24257_acpi_match),
 		.pm = &bq24257_pm,
 	},
-	.probe = bq24257_probe,
+	.probe_new = bq24257_probe,
 	.remove = bq24257_remove,
 	.id_table = bq24257_i2c_ids,
 };

@@ -43,6 +43,7 @@ static void vpu_session_handle_mem_request(struct vpu_inst *inst, struct vpu_rpc
 		  req_data.ref_frame_num,
 		  req_data.act_buf_size,
 		  req_data.act_buf_num);
+	vpu_inst_lock(inst);
 	call_void_vop(inst, mem_request,
 		      req_data.enc_frame_size,
 		      req_data.enc_frame_num,
@@ -50,6 +51,7 @@ static void vpu_session_handle_mem_request(struct vpu_inst *inst, struct vpu_rpc
 		      req_data.ref_frame_num,
 		      req_data.act_buf_size,
 		      req_data.act_buf_num);
+	vpu_inst_unlock(inst);
 }
 
 static void vpu_session_handle_stop_done(struct vpu_inst *inst, struct vpu_rpc_event *pkt)
@@ -150,7 +152,12 @@ static void vpu_session_handle_eos(struct vpu_inst *inst, struct vpu_rpc_event *
 
 static void vpu_session_handle_error(struct vpu_inst *inst, struct vpu_rpc_event *pkt)
 {
-	dev_err(inst->dev, "unsupported stream\n");
+	char *str = (char *)pkt->data;
+
+	if (strlen(str))
+		dev_err(inst->dev, "instance %d firmware error : %s\n", inst->id, str);
+	else
+		dev_err(inst->dev, "instance %d is unsupported stream\n", inst->id);
 	call_void_vop(inst, event_notify, VPU_MSG_ID_UNSUPPORTED, NULL);
 	vpu_v4l2_set_error(inst);
 }
@@ -164,6 +171,13 @@ static void vpu_session_handle_firmware_xcpt(struct vpu_inst *inst, struct vpu_r
 	call_void_vop(inst, event_notify, VPU_MSG_ID_FIRMWARE_XCPT, NULL);
 	set_bit(inst->id, &inst->core->hang_mask);
 	vpu_v4l2_set_error(inst);
+}
+
+static void vpu_session_handle_pic_skipped(struct vpu_inst *inst, struct vpu_rpc_event *pkt)
+{
+	vpu_inst_lock(inst);
+	vpu_skip_frame(inst, 1);
+	vpu_inst_unlock(inst);
 }
 
 static struct vpu_msg_handler handlers[] = {
@@ -181,6 +195,7 @@ static struct vpu_msg_handler handlers[] = {
 	{VPU_MSG_ID_PIC_EOS, vpu_session_handle_eos},
 	{VPU_MSG_ID_UNSUPPORTED, vpu_session_handle_error},
 	{VPU_MSG_ID_FIRMWARE_XCPT, vpu_session_handle_firmware_xcpt},
+	{VPU_MSG_ID_PIC_SKIPPED, vpu_session_handle_pic_skipped},
 };
 
 static int vpu_session_handle_msg(struct vpu_inst *inst, struct vpu_rpc_event *msg)

@@ -253,8 +253,7 @@ static const struct iio_info lidar_info = {
 	.read_raw = lidar_read_raw,
 };
 
-static int lidar_probe(struct i2c_client *client,
-		       const struct i2c_device_id *id)
+static int lidar_probe(struct i2c_client *client)
 {
 	struct lidar_data *data;
 	struct iio_dev *indio_dev;
@@ -311,7 +310,7 @@ error_unreg_buffer:
 	return ret;
 }
 
-static int lidar_remove(struct i2c_client *client)
+static void lidar_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 
@@ -320,8 +319,6 @@ static int lidar_remove(struct i2c_client *client)
 
 	pm_runtime_disable(&client->dev);
 	pm_runtime_set_suspended(&client->dev);
-
-	return 0;
 }
 
 static const struct i2c_device_id lidar_id[] = {
@@ -368,7 +365,7 @@ static struct i2c_driver lidar_driver = {
 		.of_match_table	= lidar_dt_ids,
 		.pm	= pm_ptr(&lidar_pm_ops),
 	},
-	.probe		= lidar_probe,
+	.probe_new	= lidar_probe,
 	.remove		= lidar_remove,
 	.id_table	= lidar_id,
 };

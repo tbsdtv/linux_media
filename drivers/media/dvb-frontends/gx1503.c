@@ -48,6 +48,7 @@ static int GX1503_WriteRegWithMask(struct i2c_client *client,unsigned int regAdd
 	
 
 }
+
 static int gx1503_init(struct dvb_frontend *fe)
 {
 	struct i2c_client *client = fe->demodulator_priv;
@@ -192,6 +193,7 @@ err:
 	return ret;
 
 }
+
 static int gx1503_set_frontend(struct dvb_frontend *fe)
 {
 	struct i2c_client *client = fe->demodulator_priv;
@@ -328,6 +330,7 @@ err:
 	dev_dbg(&client->dev,"failed = %d\n",ret);
 	return ret;	
 }
+
 static int gx1503_read_status(struct dvb_frontend *fe, enum fe_status *status)
 {
 	struct i2c_client *client = fe->demodulator_priv;
@@ -396,6 +399,7 @@ static int gx1503_read_snr(struct dvb_frontend * fe,u16 * snr)
 
 	return 0;
 }
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0)
 static int gx1503_select(struct i2c_mux_core *muxc,u32 chan)
 {
@@ -419,6 +423,7 @@ err:
 	return ret;
 
 }
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
 static int gx1503_deselect(struct i2c_mux_core *muxc,u32 chan)
 {
@@ -462,7 +467,8 @@ static const struct dvb_frontend_ops gx1503_ops = {
 		.read_snr = gx1503_read_snr,
 		
 };
-static int gx1503_probe( struct i2c_client *client,
+
+static int gx1503_probe(struct i2c_client *client,
 		const struct i2c_device_id *id)
 {
 	struct gx1503_config *cfg = client->dev.platform_data;
@@ -547,7 +553,8 @@ err:
 	dev_dbg(&client->dev,"failed = %d\n",ret);
 	return ret;
 }
-static int gx1503_remove(struct i2c_client *client)
+
+static void gx1503_remove(struct i2c_client *client)
 {
 	struct gx1503_dev*dev = i2c_get_clientdata(client);
 	
@@ -561,10 +568,8 @@ static int gx1503_remove(struct i2c_client *client)
 	dev->fe.ops.release = NULL;
 	dev->fe.demodulator_priv = NULL;
 	kfree(dev);
-
-	return 0;
-
 }
+
 static const struct i2c_device_id gx1503_id_table[] = {
 			{"gx1503",0},
 			{}

@@ -27,7 +27,6 @@
 #include <nvif/ioctl.h>
 #include <nvif/class.h>
 #include <nvif/cl0002.h>
-#include <nvif/cla06f.h>
 #include <nvif/unpack.h>
 
 #include "nouveau_drv.h"
@@ -126,9 +125,8 @@ nouveau_abi16_chan_fini(struct nouveau_abi16 *abi16,
 {
 	struct nouveau_abi16_ntfy *ntfy, *temp;
 
-	/* wait for all activity to stop before releasing notify object, which
-	 * may be still in use */
-	if (chan->chan && chan->ntfy)
+	/* wait for all activity to stop before cleaning up */
+	if (chan->chan)
 		nouveau_channel_idle(chan->chan);
 
 	/* cleanup notifier state */
@@ -147,7 +145,7 @@ nouveau_abi16_chan_fini(struct nouveau_abi16 *abi16,
 
 	/* destroy channel object, all children will be killed too */
 	if (chan->chan) {
-		nouveau_channel_idle(chan->chan);
+		nvif_object_dtor(&chan->ce);
 		nouveau_channel_del(&chan->chan);
 	}
 
@@ -254,7 +252,7 @@ nouveau_abi16_ioctl_channel_alloc(ABI16_IOCTL_ARGS)
 	struct nouveau_abi16 *abi16 = nouveau_abi16_get(file_priv);
 	struct nouveau_abi16_chan *chan;
 	struct nvif_device *device;
-	u64 engine;
+	u64 engine, runm;
 	int ret;
 
 	if (unlikely(!abi16))
@@ -264,6 +262,7 @@ nouveau_abi16_ioctl_channel_alloc(ABI16_IOCTL_ARGS)
 		return nouveau_abi16_put(abi16, -ENODEV);
 
 	device = &abi16->device;
+	engine = NV_DEVICE_HOST_RUNLIST_ENGINES_GR;
 
 	/* hack to allow channel engine type specification on kepler */
 	if (device->info.family >= NV_DEVICE_INFO_V0_KEPLER) {
@@ -277,19 +276,18 @@ nouveau_abi16_ioctl_channel_alloc(ABI16_IOCTL_ARGS)
 			default:
 				return nouveau_abi16_put(abi16, -ENOSYS);
 			}
-		} else {
-			engine = NV_DEVICE_HOST_RUNLIST_ENGINES_GR;
-		}
 
-		if (engine != NV_DEVICE_HOST_RUNLIST_ENGINES_CE)
-			engine = nvif_fifo_runlist(device, engine);
-		else
-			engine = nvif_fifo_runlist_ce(device);
-		init->fb_ctxdma_handle = engine;
-		init->tt_ctxdma_handle = 0;
+			init->fb_ctxdma_handle = 0;
+			init->tt_ctxdma_handle = 0;
+		}
 	}
 
-	if (init->fb_ctxdma_handle == ~0 || init->tt_ctxdma_handle == ~0)
+	if (engine != NV_DEVICE_HOST_RUNLIST_ENGINES_CE)
+		runm = nvif_fifo_runlist(device, engine);
+	else
+		runm = nvif_fifo_runlist_ce(device);
+
+	if (!runm || init->fb_ctxdma_handle == ~0 || init->tt_ctxdma_handle == ~0)
 		return nouveau_abi16_put(abi16, -EINVAL);
 
 	/* allocate "abi16 channel" data and make up a handle for it */
@@ -301,8 +299,8 @@ nouveau_abi16_ioctl_channel_alloc(ABI16_IOCTL_ARGS)
 	list_add(&chan->head, &abi16->channels);
 
 	/* create channel object and initialise dma and fence management */
-	ret = nouveau_channel_new(drm, device, init->fb_ctxdma_handle,
-				  init->tt_ctxdma_handle, false, &chan->chan);
+	ret = nouveau_channel_new(drm, device, false, runm, init->fb_ctxdma_handle,
+				  init->tt_ctxdma_handle, &chan->chan);
 	if (ret)
 		goto done;
 
@@ -323,6 +321,31 @@ nouveau_abi16_ioctl_channel_alloc(ABI16_IOCTL_ARGS)
 		init->subchan[1].handle = chan->chan->nvsw.handle;
 		init->subchan[1].grclass = 0x506e;
 		init->nr_subchan = 2;
+	}
+
+	/* Workaround "nvc0" gallium driver using classes it doesn't allocate on
+	 * Kepler and above.  NVKM no longer always sets CE_CTX_VALID as part of
+	 * channel init, now we know what that stuff actually is.
+	 *
+	 * Doesn't matter for Kepler/Pascal, CE context stored in NV_RAMIN.
+	 *
+	 * Userspace was fixed prior to adding Ampere support.
+	 */
+	switch (device->info.family) {
+	case NV_DEVICE_INFO_V0_VOLTA:
+		ret = nvif_object_ctor(&chan->chan->user, "abi16CeWar", 0, VOLTA_DMA_COPY_A,
+				       NULL, 0, &chan->ce);
+		if (ret)
+			goto done;
+		break;
+	case NV_DEVICE_INFO_V0_TURING:
+		ret = nvif_object_ctor(&chan->chan->user, "abi16CeWar", 0, TURING_DMA_COPY_A,
+				       NULL, 0, &chan->ce);
+		if (ret)
+			goto done;
+		break;
+	default:
+		break;
 	}
 
 	/* Named memory object area */

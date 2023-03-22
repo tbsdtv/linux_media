@@ -220,6 +220,11 @@ struct ATTRIB *mi_enum_attr(struct mft_inode *mi, struct ATTRIB *attr)
 			return NULL;
 		}
 
+		if (off + asize < off) {
+			/* overflow check */
+			return NULL;
+		}
+
 		attr = Add2Ptr(attr, asize);
 		off += asize;
 	}
@@ -258,6 +263,10 @@ struct ATTRIB *mi_enum_attr(struct mft_inode *mi, struct ATTRIB *attr)
 
 		t32 = le32_to_cpu(attr->res.data_size);
 		if (t16 + t32 > asize)
+			return NULL;
+
+		t32 = sizeof(short) * attr->name_len;
+		if (t32 && le16_to_cpu(attr->name_off) + t32 > t16)
 			return NULL;
 
 		return attr;
@@ -395,28 +404,6 @@ int mi_format_new(struct mft_inode *mi, struct ntfs_sb_info *sbi, CLST rno,
 }
 
 /*
- * mi_mark_free - Mark record as unused and marks it as free in bitmap.
- */
-void mi_mark_free(struct mft_inode *mi)
-{
-	CLST rno = mi->rno;
-	struct ntfs_sb_info *sbi = mi->sbi;
-
-	if (rno >= MFT_REC_RESERVED && rno < MFT_REC_FREE) {
-		ntfs_clear_mft_tail(sbi, rno, rno + 1);
-		mi->dirty = false;
-		return;
-	}
-
-	if (mi->mrec) {
-		clear_rec_inuse(mi->mrec);
-		mi->dirty = true;
-		mi_write(mi, 0);
-	}
-	ntfs_mark_rec_free(sbi, rno);
-}
-
-/*
  * mi_insert_attr - Reserve space for new attribute.
  *
  * Return: Not full constructed attribute or NULL if not possible to create.
@@ -445,12 +432,11 @@ struct ATTRIB *mi_insert_attr(struct mft_inode *mi, enum ATTR_TYPE type,
 	attr = NULL;
 	while ((attr = mi_enum_attr(mi, attr))) {
 		diff = compare_attr(attr, type, name, name_len, upcase);
-		if (diff > 0)
-			break;
+
 		if (diff < 0)
 			continue;
 
-		if (!is_attr_indexed(attr))
+		if (!diff && !is_attr_indexed(attr))
 			return NULL;
 		break;
 	}
@@ -560,6 +546,10 @@ bool mi_resize_attr(struct mft_inode *mi, struct ATTRIB *attr, int bytes)
 	return true;
 }
 
+/*
+ * Pack runs in MFT record.
+ * If failed record is not changed.
+ */
 int mi_pack_runs(struct mft_inode *mi, struct ATTRIB *attr,
 		 struct runs_tree *run, CLST len)
 {

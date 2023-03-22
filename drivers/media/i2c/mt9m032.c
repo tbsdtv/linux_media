@@ -701,8 +701,7 @@ static const struct v4l2_subdev_ops mt9m032_ops = {
  * Driver initialization and probing
  */
 
-static int mt9m032_probe(struct i2c_client *client,
-			 const struct i2c_device_id *devid)
+static int mt9m032_probe(struct i2c_client *client)
 {
 	struct mt9m032_platform_data *pdata = client->dev.platform_data;
 	struct i2c_adapter *adapter = client->adapter;
@@ -858,7 +857,7 @@ error_sensor:
 	return ret;
 }
 
-static int mt9m032_remove(struct i2c_client *client)
+static void mt9m032_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *subdev = i2c_get_clientdata(client);
 	struct mt9m032 *sensor = to_mt9m032(subdev);
@@ -867,7 +866,6 @@ static int mt9m032_remove(struct i2c_client *client)
 	v4l2_ctrl_handler_free(&sensor->ctrls);
 	media_entity_cleanup(&subdev->entity);
 	mutex_destroy(&sensor->lock);
-	return 0;
 }
 
 static const struct i2c_device_id mt9m032_id_table[] = {
@@ -881,7 +879,7 @@ static struct i2c_driver mt9m032_i2c_driver = {
 	.driver = {
 		.name = MT9M032_NAME,
 	},
-	.probe = mt9m032_probe,
+	.probe_new = mt9m032_probe,
 	.remove = mt9m032_remove,
 	.id_table = mt9m032_id_table,
 };

@@ -19,6 +19,7 @@
 #include <linux/module.h>
 #include <linux/irqbypass.h>
 #include <linux/kvm_irqfd.h>
+#include <linux/of.h>
 #include <asm/cputable.h>
 #include <linux/uaccess.h>
 #include <asm/kvm_ppc.h>
@@ -32,9 +33,9 @@
 #include <asm/plpar_wrappers.h>
 #endif
 #include <asm/ultravisor.h>
+#include <asm/setup.h>
 
 #include "timing.h"
-#include "irq.h"
 #include "../mm/mmu_decl.h"
 
 #define CREATE_TRACE_POINTS
@@ -237,7 +238,6 @@ int kvmppc_kvm_pv(struct kvm_vcpu *vcpu)
 	case EV_HCALL_TOKEN(EV_IDLE):
 		r = EV_SUCCESS;
 		kvm_vcpu_halt(vcpu);
-		kvm_clear_request(KVM_REQ_UNHALT, vcpu);
 		break;
 	default:
 		r = EV_UNIMPLEMENTED;
@@ -784,7 +784,6 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 
 	hrtimer_init(&vcpu->arch.dec_timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
 	vcpu->arch.dec_timer.function = kvmppc_decrementer_wakeup;
-	vcpu->arch.dec_expires = get_tb();
 
 #ifdef CONFIG_KVM_EXIT_TIMING
 	mutex_init(&vcpu->arch.exit_timing_lock);
@@ -2165,10 +2164,25 @@ static int kvm_vm_ioctl_get_pvinfo(struct kvm_ppc_pvinfo *pvinfo)
 	return 0;
 }
 
+bool kvm_arch_irqchip_in_kernel(struct kvm *kvm)
+{
+	int ret = 0;
+
+#ifdef CONFIG_KVM_MPIC
+	ret = ret || (kvm->arch.mpic != NULL);
+#endif
+#ifdef CONFIG_KVM_XICS
+	ret = ret || (kvm->arch.xics != NULL);
+	ret = ret || (kvm->arch.xive != NULL);
+#endif
+	smp_rmb();
+	return ret;
+}
+
 int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irq_event,
 			  bool line_status)
 {
-	if (!irqchip_in_kernel(kvm))
+	if (!kvm_arch_irqchip_in_kernel(kvm))
 		return -ENXIO;
 
 	irq_event->status = kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID,
@@ -2496,41 +2510,37 @@ out:
 	return r;
 }
 
-static unsigned long lpid_inuse[BITS_TO_LONGS(KVMPPC_NR_LPIDS)];
+static DEFINE_IDA(lpid_inuse);
 static unsigned long nr_lpids;
 
 long kvmppc_alloc_lpid(void)
 {
-	long lpid;
+	int lpid;
 
-	do {
-		lpid = find_first_zero_bit(lpid_inuse, KVMPPC_NR_LPIDS);
-		if (lpid >= nr_lpids) {
+	/* The host LPID must always be 0 (allocation starts at 1) */
+	lpid = ida_alloc_range(&lpid_inuse, 1, nr_lpids - 1, GFP_KERNEL);
+	if (lpid < 0) {
+		if (lpid == -ENOMEM)
+			pr_err("%s: Out of memory\n", __func__);
+		else
 			pr_err("%s: No LPIDs free\n", __func__);
-			return -ENOMEM;
-		}
-	} while (test_and_set_bit(lpid, lpid_inuse));
+		return -ENOMEM;
+	}
 
 	return lpid;
 }
 EXPORT_SYMBOL_GPL(kvmppc_alloc_lpid);
 
-void kvmppc_claim_lpid(long lpid)
-{
-	set_bit(lpid, lpid_inuse);
-}
-EXPORT_SYMBOL_GPL(kvmppc_claim_lpid);
-
 void kvmppc_free_lpid(long lpid)
 {
-	clear_bit(lpid, lpid_inuse);
+	ida_free(&lpid_inuse, lpid);
 }
 EXPORT_SYMBOL_GPL(kvmppc_free_lpid);
 
+/* nr_lpids_param includes the host LPID */
 void kvmppc_init_lpid(unsigned long nr_lpids_param)
 {
-	nr_lpids = min_t(unsigned long, KVMPPC_NR_LPIDS, nr_lpids_param);
-	memset(lpid_inuse, 0, sizeof(lpid_inuse));
+	nr_lpids = nr_lpids_param;
 }
 EXPORT_SYMBOL_GPL(kvmppc_init_lpid);
 

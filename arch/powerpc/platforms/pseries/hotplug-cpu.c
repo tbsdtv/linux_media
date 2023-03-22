@@ -70,6 +70,7 @@ static void pseries_cpu_offline_self(void)
 		xics_teardown_cpu();
 
 	unregister_slb_shadow(hwcpu);
+	unregister_vpa(hwcpu);
 	rtas_stop_self();
 
 	/* Should never get here... */
@@ -398,7 +399,7 @@ static int dlpar_online_cpu(struct device_node *dn)
 			if (get_hard_smp_processor_id(cpu) != thread)
 				continue;
 			cpu_maps_update_done();
-			find_and_online_cpu_nid(cpu);
+			find_and_update_cpu_nid(cpu);
 			rc = device_online(get_cpu_device(cpu));
 			if (rc) {
 				dlpar_offline_cpu(dn);
@@ -619,17 +620,21 @@ static ssize_t dlpar_cpu_add(u32 drc_index)
 static unsigned int pseries_cpuhp_cache_use_count(const struct device_node *cachedn)
 {
 	unsigned int use_count = 0;
-	struct device_node *dn;
+	struct device_node *dn, *tn;
 
 	WARN_ON(!of_node_is_type(cachedn, "cache"));
 
 	for_each_of_cpu_node(dn) {
-		if (of_find_next_cache_node(dn) == cachedn)
+		tn = of_find_next_cache_node(dn);
+		of_node_put(tn);
+		if (tn == cachedn)
 			use_count++;
 	}
 
 	for_each_node_by_type(dn, "cache") {
-		if (of_find_next_cache_node(dn) == cachedn)
+		tn = of_find_next_cache_node(dn);
+		of_node_put(tn);
+		if (tn == cachedn)
 			use_count++;
 	}
 
@@ -649,10 +654,13 @@ static int pseries_cpuhp_detach_nodes(struct device_node *cpudn)
 
 	dn = cpudn;
 	while ((dn = of_find_next_cache_node(dn))) {
-		if (pseries_cpuhp_cache_use_count(dn) > 1)
+		if (pseries_cpuhp_cache_use_count(dn) > 1) {
+			of_node_put(dn);
 			break;
+		}
 
 		ret = of_changeset_detach_node(&cs, dn);
+		of_node_put(dn);
 		if (ret)
 			goto out;
 	}

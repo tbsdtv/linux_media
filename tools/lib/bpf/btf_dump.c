@@ -117,14 +117,14 @@ struct btf_dump {
 	struct btf_dump_data *typed_dump;
 };
 
-static size_t str_hash_fn(const void *key, void *ctx)
+static size_t str_hash_fn(long key, void *ctx)
 {
-	return str_hash(key);
+	return str_hash((void *)key);
 }
 
-static bool str_equal_fn(const void *a, const void *b, void *ctx)
+static bool str_equal_fn(long a, long b, void *ctx)
 {
-	return strcmp(a, b) == 0;
+	return strcmp((void *)a, (void *)b) == 0;
 }
 
 static const char *btf_name_of(const struct btf_dump *d, __u32 name_off)
@@ -144,14 +144,16 @@ static void btf_dump_printf(const struct btf_dump *d, const char *fmt, ...)
 static int btf_dump_mark_referenced(struct btf_dump *d);
 static int btf_dump_resize(struct btf_dump *d);
 
-DEFAULT_VERSION(btf_dump__new_v0_6_0, btf_dump__new, LIBBPF_0.6.0)
-struct btf_dump *btf_dump__new_v0_6_0(const struct btf *btf,
-				      btf_dump_printf_fn_t printf_fn,
-				      void *ctx,
-				      const struct btf_dump_opts *opts)
+struct btf_dump *btf_dump__new(const struct btf *btf,
+			       btf_dump_printf_fn_t printf_fn,
+			       void *ctx,
+			       const struct btf_dump_opts *opts)
 {
 	struct btf_dump *d;
 	int err;
+
+	if (!OPTS_VALID(opts, btf_dump_opts))
+		return libbpf_err_ptr(-EINVAL);
 
 	if (!printf_fn)
 		return libbpf_err_ptr(-EINVAL);
@@ -188,17 +190,6 @@ err:
 	return libbpf_err_ptr(err);
 }
 
-COMPAT_VERSION(btf_dump__new_deprecated, btf_dump__new, LIBBPF_0.0.4)
-struct btf_dump *btf_dump__new_deprecated(const struct btf *btf,
-					  const struct btf_ext *btf_ext,
-					  const struct btf_dump_opts *opts,
-					  btf_dump_printf_fn_t printf_fn)
-{
-	if (!printf_fn)
-		return libbpf_err_ptr(-EINVAL);
-	return btf_dump__new_v0_6_0(btf, printf_fn, opts ? opts->ctx : NULL, opts);
-}
-
 static int btf_dump_resize(struct btf_dump *d)
 {
 	int err, last_id = btf__type_cnt(d->btf) - 1;
@@ -228,6 +219,17 @@ static int btf_dump_resize(struct btf_dump *d)
 	return 0;
 }
 
+static void btf_dump_free_names(struct hashmap *map)
+{
+	size_t bkt;
+	struct hashmap_entry *cur;
+
+	hashmap__for_each_entry(map, cur, bkt)
+		free((void *)cur->pkey);
+
+	hashmap__free(map);
+}
+
 void btf_dump__free(struct btf_dump *d)
 {
 	int i;
@@ -246,8 +248,8 @@ void btf_dump__free(struct btf_dump *d)
 	free(d->cached_names);
 	free(d->emit_queue);
 	free(d->decl_stack);
-	hashmap__free(d->type_names);
-	hashmap__free(d->ident_names);
+	btf_dump_free_names(d->type_names);
+	btf_dump_free_names(d->ident_names);
 
 	free(d);
 }
@@ -318,6 +320,7 @@ static int btf_dump_mark_referenced(struct btf_dump *d)
 		switch (btf_kind(t)) {
 		case BTF_KIND_INT:
 		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
 		case BTF_KIND_FWD:
 		case BTF_KIND_FLOAT:
 			break;
@@ -538,6 +541,7 @@ static int btf_dump_order_type(struct btf_dump *d, __u32 id, bool through_ptr)
 		return 1;
 	}
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 	case BTF_KIND_FWD:
 		/*
 		 * non-anonymous or non-referenced enums are top-level
@@ -739,6 +743,7 @@ static void btf_dump_emit_type(struct btf_dump *d, __u32 id, __u32 cont_id)
 		tstate->emit_state = EMITTED;
 		break;
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		if (top_level_def) {
 			btf_dump_emit_enum_def(d, id, t, 0);
 			btf_dump_printf(d, ";\n\n");
@@ -950,7 +955,11 @@ static void btf_dump_emit_struct_def(struct btf_dump *d,
 					  lvl + 1);
 	}
 
-	if (vlen)
+	/*
+	 * Keep `struct empty {}` on a single line,
+	 * only print newline when there are regular or padding fields.
+	 */
+	if (vlen || t->size)
 		btf_dump_printf(d, "\n");
 	btf_dump_printf(d, "%s}", pfx(lvl));
 	if (packed)
@@ -989,38 +998,81 @@ static void btf_dump_emit_enum_fwd(struct btf_dump *d, __u32 id,
 	btf_dump_printf(d, "enum %s", btf_dump_type_name(d, id));
 }
 
+static void btf_dump_emit_enum32_val(struct btf_dump *d,
+				     const struct btf_type *t,
+				     int lvl, __u16 vlen)
+{
+	const struct btf_enum *v = btf_enum(t);
+	bool is_signed = btf_kflag(t);
+	const char *fmt_str;
+	const char *name;
+	size_t dup_cnt;
+	int i;
+
+	for (i = 0; i < vlen; i++, v++) {
+		name = btf_name_of(d, v->name_off);
+		/* enumerators share namespace with typedef idents */
+		dup_cnt = btf_dump_name_dups(d, d->ident_names, name);
+		if (dup_cnt > 1) {
+			fmt_str = is_signed ? "\n%s%s___%zd = %d," : "\n%s%s___%zd = %u,";
+			btf_dump_printf(d, fmt_str, pfx(lvl + 1), name, dup_cnt, v->val);
+		} else {
+			fmt_str = is_signed ? "\n%s%s = %d," : "\n%s%s = %u,";
+			btf_dump_printf(d, fmt_str, pfx(lvl + 1), name, v->val);
+		}
+	}
+}
+
+static void btf_dump_emit_enum64_val(struct btf_dump *d,
+				     const struct btf_type *t,
+				     int lvl, __u16 vlen)
+{
+	const struct btf_enum64 *v = btf_enum64(t);
+	bool is_signed = btf_kflag(t);
+	const char *fmt_str;
+	const char *name;
+	size_t dup_cnt;
+	__u64 val;
+	int i;
+
+	for (i = 0; i < vlen; i++, v++) {
+		name = btf_name_of(d, v->name_off);
+		dup_cnt = btf_dump_name_dups(d, d->ident_names, name);
+		val = btf_enum64_value(v);
+		if (dup_cnt > 1) {
+			fmt_str = is_signed ? "\n%s%s___%zd = %lldLL,"
+					    : "\n%s%s___%zd = %lluULL,";
+			btf_dump_printf(d, fmt_str,
+					pfx(lvl + 1), name, dup_cnt,
+					(unsigned long long)val);
+		} else {
+			fmt_str = is_signed ? "\n%s%s = %lldLL,"
+					    : "\n%s%s = %lluULL,";
+			btf_dump_printf(d, fmt_str,
+					pfx(lvl + 1), name,
+					(unsigned long long)val);
+		}
+	}
+}
 static void btf_dump_emit_enum_def(struct btf_dump *d, __u32 id,
 				   const struct btf_type *t,
 				   int lvl)
 {
-	const struct btf_enum *v = btf_enum(t);
 	__u16 vlen = btf_vlen(t);
-	const char *name;
-	size_t dup_cnt;
-	int i;
 
 	btf_dump_printf(d, "enum%s%s",
 			t->name_off ? " " : "",
 			btf_dump_type_name(d, id));
 
-	if (vlen) {
-		btf_dump_printf(d, " {");
-		for (i = 0; i < vlen; i++, v++) {
-			name = btf_name_of(d, v->name_off);
-			/* enumerators share namespace with typedef idents */
-			dup_cnt = btf_dump_name_dups(d, d->ident_names, name);
-			if (dup_cnt > 1) {
-				btf_dump_printf(d, "\n%s%s___%zu = %u,",
-						pfx(lvl + 1), name, dup_cnt,
-						(__u32)v->val);
-			} else {
-				btf_dump_printf(d, "\n%s%s = %u,",
-						pfx(lvl + 1), name,
-						(__u32)v->val);
-			}
-		}
-		btf_dump_printf(d, "\n%s}", pfx(lvl));
-	}
+	if (!vlen)
+		return;
+
+	btf_dump_printf(d, " {");
+	if (btf_is_enum(t))
+		btf_dump_emit_enum32_val(d, t, lvl, vlen);
+	else
+		btf_dump_emit_enum64_val(d, t, lvl, vlen);
+	btf_dump_printf(d, "\n%s}", pfx(lvl));
 }
 
 static void btf_dump_emit_fwd_def(struct btf_dump *d, __u32 id,
@@ -1178,6 +1230,7 @@ skip_mod:
 			break;
 		case BTF_KIND_INT:
 		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
 		case BTF_KIND_FWD:
 		case BTF_KIND_STRUCT:
 		case BTF_KIND_UNION:
@@ -1312,6 +1365,7 @@ static void btf_dump_emit_type_chain(struct btf_dump *d,
 				btf_dump_emit_struct_fwd(d, id, t);
 			break;
 		case BTF_KIND_ENUM:
+		case BTF_KIND_ENUM64:
 			btf_dump_emit_mods(d, decls);
 			/* inline anonymous enum */
 			if (t->name_off == 0 && !d->skip_anon_defs)
@@ -1481,11 +1535,22 @@ static void btf_dump_emit_type_cast(struct btf_dump *d, __u32 id,
 static size_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
 				 const char *orig_name)
 {
+	char *old_name, *new_name;
 	size_t dup_cnt = 0;
+	int err;
 
-	hashmap__find(name_map, orig_name, (void **)&dup_cnt);
+	new_name = strdup(orig_name);
+	if (!new_name)
+		return 1;
+
+	(void)hashmap__find(name_map, orig_name, &dup_cnt);
 	dup_cnt++;
-	hashmap__set(name_map, orig_name, (void *)dup_cnt, NULL, NULL);
+
+	err = hashmap__set(name_map, new_name, dup_cnt, &old_name, NULL);
+	if (err)
+		free(new_name);
+
+	free(old_name);
 
 	return dup_cnt;
 }
@@ -1924,7 +1989,7 @@ static int btf_dump_struct_data(struct btf_dump *d,
 {
 	const struct btf_member *m = btf_members(t);
 	__u16 n = btf_vlen(t);
-	int i, err;
+	int i, err = 0;
 
 	/* note that we increment depth before calling btf_dump_print() below;
 	 * this is intentional.  btf_dump_data_newline() will not print a
@@ -1988,7 +2053,8 @@ static int btf_dump_get_enum_value(struct btf_dump *d,
 				   __u32 id,
 				   __s64 *value)
 {
-	/* handle unaligned enum value */
+	bool is_signed = btf_kflag(t);
+
 	if (!ptr_is_aligned(d->btf, id, data)) {
 		__u64 val;
 		int err;
@@ -2005,13 +2071,13 @@ static int btf_dump_get_enum_value(struct btf_dump *d,
 		*value = *(__s64 *)data;
 		return 0;
 	case 4:
-		*value = *(__s32 *)data;
+		*value = is_signed ? (__s64)*(__s32 *)data : *(__u32 *)data;
 		return 0;
 	case 2:
-		*value = *(__s16 *)data;
+		*value = is_signed ? *(__s16 *)data : *(__u16 *)data;
 		return 0;
 	case 1:
-		*value = *(__s8 *)data;
+		*value = is_signed ? *(__s8 *)data : *(__u8 *)data;
 		return 0;
 	default:
 		pr_warn("unexpected size %d for enum, id:[%u]\n", t->size, id);
@@ -2024,7 +2090,7 @@ static int btf_dump_enum_data(struct btf_dump *d,
 			      __u32 id,
 			      const void *data)
 {
-	const struct btf_enum *e;
+	bool is_signed;
 	__s64 value;
 	int i, err;
 
@@ -2032,14 +2098,31 @@ static int btf_dump_enum_data(struct btf_dump *d,
 	if (err)
 		return err;
 
-	for (i = 0, e = btf_enum(t); i < btf_vlen(t); i++, e++) {
-		if (value != e->val)
-			continue;
-		btf_dump_type_values(d, "%s", btf_name_of(d, e->name_off));
-		return 0;
-	}
+	is_signed = btf_kflag(t);
+	if (btf_is_enum(t)) {
+		const struct btf_enum *e;
 
-	btf_dump_type_values(d, "%d", value);
+		for (i = 0, e = btf_enum(t); i < btf_vlen(t); i++, e++) {
+			if (value != e->val)
+				continue;
+			btf_dump_type_values(d, "%s", btf_name_of(d, e->name_off));
+			return 0;
+		}
+
+		btf_dump_type_values(d, is_signed ? "%d" : "%u", value);
+	} else {
+		const struct btf_enum64 *e;
+
+		for (i = 0, e = btf_enum64(t); i < btf_vlen(t); i++, e++) {
+			if (value != btf_enum64_value(e))
+				continue;
+			btf_dump_type_values(d, "%s", btf_name_of(d, e->name_off));
+			return 0;
+		}
+
+		btf_dump_type_values(d, is_signed ? "%lldLL" : "%lluULL",
+				     (unsigned long long)value);
+	}
 	return 0;
 }
 
@@ -2099,6 +2182,7 @@ static int btf_dump_type_data_check_overflow(struct btf_dump *d,
 	case BTF_KIND_FLOAT:
 	case BTF_KIND_PTR:
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		if (data + bits_offset / 8 + size > d->typed_dump->data_end)
 			return -E2BIG;
 		break;
@@ -2203,6 +2287,7 @@ static int btf_dump_type_data_check_zero(struct btf_dump *d,
 		return -ENODATA;
 	}
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		err = btf_dump_get_enum_value(d, t, data, id, &value);
 		if (err)
 			return err;
@@ -2275,6 +2360,7 @@ static int btf_dump_dump_type_data(struct btf_dump *d,
 		err = btf_dump_struct_data(d, t, id, data);
 		break;
 	case BTF_KIND_ENUM:
+	case BTF_KIND_ENUM64:
 		/* handle bitfield and int enum values */
 		if (bit_sz) {
 			__u64 print_num;
@@ -2325,7 +2411,7 @@ int btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 	d->typed_dump->indent_lvl = OPTS_GET(opts, indent_level, 0);
 
 	/* default indent string is a tab */
-	if (!opts->indent_str)
+	if (!OPTS_GET(opts, indent_str, NULL))
 		d->typed_dump->indent_str[0] = '\t';
 	else
 		libbpf_strlcpy(d->typed_dump->indent_str, opts->indent_str,

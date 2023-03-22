@@ -372,19 +372,16 @@ static int parse_options(char *options, struct super_block *sb, s64 *newLVSize,
 		}
 
 		case Opt_discard:
-		{
-			struct request_queue *q = bdev_get_queue(sb->s_bdev);
 			/* if set to 1, even copying files will cause
 			 * trimming :O
 			 * -> user has more control over the online trimming
 			 */
 			sbi->minblks_trim = 64;
-			if (blk_queue_discard(q))
+			if (bdev_max_discard_sectors(sb->s_bdev))
 				*flag |= JFS_DISCARD;
 			else
 				pr_err("JFS: discard option not supported on device\n");
 			break;
-		}
 
 		case Opt_nodiscard:
 			*flag &= ~JFS_DISCARD;
@@ -392,10 +389,9 @@ static int parse_options(char *options, struct super_block *sb, s64 *newLVSize,
 
 		case Opt_discard_minblk:
 		{
-			struct request_queue *q = bdev_get_queue(sb->s_bdev);
 			char *minblks_trim = args[0].from;
 			int rc;
-			if (blk_queue_discard(q)) {
+			if (bdev_max_discard_sectors(sb->s_bdev)) {
 				*flag |= JFS_DISCARD;
 				rc = kstrtouint(minblks_trim, 0,
 						&sbi->minblks_trim);
@@ -749,8 +745,7 @@ static ssize_t jfs_quota_read(struct super_block *sb, int type, char *data,
 		len = i_size-off;
 	toread = len;
 	while (toread > 0) {
-		tocopy = sb->s_blocksize - offset < toread ?
-				sb->s_blocksize - offset : toread;
+		tocopy = min_t(size_t, sb->s_blocksize - offset, toread);
 
 		tmp_bh.b_state = 0;
 		tmp_bh.b_size = i_blocksize(inode);
@@ -789,8 +784,7 @@ static ssize_t jfs_quota_write(struct super_block *sb, int type,
 
 	inode_lock(inode);
 	while (towrite > 0) {
-		tocopy = sb->s_blocksize - offset < towrite ?
-				sb->s_blocksize - offset : towrite;
+		tocopy = min_t(size_t, sb->s_blocksize - offset, towrite);
 
 		tmp_bh.b_state = 0;
 		tmp_bh.b_size = i_blocksize(inode);

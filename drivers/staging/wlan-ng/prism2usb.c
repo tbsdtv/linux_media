@@ -165,14 +165,14 @@ static void prism2sta_disconnect_usb(struct usb_interface *interface)
 		spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
 
 		/* There's no hardware to shutdown, but the driver
-		 * might have some tasks or tasklets that must be
-		 * stopped before we can tear everything down.
+		 * might have some tasks that must be stopped before
+		 * we can tear everything down.
 		 */
 		prism2sta_ifstate(wlandev, P80211ENUM_ifstate_disable);
 
-		del_singleshot_timer_sync(&hw->throttle);
-		del_singleshot_timer_sync(&hw->reqtimer);
-		del_singleshot_timer_sync(&hw->resptimer);
+		timer_shutdown_sync(&hw->throttle);
+		timer_shutdown_sync(&hw->reqtimer);
+		timer_shutdown_sync(&hw->resptimer);
 
 		/* Unlink all the URBs. This "removes the wheels"
 		 * from the entire CTLX handling mechanism.
@@ -181,8 +181,8 @@ static void prism2sta_disconnect_usb(struct usb_interface *interface)
 		usb_kill_urb(&hw->tx_urb);
 		usb_kill_urb(&hw->ctlx_urb);
 
-		tasklet_kill(&hw->completion_bh);
-		tasklet_kill(&hw->reaper_bh);
+		cancel_work_sync(&hw->completion_bh);
+		cancel_work_sync(&hw->reaper_bh);
 
 		cancel_work_sync(&hw->link_bh);
 		cancel_work_sync(&hw->commsqual_bh);

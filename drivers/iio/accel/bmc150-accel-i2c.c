@@ -171,9 +171,9 @@ static void bmc150_acpi_dual_accel_probe(struct i2c_client *client) {}
 static void bmc150_acpi_dual_accel_remove(struct i2c_client *client) {}
 #endif
 
-static int bmc150_accel_probe(struct i2c_client *client,
-			      const struct i2c_device_id *id)
+static int bmc150_accel_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct regmap *regmap;
 	const char *name = NULL;
 	enum bmc150_type type = BOSCH_UNKNOWN;
@@ -209,13 +209,11 @@ static int bmc150_accel_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int bmc150_accel_remove(struct i2c_client *client)
+static void bmc150_accel_remove(struct i2c_client *client)
 {
 	bmc150_acpi_dual_accel_remove(client);
 
 	bmc150_accel_core_remove(&client->dev);
-
-	return 0;
 }
 
 static const struct acpi_device_id bmc150_accel_acpi_match[] = {
@@ -271,7 +269,7 @@ static struct i2c_driver bmc150_accel_driver = {
 		.acpi_match_table = ACPI_PTR(bmc150_accel_acpi_match),
 		.pm	= &bmc150_accel_pm_ops,
 	},
-	.probe		= bmc150_accel_probe,
+	.probe_new	= bmc150_accel_probe,
 	.remove		= bmc150_accel_remove,
 	.id_table	= bmc150_accel_id,
 };

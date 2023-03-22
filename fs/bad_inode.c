@@ -147,14 +147,14 @@ static int bad_inode_atomic_open(struct inode *inode, struct dentry *dentry,
 }
 
 static int bad_inode_tmpfile(struct user_namespace *mnt_userns,
-			     struct inode *inode, struct dentry *dentry,
+			     struct inode *inode, struct file *file,
 			     umode_t mode)
 {
 	return -EIO;
 }
 
 static int bad_inode_set_acl(struct user_namespace *mnt_userns,
-			     struct inode *inode, struct posix_acl *acl,
+			     struct dentry *dentry, struct posix_acl *acl,
 			     int type)
 {
 	return -EIO;
@@ -177,7 +177,7 @@ static const struct inode_operations bad_inode_ops =
 	.setattr	= bad_inode_setattr,
 	.listxattr	= bad_inode_listxattr,
 	.get_link	= bad_inode_get_link,
-	.get_acl	= bad_inode_get_acl,
+	.get_inode_acl	= bad_inode_get_acl,
 	.fiemap		= bad_inode_fiemap,
 	.update_time	= bad_inode_update_time,
 	.atomic_open	= bad_inode_atomic_open,

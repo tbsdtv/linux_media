@@ -256,6 +256,7 @@ my $doc_inline_sect = '\s*\*\s*(@\s*[\w][\w\.]*\s*):(.*)';
 my $doc_inline_end = '^\s*\*/\s*$';
 my $doc_inline_oneline = '^\s*/\*\*\s*(@[\w\s]+):\s*(.*)\s*\*/\s*$';
 my $export_symbol = '^\s*EXPORT_SYMBOL(_GPL)?\s*\(\s*(\w+)\s*\)\s*;';
+my $export_symbol_ns = '^\s*EXPORT_SYMBOL_NS(_GPL)?\s*\(\s*(\w+)\s*,\s*\w+\)\s*;';
 my $function_pointer = qr{([^\(]*\(\*)\s*\)\s*\(([^\)]*)\)};
 my $attribute = qr{__attribute__\s*\(\([a-z0-9,_\*\s\(\)]*\)\)}i;
 
@@ -427,6 +428,13 @@ sub print_lineno {
         print ".. LINENO " . $lineno . "\n";
     }
 }
+
+sub emit_warning {
+    my $location = shift;
+    my $msg = shift;
+    print STDERR "$location: warning: $msg";
+    ++$warnings;
+}
 ##
 # dumps section contents to arrays/hashes intended for that purpose.
 #
@@ -451,8 +459,7 @@ sub dump_section {
 	if (defined($sections{$name}) && ($sections{$name} ne "")) {
 	    # Only warn on user specified duplicate section names.
 	    if ($name ne $section_default) {
-		print STDERR "${file}:$.: warning: duplicate section name '$name'\n";
-		++$warnings;
+		emit_warning("${file}:$.", "duplicate section name '$name'\n");
 	    }
 	    $sections{$name} .= $contents;
 	} else {
@@ -860,48 +867,53 @@ sub output_function_rst(%) {
 	print "\n";
     }
 
-    print "**Parameters**\n\n";
+    #
+    # Put our descriptive text into a container (thus an HTML <div>) to help
+    # set the function prototypes apart.
+    #
+    print ".. container:: kernelindent\n\n";
     $lineprefix = "  ";
+    print $lineprefix . "**Parameters**\n\n";
     foreach $parameter (@{$args{'parameterlist'}}) {
 	my $parameter_name = $parameter;
 	$parameter_name =~ s/\[.*//;
 	$type = $args{'parametertypes'}{$parameter};
 
 	if ($type ne "") {
-	    print "``$type``\n";
+	    print $lineprefix . "``$type``\n";
 	} else {
-	    print "``$parameter``\n";
+	    print $lineprefix . "``$parameter``\n";
 	}
 
         print_lineno($parameterdesc_start_lines{$parameter_name});
 
+	$lineprefix = "    ";
 	if (defined($args{'parameterdescs'}{$parameter_name}) &&
 	    $args{'parameterdescs'}{$parameter_name} ne $undescribed) {
 	    output_highlight_rst($args{'parameterdescs'}{$parameter_name});
 	} else {
-	    print "  *undescribed*\n";
+	    print $lineprefix . "*undescribed*\n";
 	}
+	$lineprefix = "  ";
 	print "\n";
     }
 
-    $lineprefix = $oldprefix;
     output_section_rst(@_);
+    $lineprefix = $oldprefix;
 }
 
 sub output_section_rst(%) {
     my %args = %{$_[0]};
     my $section;
     my $oldprefix = $lineprefix;
-    $lineprefix = "";
 
     foreach $section (@{$args{'sectionlist'}}) {
-	print "**$section**\n\n";
+	print $lineprefix . "**$section**\n\n";
         print_lineno($section_start_lines{$section});
 	output_highlight_rst($args{'sections'}{$section});
 	print "\n";
     }
     print "\n";
-    $lineprefix = $oldprefix;
 }
 
 sub output_enum_rst(%) {
@@ -909,6 +921,7 @@ sub output_enum_rst(%) {
     my ($parameter);
     my $oldprefix = $lineprefix;
     my $count;
+    my $outer;
 
     if ($sphinx_major < 3) {
 	my $name = "enum " . $args{'enum'};
@@ -918,22 +931,25 @@ sub output_enum_rst(%) {
 	print "\n\n.. c:enum:: " . $name . "\n\n";
     }
     print_lineno($declaration_start_line);
-    $lineprefix = "   ";
+    $lineprefix = "  ";
     output_highlight_rst($args{'purpose'});
     print "\n";
 
-    print "**Constants**\n\n";
-    $lineprefix = "  ";
+    print ".. container:: kernelindent\n\n";
+    $outer = $lineprefix . "  ";
+    $lineprefix = $outer . "  ";
+    print $outer . "**Constants**\n\n";
     foreach $parameter (@{$args{'parameterlist'}}) {
-	print "``$parameter``\n";
+	print $outer . "``$parameter``\n";
+
 	if ($args{'parameterdescs'}{$parameter} ne $undescribed) {
 	    output_highlight_rst($args{'parameterdescs'}{$parameter});
 	} else {
-	    print "  *undescribed*\n";
+	    print $lineprefix . "*undescribed*\n";
 	}
 	print "\n";
     }
-
+    print "\n";
     $lineprefix = $oldprefix;
     output_section_rst(@_);
 }
@@ -976,18 +992,19 @@ sub output_struct_rst(%) {
 	}
     }
     print_lineno($declaration_start_line);
-    $lineprefix = "   ";
+    $lineprefix = "  ";
     output_highlight_rst($args{'purpose'});
     print "\n";
 
-    print "**Definition**\n\n";
-    print "::\n\n";
+    print ".. container:: kernelindent\n\n";
+    print $lineprefix . "**Definition**::\n\n";
     my $declaration = $args{'definition'};
-    $declaration =~ s/\t/  /g;
-    print "  " . $args{'type'} . " " . $args{'struct'} . " {\n$declaration  };\n\n";
+    $lineprefix = $lineprefix . "  ";
+    $declaration =~ s/\t/$lineprefix/g;
+    print $lineprefix . $args{'type'} . " " . $args{'struct'} . " {\n$declaration" . $lineprefix . "};\n\n";
 
-    print "**Members**\n\n";
     $lineprefix = "  ";
+    print $lineprefix . "**Members**\n\n";
     foreach $parameter (@{$args{'parameterlist'}}) {
 	($parameter =~ /^#/) && next;
 
@@ -997,8 +1014,10 @@ sub output_struct_rst(%) {
 	($args{'parameterdescs'}{$parameter_name} ne $undescribed) || next;
 	$type = $args{'parametertypes'}{$parameter};
         print_lineno($parameterdesc_start_lines{$parameter_name});
-	print "``" . $parameter . "``\n";
+	print $lineprefix . "``" . $parameter . "``\n";
+	$lineprefix = "    ";
 	output_highlight_rst($args{'parameterdescs'}{$parameter_name});
+	$lineprefix = "  ";
 	print "\n";
     }
     print "\n";
@@ -1094,7 +1113,7 @@ sub dump_struct($$) {
 
     if ($members) {
 	if ($identifier ne $declaration_name) {
-	    print STDERR "${file}:$.: warning: expecting prototype for $decl_type $identifier. Prototype was for $decl_type $declaration_name instead\n";
+	    emit_warning("${file}:$.", "expecting prototype for $decl_type $identifier. Prototype was for $decl_type $declaration_name instead\n");
 	    return;
 	}
 
@@ -1298,9 +1317,9 @@ sub dump_enum($$) {
     if ($members) {
 	if ($identifier ne $declaration_name) {
 	    if ($identifier eq "") {
-		print STDERR "${file}:$.: warning: wrong kernel-doc identifier on line:\n";
+		emit_warning("${file}:$.", "wrong kernel-doc identifier on line:\n");
 	    } else {
-		print STDERR "${file}:$.: warning: expecting prototype for enum $identifier. Prototype was for enum $declaration_name instead\n";
+		emit_warning("${file}:$.", "expecting prototype for enum $identifier. Prototype was for enum $declaration_name instead\n");
 	    }
 	    return;
 	}
@@ -1316,7 +1335,7 @@ sub dump_enum($$) {
 	    if (!$parameterdescs{$arg}) {
 		$parameterdescs{$arg} = $undescribed;
 	        if (show_warnings("enum", $declaration_name)) {
-			print STDERR "${file}:$.: warning: Enum value '$arg' not described in enum '$declaration_name'\n";
+			emit_warning("${file}:$.", "Enum value '$arg' not described in enum '$declaration_name'\n");
 		}
 	    }
 	    $_members{$arg} = 1;
@@ -1325,7 +1344,7 @@ sub dump_enum($$) {
 	while (my ($k, $v) = each %parameterdescs) {
 	    if (!exists($_members{$k})) {
 	        if (show_warnings("enum", $declaration_name)) {
-		     print STDERR "${file}:$.: warning: Excess enum value '$k' description in '$declaration_name'\n";
+		     emit_warning("${file}:$.", "Excess enum value '$k' description in '$declaration_name'\n");
 		}
 	    }
         }
@@ -1367,7 +1386,7 @@ sub dump_typedef($$) {
 	$return_type =~ s/^\s+//;
 
 	if ($identifier ne $declaration_name) {
-	    print STDERR "${file}:$.: warning: expecting prototype for typedef $identifier. Prototype was for typedef $declaration_name instead\n";
+	    emit_warning("${file}:$.", "expecting prototype for typedef $identifier. Prototype was for typedef $declaration_name instead\n");
 	    return;
 	}
 
@@ -1398,7 +1417,7 @@ sub dump_typedef($$) {
 	$declaration_name = $1;
 
 	if ($identifier ne $declaration_name) {
-	    print STDERR "${file}:$.: warning: expecting prototype for typedef $identifier. Prototype was for typedef $declaration_name instead\n";
+	    emit_warning("${file}:$.", "expecting prototype for typedef $identifier. Prototype was for typedef $declaration_name instead\n");
 	    return;
 	}
 
@@ -1442,6 +1461,8 @@ sub create_parameterlist($$$$) {
     foreach my $arg (split($splitter, $args)) {
 	# strip comments
 	$arg =~ s/\/\*.*\*\///;
+	# ignore argument attributes
+	$arg =~ s/\sPOS0?\s/ /;
 	# strip leading/trailing spaces
 	$arg =~ s/^\s*//;
 	$arg =~ s/\s*$//;
@@ -1554,9 +1575,7 @@ sub push_parameter($$$$$) {
 		$parameterdescs{$param} = $undescribed;
 
 	        if (show_warnings($type, $declaration_name) && $param !~ /\./) {
-			print STDERR
-			      "${file}:$.: warning: Function parameter or member '$param' not described in '$declaration_name'\n";
-			++$warnings;
+			emit_warning("${file}:$.", "Function parameter or member '$param' not described in '$declaration_name'\n");
 		}
 	}
 
@@ -1604,11 +1623,10 @@ sub check_sections($$$$$) {
 		}
 		if ($err) {
 			if ($decl_type eq "function") {
-				print STDERR "${file}:$.: warning: " .
+				emit_warning("${file}:$.",
 					"Excess function parameter " .
 					"'$sects[$sx]' " .
-					"description in '$decl_name'\n";
-				++$warnings;
+					"description in '$decl_name'\n");
 			}
 		}
 	}
@@ -1629,10 +1647,9 @@ sub check_return_section {
 
         if (!defined($sections{$section_return}) ||
             $sections{$section_return} eq "") {
-                print STDERR "${file}:$.: warning: " .
+                emit_warning("${file}:$.",
                         "No description found for return value of " .
-                        "'$declaration_name'\n";
-                ++$warnings;
+                        "'$declaration_name'\n");
         }
 }
 
@@ -1655,6 +1672,7 @@ sub dump_function($$) {
     $prototype =~ s/^__inline +//;
     $prototype =~ s/^__always_inline +//;
     $prototype =~ s/^noinline +//;
+    $prototype =~ s/^__FORTIFY_INLINE +//;
     $prototype =~ s/__init +//;
     $prototype =~ s/__init_or_module +//;
     $prototype =~ s/__deprecated +//;
@@ -1664,7 +1682,8 @@ sub dump_function($$) {
     $prototype =~ s/__weak +//;
     $prototype =~ s/__sched +//;
     $prototype =~ s/__printf\s*\(\s*\d*\s*,\s*\d*\s*\) +//;
-    $prototype =~ s/__alloc_size\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\) +//;
+    $prototype =~ s/__(?:re)?alloc_size\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\) +//;
+    $prototype =~ s/__diagnose_as\s*\(\s*\S+\s*(?:,\s*\d+\s*)*\) +//;
     my $define = $prototype =~ s/^#\s*define\s+//; #ak added
     $prototype =~ s/__attribute_const__ +//;
     $prototype =~ s/__attribute__\s*\(\(
@@ -1714,12 +1733,12 @@ sub dump_function($$) {
 
 	create_parameterlist($args, ',', $file, $declaration_name);
     } else {
-	print STDERR "${file}:$.: warning: cannot understand function prototype: '$prototype'\n";
+	emit_warning("${file}:$.", "cannot understand function prototype: '$prototype'\n");
 	return;
     }
 
     if ($identifier ne $declaration_name) {
-	print STDERR "${file}:$.: warning: expecting prototype for $identifier(). Prototype was for $declaration_name() instead\n";
+	emit_warning("${file}:$.", "expecting prototype for $identifier(). Prototype was for $declaration_name() instead\n");
 	return;
     }
 
@@ -1801,8 +1820,8 @@ sub tracepoint_munge($) {
 		$tracepointargs = $1;
 	}
 	if (($tracepointname eq 0) || ($tracepointargs eq 0)) {
-		print STDERR "${file}:$.: warning: Unrecognized tracepoint format: \n".
-			     "$prototype\n";
+		emit_warning("${file}:$.", "Unrecognized tracepoint format: \n".
+			     "$prototype\n");
 	} else {
 		$prototype = "static inline void trace_$tracepointname($tracepointargs)";
 		$identifier = "trace_$identifier";
@@ -1946,6 +1965,10 @@ sub process_export_file($) {
 	    next if (defined($nosymbol_table{$2}));
 	    $function_table{$2} = 1;
 	}
+	if (/$export_symbol_ns/) {
+	    next if (defined($nosymbol_table{$2}));
+	    $function_table{$2} = 1;
+	}
     }
 
     close(IN);
@@ -2027,22 +2050,16 @@ sub process_name($$) {
 	}
 
 	if (!$is_kernel_comment) {
-	    print STDERR "${file}:$.: warning: This comment starts with '/**', but isn't a kernel-doc comment. Refer Documentation/doc-guide/kernel-doc.rst\n";
-	    print STDERR $_;
-	    ++$warnings;
+	    emit_warning("${file}:$.", "This comment starts with '/**', but isn't a kernel-doc comment. Refer Documentation/doc-guide/kernel-doc.rst\n$_");
 	    $state = STATE_NORMAL;
 	}
 
 	if (($declaration_purpose eq "") && $verbose) {
-	    print STDERR "${file}:$.: warning: missing initial short description on line:\n";
-	    print STDERR $_;
-	    ++$warnings;
+	    emit_warning("${file}:$.", "missing initial short description on line:\n$_");
 	}
 
 	if ($identifier eq "" && $decl_type ne "enum") {
-	    print STDERR "${file}:$.: warning: wrong kernel-doc identifier on line:\n";
-	    print STDERR $_;
-	    ++$warnings;
+	    emit_warning("${file}:$.", "wrong kernel-doc identifier on line:\n$_");
 	    $state = STATE_NORMAL;
 	}
 
@@ -2050,9 +2067,7 @@ sub process_name($$) {
 	    print STDERR "${file}:$.: info: Scanning doc for $decl_type $identifier\n";
 	}
     } else {
-	print STDERR "${file}:$.: warning: Cannot understand $_ on line $.",
-	    " - I thought it was a doc line\n";
-	++$warnings;
+	emit_warning("${file}:$.", "Cannot understand $_ on line $. - I thought it was a doc line\n");
 	$state = STATE_NORMAL;
     }
 }
@@ -2071,8 +2086,7 @@ sub process_body($$) {
 	$section =~ s/\.\.\.$//;
 
 	if ($verbose) {
-	    print STDERR "${file}:$.: warning: Variable macro arguments should be documented without dots\n";
-	    ++$warnings;
+	    emit_warning("${file}:$.", "Variable macro arguments should be documented without dots\n");
 	}
     }
 
@@ -2101,8 +2115,7 @@ sub process_body($$) {
 
 	if (($contents ne "") && ($contents ne "\n")) {
 	    if (!$in_doc_sect && $verbose) {
-		print STDERR "${file}:$.: warning: contents before sections\n";
-		++$warnings;
+		emit_warning("${file}:$.", "contents before sections\n");
 	    }
 	    dump_section($file, $section, $contents);
 	    $section = $section_default;
@@ -2128,8 +2141,7 @@ sub process_body($$) {
 	}
 	# look for doc_com + <text> + doc_end:
 	if ($_ =~ m'\s*\*\s*[a-zA-Z_0-9:\.]+\*/') {
-	    print STDERR "${file}:$.: warning: suspicious ending line: $_";
-	    ++$warnings;
+	    emit_warning("${file}:$.", "suspicious ending line: $_");
 	}
 
 	$prototype = "";
@@ -2173,8 +2185,7 @@ sub process_body($$) {
 	}
     } else {
 	# i dont know - bad line?  ignore.
-	print STDERR "${file}:$.: warning: bad line: $_";
-	++$warnings;
+	emit_warning("${file}:$.", "bad line: $_");
     }
 }
 
@@ -2268,9 +2279,7 @@ sub process_inline($$) {
 	    }
 	} elsif ($inline_doc_state == STATE_INLINE_NAME) {
 	    $inline_doc_state = STATE_INLINE_ERROR;
-	    print STDERR "${file}:$.: warning: ";
-	    print STDERR "Incorrect use of kernel-doc format: $_";
-	    ++$warnings;
+	    emit_warning("${file}:$.", "Incorrect use of kernel-doc format: $_");
 	}
     }
 }
@@ -2319,11 +2328,11 @@ sub process_file($) {
     if ($initial_section_counter == $section_counter && $
 	output_mode ne "none") {
 	if ($output_selection == OUTPUT_INCLUDE) {
-	    print STDERR "${file}:1: warning: '$_' not found\n"
+	    emit_warning("${file}:1", "'$_' not found\n")
 		for keys %function_table;
 	}
 	else {
-	    print STDERR "${file}:1: warning: no structured comments found\n";
+	    emit_warning("${file}:1", "no structured comments found\n");
 	}
     }
     close IN_FILE;
@@ -2431,12 +2440,12 @@ found on PATH.
 =item -export
 
 Only output documentation for the symbols that have been exported using
-EXPORT_SYMBOL() or EXPORT_SYMBOL_GPL() in any input FILE or -export-file FILE.
+EXPORT_SYMBOL() and related macros in any input FILE or -export-file FILE.
 
 =item -internal
 
 Only output documentation for the symbols that have NOT been exported using
-EXPORT_SYMBOL() or EXPORT_SYMBOL_GPL() in any input FILE or -export-file FILE.
+EXPORT_SYMBOL() and related macros in any input FILE or -export-file FILE.
 
 =item -function NAME
 
@@ -2463,8 +2472,7 @@ Do not output DOC: sections.
 
 =item -export-file FILE
 
-Specify an additional FILE in which to look for EXPORT_SYMBOL() and
-EXPORT_SYMBOL_GPL().
+Specify an additional FILE in which to look for EXPORT_SYMBOL information.
 
 To be used with -export or -internal.
 

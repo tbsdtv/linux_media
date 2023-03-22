@@ -808,7 +808,7 @@ static int thunderbay_add_functions(struct thunderbay_pinctrl *tpc, struct funct
 					    funcs[i].num_group_names,
 					    funcs[i].data);
 	}
-	kfree(funcs);
+
 	return 0;
 }
 
@@ -817,6 +817,7 @@ static int thunderbay_build_functions(struct thunderbay_pinctrl *tpc)
 	struct function_desc *thunderbay_funcs;
 	void *ptr;
 	int pin;
+	int ret;
 
 	/*
 	 * Allocate maximum possible number of functions. Assume every pin
@@ -860,7 +861,10 @@ static int thunderbay_build_functions(struct thunderbay_pinctrl *tpc)
 		return -ENOMEM;
 
 	thunderbay_funcs = ptr;
-	return thunderbay_add_functions(tpc, thunderbay_funcs);
+	ret = thunderbay_add_functions(tpc, thunderbay_funcs);
+
+	kfree(thunderbay_funcs);
+	return ret;
 }
 
 static int thunderbay_pinconf_set_tristate(struct thunderbay_pinctrl *tpc,
@@ -1229,7 +1233,6 @@ static int thunderbay_pinctrl_probe(struct platform_device *pdev)
 	const struct of_device_id *of_id;
 	struct device *dev = &pdev->dev;
 	struct thunderbay_pinctrl *tpc;
-	struct resource *iomem;
 	int ret;
 
 	of_id = of_match_node(thunderbay_pinctrl_match, pdev->dev.of_node);
@@ -1243,11 +1246,7 @@ static int thunderbay_pinctrl_probe(struct platform_device *pdev)
 	tpc->dev = dev;
 	tpc->soc = of_id->data;
 
-	iomem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!iomem)
-		return -ENXIO;
-
-	tpc->base0 =  devm_ioremap_resource(dev, iomem);
+	tpc->base0 = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(tpc->base0))
 		return PTR_ERR(tpc->base0);
 

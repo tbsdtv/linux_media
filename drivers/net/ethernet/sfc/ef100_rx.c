@@ -21,7 +21,7 @@
 /* Get the value of a field in the RX prefix */
 #define PREFIX_OFFSET_W(_f)	(ESF_GZ_RX_PREFIX_ ## _f ## _LBN / 32)
 #define PREFIX_OFFSET_B(_f)	(ESF_GZ_RX_PREFIX_ ## _f ## _LBN % 32)
-#define PREFIX_WIDTH_MASK(_f)	((1UL << ESF_GZ_RX_PREFIX_ ## _f ## _WIDTH) - 1)
+#define PREFIX_WIDTH_MASK(_f)	((1ULL << ESF_GZ_RX_PREFIX_ ## _f ## _WIDTH) - 1)
 #define PREFIX_WORD(_p, _f)	le32_to_cpu((__force __le32)(_p)[PREFIX_OFFSET_W(_f)])
 #define PREFIX_FIELD(_p, _f)	((PREFIX_WORD(_p, _f) >> PREFIX_OFFSET_B(_f)) & \
 				 PREFIX_WIDTH_MASK(_f))
@@ -55,13 +55,24 @@ static bool ef100_has_fcs_error(struct efx_channel *channel, u32 *prefix)
 
 void __ef100_rx_packet(struct efx_channel *channel)
 {
-	struct efx_rx_buffer *rx_buf = efx_rx_buffer(&channel->rx_queue, channel->rx_pkt_index);
+	struct efx_rx_queue *rx_queue = efx_channel_get_rx_queue(channel);
+	struct efx_rx_buffer *rx_buf = efx_rx_buffer(rx_queue,
+						     channel->rx_pkt_index);
 	struct efx_nic *efx = channel->efx;
+	struct ef100_nic_data *nic_data;
 	u8 *eh = efx_rx_buf_va(rx_buf);
 	__wsum csum = 0;
+	u16 ing_port;
 	u32 *prefix;
 
 	prefix = (u32 *)(eh - ESE_GZ_RX_PKT_PREFIX_LEN);
+
+	if (channel->type->receive_raw) {
+		u32 mark = PREFIX_FIELD(prefix, USER_MARK);
+
+		if (channel->type->receive_raw(rx_queue, mark))
+			return; /* packet was consumed */
+	}
 
 	if (ef100_has_fcs_error(channel, prefix) &&
 	    unlikely(!(efx->net_dev->features & NETIF_F_RXALL)))
@@ -76,6 +87,37 @@ void __ef100_rx_packet(struct efx_channel *channel)
 		goto out;
 	}
 
+	ing_port = le16_to_cpu((__force __le16) PREFIX_FIELD(prefix, INGRESS_MPORT));
+
+	nic_data = efx->nic_data;
+
+	if (nic_data->have_mport && ing_port != nic_data->base_mport) {
+#ifdef CONFIG_SFC_SRIOV
+		struct efx_rep *efv;
+
+		rcu_read_lock();
+		efv = efx_ef100_find_rep_by_mport(efx, ing_port);
+		if (efv) {
+			if (efv->net_dev->flags & IFF_UP)
+				efx_ef100_rep_rx_packet(efv, rx_buf);
+			rcu_read_unlock();
+			/* Representor Rx doesn't care about PF Rx buffer
+			 * ownership, it just makes a copy. So, we are done
+			 * with the Rx buffer from PF point of view and should
+			 * free it.
+			 */
+			goto free_rx_buffer;
+		}
+		rcu_read_unlock();
+#endif
+		if (net_ratelimit())
+			netif_warn(efx, drv, efx->net_dev,
+				   "Unrecognised ing_port %04x (base %04x), dropping\n",
+				   ing_port, nic_data->base_mport);
+		channel->n_rx_mport_bad++;
+		goto free_rx_buffer;
+	}
+
 	if (likely(efx->net_dev->features & NETIF_F_RXCSUM)) {
 		if (PREFIX_FIELD(prefix, NT_OR_INNER_L3_CLASS) == 1) {
 			++channel->n_rx_ip_hdr_chksum_err;
@@ -87,17 +129,16 @@ void __ef100_rx_packet(struct efx_channel *channel)
 	}
 
 	if (channel->type->receive_skb) {
-		struct efx_rx_queue *rx_queue =
-			efx_channel_get_rx_queue(channel);
-
 		/* no support for special channels yet, so just discard */
 		WARN_ON_ONCE(1);
-		efx_free_rx_buffers(rx_queue, rx_buf, 1);
-		goto out;
+		goto free_rx_buffer;
 	}
 
 	efx_rx_packet_gro(channel, rx_buf, channel->rx_pkt_n_frags, eh, csum);
+	goto out;
 
+free_rx_buffer:
+	efx_free_rx_buffers(rx_queue, rx_buf, 1);
 out:
 	channel->rx_pkt_n_frags = 0;
 }
@@ -149,24 +190,32 @@ void efx_ef100_ev_rx(struct efx_channel *channel, const efx_qword_t *p_event)
 
 void ef100_rx_write(struct efx_rx_queue *rx_queue)
 {
+	unsigned int notified_count = rx_queue->notified_count;
 	struct efx_rx_buffer *rx_buf;
 	unsigned int idx;
 	efx_qword_t *rxd;
 	efx_dword_t rxdb;
 
-	while (rx_queue->notified_count != rx_queue->added_count) {
-		idx = rx_queue->notified_count & rx_queue->ptr_mask;
+	while (notified_count != rx_queue->added_count) {
+		idx = notified_count & rx_queue->ptr_mask;
 		rx_buf = efx_rx_buffer(rx_queue, idx);
 		rxd = efx_rx_desc(rx_queue, idx);
 
 		EFX_POPULATE_QWORD_1(*rxd, ESF_GZ_RX_BUF_ADDR, rx_buf->dma_addr);
 
-		++rx_queue->notified_count;
+		++notified_count;
 	}
+	if (notified_count == rx_queue->notified_count)
+		return;
 
 	wmb();
 	EFX_POPULATE_DWORD_1(rxdb, ERF_GZ_RX_RING_PIDX,
 			     rx_queue->added_count & rx_queue->ptr_mask);
 	efx_writed_page(rx_queue->efx, &rxdb,
 			ER_GZ_RX_RING_DOORBELL, efx_rx_queue_index(rx_queue));
+	if (rx_queue->grant_credits)
+		wmb();
+	rx_queue->notified_count = notified_count;
+	if (rx_queue->grant_credits)
+		schedule_work(&rx_queue->grant_work);
 }

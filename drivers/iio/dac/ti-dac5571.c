@@ -13,6 +13,7 @@
  * https://www.ti.com/lit/ds/symlink/dac5573.pdf
  * https://www.ti.com/lit/ds/symlink/dac6573.pdf
  * https://www.ti.com/lit/ds/symlink/dac7573.pdf
+ * https://www.ti.com/lit/ds/symlink/dac121c081.pdf
  */
 
 #include <linux/iio/iio.h>
@@ -52,7 +53,7 @@ struct dac5571_data {
 	struct dac5571_spec const *spec;
 	int (*dac5571_cmd)(struct dac5571_data *data, int channel, u16 val);
 	int (*dac5571_pwrdwn)(struct dac5571_data *data, int channel, u8 pwrdwn);
-	u8 buf[3] ____cacheline_aligned;
+	u8 buf[3] __aligned(IIO_DMA_MINALIGN);
 };
 
 #define DAC5571_POWERDOWN(mode)		((mode) + 1)
@@ -179,7 +180,7 @@ static ssize_t dac5571_write_powerdown(struct iio_dev *indio_dev,
 	bool powerdown;
 	int ret;
 
-	ret = strtobool(buf, &powerdown);
+	ret = kstrtobool(buf, &powerdown);
 	if (ret)
 		return ret;
 
@@ -305,9 +306,9 @@ static const struct iio_info dac5571_info = {
 	.write_raw_get_fmt = dac5571_write_raw_get_fmt,
 };
 
-static int dac5571_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int dac5571_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct device *dev = &client->dev;
 	const struct dac5571_spec *spec;
 	struct dac5571_data *data;
@@ -381,15 +382,13 @@ static int dac5571_probe(struct i2c_client *client,
 	return ret;
 }
 
-static int dac5571_remove(struct i2c_client *i2c)
+static void dac5571_remove(struct i2c_client *i2c)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(i2c);
 	struct dac5571_data *data = iio_priv(indio_dev);
 
 	iio_device_unregister(indio_dev);
 	regulator_disable(data->vref);
-
-	return 0;
 }
 
 static const struct of_device_id dac5571_of_id[] = {
@@ -402,6 +401,7 @@ static const struct of_device_id dac5571_of_id[] = {
 	{.compatible = "ti,dac5573", .data = (void *)quad_8bit},
 	{.compatible = "ti,dac6573", .data = (void *)quad_10bit},
 	{.compatible = "ti,dac7573", .data = (void *)quad_12bit},
+	{.compatible = "ti,dac121c081", .data = (void *)single_12bit},
 	{}
 };
 MODULE_DEVICE_TABLE(of, dac5571_of_id);
@@ -416,6 +416,7 @@ static const struct i2c_device_id dac5571_id[] = {
 	{"dac5573", quad_8bit},
 	{"dac6573", quad_10bit},
 	{"dac7573", quad_12bit},
+	{"dac121c081", single_12bit},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, dac5571_id);
@@ -425,7 +426,7 @@ static struct i2c_driver dac5571_driver = {
 		   .name = "ti-dac5571",
 		   .of_match_table = dac5571_of_id,
 	},
-	.probe	  = dac5571_probe,
+	.probe_new = dac5571_probe,
 	.remove   = dac5571_remove,
 	.id_table = dac5571_id,
 };

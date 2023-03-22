@@ -141,8 +141,7 @@ static const struct iio_chan_spec bh1780_channels[] = {
 	}
 };
 
-static int bh1780_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int bh1780_probe(struct i2c_client *client)
 {
 	int ret;
 	struct bh1780_data *bh1780;
@@ -202,7 +201,7 @@ out_disable_pm:
 	return ret;
 }
 
-static int bh1780_remove(struct i2c_client *client)
+static void bh1780_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct bh1780_data *bh1780 = iio_priv(indio_dev);
@@ -213,12 +212,9 @@ static int bh1780_remove(struct i2c_client *client)
 	pm_runtime_put_noidle(&client->dev);
 	pm_runtime_disable(&client->dev);
 	ret = bh1780_write(bh1780, BH1780_REG_CONTROL, BH1780_POFF);
-	if (ret < 0) {
-		dev_err(&client->dev, "failed to power off\n");
-		return ret;
-	}
-
-	return 0;
+	if (ret < 0)
+		dev_err(&client->dev, "failed to power off (%pe)\n",
+			ERR_PTR(ret));
 }
 
 static int bh1780_runtime_suspend(struct device *dev)
@@ -273,7 +269,7 @@ static const struct of_device_id of_bh1780_match[] = {
 MODULE_DEVICE_TABLE(of, of_bh1780_match);
 
 static struct i2c_driver bh1780_driver = {
-	.probe		= bh1780_probe,
+	.probe_new	= bh1780_probe,
 	.remove		= bh1780_remove,
 	.id_table	= bh1780_id,
 	.driver = {

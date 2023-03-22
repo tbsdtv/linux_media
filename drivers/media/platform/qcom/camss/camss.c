@@ -937,7 +937,7 @@ struct media_entity *camss_find_sensor(struct media_entity *entity)
 		if (!(pad->flags & MEDIA_PAD_FL_SINK))
 			return NULL;
 
-		pad = media_entity_remote_pad(pad);
+		pad = media_pad_remote_pad_first(pad);
 		if (!pad || !is_media_entity_v4l2_subdev(pad->entity))
 			return NULL;
 
@@ -1170,7 +1170,7 @@ static int camss_init_subdevices(struct camss *camss)
 	}
 
 	/* note: SM8250 requires VFE to be initialized before CSID */
-	for (i = 0; i < camss->vfe_num; i++) {
+	for (i = 0; i < camss->vfe_num + camss->vfe_lite_num; i++) {
 		ret = msm_vfe_subdev_init(camss, &camss->vfe[i],
 					  &vfe_res[i], i);
 		if (ret < 0) {
@@ -1242,7 +1242,7 @@ static int camss_register_entities(struct camss *camss)
 		goto err_reg_ispif;
 	}
 
-	for (i = 0; i < camss->vfe_num; i++) {
+	for (i = 0; i < camss->vfe_num + camss->vfe_lite_num; i++) {
 		ret = msm_vfe_register_entities(&camss->vfe[i],
 						&camss->v4l2_dev);
 		if (ret < 0) {
@@ -1314,7 +1314,7 @@ static int camss_register_entities(struct camss *camss)
 				}
 	} else {
 		for (i = 0; i < camss->csid_num; i++)
-			for (k = 0; k < camss->vfe_num; k++)
+			for (k = 0; k < camss->vfe_num + camss->vfe_lite_num; k++)
 				for (j = 0; j < camss->vfe[k].line_num; j++) {
 					struct v4l2_subdev *csid = &camss->csid[i].subdev;
 					struct v4l2_subdev *vfe = &camss->vfe[k].line[j].subdev;
@@ -1338,7 +1338,7 @@ static int camss_register_entities(struct camss *camss)
 	return 0;
 
 err_link:
-	i = camss->vfe_num;
+	i = camss->vfe_num + camss->vfe_lite_num;
 err_reg_vfe:
 	for (i--; i >= 0; i--)
 		msm_vfe_unregister_entities(&camss->vfe[i]);
@@ -1377,7 +1377,7 @@ static void camss_unregister_entities(struct camss *camss)
 
 	msm_ispif_unregister_entities(camss->ispif);
 
-	for (i = 0; i < camss->vfe_num; i++)
+	for (i = 0; i < camss->vfe_num + camss->vfe_lite_num; i++)
 		msm_vfe_unregister_entities(&camss->vfe[i]);
 }
 
@@ -1452,44 +1452,65 @@ static const struct media_device_ops camss_media_ops = {
 
 static int camss_configure_pd(struct camss *camss)
 {
-	int nbr_pm_domains = 0;
-	int last_pm_domain = 0;
+	struct device *dev = camss->dev;
 	int i;
 	int ret;
 
-	if (camss->version == CAMSS_8x96 ||
-	    camss->version == CAMSS_660)
-		nbr_pm_domains = PM_DOMAIN_GEN1_COUNT;
-	else if (camss->version == CAMSS_845 ||
-		 camss->version == CAMSS_8250)
-		nbr_pm_domains = PM_DOMAIN_GEN2_COUNT;
+	camss->genpd_num = of_count_phandle_with_args(dev->of_node,
+						      "power-domains",
+						      "#power-domain-cells");
+	if (camss->genpd_num < 0) {
+		dev_err(dev, "Power domains are not defined for camss\n");
+		return camss->genpd_num;
+	}
 
-	for (i = 0; i < nbr_pm_domains; i++) {
+	/*
+	 * If a platform device has just one power domain, then it is attached
+	 * at platform_probe() level, thus there shall be no need and even no
+	 * option to attach it again, this is the case for CAMSS on MSM8916.
+	 */
+	if (camss->genpd_num == 1)
+		return 0;
+
+	camss->genpd = devm_kmalloc_array(dev, camss->genpd_num,
+					  sizeof(*camss->genpd), GFP_KERNEL);
+	if (!camss->genpd)
+		return -ENOMEM;
+
+	camss->genpd_link = devm_kmalloc_array(dev, camss->genpd_num,
+					       sizeof(*camss->genpd_link),
+					       GFP_KERNEL);
+	if (!camss->genpd_link)
+		return -ENOMEM;
+
+	/*
+	 * VFE power domains are in the beginning of the list, and while all
+	 * power domains should be attached, only if TITAN_TOP power domain is
+	 * found in the list, it should be linked over here.
+	 */
+	for (i = 0; i < camss->genpd_num; i++) {
 		camss->genpd[i] = dev_pm_domain_attach_by_id(camss->dev, i);
 		if (IS_ERR(camss->genpd[i])) {
 			ret = PTR_ERR(camss->genpd[i]);
 			goto fail_pm;
 		}
+	}
 
-		camss->genpd_link[i] = device_link_add(camss->dev, camss->genpd[i],
-						       DL_FLAG_STATELESS | DL_FLAG_PM_RUNTIME |
-						       DL_FLAG_RPM_ACTIVE);
-		if (!camss->genpd_link[i]) {
-			dev_pm_domain_detach(camss->genpd[i], true);
+	if (i > camss->vfe_num) {
+		camss->genpd_link[i - 1] = device_link_add(camss->dev, camss->genpd[i - 1],
+							   DL_FLAG_STATELESS | DL_FLAG_PM_RUNTIME |
+							   DL_FLAG_RPM_ACTIVE);
+		if (!camss->genpd_link[i - 1]) {
 			ret = -EINVAL;
 			goto fail_pm;
 		}
-
-		last_pm_domain = i;
 	}
 
 	return 0;
 
 fail_pm:
-	for (i = 0; i < last_pm_domain; i++) {
-		device_link_del(camss->genpd_link[i]);
+	for (--i ; i >= 0; i--)
 		dev_pm_domain_detach(camss->genpd[i], true);
-	}
 
 	return ret;
 }
@@ -1529,7 +1550,7 @@ static int camss_probe(struct platform_device *pdev)
 	struct camss *camss;
 	int num_subdevs, ret;
 
-	camss = kzalloc(sizeof(*camss), GFP_KERNEL);
+	camss = devm_kzalloc(dev, sizeof(*camss), GFP_KERNEL);
 	if (!camss)
 		return -ENOMEM;
 
@@ -1559,47 +1580,40 @@ static int camss_probe(struct platform_device *pdev)
 		camss->version = CAMSS_845;
 		camss->csiphy_num = 4;
 		camss->csid_num = 3;
-		camss->vfe_num = 3;
+		camss->vfe_num = 2;
+		camss->vfe_lite_num = 1;
 	} else if (of_device_is_compatible(dev->of_node,
 					   "qcom,sm8250-camss")) {
 		camss->version = CAMSS_8250;
 		camss->csiphy_num = 6;
 		camss->csid_num = 4;
-		camss->vfe_num = 4;
+		camss->vfe_num = 2;
+		camss->vfe_lite_num = 2;
 	} else {
-		ret = -EINVAL;
-		goto err_free;
+		return -EINVAL;
 	}
 
 	camss->csiphy = devm_kcalloc(dev, camss->csiphy_num,
 				     sizeof(*camss->csiphy), GFP_KERNEL);
-	if (!camss->csiphy) {
-		ret = -ENOMEM;
-		goto err_free;
-	}
+	if (!camss->csiphy)
+		return -ENOMEM;
 
 	camss->csid = devm_kcalloc(dev, camss->csid_num, sizeof(*camss->csid),
 				   GFP_KERNEL);
-	if (!camss->csid) {
-		ret = -ENOMEM;
-		goto err_free;
-	}
+	if (!camss->csid)
+		return -ENOMEM;
 
 	if (camss->version == CAMSS_8x16 ||
 	    camss->version == CAMSS_8x96) {
 		camss->ispif = devm_kcalloc(dev, 1, sizeof(*camss->ispif), GFP_KERNEL);
-		if (!camss->ispif) {
-			ret = -ENOMEM;
-			goto err_free;
-		}
+		if (!camss->ispif)
+			return -ENOMEM;
 	}
 
-	camss->vfe = devm_kcalloc(dev, camss->vfe_num, sizeof(*camss->vfe),
-				  GFP_KERNEL);
-	if (!camss->vfe) {
-		ret = -ENOMEM;
-		goto err_free;
-	}
+	camss->vfe = devm_kcalloc(dev, camss->vfe_num + camss->vfe_lite_num,
+				  sizeof(*camss->vfe), GFP_KERNEL);
+	if (!camss->vfe)
+		return -ENOMEM;
 
 	v4l2_async_nf_init(&camss->notifier);
 
@@ -1681,15 +1695,12 @@ err_register_entities:
 	v4l2_device_unregister(&camss->v4l2_dev);
 err_cleanup:
 	v4l2_async_nf_cleanup(&camss->notifier);
-err_free:
-	kfree(camss);
 
 	return ret;
 }
 
 void camss_delete(struct camss *camss)
 {
-	int nbr_pm_domains = 0;
 	int i;
 
 	v4l2_device_unregister(&camss->v4l2_dev);
@@ -1698,19 +1709,14 @@ void camss_delete(struct camss *camss)
 
 	pm_runtime_disable(camss->dev);
 
-	if (camss->version == CAMSS_8x96 ||
-	    camss->version == CAMSS_660)
-		nbr_pm_domains = PM_DOMAIN_GEN1_COUNT;
-	else if (camss->version == CAMSS_845 ||
-		 camss->version == CAMSS_8250)
-		nbr_pm_domains = PM_DOMAIN_GEN2_COUNT;
+	if (camss->genpd_num == 1)
+		return;
 
-	for (i = 0; i < nbr_pm_domains; i++) {
-		device_link_del(camss->genpd_link[i]);
+	if (camss->genpd_num > camss->vfe_num)
+		device_link_del(camss->genpd_link[camss->genpd_num - 1]);
+
+	for (i = 0; i < camss->genpd_num; i++)
 		dev_pm_domain_detach(camss->genpd[i], true);
-	}
-
-	kfree(camss);
 }
 
 /*

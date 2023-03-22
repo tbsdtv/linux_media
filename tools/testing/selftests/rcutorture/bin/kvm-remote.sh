@@ -34,19 +34,18 @@ fi
 shift
 
 # Pathnames:
-# T:	  /tmp/kvm-remote.sh.$$
-# resdir: /tmp/kvm-remote.sh.$$/res
-# rundir: /tmp/kvm-remote.sh.$$/res/$ds ("-remote" suffix)
+# T:	  /tmp/kvm-remote.sh.NNNNNN where "NNNNNN" is set by mktemp
+# resdir: /tmp/kvm-remote.sh.NNNNNN/res
+# rundir: /tmp/kvm-remote.sh.NNNNNN/res/$ds ("-remote" suffix)
 # oldrun: `pwd`/tools/testing/.../res/$otherds
 #
 # Pathname segments:
-# TD:	  kvm-remote.sh.$$
+# TD:	  kvm-remote.sh.NNNNNN
 # ds:	  yyyy.mm.dd-hh.mm.ss-remote
 
-TD=kvm-remote.sh.$$
-T=${TMPDIR-/tmp}/$TD
+T="`mktemp -d ${TMPDIR-/tmp}/kvm-remote.sh.XXXXXX`"
 trap 'rm -rf $T' 0
-mkdir $T
+TD="`basename "$T"`"
 
 resdir="$T/res"
 ds=`date +%Y.%m.%d-%H.%M.%S`-remote
@@ -138,14 +137,14 @@ chmod +x $T/bin/kvm-remote-*.sh
 # Check first to avoid the need for cleanup for system-name typos
 for i in $systems
 do
-	ncpus="`ssh $i getconf _NPROCESSORS_ONLN 2> /dev/null`"
-	echo $i: $ncpus CPUs " " `date` | tee -a "$oldrun/remote-log"
+	ncpus="`ssh -o BatchMode=yes $i getconf _NPROCESSORS_ONLN 2> /dev/null`"
 	ret=$?
 	if test "$ret" -ne 0
 	then
 		echo System $i unreachable, giving up. | tee -a "$oldrun/remote-log"
 		exit 4
 	fi
+	echo $i: $ncpus CPUs " " `date` | tee -a "$oldrun/remote-log"
 done
 
 # Download and expand the tarball on all systems.
@@ -153,14 +152,14 @@ echo Build-products tarball: `du -h $T/binres.tgz` | tee -a "$oldrun/remote-log"
 for i in $systems
 do
 	echo Downloading tarball to $i `date` | tee -a "$oldrun/remote-log"
-	cat $T/binres.tgz | ssh $i "cd /tmp; tar -xzf -"
+	cat $T/binres.tgz | ssh -o BatchMode=yes $i "cd /tmp; tar -xzf -"
 	ret=$?
 	tries=0
 	while test "$ret" -ne 0
 	do
 		echo Unable to download $T/binres.tgz to system $i, waiting and then retrying.  $tries prior retries. | tee -a "$oldrun/remote-log"
 		sleep 60
-		cat $T/binres.tgz | ssh $i "cd /tmp; tar -xzf -"
+		cat $T/binres.tgz | ssh -o BatchMode=yes $i "cd /tmp; tar -xzf -"
 		ret=$?
 		if test "$ret" -ne 0
 		then
@@ -185,7 +184,7 @@ checkremotefile () {
 
 	while :
 	do
-		ssh $1 "test -f \"$2\""
+		ssh -o BatchMode=yes $1 "test -f \"$2\""
 		ret=$?
 		if test "$ret" -eq 255
 		then
@@ -228,7 +227,7 @@ startbatches () {
 		then
 			continue # System still running last test, skip.
 		fi
-		ssh "$i" "cd \"$resdir/$ds\"; touch remote.run; PATH=\"$T/bin:$PATH\" nohup kvm-remote-$curbatch.sh > kvm-remote-$curbatch.sh.out 2>&1 &" 1>&2
+		ssh -o BatchMode=yes "$i" "cd \"$resdir/$ds\"; touch remote.run; PATH=\"$T/bin:$PATH\" nohup kvm-remote-$curbatch.sh > kvm-remote-$curbatch.sh.out 2>&1 &" 1>&2
 		ret=$?
 		if test "$ret" -ne 0
 		then
@@ -262,12 +261,13 @@ echo All batches started. `date` | tee -a "$oldrun/remote-log"
 # Wait for all remaining scenarios to complete and collect results.
 for i in $systems
 do
+	echo " ---" Waiting for $i `date` | tee -a "$oldrun/remote-log"
 	while checkremotefile "$i" "$resdir/$ds/remote.run"
 	do
 		sleep 30
 	done
 	echo " ---" Collecting results from $i `date` | tee -a "$oldrun/remote-log"
-	( cd "$oldrun"; ssh $i "cd $rundir; tar -czf - kvm-remote-*.sh.out */console.log */kvm-test-1-run*.sh.out */qemu[_-]pid */qemu-retval */qemu-affinity; rm -rf $T > /dev/null 2>&1" | tar -xzf - )
+	( cd "$oldrun"; ssh -o BatchMode=yes $i "cd $rundir; tar -czf - kvm-remote-*.sh.out */console.log */kvm-test-1-run*.sh.out */qemu[_-]pid */qemu-retval */qemu-affinity; rm -rf $T > /dev/null 2>&1" | tar -xzf - )
 done
 
 ( kvm-end-run-stats.sh "$oldrun" "$starttime"; echo $? > $T/exitcode ) | tee -a "$oldrun/remote-log"

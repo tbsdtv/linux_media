@@ -19,9 +19,6 @@ extern unsigned long parisc_pat_pdc_cap; /* PDC capabilities (PAT) */
 #define PDC_TYPE_SYSTEM_MAP	 1 /* 32-bit, but supports PDC_SYSTEM_MAP */
 #define PDC_TYPE_SNAKE		 2 /* Doesn't support SYSTEM_MAP */
 
-void pdc_console_init(void);	/* in pdc_console.c */
-void pdc_console_restart(void);
-
 void setup_pdc(void);		/* in inventory.c */
 
 /* wrapper-functions from pdc.c */
@@ -40,7 +37,7 @@ int pdc_system_map_find_mods(struct pdc_system_map_mod_info *pdc_mod_info,
 int pdc_system_map_find_addrs(struct pdc_system_map_addr_info *pdc_addr_info,
 			      long mod_index, long addr_index);
 int pdc_model_info(struct pdc_model *model);
-int pdc_model_sysmodel(char *name);
+int pdc_model_sysmodel(unsigned int os_id, char *name);
 int pdc_model_cpuid(unsigned long *cpu_id);
 int pdc_model_versions(unsigned long *versions, int id);
 int pdc_model_capabilities(unsigned long *capabilities);

@@ -451,7 +451,8 @@ static int dma_chan_get(struct dma_chan *chan)
 	/* The channel is already in use, update client count */
 	if (chan->client_count) {
 		__module_get(owner);
-		goto out;
+		chan->client_count++;
+		return 0;
 	}
 
 	if (!try_module_get(owner))
@@ -470,11 +471,11 @@ static int dma_chan_get(struct dma_chan *chan)
 			goto err_out;
 	}
 
+	chan->client_count++;
+
 	if (!dma_has_cap(DMA_PRIVATE, chan->device->cap_mask))
 		balance_ref_count(chan);
 
-out:
-	chan->client_count++;
 	return 0;
 
 err_out:
@@ -1053,9 +1054,7 @@ static int __dma_async_device_channel_register(struct dma_device *device,
 	 * When the chan_id is a negative value, we are dynamically adding
 	 * the channel. Otherwise we are static enumerating.
 	 */
-	mutex_lock(&device->chan_mutex);
 	chan->chan_id = ida_alloc(&device->chan_ida, GFP_KERNEL);
-	mutex_unlock(&device->chan_mutex);
 	if (chan->chan_id < 0) {
 		pr_err("%s: unable to alloc ida for chan: %d\n",
 		       __func__, chan->chan_id);
@@ -1078,9 +1077,7 @@ static int __dma_async_device_channel_register(struct dma_device *device,
 	return 0;
 
  err_out_ida:
-	mutex_lock(&device->chan_mutex);
 	ida_free(&device->chan_ida, chan->chan_id);
-	mutex_unlock(&device->chan_mutex);
  err_free_dev:
 	kfree(chan->dev);
  err_free_local:
@@ -1113,9 +1110,7 @@ static void __dma_async_device_channel_unregister(struct dma_device *device,
 	device->chancnt--;
 	chan->dev->chan = NULL;
 	mutex_unlock(&dma_list_mutex);
-	mutex_lock(&device->chan_mutex);
 	ida_free(&device->chan_ida, chan->chan_id);
-	mutex_unlock(&device->chan_mutex);
 	device_unregister(&chan->dev->device);
 	free_percpu(chan->local);
 }
@@ -1156,13 +1151,6 @@ int dma_async_device_register(struct dma_device *device)
 		dev_err(device->dev,
 			"Device claims capability %s, but op is not defined\n",
 			"DMA_MEMCPY");
-		return -EIO;
-	}
-
-	if (dma_has_cap(DMA_MEMCPY_SG, device->cap_mask) && !device->device_prep_dma_memcpy_sg) {
-		dev_err(device->dev,
-			"Device claims capability %s, but op is not defined\n",
-			"DMA_MEMCPY_SG");
 		return -EIO;
 	}
 
@@ -1250,7 +1238,6 @@ int dma_async_device_register(struct dma_device *device)
 	if (rc != 0)
 		return rc;
 
-	mutex_init(&device->chan_mutex);
 	ida_init(&device->chan_ida);
 
 	/* represent channels in sysfs. Probably want devs too */

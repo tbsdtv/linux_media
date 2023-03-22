@@ -34,7 +34,7 @@ struct elevator_mq_ops {
 	int (*request_merge)(struct request_queue *q, struct request **, struct bio *);
 	void (*request_merged)(struct request_queue *, struct request *, enum elv_merge);
 	void (*requests_merged)(struct request_queue *, struct request *, struct request *);
-	void (*limit_depth)(unsigned int, struct blk_mq_alloc_data *);
+	void (*limit_depth)(blk_opf_t, struct blk_mq_alloc_data *);
 	void (*prepare_request)(struct request *);
 	void (*finish_request)(struct request *);
 	void (*insert_requests)(struct blk_mq_hw_ctx *, struct list_head *, bool);
@@ -84,6 +84,21 @@ struct elevator_type
 	struct list_head list;
 };
 
+static inline bool elevator_tryget(struct elevator_type *e)
+{
+	return try_module_get(e->elevator_owner);
+}
+
+static inline void __elevator_get(struct elevator_type *e)
+{
+	__module_get(e->elevator_owner);
+}
+
+static inline void elevator_put(struct elevator_type *e)
+{
+	module_put(e->elevator_owner);
+}
+
 #define ELV_HASH_BITS 6
 
 void elv_rqhash_del(struct request_queue *q, struct request *rq);
@@ -100,9 +115,12 @@ struct elevator_queue
 	void *elevator_data;
 	struct kobject kobj;
 	struct mutex sysfs_lock;
-	unsigned int registered:1;
+	unsigned long flags;
 	DECLARE_HASHTABLE(hash, ELV_HASH_BITS);
 };
+
+#define ELEVATOR_FLAG_REGISTERED	0
+#define ELEVATOR_FLAG_DISABLE_WBT	1
 
 /*
  * block elevator interface

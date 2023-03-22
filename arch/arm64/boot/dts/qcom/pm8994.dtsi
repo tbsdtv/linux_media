@@ -108,7 +108,7 @@
 			};
 		};
 
-		pm8994_gpios: gpios@c000 {
+		pm8994_gpios: gpio@c000 {
 			compatible = "qcom,pm8994-gpio", "qcom,spmi-gpio";
 			reg = <0xc000>;
 			gpio-controller;
@@ -134,6 +134,16 @@
 		reg = <0x1 SPMI_USID>;
 		#address-cells = <1>;
 		#size-cells = <0>;
+
+		pm8994_lpg: pwm {
+			compatible = "qcom,pm8994-lpg";
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+			#pwm-cells = <2>;
+
+			status = "disabled";
+		};
 
 		pm8994_spmi_regulators: regulators {
 			compatible = "qcom,pm8994-regulators";

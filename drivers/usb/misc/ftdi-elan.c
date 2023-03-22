@@ -1449,8 +1449,7 @@ wait:if (ftdi->disconnected > 0) {
 			command->length = 0x8007;
 			command->address = (toggle_bits << 6) | (ep_number << 2)
 				| (address << 0);
-			command->width = usb_maxpacket(urb->dev, urb->pipe,
-						       usb_pipeout(urb->pipe));
+			command->width = usb_maxpacket(urb->dev, urb->pipe);
 			command->follows = 8;
 			command->value = 0;
 			command->buffer = urb->setup_packet;
@@ -1514,8 +1513,7 @@ wait:if (ftdi->disconnected > 0) {
 							    1);
 			command->address = (toggle_bits << 6) | (ep_number << 2)
 				| (address << 0);
-			command->width = usb_maxpacket(urb->dev, urb->pipe,
-						       usb_pipeout(urb->pipe));
+			command->width = usb_maxpacket(urb->dev, urb->pipe);
 			command->follows = 0;
 			command->value = 0;
 			command->buffer = NULL;
@@ -1571,8 +1569,7 @@ wait:if (ftdi->disconnected > 0) {
 			command->length = 0x0000;
 			command->address = (toggle_bits << 6) | (ep_number << 2)
 				| (address << 0);
-			command->width = usb_maxpacket(urb->dev, urb->pipe,
-						       usb_pipeout(urb->pipe));
+			command->width = usb_maxpacket(urb->dev, urb->pipe);
 			command->follows = 0;
 			command->value = 0;
 			command->buffer = NULL;
@@ -1627,15 +1624,13 @@ wait:if (ftdi->disconnected > 0) {
 			char data[30 *3 + 4];
 			char *d = data;
 			int m = (sizeof(data) - 1) / 3 - 1;
-			int l = 0;
 			struct u132_target *target = &ftdi->target[ed];
 			struct u132_command *command = &ftdi->command[
 				COMMAND_MASK & ftdi->command_next];
 			command->header = 0x81 | (ed << 5);
 			command->address = (toggle_bits << 6) | (ep_number << 2)
 				| (address << 0);
-			command->width = usb_maxpacket(urb->dev, urb->pipe,
-						       usb_pipeout(urb->pipe));
+			command->width = usb_maxpacket(urb->dev, urb->pipe);
 			command->follows = min_t(u32, 1024,
 						 urb->transfer_buffer_length -
 						 urb->actual_length);
@@ -1651,7 +1646,6 @@ wait:if (ftdi->disconnected > 0) {
 				} else if (i++ < m) {
 					int w = sprintf(d, " %02X", *b++);
 					d += w;
-					l += w;
 				} else
 					d += sprintf(d, " ..");
 			}
@@ -1715,8 +1709,7 @@ wait:if (ftdi->disconnected > 0) {
 							    1);
 			command->address = (toggle_bits << 6) | (ep_number << 2)
 				| (address << 0);
-			command->width = usb_maxpacket(urb->dev, urb->pipe,
-						       usb_pipeout(urb->pipe));
+			command->width = usb_maxpacket(urb->dev, urb->pipe);
 			command->follows = 0;
 			command->value = 0;
 			command->buffer = NULL;
@@ -1961,7 +1954,6 @@ static int ftdi_elan_synchronize(struct usb_ftdi *ftdi)
 	int long_stop = 10;
 	int retry_on_timeout = 5;
 	int retry_on_empty = 10;
-	int err_count = 0;
 	retval = ftdi_elan_flush_input_fifo(ftdi);
 	if (retval)
 		return retval;
@@ -2056,7 +2048,6 @@ static int ftdi_elan_synchronize(struct usb_ftdi *ftdi)
 					continue;
 				}
 			} else {
-				err_count += 1;
 				dev_err(&ftdi->udev->dev, "error = %d\n",
 					retval);
 				if (read_stop-- > 0) {

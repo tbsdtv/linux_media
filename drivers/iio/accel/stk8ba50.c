@@ -379,8 +379,7 @@ static const struct iio_buffer_setup_ops stk8ba50_buffer_setup_ops = {
 	.postdisable = stk8ba50_buffer_postdisable,
 };
 
-static int stk8ba50_probe(struct i2c_client *client,
-			  const struct i2c_device_id *id)
+static int stk8ba50_probe(struct i2c_client *client)
 {
 	int ret;
 	struct iio_dev *indio_dev;
@@ -490,7 +489,7 @@ err_power_off:
 	return ret;
 }
 
-static int stk8ba50_remove(struct i2c_client *client)
+static void stk8ba50_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct stk8ba50_data *data = iio_priv(indio_dev);
@@ -501,7 +500,7 @@ static int stk8ba50_remove(struct i2c_client *client)
 	if (data->dready_trig)
 		iio_trigger_unregister(data->dready_trig);
 
-	return stk8ba50_set_power(data, STK8BA50_MODE_SUSPEND);
+	stk8ba50_set_power(data, STK8BA50_MODE_SUSPEND);
 }
 
 static int stk8ba50_suspend(struct device *dev)
@@ -544,7 +543,7 @@ static struct i2c_driver stk8ba50_driver = {
 		.pm = pm_sleep_ptr(&stk8ba50_pm_ops),
 		.acpi_match_table = ACPI_PTR(stk8ba50_acpi_id),
 	},
-	.probe =            stk8ba50_probe,
+	.probe_new =        stk8ba50_probe,
 	.remove =           stk8ba50_remove,
 	.id_table =         stk8ba50_i2c_id,
 };

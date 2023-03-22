@@ -2,7 +2,7 @@
 #include <errno.h>
 #include <string.h>
 #include "perf_regs.h"
-#include "event.h"
+#include "util/sample.h"
 
 int __weak arch_sdt_arg_parse_op(char *old_op __maybe_unused,
 				 char **new_op __maybe_unused)
@@ -103,6 +103,8 @@ static const char *__perf_reg_name_arm64(int id)
 		return "lr";
 	case PERF_REG_ARM64_PC:
 		return "pc";
+	case PERF_REG_ARM64_VG:
+		return "vg";
 	default:
 		return NULL;
 	}

@@ -11,8 +11,6 @@
 #include "../include/usb_osintf.h"
 #include "../include/usb_ops.h"
 
-extern void indicate_wx_scan_complete_event(struct adapter *padapter);
-
 u8 rtw_do_join(struct adapter *padapter)
 {
 	struct list_head *plist, *phead;
@@ -43,8 +41,8 @@ u8 rtw_do_join(struct adapter *padapter)
 		if (!pmlmepriv->LinkDetectInfo.bBusyTraffic ||
 		    pmlmepriv->to_roaming > 0) {
 			/*  submit site_survey_cmd */
-			ret = rtw_sitesurvey_cmd(padapter, &pmlmepriv->assoc_ssid, 1, NULL, 0);
-			if (_SUCCESS != ret)
+			ret = rtw_sitesurvey_cmd(padapter, &pmlmepriv->assoc_ssid, 1);
+			if (ret != _SUCCESS)
 				pmlmepriv->to_join = false;
 		} else {
 			pmlmepriv->to_join = false;
@@ -71,7 +69,6 @@ u8 rtw_do_join(struct adapter *padapter)
 
 				pibss = padapter->registrypriv.dev_network.MacAddress;
 
-				memset(&pdev_network->Ssid, 0, sizeof(struct ndis_802_11_ssid));
 				memcpy(&pdev_network->Ssid, &pmlmepriv->assoc_ssid, sizeof(struct ndis_802_11_ssid));
 
 				rtw_update_registrypriv_dev_network(padapter);
@@ -90,8 +87,8 @@ u8 rtw_do_join(struct adapter *padapter)
 				/* we try to issue sitesurvey firstly */
 				if (!pmlmepriv->LinkDetectInfo.bBusyTraffic ||
 				    pmlmepriv->to_roaming > 0) {
-					ret = rtw_sitesurvey_cmd(padapter, &pmlmepriv->assoc_ssid, 1, NULL, 0);
-					if (_SUCCESS != ret)
+					ret = rtw_sitesurvey_cmd(padapter, &pmlmepriv->assoc_ssid, 1);
+					if (ret != _SUCCESS)
 						pmlmepriv->to_join = false;
 				} else {
 					ret = _FAIL;
@@ -290,7 +287,7 @@ u8 rtw_set_802_11_infrastructure_mode(struct adapter *padapter,
 
 		if ((*pold_state == Ndis802_11Infrastructure) || (*pold_state == Ndis802_11IBSS)) {
 			if (check_fwstate(pmlmepriv, _FW_LINKED))
-				rtw_indicate_disconnect(padapter); /* will clr Linked_state; before this function, we must have chked whether  issue dis-assoc_cmd or not */
+				rtw_indicate_disconnect(padapter); /* will clr Linked_state; before this function, we must have checked whether issue dis-assoc_cmd or not */
 	       }
 
 		*pold_state = networktype;
@@ -317,7 +314,7 @@ u8 rtw_set_802_11_infrastructure_mode(struct adapter *padapter,
 	return true;
 }
 
-u8 rtw_set_802_11_disassociate(struct adapter *padapter)
+void rtw_set_802_11_disassociate(struct adapter *padapter)
 {
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 
@@ -331,8 +328,6 @@ u8 rtw_set_802_11_disassociate(struct adapter *padapter)
 	}
 
 	spin_unlock_bh(&pmlmepriv->lock);
-
-	return true;
 }
 
 u8 rtw_set_802_11_bssid_list_scan(struct adapter *padapter, struct ndis_802_11_ssid *pssid, int ssid_max_num)
@@ -354,14 +349,9 @@ u8 rtw_set_802_11_bssid_list_scan(struct adapter *padapter, struct ndis_802_11_s
 		/*  Scan or linking is in progress, do nothing. */
 		res = true;
 	} else {
-		if (rtw_is_scan_deny(padapter)) {
-			indicate_wx_scan_complete_event(padapter);
-			return _SUCCESS;
-		}
-
 		spin_lock_bh(&pmlmepriv->lock);
 
-		res = rtw_sitesurvey_cmd(padapter, pssid, ssid_max_num, NULL, 0);
+		res = rtw_sitesurvey_cmd(padapter, pssid, ssid_max_num);
 
 		spin_unlock_bh(&pmlmepriv->lock);
 	}

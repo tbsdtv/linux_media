@@ -168,6 +168,8 @@ static int skl_int3472_map_gpio_to_clk(struct int3472_discrete_device *int3472,
 			return (PTR_ERR(gpio));
 
 		int3472->clock.ena_gpio = gpio;
+		/* Ensure the pin is in output mode and non-active state */
+		gpiod_direction_output(int3472->clock.ena_gpio, 0);
 		break;
 	case INT3472_GPIO_TYPE_PRIVACY_LED:
 		gpio = acpi_get_and_request_gpiod(path, pin, "int3472,privacy-led");
@@ -175,6 +177,8 @@ static int skl_int3472_map_gpio_to_clk(struct int3472_discrete_device *int3472,
 			return (PTR_ERR(gpio));
 
 		int3472->clock.led_gpio = gpio;
+		/* Ensure the pin is in output mode and non-active state */
+		gpiod_direction_output(int3472->clock.led_gpio, 0);
 		break;
 	default:
 		dev_err(int3472->dev, "Invalid GPIO type 0x%02x for clock\n", type);
@@ -331,7 +335,22 @@ static int skl_int3472_parse_crs(struct int3472_discrete_device *int3472)
 	return 0;
 }
 
-static int skl_int3472_discrete_remove(struct platform_device *pdev);
+static int skl_int3472_discrete_remove(struct platform_device *pdev)
+{
+	struct int3472_discrete_device *int3472 = platform_get_drvdata(pdev);
+
+	gpiod_remove_lookup_table(&int3472->gpios);
+
+	if (int3472->clock.cl)
+		skl_int3472_unregister_clock(int3472);
+
+	gpiod_put(int3472->clock.ena_gpio);
+	gpiod_put(int3472->clock.led_gpio);
+
+	skl_int3472_unregister_regulator(int3472);
+
+	return 0;
+}
 
 static int skl_int3472_discrete_probe(struct platform_device *pdev)
 {
@@ -380,23 +399,6 @@ static int skl_int3472_discrete_probe(struct platform_device *pdev)
 	}
 
 	acpi_dev_clear_dependencies(adev);
-	return 0;
-}
-
-static int skl_int3472_discrete_remove(struct platform_device *pdev)
-{
-	struct int3472_discrete_device *int3472 = platform_get_drvdata(pdev);
-
-	gpiod_remove_lookup_table(&int3472->gpios);
-
-	if (int3472->clock.cl)
-		skl_int3472_unregister_clock(int3472);
-
-	gpiod_put(int3472->clock.ena_gpio);
-	gpiod_put(int3472->clock.led_gpio);
-
-	skl_int3472_unregister_regulator(int3472);
-
 	return 0;
 }
 

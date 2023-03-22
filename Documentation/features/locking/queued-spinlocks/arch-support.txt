@@ -10,10 +10,10 @@
     |         arc: | TODO |
     |         arm: | TODO |
     |       arm64: |  ok  |
-    |        csky: | TODO |
-    |       h8300: | TODO |
+    |        csky: |  ok  |
     |     hexagon: | TODO |
     |        ia64: | TODO |
+    |   loongarch: |  ok  |
     |        m68k: | TODO |
     |  microblaze: | TODO |
     |        mips: |  ok  |

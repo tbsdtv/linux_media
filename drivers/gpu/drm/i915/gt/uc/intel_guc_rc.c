@@ -3,15 +3,28 @@
  * Copyright © 2021 Intel Corporation
  */
 
+#include <linux/string_helpers.h>
+
 #include "intel_guc_rc.h"
 #include "gt/intel_gt.h"
 #include "i915_drv.h"
 
 static bool __guc_rc_supported(struct intel_guc *guc)
 {
+	struct intel_gt *gt = guc_to_gt(guc);
+
+	/*
+	 * Wa_14017073508: mtl
+	 * Do not enable gucrc to avoid additional interrupts which
+	 * may disrupt pcode wa.
+	 */
+	if (IS_MTL_GRAPHICS_STEP(gt->i915, P, STEP_A0, STEP_B0) &&
+	    gt->type == GT_MEDIA)
+		return false;
+
 	/* GuC RC is unavailable for pre-Gen12 */
 	return guc->submission_supported &&
-		GRAPHICS_VER(guc_to_gt(guc)->i915) >= 12;
+		GRAPHICS_VER(gt->i915) >= 12;
 }
 
 static bool __guc_rc_selected(struct intel_guc *guc)
@@ -47,7 +60,6 @@ static int guc_action_control_gucrc(struct intel_guc *guc, bool enable)
 static int __guc_rc_control(struct intel_guc *guc, bool enable)
 {
 	struct intel_gt *gt = guc_to_gt(guc);
-	struct drm_device *drm = &guc_to_gt(guc)->i915->drm;
 	int ret;
 
 	if (!intel_uc_uses_guc_rc(&gt->uc))
@@ -58,13 +70,13 @@ static int __guc_rc_control(struct intel_guc *guc, bool enable)
 
 	ret = guc_action_control_gucrc(guc, enable);
 	if (ret) {
-		drm_err(drm, "Failed to %s GuC RC (%pe)\n",
-			enabledisable(enable), ERR_PTR(ret));
+		i915_probe_error(guc_to_gt(guc)->i915, "Failed to %s GuC RC (%pe)\n",
+				 str_enable_disable(enable), ERR_PTR(ret));
 		return ret;
 	}
 
 	drm_info(&gt->i915->drm, "GuC RC: %s\n",
-		 enableddisabled(enable));
+		 str_enabled_disabled(enable));
 
 	return 0;
 }

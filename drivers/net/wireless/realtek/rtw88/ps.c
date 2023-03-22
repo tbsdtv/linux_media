@@ -19,14 +19,14 @@ static int rtw_ips_pwr_up(struct rtw_dev *rtwdev)
 		rtw_err(rtwdev, "leave idle state failed\n");
 
 	rtw_set_channel(rtwdev);
-	clear_bit(RTW_FLAG_INACTIVE_PS, rtwdev->flags);
 
 	return ret;
 }
 
 int rtw_enter_ips(struct rtw_dev *rtwdev)
 {
-	set_bit(RTW_FLAG_INACTIVE_PS, rtwdev->flags);
+	if (test_and_set_bit(RTW_FLAG_INACTIVE_PS, rtwdev->flags))
+		return 0;
 
 	rtw_coex_ips_notify(rtwdev, COEX_IPS_ENTER);
 
@@ -50,6 +50,9 @@ int rtw_leave_ips(struct rtw_dev *rtwdev)
 {
 	int ret;
 
+	if (!test_and_clear_bit(RTW_FLAG_INACTIVE_PS, rtwdev->flags))
+		return 0;
+
 	rtw_hci_link_ps(rtwdev, false);
 
 	ret = rtw_ips_pwr_up(rtwdev);
@@ -58,7 +61,7 @@ int rtw_leave_ips(struct rtw_dev *rtwdev)
 		return ret;
 	}
 
-	rtw_iterate_vifs_atomic(rtwdev, rtw_restore_port_cfg_iter, rtwdev);
+	rtw_iterate_vifs(rtwdev, rtw_restore_port_cfg_iter, rtwdev);
 
 	rtw_coex_ips_notify(rtwdev, COEX_IPS_LEAVE);
 

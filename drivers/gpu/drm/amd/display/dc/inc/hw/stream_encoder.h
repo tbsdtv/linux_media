@@ -30,6 +30,7 @@
 
 #include "audio_types.h"
 #include "hw_shared.h"
+#include "dc_link.h"
 
 struct dc_bios;
 struct dc_context;
@@ -77,6 +78,7 @@ struct encoder_info_frame {
 	struct dc_info_packet gamut;
 	struct dc_info_packet vendor;
 	struct dc_info_packet hfvsif;
+	struct dc_info_packet vtem;
 	/* source product description */
 	struct dc_info_packet spd;
 	/* video stream configuration */
@@ -164,6 +166,10 @@ struct stream_encoder_funcs {
 	void (*stop_dp_info_packets)(
 		struct stream_encoder *enc);
 
+	void (*reset_fifo)(
+		struct stream_encoder *enc
+	);
+
 	void (*dp_blank)(
 		struct dc_link *link,
 		struct stream_encoder *enc);
@@ -237,12 +243,20 @@ struct stream_encoder_funcs {
 			uint32_t hubp_requestor_id,
 			enum dynamic_metadata_mode dmdata_mode);
 
+	/**
+	 * @dp_set_odm_combine: Sets up DP stream encoder for ODM.
+	 */
 	void (*dp_set_odm_combine)(
 		struct stream_encoder *enc,
 		bool odm_combine);
 
 	uint32_t (*get_fifo_cal_average_level)(
 		struct stream_encoder *enc);
+
+	void (*set_input_mode)(
+		struct stream_encoder *enc, unsigned int pix_per_container);
+	void (*enable_fifo)(struct stream_encoder *enc);
+	void (*disable_fifo)(struct stream_encoder *enc);
 };
 
 struct hpo_dp_stream_encoder_state {
@@ -305,9 +319,6 @@ struct hpo_dp_stream_encoder_funcs {
 			struct hpo_dp_stream_encoder *enc,
 			uint32_t stream_enc_inst,
 			uint32_t link_enc_inst);
-
-	void (*audio_mute_control)(
-			struct hpo_dp_stream_encoder *enc, bool mute);
 
 	void (*dp_audio_setup)(
 			struct hpo_dp_stream_encoder *enc,
