@@ -496,8 +496,7 @@ static const struct dvb_tuner_ops mxl603_ops ={
 
 };
 
-static int mxl603_probe(struct i2c_client *client,
-		const struct i2c_device_id *id)
+static int mxl603_probe(struct i2c_client *client)
 {
 	struct mxl603_config *cfg = client->dev.platform_data;
 	struct dvb_frontend *fe = cfg->fe;
@@ -573,7 +572,7 @@ static struct i2c_driver mxl603_driver = {
 	.driver = {
 		.name	= "mxl603",
 	},
-	.probe		= mxl603_probe,
+	.probe_new	= mxl603_probe,
 	.remove		= mxl603_remove,
 	.id_table	= mxl603_id_table,
 };

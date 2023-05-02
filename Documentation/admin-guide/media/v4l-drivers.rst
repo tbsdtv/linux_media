@@ -12,7 +12,6 @@ Video4Linux (V4L) driver-specific documentation
 	bttv
 	cafe_ccic
 	cx88
-	davinci-vpbe
 	fimc
 	imx
 	imx7

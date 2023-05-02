@@ -76,7 +76,13 @@ struct cxd2878_config{
 	//for ecp3 update
 	void (*write_properties) (struct i2c_adapter *i2c,u8 reg, u32 buf);
 	void (*read_properties) (struct i2c_adapter *i2c,u8 reg, u32 *buf);
+	// EEPROM access
+	void (*write_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 buf);
+	void (*read_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 *buf);
 	
+	//for 6590SE mode change(T or s);
+	void (*RF_switch)(struct i2c_adapter * i2c,u8 rf_in,u8 flag);
+	u8 rf_port; //for change command
 };
 
 #if IS_REACHABLE(CONFIG_DVB_CXD2878)

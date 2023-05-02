@@ -1186,7 +1186,9 @@ static struct cxd2878_config tbs6209se_cfg[] = {
 		.ts_valid = 0,
 		.atscCoreDisable = 0,
 		.write_properties = ecp3_spi_write, 
-		.read_properties = ecp3_spi_read,	
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
 	},
 	{
 		.addr_slvt = 0x6c,
@@ -1199,7 +1201,9 @@ static struct cxd2878_config tbs6209se_cfg[] = {
 		.ts_valid = 0,
 		.atscCoreDisable = 0,
 		.write_properties = ecp3_spi_write, 
-		.read_properties = ecp3_spi_read,	
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
 	},	
 
 	{
@@ -1213,7 +1217,9 @@ static struct cxd2878_config tbs6209se_cfg[] = {
 		.ts_valid = 0,
 		.atscCoreDisable = 0,
 		.write_properties = ecp3_spi_write, 
-		.read_properties = ecp3_spi_read,	
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
 	},
 	{
 		.addr_slvt = 0x6D,
@@ -1227,7 +1233,9 @@ static struct cxd2878_config tbs6209se_cfg[] = {
 		.ts_valid = 0,
 		.atscCoreDisable = 0,
 		.write_properties = ecp3_spi_write, 
-		.read_properties = ecp3_spi_read,	
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
 	}	
 };
 
@@ -1262,6 +1270,80 @@ static struct cxd2878_config cxd6802_parallel_cfg = {
 		.lock_flag = 0,
 		.write_properties = ecp3_spi_write, 
 		.read_properties = ecp3_spi_read,
+	};
+static struct cxd2878_config tbs6504h_cfg[] = {
+	{
+		.addr_slvt = 0x6c,
+		.xtal      = SONY_DEMOD_XTAL_24000KHz,
+		.tuner_addr = 0x60,
+		.tuner_xtal = SONY_ASCOT3_XTAL_24000KHz,
+		.ts_mode	= 0,
+		.ts_ser_data = 0,
+		.ts_clk = 1,
+		.ts_valid = 0,
+		.atscCoreDisable = 0,
+		.write_properties = ecp3_spi_write, 
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
+	},
+	{
+		.addr_slvt = 0x64,
+		.xtal      = SONY_DEMOD_XTAL_24000KHz,
+		.tuner_addr = 0x60,
+		.tuner_xtal = SONY_ASCOT3_XTAL_24000KHz,
+		.ts_mode	= 0,
+		.ts_ser_data = 0,
+		.ts_clk = 1,
+		.ts_valid = 0,
+		.atscCoreDisable = 0,
+		.write_properties = ecp3_spi_write, 
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
+	},	
+
+};
+
+static struct cxd2878_config tbs6590se_cfg[] = {
+	{
+		.addr_slvt = 0x64,
+		.xtal      = SONY_DEMOD_XTAL_24000KHz,
+		.tuner_addr = 0x60,
+		.tuner_xtal = SONY_ASCOT3_XTAL_24000KHz,
+		.ts_mode	= 1,
+		.ts_ser_data = 0,
+		.ts_clk = 1,
+		.ts_clk_mask= 1,
+		.ts_valid = 0,
+		.atscCoreDisable = 0,
+		.lock_flag = 0,
+		.write_properties = ecp3_spi_write, 
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,
+		.RF_switch = 	RF_switch,
+		.rf_port = 0,
+		},
+		{
+		.addr_slvt = 0x64,
+		.xtal      = SONY_DEMOD_XTAL_24000KHz,
+		.tuner_addr = 0x60,
+		.tuner_xtal = SONY_ASCOT3_XTAL_24000KHz,
+		.ts_mode	= 1,
+		.ts_ser_data = 0,
+		.ts_clk = 1,
+		.ts_clk_mask= 1,
+		.ts_valid = 0,
+		.atscCoreDisable = 0,
+		.lock_flag = 0,
+		.write_properties = ecp3_spi_write, 
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,
+		.RF_switch = 	RF_switch,
+		.rf_port = 1,
+		}		
 	};
 static void tbs_octuples_reset_demod(struct tbsecp3_adapter *adapter)
 {
@@ -1302,6 +1384,24 @@ static u32 tbs_FPGA_fireware_info(struct tbsecp3_adapter *adapter)
 			
 	return data;	
 }
+static void tbs6590se_reset_demod(struct tbsecp3_adapter *adapter) //for the cxd6802
+{
+	struct tbsecp3_dev *dev = adapter->dev;
+	u32 tmp;
+	u32 gpio;
+	
+	gpio= 0x08+0x4*(adapter->nr);
+	
+	tmp = tbs_read(TBSECP3_GPIO_BASE, gpio);
+	tmp = tmp &0xfffffffe;
+	tbs_write(TBSECP3_GPIO_BASE, gpio, tmp);	
+	msleep(50);
+	tmp = tmp|0x01;
+	tbs_write(TBSECP3_GPIO_BASE, gpio, tmp);
+	msleep(50);
+	
+	return ;
+}
 static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 {
 	struct tbsecp3_dev *dev = adapter->dev;
@@ -1324,12 +1424,106 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 	adapter->i2c_client_demod = NULL;
 	adapter->i2c_client_tuner = NULL;
 
-	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id) && (TBSECP3_BOARD_TBS6302SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6209SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6909SE != dev->info->board_id)){
+	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id) && (TBSECP3_BOARD_TBS6302SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6209SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6909SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6504H!= dev->info->board_id)){
 		reset_demod(adapter);
 		set_mac_address(adapter);
 	}
 
 	switch (dev->info->board_id) {
+	   case TBSECP3_BOARD_TBS6590SE:   
+	   	tbs6590se_reset_demod(adapter);
+	   //	adapter->fe2 = &adapter->_fe2;
+		//memcpy(adapter->fe2, adapter->fe, sizeof(struct dvb_frontend));
+	   	/* terrestrial tuner */
+		adapter->fe = dvb_attach(cxd2878_attach, &tbs6590se_cfg[adapter->nr], i2c);
+		if (adapter->fe == NULL)
+		     goto frontend_atach_fail;
+		
+		/* sattelite tuner */
+		/* attach frontend */
+	   	 memset(&m88rs6060_config, 0, sizeof(m88rs6060_config));
+		 m88rs6060_config.fe = &adapter->fe2;
+		 m88rs6060_config.clk = 27000000;
+		 m88rs6060_config.i2c_wr_max = 65;
+		 m88rs6060_config.ts_mode = MtFeTsOutMode_Parallel;
+		 m88rs6060_config.ts_pinswitch = 0;
+		 m88rs6060_config.HAS_CI = 0;
+		 m88rs6060_config.SetCIClock= NULL;
+		 m88rs6060_config.envelope_mode = 0;
+		 m88rs6060_config.demod_adr = 0x69; 
+		 m88rs6060_config.disable_22k = 0;
+		 m88rs6060_config.tuner_adr = 0x2c;
+		 m88rs6060_config.repeater_value = 0x12;
+		 m88rs6060_config.num = adapter->nr;
+		 m88rs6060_config.read_properties = ecp3_spi_read;
+		 m88rs6060_config.write_properties = ecp3_spi_write;
+		 m88rs6060_config.read_eeprom = ecp3_eeprom_read;
+		 m88rs6060_config.write_eeprom = ecp3_eeprom_write;
+		 m88rs6060_config.RF_switch = RF_switch; 
+		memset(&info, 0, sizeof(struct i2c_board_info));
+		strlcpy(info.type, "m88rs6060", I2C_NAME_SIZE);
+		info.addr = m88rs6060_config.demod_adr;
+		info.platform_data = &m88rs6060_config;
+		request_module(info.type);
+		client_demod = i2c_new_client_device(i2c, &info);
+		if (!i2c_client_has_driver(client_demod))
+		    goto frontend_atach_fail;
+		if (!try_module_get(client_demod->dev.driver->owner)) {
+		    i2c_unregister_device(client_demod);
+		    goto frontend_atach_fail;
+		}			
+		adapter->i2c_client_demod = client_demod;
+	
+		tbsecp3_ca_init(adapter, adapter->nr);
+	   	break;
+	   case TBSECP3_BOARD_TBS6504H:
+	   	 tbs_octuples_reset_demod(adapter);
+	   	 set_mac_address(adapter);
+	   	 
+	   	if(adapter->nr<4){ //for tuner#0~#3
+	   	 memset(&m88rs6060_config, 0, sizeof(m88rs6060_config));
+		 m88rs6060_config.fe = &adapter->fe;
+		 m88rs6060_config.clk = 27000000;
+		 m88rs6060_config.i2c_wr_max = 65;
+		 m88rs6060_config.ts_mode = MtFeTsOutMode_Parallel;
+		 m88rs6060_config.ts_pinswitch = 0;
+		 m88rs6060_config.HAS_CI = 0;
+		 m88rs6060_config.SetCIClock= NULL;
+		 m88rs6060_config.envelope_mode = 0;
+		 m88rs6060_config.demod_adr = (adapter->nr%2)?0x6B:0x69; 
+		 m88rs6060_config.disable_22k = 0;
+		 m88rs6060_config.tuner_adr = 0x2c;
+		 m88rs6060_config.repeater_value = 0x12;
+		 m88rs6060_config.num = adapter->nr;
+		 m88rs6060_config.read_properties = ecp3_spi_read;
+		 m88rs6060_config.write_properties = ecp3_spi_write;
+		 m88rs6060_config.read_eeprom = ecp3_eeprom_read;
+		 m88rs6060_config.write_eeprom = ecp3_eeprom_write;
+		memset(&info, 0, sizeof(struct i2c_board_info));
+		strlcpy(info.type, "m88rs6060", I2C_NAME_SIZE);
+		info.addr = m88rs6060_config.demod_adr;
+		info.platform_data = &m88rs6060_config;
+		request_module(info.type);
+		client_demod = i2c_new_client_device(i2c, &info);
+		if (!i2c_client_has_driver(client_demod))
+				goto frontend_atach_fail;
+		if (!try_module_get(client_demod->dev.driver->owner)) {
+				i2c_unregister_device(client_demod);
+					goto frontend_atach_fail;
+					}
+		adapter->i2c_client_demod = client_demod;
+		if (tbsecp3_attach_sec(adapter, adapter->fe) == NULL) {
+			    dev_warn(&dev->pci_dev->dev,
+			    			    "error attaching lnb control on adapter %d\n",
+							    adapter->nr);
+			}
+	   	}else{
+   	
+	   	adapter->fe = dvb_attach(cxd2878_attach, &tbs6504h_cfg[adapter->nr%2], i2c);
+	   	if (adapter->fe == NULL)
+		    goto frontend_atach_fail;
+	   	}
+	   break;
 	   case TBSECP3_BOARD_TBS6522H:
 	   	if(adapter->nr<2){ //for tuner0/1 dvbt/c/isdbt/atsc
 	   		adapter->fe = dvb_attach(cxd2878_attach, &cxd6802_parallel_cfg, i2c);
@@ -1421,6 +1615,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		 }else{
 			 m88rs6060_config.ts_mode = MtFeTsOutMode_Parallel;
 			 m88rs6060_config.ts_pinswitch = 1;
+			 m88rs6060_config.ts_autoclock = 1;
 		 	}
 		 
 		 if(dev->info->board_id == TBSECP3_BOARD_TBS6910SE){

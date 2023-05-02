@@ -49,6 +49,7 @@ struct cxd2878_dev{
 	u32 atscNoSignalThresh;
 	u32 atscSignalThresh;
 	u32 tune_time;
+	
  };
 /* For CXD2856 or newer generation ICs */
 static	struct sony_ascot3_adjust_param_t g_param_table_ascot3i[SONY_ASCOT3_TV_SYSTEM_NUM] = {
@@ -2901,9 +2902,12 @@ static int cxd2878_set_frontend(struct dvb_frontend *fe)
 	
 		mutex_lock(&dev->base->i2c_lock);
 
-		if(!dev->warm)
-			cxd2878_init(fe);
-		
+	if(!dev->warm)
+	    cxd2878_init(fe);
+			
+	if(dev->base->config->RF_switch)
+		dev->base->config->RF_switch(dev->base->i2c,dev->base->config->rf_port,0);
+	
 	 switch(c->delivery_system){
 		case SYS_DVBT:
 			ret = cxd2878_set_dvbt(fe);
@@ -2959,6 +2963,7 @@ static int cxd2878_tune(struct dvb_frontend*fe,bool re_tune,
 {
 	struct cxd2878_dev *dev = fe->demodulator_priv;
 	int ret = 0;
+	
 	if(re_tune){
 		 ret = cxd2878_set_frontend(fe);
 		if(ret)
@@ -3087,7 +3092,24 @@ static void cxd2878_spi_write(struct dvb_frontend *fe,struct ecp3_info *ecp3inf)
 		dev->base->config->write_properties(dev->base->i2c,ecp3inf->reg, ecp3inf->data);
 	return ;
 }
+static void cxd2878_eeprom_read(struct dvb_frontend *fe, struct eeprom_info *eepinf)
+{
+	struct cxd2878_dev *dev = fe->demodulator_priv;
 
+	if (dev->base->config->read_eeprom)
+		dev->base->config->read_eeprom(dev->base->i2c,eepinf->reg, &(eepinf->data));
+	return ;
+}
+
+static void cxd2878_eeprom_write(struct dvb_frontend *fe,struct eeprom_info *eepinf)
+{
+	struct cxd2878_dev *dev = fe->demodulator_priv;
+
+	if (dev->base->config->write_eeprom)
+		dev->base->config->write_eeprom(dev->base->i2c,eepinf->reg, eepinf->data);
+
+	return ;
+}
 static void cxd2878_release (struct dvb_frontend*fe)
 {
 	struct cxd2878_dev *dev = fe->demodulator_priv;
@@ -3145,6 +3167,8 @@ static const struct dvb_frontend_ops cxd2878_ops = {
 			
 			.spi_read				= cxd2878_spi_read,
 			.spi_write				= cxd2878_spi_write,
+			.eeprom_read		= cxd2878_eeprom_read,
+			.eeprom_write		= cxd2878_eeprom_write,
 };
 
 static struct cxd_base *match_base(struct i2c_adapter *i2c,u8 adr)
@@ -3157,7 +3181,7 @@ static struct cxd_base *match_base(struct i2c_adapter *i2c,u8 adr)
 	return NULL;
 }
 struct dvb_frontend*cxd2878_attach(const struct cxd2878_config*config,
-									struct i2c_adapter*i2c)
+					   struct i2c_adapter*i2c)
 {
 	struct cxd2878_dev *dev;
 	struct cxd_base *base;
