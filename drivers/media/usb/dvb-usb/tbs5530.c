@@ -63,8 +63,8 @@ static int tbs5530_i2c_transfer(struct i2c_adapter *adap,
 {
 	struct dvb_usb_device *d = i2c_get_adapdata(adap);
 	int i = 0;
-	u8 buf6[20];
-	u8 inbuf[20];
+	u8 buf6[50];
+	u8 inbuf[50];
 
 	if (!d)
 		return -ENODEV;

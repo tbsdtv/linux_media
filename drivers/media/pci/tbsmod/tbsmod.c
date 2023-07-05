@@ -3609,7 +3609,7 @@ static __init int module_init_tbsmod(void)
 	mod_cdev.owner = THIS_MODULE;
 	cdev_add(&mod_cdev, dev, 256);
 
-	mod_cdev_class = class_create(THIS_MODULE, "tbsmod");
+	mod_cdev_class = class_create("tbsmod");
 	stat = pci_register_driver(&tbsmod_pci_driver);
 	return stat;
 }

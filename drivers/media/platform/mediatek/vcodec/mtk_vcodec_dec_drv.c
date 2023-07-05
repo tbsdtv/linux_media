@@ -310,7 +310,6 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 	}
 
 	if (IS_VDEC_LAT_ARCH(dev->vdec_pdata->hw_arch)) {
-		vdec_msg_queue_init_ctx(&dev->msg_queue_core_ctx, MTK_VDEC_CORE);
 		dev->core_workqueue =
 			alloc_ordered_workqueue("core-decoder",
 						WQ_MEM_RECLAIM | WQ_FREEZABLE);
@@ -318,14 +317,6 @@ static int mtk_vcodec_probe(struct platform_device *pdev)
 			mtk_v4l2_err("Failed to create core workqueue");
 			ret = -EINVAL;
 			goto err_res;
-		}
-	}
-
-	if (of_property_present(pdev->dev.of_node, "dma-ranges")) {
-		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(34));
-		if (ret) {
-			mtk_v4l2_err("Failed to set mask");
-			goto err_core_workq;
 		}
 	}
 
