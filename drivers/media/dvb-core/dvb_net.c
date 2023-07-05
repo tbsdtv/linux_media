@@ -989,8 +989,10 @@ static int dvb_net_gse(struct net_device *dev, const u8 *buffer,
 		memcpy(ethh->h_dest, dest_addr, ETH_ALEN);
 		memset(ethh->h_source, 0, ETH_ALEN);
 	}
-	else /* zeroize source and dest */
-		memset(ethh, 0, ETH_ALEN*2);
+	else {
+		memset(ethh->h_dest, 0xff, ETH_ALEN);
+		memset(ethh->h_source, 0, ETH_ALEN);
+	}
 	ethh = (struct ethhdr *)priv->gse_skb->data;
 	ethh->h_proto = htons(gse_sndu_type);
 	/* Stuff into kernel's protocol stack. */
