@@ -601,12 +601,18 @@ static struct tas2101_config tbs6902_demod_cfg[] = {
 static struct gx1133_config tbs6902_gx1133_cfg[] = {
 	{
 		.i2c_address   = 0x52,
+		.ts_mode 	   = 0,	
+		.ts_cfg		= {data_0,data_1,data_2,data_3,data_4,data_5,data_6,  \
+								data_7,ts_sync,ts_valid,ts_clk,ts_err},
 		.write_properties = ecp3_spi_write,  
 		.read_properties = ecp3_spi_read,	
 
 	},
 	{
 		.i2c_address   = 0x5A,
+		.ts_mode 	   = 0,	
+		.ts_cfg		= {data_0,data_1,data_2,data_3,data_4,data_5,data_6,  \
+								data_7,ts_sync,ts_valid,ts_clk,ts_err},
 		.write_properties = ecp3_spi_write,  
 		.read_properties = ecp3_spi_read,
 	}

@@ -24,11 +24,49 @@
 #include <linux/kconfig.h>
 #include <linux/dvb/frontend.h>
 
+enum Demod_TS_Inr
+{
+	data_0		=	0x0	,
+	data_1		=	0x1	,
+	data_2		=	0x2	,
+	data_3		=	0x3	,
+	data_4		=	0x4	,
+	data_5		=	0x5	,
+	data_6		=	0x6	,
+	data_7		=	0x7	,
+	ts_clk		=	0x8	,
+	ts_valid	=	0x9	,
+	ts_sync		=	0xa	,
+	ts_err		=	0xb	,
+	s2_ok_clk	=	0xc	,
+	mcu_txd		=	0xd	,
+	vcc		=	0xe	,
+	gnd		=	0xf
+
+};
+
+struct Demod_TS_Pin_cfg
+{
+	enum Demod_TS_Inr	TS_0	;
+	enum Demod_TS_Inr	TS_1	;
+	enum Demod_TS_Inr	TS_2	;
+	enum Demod_TS_Inr	TS_3	;
+	enum Demod_TS_Inr	TS_4	;
+	enum Demod_TS_Inr	TS_5	;
+	enum Demod_TS_Inr	TS_6	;
+	enum Demod_TS_Inr	TS_7	;
+	enum Demod_TS_Inr	TS_8	;
+	enum Demod_TS_Inr	TS_9	;
+	enum Demod_TS_Inr	TS_10	;
+	enum Demod_TS_Inr	TS_11	;
+};
 
 
 struct gx1133_config {
 	/* demodulator i2c address */
 	u8 i2c_address;
+	u8 ts_mode;   //parallel_port = 0 ; serial_port = 1;
+	struct Demod_TS_Pin_cfg ts_cfg;
 
 	/* demod hard reset */
 	void (*reset_demod)(struct dvb_frontend *fe);

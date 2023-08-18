@@ -505,6 +505,16 @@ config DVB_USB_TBS5930
 	help
 	  Say Y here to support the TurboSight TBS5930 DVB-S/S2/S2x USB2.0 receivers
 	  
+config DVB_USB_TBS5931
+	tristate "TurboSight TBS5930 lite DVB-S/S2 USB2.0 support"
+	depends on DVB_USB
+	select DVB_PLL if MEDIA_SUBDRV_AUTOSELECT
+	select DVB_TAS2101 if MEDIA_SUBDRV_AUTOSELECT
+	select DVB_GX1133 if MEDIA_SUBDRV_AUTOSELECT
+	select MEDIA_TUNER_AV201X if MEDIA_SUBDRV_AUTOSELECT
+	help
+	  Say Y here to support the TurboSight TBS5930 lite DVB-S/S2 USB2.0 receivers	  
+	  
 config DVB_USB_TBS5590
        tristate "Turbosight TBS5590 usb2.0 capture support"
         depends on DVB_USB

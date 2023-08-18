@@ -252,14 +252,13 @@ struct fe_stid135_internal_param {
 					demod_search_range[8]; /* Search range 
 					(Hz) */
 	u32				quartz;/* Demod Reference frequency (Hz) */
-	u8			internal_dcdc; /* DCDC supply either internal or external */
-	u8			internal_ldo; /* LDO supply either internal or external */
+	u8				internal_dcdc; /* DCDC supply either internal or external */
+	u8				internal_ldo; /* LDO supply either internal or external */
 	u8				rf_input_type; /* VGLNA input type, either single ended or differential */
 	u32				master_clock, /* Master clock frequency */
 					lo_frequency; /* Temporary definition 
 					for LO frequency   */
 	BOOL			ts_nosync;
-	BOOL	 mis;
 	enum fe_sat_iq_inversion 	tuner_global_iqv_inv[8]; /* Global I,Q 
 					inversion I,Q conection from tuner to 
 					demod */

@@ -908,16 +908,20 @@ static int gx1133_initfe(struct dvb_frontend *fe)
 	temp = (temp&0xc0)|(0<<5)|(1<<4)|(0<<2)|(0<<1)|(0);	
 	gx1133_wr(priv,Demod_TOP,cfg_ts_mod_ctrl,temp); 
 	
-	gx1133_rd(priv,Demod_TOP,cfg_TS_s_sel,&temp); 
-	gx1133_wr(priv,Demod_TOP,cfg_TS_s_sel,temp&0xf7); 
-
-	
-	gx1133_wr(priv,Demod_TOP,0xc8,(1<<4)+0); 
-	gx1133_wr(priv,Demod_TOP,0xc9,(3<<4)+2); 
-	gx1133_wr(priv,Demod_TOP,0xca,(5<<4)+4); 
-	gx1133_wr(priv,Demod_TOP,0xcb,(7<<4)+6); 
-	gx1133_wr(priv,Demod_TOP,0xcc,(9<<4)+10); 
-	gx1133_wr(priv,Demod_TOP,0xcd,(11<<4)+8); 
+	if(!priv->cfg->ts_mode){ //parallel_port
+		gx1133_rd(priv,Demod_TOP,cfg_TS_s_sel,&temp); 
+		gx1133_wr(priv,Demod_TOP,cfg_TS_s_sel,temp&0xf7);  
+		}
+	else{
+		gx1133_rd(priv,Demod_TOP,cfg_TS_s_sel,&temp); 
+		gx1133_wr(priv,Demod_TOP,cfg_TS_s_sel,(temp&0xf7)|0x08);
+		}
+	gx1133_wr(priv,Demod_TOP,0xc8,(priv->cfg->ts_cfg.TS_1<<4)+priv->cfg->ts_cfg.TS_0); 
+	gx1133_wr(priv,Demod_TOP,0xc9,(priv->cfg->ts_cfg.TS_3<<4)+priv->cfg->ts_cfg.TS_2); 
+	gx1133_wr(priv,Demod_TOP,0xca,(priv->cfg->ts_cfg.TS_5<<4)+priv->cfg->ts_cfg.TS_4); 
+	gx1133_wr(priv,Demod_TOP,0xcb,(priv->cfg->ts_cfg.TS_7<<4)+priv->cfg->ts_cfg.TS_6); 
+	gx1133_wr(priv,Demod_TOP,0xcc,(priv->cfg->ts_cfg.TS_9<<4)+priv->cfg->ts_cfg.TS_8); 
+	gx1133_wr(priv,Demod_TOP,0xcd,(priv->cfg->ts_cfg.TS_11<<4)+priv->cfg->ts_cfg.TS_10);
 
 	//init chip
 	gx1133_wr(priv,Demod_TOP,cfg_mcu_onoff_line,0);	

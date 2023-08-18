@@ -3491,8 +3491,7 @@ fe_lla_error_t fe_stid135_init (struct fe_sat_init_params *pInit,
 		pParams->internal_dcdc = pInit->internal_dcdc;
 		pParams->internal_ldo = pInit->internal_ldo;
 		pParams->rf_input_type = pInit->rf_input_type;
-            	pParams->ts_nosync = pInit->ts_nosync;
-	 	pParams->mis = pInit->mis;
+		pParams->ts_nosync = pInit->ts_nosync;
 		/* Init for PID filtering feature */
 		for(i=0;i<8;i++)
 			pParams->pid_flt[i].first_disable_all_command = TRUE;
@@ -4891,8 +4890,8 @@ fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 			/* If TS/GS = 11 (MPEG TS), reset matype force bit and do NOT load frames in MPEG packets */
 			if(((genuine_matype>>6) & 0x3) == 0x3) {
 				/* "TS FIFO Minimum latence mode */
-				if(!pParams->mis)
-				    error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSTATE1_TSOUT_NOSYNC(Demod), pParams->ts_nosync ? 1 : 0);
+				if(pParams->ts_nosync)
+				    error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSTATE1_TSOUT_NOSYNC(Demod), 1);
 				/* Unforce HEM mode */
 				error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL0_HEMMODE_SELECT(Demod), 0);
 				/* Go back to reset value settings */
