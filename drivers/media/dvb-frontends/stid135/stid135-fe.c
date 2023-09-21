@@ -373,14 +373,11 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 
 	/* Set PLS before search */
 	dev_dbg(&state->base->i2c->dev, "%s: set pls_mode %d, pls_code %d !\n", __func__, pls_mode, pls_code);
-	
-	if((p->stream_id != NO_STREAM_ID_FILTER)||(p->scrambling_sequence_index)){
-		err |= fe_stid135_set_pls(state->base->handle, state->nr + 1, pls_mode, pls_code);
+	err |= fe_stid135_set_pls(state->base->handle, state->nr + 1, pls_mode, pls_code);
 	
 	if (err != FE_LLA_NO_ERROR)
 		dev_err(&state->base->i2c->dev, "%s: fe_stid135_set_pls error %d !\n", __func__, err);
-	}
-		
+
 	if(state->modcode_filter){
 	    err |= fe_stid135_reset_modcodes_filter(state->base->handle, state->nr + 1);
 		if (err != FE_LLA_NO_ERROR)

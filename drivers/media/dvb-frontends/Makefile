@@ -57,6 +57,7 @@ obj-$(CONFIG_DVB_HELENE) += helene.o
 obj-$(CONFIG_DVB_HORUS3A) += horus3a.o
 obj-$(CONFIG_DVB_ISL6405) += isl6405.o
 obj-$(CONFIG_DVB_ISL6421) += isl6421.o
+obj-$(CONFIG_DVB_ISL6422) += isl6422.o
 obj-$(CONFIG_DVB_ISL6423) += isl6423.o
 obj-$(CONFIG_DVB_IX2505V) += ix2505v.o
 obj-$(CONFIG_DVB_L64781) += l64781.o

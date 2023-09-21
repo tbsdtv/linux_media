@@ -2248,7 +2248,7 @@ MXL_STATUS MxLWare603_API_ReqTunerAGCLock(struct dvb_frontend *fe, MXL_BOOL* agc
 
 		*agcLockStatusPtr =  lockStatus;
 
-		printk(" Agc lock = %d", (UINT8)*agcLockStatusPtr); 
+		//printk(" Agc lock = %d", (UINT8)*agcLockStatusPtr); 
 	}
 	else
 		status = MXL_INVALID_PARAMETER;
@@ -2492,15 +2492,15 @@ MXL_STATUS Mxl603SetFreqBw(struct dvb_frontend *fe,UINT32 freq)
 
 	// Read back Tuner lock status
 	status = MxLWare603_API_ReqTunerLockStatus(fe, &rfLockPtr, &refLockPtr);
-	if (status == MXL_TRUE)
-	{
-		if (MXL_LOCKED == rfLockPtr && MXL_LOCKED == refLockPtr)
-		{
-			printk("Tuner locked\n"); //If system runs into here, it mean that Tuner locked and output IF OK!!
-		}
-		else
-			printk("Tuner unlocked\n");
-	}
+//	if (status == MXL_TRUE)
+//	{
+//		if (MXL_LOCKED == rfLockPtr && MXL_LOCKED == refLockPtr)
+//		{
+//			printk("Tuner locked\n"); //If system runs into here, it mean that Tuner locked and output IF OK!!
+//		}
+//		else
+//			printk("Tuner unlocked\n");
+//	}
 	return status; 
 }
 
@@ -2799,7 +2799,7 @@ DMD_ERROR_t DMD_scan_vq(struct dvb_frontend* fe, DMD_PARAMETER_t *param )
 		break;
 	}
 	
-	for(i=0;i<160;i++)
+	for(i=0;i<230;i++)
 	{
 		DMD_I2C_Read(fe, DMD_BANK_MAIN(param->devid)  ,DMD_MAIN_STSMON1	 , &rd );
 		//VQ LOCK
@@ -2807,7 +2807,7 @@ DMD_ERROR_t DMD_scan_vq(struct dvb_frontend* fe, DMD_PARAMETER_t *param )
 		{
 			param->info[DMD_E_INFO_LOCK] = DMD_E_LOCKED;	
 			ret = DMD_E_OK;
-			printk("Singal LOCK.");
+			//printk("Singal LOCK.");
 			break;
 		}
 		msleep(2);			//wait 1ms
@@ -2973,14 +2973,14 @@ static int DMD_set_parameters(struct dvb_frontend* fe)
 		return -EINVAL;
 	}
 	DMD_set_system(fe,&param);
-	
+	msleep(20);
 	Mxl603SetFreqBw(fe, c->frequency);
-	msleep(2);
+	msleep(20);
 	DMD_device_post_tune(fe, &param );
-	
+	msleep(100);
 	/* Call Lock/SYNC Status Judgement */
 	 DMD_device_scan(fe, &param );
-
+	msleep(100);
 	return 0;
 }
 
@@ -3013,7 +3013,7 @@ static int DMD_read_status(struct dvb_frontend *fe, enum fe_status *status)
 
 	MxLWare603_API_ReqTunerRxPower(fe,&rfpower);
 	
-
+	msleep(2);
 	c->strength.len = 2;
 	c->strength.stat[0].scale = FE_SCALE_DECIBEL;
 	c->strength.stat[0].svalue = rfpower*10;
@@ -3044,7 +3044,7 @@ static int DMD_read_status(struct dvb_frontend *fe, enum fe_status *status)
 			val = 0;
 
 	}
-	printk("cnr = %d",val);
+	//printk("cnr = %d",val);
 	c->cnr.len = 2;
 	c->cnr.stat[0].scale = FE_SCALE_DECIBEL;
 	c->cnr.stat[0].uvalue =  val*10;
