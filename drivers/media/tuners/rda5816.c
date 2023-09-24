@@ -501,8 +501,7 @@ struct dvb_frontend *rda5816_attach(struct dvb_frontend *fe,
 	return fe;
 }
 
-
-EXPORT_SYMBOL(rda5816_attach);
+EXPORT_SYMBOL_GPL(rda5816_attach);
 
 MODULE_DESCRIPTION("RDA 5816 tuner driver");
 MODULE_AUTHOR("Davin<smiledavin@gmail.com>");

@@ -46,6 +46,7 @@
 		#include <linux/kernel.h>
 		#include <linux/delay.h>
 		#include <linux/slab.h>
+		#include <linux/mm.h>
 
 		#define WAIT_N_MS(X) msleep(X)
 		#define calloc(n,s) kvzalloc(n*s,GFP_KERNEL)

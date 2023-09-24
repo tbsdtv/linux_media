@@ -473,4 +473,3 @@ MODULE_DESCRIPTION("DVB Frontend module for Tmax TAS2101");
 MODULE_AUTHOR("Luis Alves (ljalvs@gmail.com)");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");
-

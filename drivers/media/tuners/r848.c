@@ -3529,7 +3529,8 @@ struct dvb_frontend *r848_attach(struct dvb_frontend *fe,
 	fe->tuner_priv = priv;
 	return fe;
 }
-EXPORT_SYMBOL(r848_attach);
+
+EXPORT_SYMBOL_GPL(r848_attach);
 
 MODULE_DESCRIPTION("Rafael R848 silicon tuner driver");
 MODULE_AUTHOR("Luis Alves <ljalvs@gmail.com>");

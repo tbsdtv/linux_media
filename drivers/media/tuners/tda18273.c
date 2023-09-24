@@ -2175,7 +2175,7 @@ err:
 	kfree(tda18273);
 	return NULL;
 }
-EXPORT_SYMBOL(tda18273_attach);
+EXPORT_SYMBOL_GPL(tda18273_attach);
 
 MODULE_AUTHOR("Manu Abraham");
 MODULE_DESCRIPTION("TDA18273 Silicon tuner");

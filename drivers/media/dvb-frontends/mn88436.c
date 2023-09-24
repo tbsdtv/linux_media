@@ -3219,7 +3219,7 @@ struct dvb_frontend* mndmd_attach(struct mndmd_config* config,
 	return &state->frontend;
 }
 
-EXPORT_SYMBOL(mndmd_attach);
+EXPORT_SYMBOL_GPL(mndmd_attach);
 MODULE_DESCRIPTION("mn88436 qamb atsc demodulator driver");
 MODULE_AUTHOR("Georg Acher, Bob Liu, Igor liplianin");
 MODULE_LICENSE("GPL");

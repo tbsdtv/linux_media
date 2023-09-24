@@ -295,7 +295,7 @@ struct dvb_frontend *av201x_attach(struct dvb_frontend *fe,
 	fe->tuner_priv = priv;
 	return fe;
 }
-EXPORT_SYMBOL(av201x_attach);
+EXPORT_SYMBOL_GPL(av201x_attach);
 
 MODULE_DESCRIPTION("Airoha Technology AV201x silicon tuner driver");
 MODULE_AUTHOR("Luis Alves <ljalvs@gmail.com>");

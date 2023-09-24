@@ -178,7 +178,6 @@ static struct dvb_frontend_ops tbs_ops = {
 
 };
 
-
 struct dvb_frontend *tbs_attach(struct i2c_adapter*i2c,
 									struct tbs_cfg*cfg,
 									u32 demod)
@@ -210,10 +209,8 @@ struct dvb_frontend *tbs_attach(struct i2c_adapter*i2c,
 	return &state->fe;
 	
 }
+EXPORT_SYMBOL_GPL(tbs_attach);
+
 MODULE_DESCRIPTION("TBS private virtual demodulator driver");
 MODULE_AUTHOR("Davin zhang(Davin@tbsdtv.com)");
 MODULE_LICENSE("GPL");
-
-EXPORT_SYMBOL(tbs_attach);
-
-
