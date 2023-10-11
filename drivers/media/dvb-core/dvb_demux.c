@@ -1130,7 +1130,7 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 	header_info = *buf << 24 | *(buf+1)<<16 | *(buf+2)<<8 | *(buf +3);
 	payload_type = ((enum gse_payload_type)(GSE_PAYLOAD_TYPE(header_info)));
 	label_type =  ((gse_label_type_t)(GSE_LABEL_TYPE(header_info)));
-
+	
 	/* Determine the length of the label of the GSE packet */
 	label_length = gse_get_label_length(label_type);
 	/* Get GSE Packet Length */
@@ -1138,6 +1138,11 @@ static int _dvb_dmx_swfilter_gse( struct dvb_demux *demux, const u8 *buf, size_t
 
 	dprintk_gsecheck("GSE packet length = %lu First 4byte of GSE header = %u\n",
 			buf_len,header_info);
+
+	if((payload_type == GSE_NEXT_FRAG_PDU) && (label_type == GSE_PKT_LABEL_SIX_BYTES)) {
+		dprintk_gsecheck("GSE padding len = %lu\n",	(header_info & 0x0f000000) >> 24);
+		return ret;
+	}
 
 	/* finding protocol type,label length and label bits for
 	 * 	   full gse packet or 1st frag gse packet */
