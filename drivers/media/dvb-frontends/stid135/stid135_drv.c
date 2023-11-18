@@ -2138,7 +2138,7 @@ static fe_lla_error_t FE_STiD135_GetDemodLock    (fe_stid135_handle_t handle,
 static fe_lla_error_t FE_STiD135_GetFECLock(stchip_handle_t hChip, enum fe_stid135_demod Demod, 
 				u32 TimeOut, BOOL* lock_bool_p)
 {
-	u32 headerField, pktdelinField, lockVitField, pedlstatus,timer = 0;
+	u32 headerField, pktdelinField, lockVitField,timer = 0;
 	s32 lock = 0;
 	fe_lla_error_t error = FE_LLA_NO_ERROR; 
 	s32 fld_value;
@@ -2153,11 +2153,6 @@ static fe_lla_error_t FE_STiD135_GetFECLock(stchip_handle_t hChip, enum fe_stid1
 		
 	error |= ChipGetField(hChip, headerField, &fld_value);
 	demodState = (enum fe_sat_search_state)fld_value;
-	ChipGetOneRegister(hChip, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_PDELSTATUS1(Demod), &pedlstatus);
-	if(pedlstatus&3!=3){
-	ChipSetOneRegister(hChip, (u16)REG_RC8CODEW_DVBSX_DEMOD_DMDISTATE(Demod), 0x05);
-	ChipWaitOrAbort(hChip, 10);	
-	}
 	while ((timer < TimeOut) && (lock == 0)) {
 
 		switch (demodState) {
@@ -2179,9 +2174,6 @@ static fe_lla_error_t FE_STiD135_GetFECLock(stchip_handle_t hChip, enum fe_stid1
 		{
 			ChipWaitOrAbort(hChip, 10);
 			timer += 10;
-			if(timer==150)
-				ChipSetOneRegister(hChip, (u16)REG_RC8CODEW_DVBSX_DEMOD_DMDISTATE(Demod), 0x05);
-
 		}
 	}
 
@@ -4889,6 +4881,8 @@ fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 
 			/* If TS/GS = 11 (MPEG TS), reset matype force bit and do NOT load frames in MPEG packets */
 			if(((genuine_matype>>6) & 0x3) == 0x3) {
+				error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FORCE_CONTINUOUS(Demod), 0);
+				error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FRAME_MODE(Demod), 0);
 				/* "TS FIFO Minimum latence mode */
 				if(pParams->ts_nosync)
 				    error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSTATE1_TSOUT_NOSYNC(Demod), 1);
@@ -11609,7 +11603,7 @@ fe_lla_error_t get_current_llr(fe_stid135_handle_t handle,enum fe_stid135_demod 
 	struct fe_stid135_internal_param *pParams;
 	pParams = (struct fe_stid135_internal_param *) handle;
 
-	//printk("Symbol rate = %d\n", pParams->demod_results[demod_path-1].symbol_rate);
+	printk("Symbol rate = %d Ks\n", pParams->demod_results[demod_path-1].symbol_rate/1000);
 	*current_llr = pParams->demod_results[demod_path-1].symbol_rate;
 	switch(pParams->demod_results[demod_path-1].modulation)
 	{
@@ -11643,8 +11637,9 @@ fe_lla_error_t get_current_llr(fe_stid135_handle_t handle,enum fe_stid135_demod 
 			*current_llr *= 10;
 			break;
 		default:
-			*current_llr *= 3;			
+			*current_llr *= 3;
 	}
+	*current_llr += 1000000;
 
 	if(*current_llr != 0)
 		printk("Current LLR  = %d MLLR/s\n", *current_llr/1000000);
@@ -11653,9 +11648,9 @@ fe_lla_error_t get_current_llr(fe_stid135_handle_t handle,enum fe_stid135_demod 
 
 	if((*current_llr/1000)<90000)
 		fe_stid135_set_maxllr_rate(handle,demod_path,90);
-	else if(((*current_llr/1000)>=90000)&&((*current_llr/1000)<129000))
+	else if((*current_llr/1000)<129000)
 	    fe_stid135_set_maxllr_rate(handle,demod_path,129);	
-	else if(((*current_llr/1000)>=129000)&&((*current_llr/1000)<180000))
+	else if((*current_llr/1000)<180000)
 		fe_stid135_set_maxllr_rate(handle,demod_path,180);
 	else 			
 		fe_stid135_set_maxllr_rate(handle,demod_path,250);

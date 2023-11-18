@@ -77,7 +77,7 @@ struct mxl_base {
 
 	struct mutex         i2c_lock;
 	struct mutex         status_lock;
-	u8                   buf[MXL_HYDRA_OEM_MAX_CMD_BUFF_LEN];
+	u8                   buf[MXL_HYDRA_OEM_MAX_CMD_BUFF_LEN+8];
 
 	u32                  cmd_size;
 	u8                   cmd_data[MAX_CMD_DATA];

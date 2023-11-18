@@ -1480,7 +1480,7 @@ static snd_pcm_uframes_t tbs_pcie_audio_pointer(struct snd_pcm_substream *substr
 	return bytes_to_frames(runtime,chip->pos);
 }
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(4, 13, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 static int tbs_pcie_audio_copy_user(struct snd_pcm_substream *substream,
 	int channel,
 	unsigned long pos,
@@ -1493,15 +1493,15 @@ static int tbs_pcie_audio_copy_user(struct snd_pcm_substream *substream,
 	return 0;
 }
 #else
-static int tbs_pcie_audio_copy(struct snd_pcm_substream *substream,
-	int channel,
-	snd_pcm_uframes_t pos,
-	void __user *dst,
-	snd_pcm_uframes_t count)
+static int tbs_pcie_audio_copy(struct snd_pcm_substream *substream, int channel,
+								unsigned long pos, struct iov_iter *dst,
+								unsigned long count)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	int ret;
-	ret = copy_to_user(dst,runtime->dma_area+frames_to_bytes(runtime,pos),frames_to_bytes(runtime,count));
+	if (copy_to_iter(runtime->dma_area+frames_to_bytes(runtime,pos), frames_to_bytes(runtime,count), dst) !=
+						frames_to_bytes(runtime,count))
+		return -EFAULT;
 	return 0;
 }
 #endif
@@ -1515,7 +1515,7 @@ struct snd_pcm_ops tbs_pcie_pcm_ops ={
 	.prepare =		tbs_pcie_audio_prepare,
 	.trigger =		tbs_pcie_audio_trigger,
 	.pointer =		tbs_pcie_audio_pointer,
-#if LINUX_VERSION_CODE > KERNEL_VERSION(4, 13, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
 	.copy_user =	tbs_pcie_audio_copy_user,
 #else
 	.copy =			tbs_pcie_audio_copy,

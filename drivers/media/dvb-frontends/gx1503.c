@@ -580,7 +580,7 @@ static struct i2c_driver gx1503_driver = {
 	.driver = {
 		.name = "gx1503",
 	},
-	.probe_new = gx1503_probe,
+	.probe = gx1503_probe,
 	.remove = gx1503_remove,
 	.id_table = gx1503_id_table,
 };

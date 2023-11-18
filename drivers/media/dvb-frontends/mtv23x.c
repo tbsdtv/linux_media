@@ -2414,7 +2414,7 @@ static struct dvb_frontend_ops mtv23x_ops = {
 	.read_ber = mtv23x_read_ber,
 };
 
-static int mtv23x_probe(struct i2c_client*client)
+static int mtv23x_probe(struct i2c_client *client)
 {
 	struct mtv23x_config *cfg = client->dev.platform_data;
 	struct mtv23x_dev *dev ;
@@ -2470,7 +2470,7 @@ err:
 	return ret;
 }
 
-static void mtv23x_remove(struct i2c_client*client)
+static void mtv23x_remove(struct i2c_client *client)
 {
 	struct mtv23x_dev*dev = i2c_get_clientdata(client);
 
@@ -2490,7 +2490,7 @@ static struct i2c_driver mtv23x_driver = {
 	.driver = {
 		.name = "mtv23x",
 	},
-	.probe_new = mtv23x_probe,
+	.probe = mtv23x_probe,
 	.remove = mtv23x_remove,
 	.id_table = mtv23x_id_table,
 

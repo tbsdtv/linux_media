@@ -572,7 +572,7 @@ static struct i2c_driver mxl603_driver = {
 	.driver = {
 		.name	= "mxl603",
 	},
-	.probe_new	= mxl603_probe,
+	.probe		= mxl603_probe,
 	.remove		= mxl603_remove,
 	.id_table	= mxl603_id_table,
 };

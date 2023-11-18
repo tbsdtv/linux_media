@@ -99,6 +99,7 @@ struct stv {
 	int loops ;//for tbs6912
 	
 	bool modcode_filter; //for set the modcode
+	struct fe_sat_dvbs2_mode_t modcode_mask[FE_SAT_MODCODE_UNKNOWN*4];
 };
 
 I2C_RESULT I2cReadWrite(void *pI2CHost, I2C_MODE mode, u8 ChipAddress, u8 *Data, int NbData)
@@ -313,7 +314,6 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	s32 rf_power;
 	s32 current_llr;
     u32 i, j, m;
-    struct fe_sat_dvbs2_mode_t modcode_mask[FE_SAT_MODCODE_UNKNOWN*4];
     U8 vglna_status;
     S32 vglna_gain;
 
@@ -382,6 +382,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	    err |= fe_stid135_reset_modcodes_filter(state->base->handle, state->nr + 1);
 		if (err != FE_LLA_NO_ERROR)
 			dev_err(&state->base->i2c->dev, "%s: fe_stid135_reset_modcodes_filter error %d !\n", __func__, err);
+		state->modcode_filter = false;
 	}
 	state->stats_time = 0;
 	state->signal_info.locked = 0;
@@ -436,24 +437,24 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
         for (i=FE_SAT_QPSK_14; i < FE_SAT_MODCODE_UNKNOWN; i ++) {
             if (m & 1) {
                 dev_dbg(&state->base->i2c->dev, "%s: Modcode %02x enabled!\n", __func__, i);
-                modcode_mask[j].mod_code = i;
-                modcode_mask[j].pilots = FE_SAT_PILOTS_OFF;
-                modcode_mask[j].frame_length = FE_SAT_NORMAL_FRAME;
-                modcode_mask[j+1].mod_code = i;
-                modcode_mask[j+1].pilots = FE_SAT_PILOTS_ON;
-                modcode_mask[j+1].frame_length = FE_SAT_NORMAL_FRAME;
-                modcode_mask[j+2].mod_code = i;
-                modcode_mask[j+2].pilots = FE_SAT_PILOTS_OFF;
-                modcode_mask[j+2].frame_length = FE_SAT_SHORT_FRAME;
-                modcode_mask[j+3].mod_code = i;
-                modcode_mask[j+3].pilots = FE_SAT_PILOTS_ON;
-                modcode_mask[j+3].frame_length = FE_SAT_SHORT_FRAME;
+                state->modcode_mask[j].mod_code = i;
+                state->modcode_mask[j].pilots = FE_SAT_PILOTS_OFF;
+                state->modcode_mask[j].frame_length = FE_SAT_NORMAL_FRAME;
+                state->modcode_mask[j+1].mod_code = i;
+                state->modcode_mask[j+1].pilots = FE_SAT_PILOTS_ON;
+                state->modcode_mask[j+1].frame_length = FE_SAT_NORMAL_FRAME;
+                state->modcode_mask[j+2].mod_code = i;
+                state->modcode_mask[j+2].pilots = FE_SAT_PILOTS_OFF;
+                state->modcode_mask[j+2].frame_length = FE_SAT_SHORT_FRAME;
+                state->modcode_mask[j+3].mod_code = i;
+                state->modcode_mask[j+3].pilots = FE_SAT_PILOTS_ON;
+                state->modcode_mask[j+3].frame_length = FE_SAT_SHORT_FRAME;
                 j+=4;
             }
             m >>= 1;
         }
         state->modcode_filter = true;
-        err |= fe_stid135_set_modcodes_filter(state->base->handle, state->nr + 1, modcode_mask, j);
+        err |= fe_stid135_set_modcodes_filter(state->base->handle, state->nr + 1, state->modcode_mask, j);
         if (err != FE_LLA_NO_ERROR)
             dev_err(&state->base->i2c->dev, "%s: fe_stid135_set_modcodes_filter error %d !\n", __func__, err);
 	}
@@ -461,7 +462,7 @@ static int stid135_set_parameters(struct dvb_frontend *fe)
 	/* Set ISI after search */
 	if (p->stream_id != NO_STREAM_ID_FILTER) {
 		dev_dbg(&state->base->i2c->dev, "%s: set ISI %d !\n", __func__, p->stream_id & 0xFF);
-		err |= fe_stid135_set_mis_filtering(state->base->handle, state->nr + 1, TRUE, p->stream_id & 0xFF, 0xFF);
+		err |= fe_stid135_select_isi(state->base->handle, state->nr + 1, p->stream_id & 0xFF);
 	} else {
 		dev_dbg(&state->base->i2c->dev, "%s: disable ISI filtering !\n", __func__);
 		err |= fe_stid135_set_mis_filtering(state->base->handle, state->nr + 1, FALSE, 0, 0xFF);				
