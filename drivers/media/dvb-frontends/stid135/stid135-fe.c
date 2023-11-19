@@ -981,10 +981,12 @@ static int stid135_read_temp(struct dvb_frontend *fe, s16 *temp)
 
 	mutex_lock(&state->base->status_lock);
 	err = fe_stid135_get_soc_temperature(state->base->handle, temp);
+	fe_stid135_dump_regs(state->base->handle, state->rf_in + 1);
 	mutex_unlock(&state->base->status_lock);
 
 	if (err != FE_LLA_NO_ERROR)
 		dev_warn(&state->base->i2c->dev, "%s: fe_stid135_get_soc_temperature error %d !\n", __func__, err);
+
 	return 0;
 }
 
