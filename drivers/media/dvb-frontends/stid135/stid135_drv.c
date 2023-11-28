@@ -7247,8 +7247,7 @@ fe_lla_error_t fe_stid135_set_ts_parallel_serial(fe_stid135_handle_t handle, enu
 				
 				case FE_TS_PARALLEL_PUNCT_CLOCK:		
 					error |= ChipSetFieldImage(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSCFG2_TSFIFO_SERIAL(demod), 0); /* Parallel mode */
-					//error |= ChipSetFieldImage(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSCFG2_TSFIFO_DVBCI(demod), 0);  /* punctured clock */
-					error |= ChipSetFieldImage(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSCFG2_TSFIFO_DVBCI(demod), 1);  /* contiunous clock */
+					error |= ChipSetFieldImage(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSCFG2_TSFIFO_DVBCI(demod), 0);  /* punctured clock */
 					error |= ChipSetRegisters(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSCFG2(demod), 1);
 					/* Only demod#1 and demod#3 are able to output on SOC PIOs
 					It is a FPGA choice/limitation
