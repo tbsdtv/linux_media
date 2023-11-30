@@ -39,7 +39,7 @@
 #include "c8codew_addr_map.h"
 #include "stid135_addr_map.h"
 
-#define USER1
+//#define USER1
 //#define ENABLE_BBFRAME_FOR_GSE
 
 #define DmdLock_TIMEOUT_LIMIT      5500  // Fixed issue BZ#86598
@@ -11567,6 +11567,14 @@ fe_lla_error_t fe_stid135_dump_regs(fe_stid135_handle_t handle, enum fe_stid135_
 	printk("TSSTATE1 = 0x%02X\n",reg_val);
 	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSTATE0(demod_path), &reg_val);
 	printk("TSSTATE0 = 0x%02X\n",reg_val);
+
+	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSPEED(demod_path), &reg_val);
+	printk("TSSPEED = 0x%02X\n",reg_val);
+
+	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE1(demod_path), &reg_val);
+	printk("TSBITRATE1 = 0x%02X\n",reg_val);
+	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE0(demod_path), &reg_val);
+	printk("TSBITRATE0 = 0x%02X\n",reg_val);
 
 	return FE_LLA_NO_ERROR;
 }
