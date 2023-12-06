@@ -513,8 +513,10 @@ struct dvb_frontend_ops {
 
 	void(*eeprom_read)( struct dvb_frontend *fe,struct eeprom_info *peepinf);
 	void(*eeprom_write)( struct dvb_frontend *fe,struct eeprom_info *peepinf);
-    
-    int (*read_temp)(struct dvb_frontend* fe, s16* temp);
+
+	int(*read_temp)(struct dvb_frontend* fe, s16* temp);
+
+	int(*reg_read)( struct dvb_frontend *fe,struct reg_info *preg_info);
 };
 
 #ifdef __DVB_CORE__

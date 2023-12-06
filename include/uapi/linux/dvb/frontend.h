@@ -1099,6 +1099,12 @@ struct eeprom_info
 	__u8 data;
 };
 
+struct reg_info
+{
+	__u16 reg;
+	__u32 data;
+};
+
 #define FE_ECP3FW_READ    _IOR('o', 90, struct ecp3_info)
 #define FE_ECP3FW_WRITE   _IOW('o', 91, struct ecp3_info)
 
@@ -1111,6 +1117,7 @@ struct eeprom_info
 #define FE_EEPROM_READ    _IOR('o', 96, struct eeprom_info)
 #define FE_EEPROM_WRITE   _IOW('o', 97, struct eeprom_info)
 
-#define FE_READ_TEMP	  _IOR('o', 98, __s16)
+#define FE_READ_TEMP     _IOR('o', 98, __s16)
+#define FE_REG_READ      _IOR('o', 99, struct reg_info)
 
 #endif /* _DVBFRONTEND_H_ */

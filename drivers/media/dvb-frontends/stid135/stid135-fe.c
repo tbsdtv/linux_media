@@ -991,7 +991,6 @@ static int stid135_read_temp(struct dvb_frontend *fe, s16 *temp)
 
 	mutex_lock(&state->base->status_lock);
 	err = fe_stid135_get_soc_temperature(state->base->handle, temp);
-	fe_stid135_dump_regs(state->base->handle, state->rf_in + 1);
 	mutex_unlock(&state->base->status_lock);
 
 	if (err != FE_LLA_NO_ERROR)
@@ -1000,6 +999,20 @@ static int stid135_read_temp(struct dvb_frontend *fe, s16 *temp)
 	return 0;
 }
 
+static int stid135_reg_read(struct dvb_frontend *fe, struct reg_info *preg_info)
+{
+	struct stv *state = fe->demodulator_priv;
+	fe_lla_error_t err = FE_LLA_NO_ERROR;
+
+	mutex_lock(&state->base->status_lock);
+	err = fe_stid135_reg_read(state->base->handle, preg_info->reg, &preg_info->data);
+	mutex_unlock(&state->base->status_lock);
+
+	if (err != FE_LLA_NO_ERROR)
+		dev_warn(&state->base->i2c->dev, "%s: fe_stid135_reg_read error %d !\n", __func__, err);
+
+	return 0;
+}
 
 static struct dvb_frontend_ops stid135_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2, SYS_DSS },
@@ -1038,6 +1051,7 @@ static struct dvb_frontend_ops stid135_ops = {
 	.eeprom_read			= eeprom_read,
 	.eeprom_write			= eeprom_write,
     .read_temp			= stid135_read_temp,
+	.reg_read			= stid135_reg_read,
 };
 
 static struct stv_base *match_base(struct i2c_adapter  *i2c, u8 adr)

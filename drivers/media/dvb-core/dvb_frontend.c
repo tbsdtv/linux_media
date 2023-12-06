@@ -2458,8 +2458,15 @@ static int dvb_frontend_handle_ioctl(struct file *file,
 	dev_dbg(fe->dvb->device, "%s:\n", __func__);
 
 	switch (cmd) {
+	case FE_REG_READ:
+		if (fe->ops.reg_read) {
+			struct reg_info *info = parg;
+			err = fe->ops.reg_read(fe, info);
+		}
+		err = 0;
+		break;
 
-    case FE_READ_TEMP:
+	case FE_READ_TEMP:
 		if (fe->ops.read_temp) {
 				err = fe->ops.read_temp(fe, parg);
 		}

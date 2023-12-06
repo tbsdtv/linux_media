@@ -11532,49 +11532,10 @@ fe_lla_error_t get_current_llr(fe_stid135_handle_t handle,enum fe_stid135_demod 
 	return FE_LLA_NO_ERROR;
 }
 
-fe_lla_error_t fe_stid135_dump_regs(fe_stid135_handle_t handle, enum fe_stid135_demod demod_path)
+fe_lla_error_t fe_stid135_reg_read(fe_stid135_handle_t handle, u16 reg_addr, u32* pdata)
 {
 	struct fe_stid135_internal_param *pParams;
-	u32 reg_val;
 	pParams = (struct fe_stid135_internal_param *) handle;
 
-	printk("-----------------------------------------------------\n");
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSTATUS(demod_path), &reg_val);
-	printk("TSSTATUS = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSTATUS2(demod_path), &reg_val);
-	printk("TSSTATUS2 = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_PDELSTATUS1(demod_path), &reg_val);
-	printk("PDELSTATUS1 = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_BBFCRCKO1(demod_path), &reg_val);
-	printk("BBFCRCKO1 = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_BBFCRCKO0(demod_path), &reg_val);
-	printk("BBFCRCKO0 = 0x%02X\n",reg_val);
-
-	ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSTATUS(demod_path), 0);
-	ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSTATUS2(demod_path), 0);
-	ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_PDELSTATUS1(demod_path), 0);
-	ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_BBFCRCKO1(demod_path), 0);
-	ChipSetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_PKTDELIN_BBFCRCKO0(demod_path), 0);
-
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSCFG2(demod_path), &reg_val);
-	printk("TSCFG2 = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSCFG1(demod_path), &reg_val);
-	printk("TSCFG1 = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSCFG0(demod_path), &reg_val);
-	printk("TSCFG0 = 0x%02X\n",reg_val);
-
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSTATE1(demod_path), &reg_val);
-	printk("TSSTATE1 = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSTATE0(demod_path), &reg_val);
-	printk("TSSTATE0 = 0x%02X\n",reg_val);
-
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSSPEED(demod_path), &reg_val);
-	printk("TSSPEED = 0x%02X\n",reg_val);
-
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE1(demod_path), &reg_val);
-	printk("TSBITRATE1 = 0x%02X\n",reg_val);
-	ChipGetOneRegister(pParams->handle_demod, (u16)REG_RC8CODEW_DVBSX_HWARE_TSBITRATE0(demod_path), &reg_val);
-	printk("TSBITRATE0 = 0x%02X\n",reg_val);
-
-	return FE_LLA_NO_ERROR;
+	return ChipGetOneRegister(pParams->handle_demod, reg_addr, pdata);
 }
