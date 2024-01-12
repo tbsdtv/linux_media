@@ -55,6 +55,10 @@ static unsigned int ts_nosync;
 module_param(ts_nosync, int, 0644);
 MODULE_PARM_DESC(ts_nosync, "TS FIFO Minimum latence mode (default:off)");
 
+static unsigned int bbframe;
+module_param(bbframe, int, 0644);
+MODULE_PARM_DESC(bbframe, "BBFrame L3 encapsulation for GCS, GSE-HEM (default:off)");
+
 struct stv_base {
 	struct list_head     stvlist;
 
@@ -143,6 +147,7 @@ static int stid135_probe(struct stv *state)
 	init_params.roll_off		=  	FE_SAT_35; // NYQUIST Filter value (used for DVBS1/DSS, DVBS2 is automatic)
 	init_params.tuner_iq_inversion	=	FE_SAT_IQ_NORMAL;
 	init_params.ts_nosync		=	ts_nosync;
+	init_params.bbframe		=	bbframe;
 	err = fe_stid135_init(&init_params,&state->base->handle);
 
 	if (err != FE_LLA_NO_ERROR) {

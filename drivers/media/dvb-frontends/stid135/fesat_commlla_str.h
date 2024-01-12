@@ -284,6 +284,7 @@ struct fe_sat_init_params {
 		enum fe_sat_iq_inversion	tuner_iq_inversion;	/* Tuner 1 Global IQ setting (coonction of IQ from the tuner1 to the demod */
 		enum fe_sat_search_standard	standard;
 		BOOL ts_nosync;
+		BOOL bbframe;
 	};
 
 	/****************************************************************

@@ -259,6 +259,7 @@ struct fe_stid135_internal_param {
 					lo_frequency; /* Temporary definition 
 					for LO frequency   */
 	BOOL			ts_nosync;
+	BOOL			bbframe;
 	enum fe_sat_iq_inversion 	tuner_global_iqv_inv[8]; /* Global I,Q 
 					inversion I,Q conection from tuner to 
 					demod */
