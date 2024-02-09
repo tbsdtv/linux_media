@@ -137,8 +137,10 @@ struct m88rs6060_cfg {
 	void (*read_properties)(struct i2c_adapter * i2c, u8 reg, u32 * buf);
 	void (*write_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 buf);
 	void (*read_eeprom) (struct i2c_adapter *i2c,u8 reg, u8 *buf);
-	/*rf switch for 6590se*/
+	/*rf switch for 6590se 5590*/
 	void (*RF_switch)(struct i2c_adapter * i2c,u8 rf_in,u8 flag);
+	void (*TS_switch)(struct i2c_adapter * i2c,u8 flag);  //5590
+	void (*LED_switch)(struct i2c_adapter * i2c,u8 flag); //5590	
 };
 
 #endif

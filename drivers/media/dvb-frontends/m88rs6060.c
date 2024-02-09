@@ -55,9 +55,8 @@ struct m88rs6060_dev {
 	u64 post_bit_count;
 	struct m88rs6060_base *base;
 	struct si5351_priv *priv;
-
 	bool newTP;
-	
+
 };
 
 static u16 mes_log10[] = {
@@ -1957,8 +1956,13 @@ static int m88rs6060_set_frontend(struct dvb_frontend *fe)
 	}
 
 	if(dev->config.RF_switch)
-		dev->config.RF_switch(i2c,dev->config.num,1);  //
+		dev->config.RF_switch(i2c,dev->config.num,0);  //
+	if(dev->config.TS_switch)
+		dev->config.TS_switch(i2c,1);  //
 		
+	if(dev->config.LED_switch)
+		dev->config.LED_switch(i2c,2);  //
+				
 	mutex_lock(&dev->base->i2c_mutex);
 	
 	symbol_rate_KSs = c->symbol_rate / 1000;
@@ -3484,6 +3488,8 @@ static int m88rs6060_probe(struct i2c_client *client)
 	dev->config.read_eeprom = cfg->read_eeprom;
 	dev->config.write_eeprom = cfg->write_eeprom;
 	dev->config.RF_switch	= cfg->RF_switch;
+	dev->config.TS_switch = cfg->TS_switch;
+	dev->config.LED_switch = cfg->LED_switch;
 	dev->config.envelope_mode = cfg->envelope_mode;
 	dev->config.disable_22k   = cfg->disable_22k;
 	dev->TsClockChecked = false;

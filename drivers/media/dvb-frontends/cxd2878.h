@@ -16,6 +16,9 @@
 #define SONY_DEMOD_MAKE_IFFREQ_CONFIG(iffreq) ((u32)(((iffreq)/48.0)*16777216.0 + 0.5))
 #define SONY_DEMOD_ATSC_MAKE_IFFREQ_CONFIG(iffreq) ((u32)(((iffreq)/24.0)*4294967296.0 + 0.5))
 
+#define MASKUPPER(n) (((n) == 0) ? 0 : (0xFFFFFFFFU << (32 - (n))))
+#define MASKLOWER(n) (((n) == 0) ? 0 : (0xFFFFFFFFU >> (32 - (n))))
+
 struct cxd2878_config{
 	u8 addr_slvt;
 	enum sony_demod_xtal_t xtal;
@@ -83,6 +86,8 @@ struct cxd2878_config{
 	//for 6590SE mode change(T or s);
 	void (*RF_switch)(struct i2c_adapter * i2c,u8 rf_in,u8 flag);
 	u8 rf_port; //for change command
+	void (*TS_switch)(struct i2c_adapter * i2c,u8 flag);  //5590
+	void (*LED_switch)(struct i2c_adapter * i2c,u8 flag); //5590	
 };
 
 #if IS_REACHABLE(CONFIG_DVB_CXD2878)

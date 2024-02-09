@@ -744,7 +744,6 @@ static int gx1133_i2c_select(struct i2c_adapter *adap,
 	struct gx1133_priv *priv = mux_priv;
 #endif
 	int ret;
-	u8 temp;
 	u8 buf[3];
 	struct i2c_msg msg_wr = {
 		.addr = priv->cfg->i2c_address,
@@ -1115,18 +1114,362 @@ static int gx1133_sleep(struct dvb_frontend *fe)
 	return 0;
 }
 
+static u32 root_2_gold(u32 root)
+{
+	int i;
+
+	for ( i = 0; i < 4096; i++ )
+	{
+		if ( root == 133647 )
+			return 16384 - i;
+		if ( root > 133647 )
+		{
+			if ( root == 187706 )
+				return 77824 - i;
+			if ( root > 187706 )
+			{
+				if ( root == 201999 )
+					return 188416 - i;
+				if ( root > 201999 )
+				{
+					if ( root == 241848 )
+						return 237568 - i;
+					if ( root > 241848 )
+					{
+						if ( root == 250156 )
+							return 143360 - i;
+						if ( root > 250156 )
+						{
+							if ( root == 252451 )
+								return 249856 - i;
+							if ( root == 255652 )
+								return 135168 - i;
+						}
+						else if ( root == 250024 )
+						{
+							return 180224 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 218494:
+							return 4096 - i;
+						case 220394:
+							return 118784 - i;
+						case 204289:
+							return 221184 - i;
+						}
+					}
+				}
+				else
+				{
+					if ( root == 191286 )
+						return 151552 - i;
+					if ( root > 191286 )
+					{
+						switch ( root )
+						{
+						case 200200:
+							return 28672 - i;
+						case 200201:
+							return 73728 - i;
+						case 194133:
+							return 176128 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 190045:
+							return 102400 - i;
+						case 190773:
+							return 122880 - i;
+						case 189090:
+							return 208896 - i;
+						}
+					}
+				}
+			}
+			else
+			{
+				if ( root == 160570 )
+					return 8192 - i;
+				if ( root > 160570 )
+				{
+					if ( root == 173108 )
+						return 20480 - i;
+					if ( root > 173108 )
+					{
+						switch ( root )
+						{
+						case 177342:
+							return 192512 - i;
+						case 181283:
+							return 172032 - i;
+						case 176922:
+							return 155648 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 165152:
+							return 53248 - i;
+						case 167995:
+							return 94208 - i;
+						case 164627:
+							return 184320 - i;
+						}
+					}
+				}
+				else
+				{
+					if ( root == 151579 )
+						return 139264 - i;
+					if ( root > 151579 )
+					{
+						switch ( root )
+						{
+						case 153836:
+							return 90112 - i;
+						case 155666:
+							return 81920 - i;
+						case 153128:
+							return 200704 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 141589:
+							return 212992 - i;
+						case 141681:
+							return 233472 - i;
+						case 139537:
+							return 98304 - i;
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			if ( root == 52291 )
+				return 12288 - i;
+			if ( root > 52291 )
+			{
+				if ( root == 80798 )
+					return 225280 - i;
+				if ( root > 80798 )
+				{
+					if ( root == 125012 )
+						return 147456 - i;
+					if ( root > 125012 )
+					{
+						switch ( root )
+						{
+						case 127037:
+							return 69632 - i;
+						case 129117:
+							return 86016 - i;
+						case 125013:
+							return 57344 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 100420:
+							return 32768 - i;
+						case 114248:
+							return 61440 - i;
+						case 81022:
+							return 159744 - i;
+						}
+					}
+				}
+				else
+				{
+					if ( root == 70927 )
+						return 217088 - i;
+					if ( root > 70927 )
+					{
+						switch ( root )
+						{
+						case 78346:
+							return 253952 - i;
+						case 78878:
+							return 40960 - i;
+						case 76918:
+							return 204800 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 58674:
+							return 126976 - i;
+						case 66566:
+							return 163840 - i;
+						case 54024:
+							return 110592 - i;
+						}
+					}
+				}
+			}
+			else
+			{
+				if ( root == 21219 )
+					return 45056 - i;
+				if ( root > 21219 )
+				{
+					if ( root == 42033 )
+						return 24576 - i;
+					if ( root > 42033 )
+					{
+						switch ( root )
+						{
+						case 49184:
+							return 65536 - i;
+						case 50211:
+							return 114688 - i;
+						case 43526:
+							return 258048 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 31501:
+							return 241664 - i;
+						case 37387:
+							return 245760 - i;
+						case 30990:
+							return 167936 - i;
+						}
+					}
+				}
+				else
+				{
+					if ( root == 4904 )
+						return 36864 - i;
+					if ( root > 4904 )
+					{
+						switch ( root )
+						{
+						case 13327:
+							return 49152 - i;
+						case 13836:
+							return 106496 - i;
+						case 12297:
+							return 229376 - i;
+						}
+					}
+					else
+					{
+						switch ( root )
+						{
+						case 515:
+							return 196608 - i;
+						case 4104:
+							return 131072 - i;
+						case 1:
+							return (262143 - i) % 262143;
+						}
+					}
+				}
+			}
+		}
+		root = (((((root & 0x80) != 0) + (root & 1)) & 1) << 17) | (root >> 1);
+	}
+	return i;
+}
+
+static int gx1133_set_pls_n(struct gx1133_priv *priv, u32 n)
+{
+	int i, nx, ny;
+	int shift=131072;
+	unsigned int scram_0x=1;
+	unsigned int scram_1x=0x8050;
+	unsigned int scram_1y=0;
+	unsigned int xx_18,xx_7;
+	u8 tmp;
+
+	nx = n+shift;
+	ny = shift;
+	
+	gx1133_rd(priv,DVB_S2,GX1133_SCRAM_1X1Y0X_H,&tmp);
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_1X1Y0X_H,tmp & 0xbf);
+
+	for ( i=0; i<n; i++ )
+	{
+		scram_0x = scram_0x << 1;
+		xx_18 = (scram_0x & 0x40000) >> 18;
+		xx_7 = (scram_0x & 0x80) ^ (xx_18 << 7);
+		scram_0x = (scram_0x & 0x7ff7f) | xx_18 | xx_7;
+
+		scram_1x = scram_1x<<1;
+		xx_18 = (scram_1x & 0x40000) >> 18;
+		xx_7 = (scram_1x & 0x80) ^ (xx_18 << 7);
+		scram_1x = (scram_1x & 0x7ff7f) | xx_18 | xx_7;
+	}
+	scram_1y = 0xff60;
+	
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_0X_L,scram_0x&0xff);
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_0X_M,(scram_0x>>8)&0xff);
+
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_1X_L,scram_1x&0xff);
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_1X_M,(scram_1x>>8)&0xff);
+
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_1Y_L,scram_1y&0xff);
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_1Y_M,(scram_1y>>8)&0xff);
+
+	gx1133_wr(priv,DVB_S2,GX1133_SCRAM_1X1Y0X_H,(((scram_1x>>16)&0x03)<<4)|(((scram_1y>>16)&0x03)<<2)|((scram_0x>>16)&0x03));
+
+	//printk("scrm_0x = %x\n",scram_0x);
+	//printk("scrm_1x = %x\n",scram_1x);
+	//printk("scrm_1y = %x\n",scram_1y);
+
+	return 0;
+}
+
 static int gx1133_set_frontend(struct dvb_frontend *fe)
 {
 	struct gx1133_priv *priv = fe->demodulator_priv;
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	enum fe_status tunerstat;
 	int ret, i;
-	u32 s;
+	u32 s, pls_mode, pls_code;
+	u8 isi;
 	u8 buf[4],temp;
+
+	if (c->stream_id != NO_STREAM_ID_FILTER) {
+		isi = c->stream_id & 0xff;
+		pls_mode = (c->stream_id >> 26) & 3;
+		pls_code = (c->stream_id >> 8) & 0x3ffff;
+		if (!pls_mode && !pls_code)
+			pls_code = 1;
+	} else {
+		isi = 0;
+		pls_mode = 0;
+		pls_code = 1;
+	}
+
+	if (c->scrambling_sequence_index) {
+		pls_mode = 1;
+		pls_code = c->scrambling_sequence_index;
+	}
 
 	dev_dbg(&priv->i2c->dev, "%s()\n", __func__);
 
-	printk("set frontends\n");
 	/* do some basic parameter validation */
 	switch (c->delivery_system) {
 	case SYS_DVBS:
@@ -1149,6 +1492,15 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 		return -EINVAL;
 	}
 
+	/* Set PLS before search */
+	dev_dbg(&priv->i2c->dev, "%s: set pls_mode %d, pls_code %d !\n", __func__, pls_mode, pls_code);
+	gx1133_set_pls_n(priv, pls_mode ? pls_code : root_2_gold(pls_code));
+
+	/* Reset ISI filter */
+	gx1133_rd(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,&temp);
+	temp&=0xfe;
+	gx1133_wr(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,temp);
+	
 	gx1133_rd(priv,DVB_S2,GX1133_AUTO_RST,&temp);
 	temp|=0x01;
 	gx1133_wr(priv,DVB_S2,GX1133_AUTO_RST,temp);
@@ -1176,6 +1528,7 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 	buf[2] = 0;
 	buf[3] = 0;
 	ret = gx1133_wrm(priv, buf, 4);
+
 	if (ret)
 		return ret;
 
@@ -1191,7 +1544,6 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 #endif
 		}
 
-
 	gx1133_rd(priv,DVB_S2,GX1133_RST,&temp);
 	temp|=0x01;
 	gx1133_wr(priv,DVB_S2,GX1133_RST,temp);	
@@ -1201,7 +1553,21 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 	for (i = 0; i<15; i++) {
 		ret = gx1133_read_status(fe, &tunerstat);
 		if (tunerstat & FE_HAS_LOCK)
+		{
+			/* Setup ISI filtering */
+			if (c->delivery_system == SYS_DVBS2)
+			{
+				gx1133_rd(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,&temp);
+				if (c->stream_id != NO_STREAM_ID_FILTER)
+					temp|=1;
+				else
+					temp&=0xfe;
+				gx1133_wr(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,temp);
+				gx1133_wr(priv,DVB_S2,GX1133_LDPC_TSID_CFG,isi);
+				
+			}
 			return 0;
+		}
 		msleep(20);
 	}
 	return -EINVAL;
@@ -1299,7 +1665,8 @@ static struct dvb_frontend_ops gx1133_ops = {
 			FE_CAN_FEC_4_5 | FE_CAN_FEC_5_6 | FE_CAN_FEC_6_7 |
 			FE_CAN_FEC_7_8 | FE_CAN_FEC_AUTO |
 			FE_CAN_2G_MODULATION |
-			FE_CAN_QPSK | FE_CAN_RECOVER
+			FE_CAN_QPSK | FE_CAN_RECOVER |
+			FE_CAN_MULTISTREAM
 	},
 	.release = gx1133_release,
 

@@ -15,12 +15,14 @@
 #include "si2157.h"
 #include "av201x.h"
 #include "tbs_priv.h"
+#include "m88rs6060.h"
+#include "cxd2878.h"
 
 #define TBS5590_READ_MSG 0
 #define TBS5590_WRITE_MSG 1
 
-#define TBS5590_RC_QUERY (0x1a00)
-#define TBS5590_VOLTAGE_CTRL (0x1800)
+//#define TBS5590_RC_QUERY (0x1a00)
+//#define TBS5590_VOLTAGE_CTRL (0x1800)
 
 
 #define ecp3_addr 0x50
@@ -80,8 +82,8 @@ static int tbs5590_i2c_transfer(struct i2c_adapter *adap,
 {
 	struct dvb_usb_device *d = i2c_get_adapdata(adap);
 	int i = 0;
-	u8 buf6[20];
-	u8 inbuf[20];
+	u8 buf6[50];
+	u8 inbuf[50];
 
 	if (!d)
 		return -ENODEV;
@@ -104,46 +106,25 @@ static int tbs5590_i2c_transfer(struct i2c_adapter *adap,
 
 		break;
 	case 1:
-		switch (msg[0].addr) {
-		case 0x67:
-		case 0x62:
-		case 0x61:
-			if (msg[0].flags == 0) {
-				buf6[0] = msg[0].len+1;//lenth
-				buf6[1] = msg[0].addr<<1;//addr
-				for(i=0;i<msg[0].len;i++) {
-					buf6[2+i] = msg[0].buf[i];//register
-				}
-				tbs5590_op_rw(d->udev, 0x80, 0, 0,
-					buf6, msg[0].len+2, TBS5590_WRITE_MSG);
-			} else {
-				buf6[0] = msg[0].len;//length
-				buf6[1] = (msg[0].addr<<1) | 0x01;//addr
-				tbs5590_op_rw(d->udev, 0x93, 0, 0,
-						buf6, 2, TBS5590_WRITE_MSG);
-				//msleep(5);
-				tbs5590_op_rw(d->udev, 0x91, 0, 0,
-					inbuf, buf6[0], TBS5590_READ_MSG);
-				memcpy(msg[0].buf, inbuf, msg[0].len);
+		if (msg[0].flags == 0) {
+			buf6[0] = msg[0].len+1;//lenth
+			buf6[1] = msg[0].addr<<1;//addr
+			for(i=0;i<msg[0].len;i++) {
+				buf6[2+i] = msg[0].buf[i];//register
 			}
-			//msleep(3);
-		break;
-		case (TBS5590_VOLTAGE_CTRL):
-			buf6[0] = 3;
-			buf6[1] = msg[0].buf[0];
-			tbs5590_op_rw(d->udev, 0x8a, 0, 0,
+			tbs5590_op_rw(d->udev, 0x80, 0, 0,
+				buf6, msg[0].len+2, TBS5590_WRITE_MSG);
+		} else {
+			buf6[0] = msg[0].len;//length
+			buf6[1] = (msg[0].addr<<1) | 0x01;//addr
+			tbs5590_op_rw(d->udev, 0x93, 0, 0,
 					buf6, 2, TBS5590_WRITE_MSG);
-			break;
-		case (TBS5590_RC_QUERY):
-			tbs5590_op_rw(d->udev, 0xb8, 0, 0,
-					buf6, 4, TBS5590_READ_MSG);
-			msg[0].buf[0] = buf6[2];
-			msg[0].buf[1] = buf6[3];
-			//msleep(3);
-			//info("TBS5590_RC_QUERY %x %x %x %x\n",
-			//		buf6[0],buf6[1],buf6[2],buf6[3]);
-			break;
+			//msleep(5);
+			tbs5590_op_rw(d->udev, 0x91, 0, 0,
+				inbuf, buf6[0], TBS5590_READ_MSG);
+			memcpy(msg[0].buf, inbuf, msg[0].len);
 		}
+		//msleep(3);	
 
 		break;
 	}
@@ -371,7 +352,25 @@ static struct tbs_cfg tbs5590_tbs_cfg = {
 		.read_properties = NULL ,
 
 } ;
-
+static struct cxd2878_config tbs5590_Gl6822_cfg = {
+	
+		.addr_slvt = 0x64,
+		.xtal      = SONY_DEMOD_XTAL_24000KHz,
+		.tuner_addr = 0x60,
+		.tuner_xtal = SONY_ASCOT3_XTAL_24000KHz,
+		.ts_mode	= 1,
+		.ts_ser_data = 0,
+		.ts_clk = 1,
+		.ts_clk_mask= 1,
+		.ts_valid = 0,
+		.atscCoreDisable = 0,
+		.lock_flag = 1,
+		.write_properties = NULL, 
+		.read_properties = NULL,
+		.RF_switch = tbs5590_RF_ctrl,
+		.TS_switch = tbs5590_TS_ctrl,
+		.LED_switch = tbs5590_LED_ctrl,
+	};
 static int tbs5590_frontend_attach(struct dvb_usb_adapter *adap)
 {
 	struct dvb_usb_device *d = adap->dev;
@@ -382,9 +381,35 @@ static int tbs5590_frontend_attach(struct dvb_usb_adapter *adap)
 	struct i2c_board_info info;
 	struct si2183_config si2183_config;
 	struct si2157_config si2157_config;
+	struct m88rs6060_cfg m88rs6060_config;
 	u8 buf[20];
+	u16 hardware_ver;
 
+	buf[0] = 1+2;   //lenth
+	buf[1] = 0x50; //chipaddr
+	buf[2] = 0x2;      //ecp3 register addr
+	buf[3] = 0x55;
+	tbs5590_op_rw(d->udev, 0x80, 0, 0,
+		buf, 4, TBS5590_WRITE_MSG);
 
+	//	read	
+	buf[0] = 2;//lenth
+	buf[1] = 0x50;//demod addr
+	//register
+	buf[2] = 0x0;
+	
+	tbs5590_op_rw(d->udev, 0x90, 0, 0,
+				buf, 3, TBS5590_WRITE_MSG);
+	//msleep(5);
+	tbs5590_op_rw(d->udev, 0x91, 0, 0,
+				buf, buf[0], TBS5590_READ_MSG);
+	
+	
+	hardware_ver = (buf[0]<<8)+buf[1];
+	printk("Get ecp3ID High Bit 0x%x  Low Bit 0x%x ,hardware version %x \n",buf[0],buf[1],hardware_ver);
+	if(hardware_ver==0)return 0;
+	
+	if(hardware_ver == 0x5301){	
 	/* attach frontend */
 	memset(&si2183_config,0,sizeof(si2183_config));
 	si2183_config.i2c_adapter = &adapter;
@@ -470,7 +495,51 @@ static int tbs5590_frontend_attach(struct dvb_usb_adapter *adap)
 		
 	}
 
+	}
+	else if(hardware_ver==0x5590){
+	/*attach ter/cable frontend*/
+	adap->fe_adap[0].fe = dvb_attach(cxd2878_attach, &tbs5590_Gl6822_cfg, &d->i2c_adap);
 
+	if(adap->fe_adap[0].fe==NULL){
+		return -ENODEV;
+	}
+	
+	/* attach satellite frontend */
+	memset(&m88rs6060_config,0,sizeof(m88rs6060_config));
+	m88rs6060_config.fe = &adap->fe_adap[0].fe2;
+	m88rs6060_config.clk = 27000000;
+	m88rs6060_config.i2c_wr_max = 33;
+	m88rs6060_config.ts_mode = MtFeTsOutMode_Parallel;
+	m88rs6060_config.ts_pinswitch = 0;
+	m88rs6060_config.envelope_mode = 0;
+	m88rs6060_config.demod_adr = 0x69;
+	m88rs6060_config.tuner_adr = 0x2c;
+	m88rs6060_config.repeater_value = 0x11;
+	m88rs6060_config.read_properties = NULL;
+	m88rs6060_config.write_properties  = NULL;
+	m88rs6060_config.RF_switch = tbs5590_RF_ctrl;
+	m88rs6060_config.TS_switch = tbs5590_TS_ctrl;
+	m88rs6060_config.LED_switch = tbs5590_LED_ctrl;
+
+	memset(&info, 0, sizeof(struct i2c_board_info));
+	strlcpy(info.type, "m88rs6060", I2C_NAME_SIZE);
+	info.addr = 0x69;
+	info.platform_data = &m88rs6060_config;
+	request_module(info.type);
+	client_demod = i2c_new_client_device(&d->i2c_adap,&info);
+	if(!i2c_client_has_driver(client_demod))
+				return -ENODEV;
+	if (!try_module_get(client_demod->dev.driver->owner)) {
+			i2c_unregister_device(client_demod);
+			return -ENODEV;
+	}
+//	buf[0] = 1;
+//	buf[1] = 0;
+//	tbs5590_op_rw(d->udev, 0x8a, 0, 0,
+//				buf, 2, TBS5590_WRITE_MSG);
+	
+	adap->fe_adap[0].fe2->ops.set_voltage = tbs5590_set_voltage;
+	}
 
 	buf[0] = 0;
 	buf[1] = 0;
@@ -481,28 +550,7 @@ static int tbs5590_frontend_attach(struct dvb_usb_adapter *adap)
 	tbs5590_op_rw(d->udev, 0x8a, 0, 0,
 			buf, 2, TBS5590_WRITE_MSG);
 
-	buf[0] = 1+2;   //lenth
-	buf[1] = 0x50; //chipaddr
-	buf[2] = 0x2;      //ecp3 register addr
-	buf[3] = 0x55;
-	tbs5590_op_rw(d->udev, 0x80, 0, 0,
-		buf, 4, TBS5590_WRITE_MSG);
 
-	//	read	
-	buf[0] = 2;//lenth
-	buf[1] = 0x50;//demod addr
-	//register
-	buf[2] = 0x0;
-	
-	tbs5590_op_rw(d->udev, 0x90, 0, 0,
-				buf, 3, TBS5590_WRITE_MSG);
-	//msleep(5);
-	tbs5590_op_rw(d->udev, 0x91, 0, 0,
-				buf, buf[0], TBS5590_READ_MSG);
-	
-	
-
-	deb_xfer("Get ecp3ID High Bit 0x%x  Low Bit 0x%x \n",buf[0],buf[1]);
 	
 	strlcpy(adap->fe_adap[0].fe->ops.info.name,d->props.devices[0].name,52);
 	strcat(adap->fe_adap[0].fe->ops.info.name," DVB-T/T2/C/C2/ISDB-T");
