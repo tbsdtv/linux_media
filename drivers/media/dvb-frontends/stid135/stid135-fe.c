@@ -87,6 +87,7 @@ struct stv_base {
 	u32  (*set_TSparam)(struct i2c_adapter *i2c,int tuner,int time,bool flag);
 	//end
 	int vglna;
+	bool control_22k; //for 6916
 };
 
 struct stv {
@@ -215,9 +216,15 @@ static int stid135_probe(struct stv *state)
 		err |= fe_stid135_tuner_enable(p_params->handle_demod, AFE_TUNER3);
 		err |= fe_stid135_tuner_enable(p_params->handle_demod, AFE_TUNER4);
 		err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER1, FE_SAT_DISEQC_2_3_PWM);
-		err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER2, FE_SAT_22KHZ_Continues);
-		err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER3, FE_SAT_DISEQC_2_3_PWM);
-		err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER4, FE_SAT_22KHZ_Continues);
+	        err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER3, FE_SAT_DISEQC_2_3_PWM);	
+		if(state->base->control_22k){
+		     err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER2, FE_SAT_22KHZ_Continues);
+		     err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER4, FE_SAT_22KHZ_Continues);
+		}
+		else{
+		      err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER2, FE_SAT_DISEQC_2_3_PWM);
+		      err |= fe_stid135_diseqc_init(state->base->handle,AFE_TUNER4, FE_SAT_DISEQC_2_3_PWM);
+		    }
 		if (state->base->set_voltage) {		  
 			state->base->set_voltage(state->base->i2c, SEC_VOLTAGE_13, 0);
 			state->base->set_voltage(state->base->i2c, SEC_VOLTAGE_13, 1);
@@ -818,7 +825,8 @@ static int stid135_set_tone(struct dvb_frontend *fe, enum fe_sec_tone_mode tone)
 
 		return 0;
 	}
-
+	if(state->base->control_22k==false)   //for 6916 demod1 ,disable the 22k function.
+		return 0;
 	mutex_lock(&state->base->status_lock);
 	err = fe_stid135_set_22khz_cont(state->base->handle,state->rf_in + 1, tone == SEC_TONE_ON);
 	mutex_unlock(&state->base->status_lock);
@@ -1086,6 +1094,7 @@ struct dvb_frontend *stid135_attach(struct i2c_adapter *i2c,
 		base->set_TSsampling = cfg->set_TSsampling;
 		base->set_TSparam  = cfg->set_TSparam;
 		base->vglna		=	cfg->vglna;    //for stvvglna 6909x v2 6903x v2
+		base->control_22k	= cfg->control_22k;
 
 		mutex_init(&base->status_lock);
 

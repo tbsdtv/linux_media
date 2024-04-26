@@ -1019,6 +1019,7 @@ static struct stid135_cfg tbs6903x_stid135_cfg = {
 	.set_TSsampling = NULL,
 	.set_TSparam = NULL,
 	.vglna = 0,
+	.control_22k = true,
 };
 
 static struct stid135_cfg tbs6909x_stid135_cfg = {
@@ -1033,6 +1034,7 @@ static struct stid135_cfg tbs6909x_stid135_cfg = {
 	.set_TSsampling = NULL,
 	.set_TSparam = NULL,
 	.vglna = 0,
+	.control_22k = true,
 	
 };
 static struct stid135_cfg tbs6903x_V2_stid135_cfg = {
@@ -1047,6 +1049,7 @@ static struct stid135_cfg tbs6903x_V2_stid135_cfg = {
 	.set_TSsampling = NULL,
 	.set_TSparam = NULL,
 	.vglna = 1,
+	.control_22k = true,
 };
 
 static struct stid135_cfg tbs6909x_V2_stid135_cfg = {
@@ -1061,6 +1064,7 @@ static struct stid135_cfg tbs6909x_V2_stid135_cfg = {
 	.set_TSsampling = NULL,
 	.set_TSparam = NULL,
 	.vglna = 2,
+	.control_22k = true,
 };
 
 static struct stid135_cfg tbs6912_stid135_cfg = {
@@ -1075,8 +1079,36 @@ static struct stid135_cfg tbs6912_stid135_cfg = {
 	.set_TSsampling = Set_TSsampling,
 	.set_TSparam = Set_TSparam,
 	.vglna = false,
+	.control_22k = true,
 };
 
+static struct stid135_cfg tbs6916_stid135_cfg[] = {
+{
+	.adr		= 0x68,
+	.clk		= 27,
+	.ts_mode	= TS_STFE,
+	.set_voltage	= max_set_voltage,
+	.write_properties = ecp3_spi_write, 
+	.read_properties = ecp3_spi_read,
+	.set_TSsampling = NULL,
+	.set_TSparam = NULL,
+	.vglna   =false,
+	.control_22k = true,
+	},
+	{
+	.adr		= 0x68,
+	.clk		= 27,
+	.ts_mode	= TS_STFE,
+	.set_voltage	= max_set_voltage,
+	.write_properties = NULL, 
+	.read_properties = NULL,
+	.set_TSsampling = NULL,
+	.set_TSparam = NULL,
+	.vglna   =false,
+	.control_22k = false,
+	},
+	
+};
 static struct rda5816_config rda5816_cfg[] = {
 	{
 		.i2c_adr = 0x8,
@@ -2460,7 +2492,20 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 
 		tbsecp3_ca_init(adapter, adapter->nr);
 		break;
+	case TBSECP3_BOARD_TBS6916:
 
+		if(adapter->nr<8)
+			adapter->fe = dvb_attach(stid135_attach, i2c,
+					&tbs6916_stid135_cfg[0], adapter->nr, adapter->nr/2);
+		else{
+		
+			adapter->nr -= 8;
+			adapter->fe = dvb_attach(stid135_attach, i2c,
+					&tbs6916_stid135_cfg[1], adapter->nr, adapter->nr/2);	
+		}
+	
+		if (adapter->fe == NULL)
+			goto frontend_atach_fail;
 	case TBSECP3_BOARD_TBS6909X:
 		if(pci->subsystem_device==0x0010)
 			adapter->fe = dvb_attach(stid135_attach, i2c,
