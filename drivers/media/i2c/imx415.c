@@ -1272,8 +1272,9 @@ static int imx415_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static DEFINE_RUNTIME_DEV_PM_OPS(imx415_pm_ops, imx415_runtime_suspend,
-				 imx415_runtime_resume, NULL);
+static const struct dev_pm_ops imx415_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(imx415_runtime_suspend, imx415_runtime_resume)
+};
 
 static const struct of_device_id imx415_of_match[] = {
 	{ .compatible = "sony,imx415" },
