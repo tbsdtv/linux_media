@@ -24,7 +24,7 @@ struct tbsecp3_board tbsecp3_boards[] = {
 		.adapters	= 16,
 		.i2c_speed	= 39,
 		.eeprom_i2c	= 1,
-		.eeprom_addr	= 0x00,
+		.eeprom_addr	= 0x02,
 		.adap_config	= {
 			{
 				.ts_in = 0,
