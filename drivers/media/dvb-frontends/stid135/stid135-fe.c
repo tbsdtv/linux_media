@@ -696,8 +696,8 @@ static int stid135_read_status(struct dvb_frontend *fe, enum fe_status *status)
 
 	if (!state->stats_time ||
 		(time_after(jiffies, state->stats_time))) {
-		/* Prevent retrieving stats faster than once per 5 seconds */
-		state->stats_time = jiffies + msecs_to_jiffies(5000);
+		/* Prevent retrieving stats faster than once per 20 seconds */
+		state->stats_time = jiffies + msecs_to_jiffies(20000);
 
 		err = fe_stid135_get_signal_info(state->base->handle, state->nr + 1, &state->signal_info, 0);
 
