@@ -3366,19 +3366,6 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 
 //	printk("syncstat=0x%x ,tslockstat=0x%x,unlockdetected =0x%x\n",syncstat ,tslockstat,unlockdetected);
 
-	if(!(*status &FE_HAS_LOCK)){
-	    mutex_unlock(&dev->base->i2c_lock);
-	    return 0;
-	}
-		
-	//lock flag
-
-	   if(dev->base->config->lock_flag){	   
-	   if(*status &FE_HAS_LOCK)
-  	    	cxd2878_lock_flag(dev,1);//locked 
-  	    else
-  	    	cxd2878_lock_flag(dev,0);//unlocked 
-	  }
 	/*rf signal*/	
 	ret |= cxd2878_i2c_repeater(dev,1);
 	if(dev->chipid == SONY_DEMOD_CHIP_ID_CXD6802)
@@ -3397,6 +3384,20 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 	c->cnr.len =1;
 	c->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 
+	if(!(*status &FE_HAS_LOCK)){
+	    mutex_unlock(&dev->base->i2c_lock);
+	    return ret;
+	}
+		
+	//lock flag
+
+	   if(dev->base->config->lock_flag){	   
+	   if(*status &FE_HAS_LOCK)
+  	    	cxd2878_lock_flag(dev,1);//locked 
+  	    else
+  	    	cxd2878_lock_flag(dev,0);//unlocked 
+	  }
+	
 	if(*status &FE_HAS_VITERBI){
 		u8 tmp1[3];
 		u32 dcl_avgerr_fine;
