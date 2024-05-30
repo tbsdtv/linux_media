@@ -471,6 +471,10 @@ static int dvb_frontend_swzigzag_autotune(struct dvb_frontend *fe, int check_wra
 	if (fe->ops.set_frontend)
 		fe_set_err = fe->ops.set_frontend(fe);
 	*c = tmp;
+	if (fe_set_err == -ETIMEDOUT) {
+		fepriv->state = FESTATE_RETUNE;
+		return 0;
+	}
 	if (fe_set_err < 0) {
 		fepriv->state = FESTATE_ERROR;
 		return fe_set_err;
@@ -508,6 +512,10 @@ static void dvb_frontend_swzigzag(struct dvb_frontend *fe)
 			if (fe->ops.set_frontend)
 				retval = fe->ops.set_frontend(fe);
 			*c = tmp;
+			if (retval == -ETIMEDOUT) {
+				fepriv->state = FESTATE_RETUNE;
+				return;
+			}
 			if (retval < 0)
 				fepriv->state = FESTATE_ERROR;
 			else
