@@ -3118,7 +3118,10 @@ static irqreturn_t tbsmod_irq(int irq, void *dev_id)
 
 	stat = TBS_PCIE_READ(Int_adapter, 0); // clear total interrupts.
 	//stat16 = TBS_PCIE_READ(Int_adapter, 0x0c);
-	stat16 = TBS_PCIE_READ(Int_adapter, 0x18);
+	if(dev->cardid == 0x6032)
+		stat16 = TBS_PCIE_READ(Int_adapter, 0x18);
+	else
+		stat16 = 0;
 	TBS_PCIE_WRITE(Int_adapter, 0x04, 0x00000001);
 
 
