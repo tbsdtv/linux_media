@@ -12,6 +12,7 @@
 
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/workqueue.h>
 
 #include <media/drv-intf/saa7146.h>
 
@@ -49,8 +50,8 @@ struct budget {
 	unsigned char *grabbing;
 	struct saa7146_pgtable pt;
 
-	struct tasklet_struct fidb_tasklet;
-	struct tasklet_struct vpe_tasklet;
+	struct work_struct fidb_bh_work;
+	struct work_struct vpe_bh_work;
 
 	struct dmxdev dmxdev;
 	struct dvb_demux demux;
