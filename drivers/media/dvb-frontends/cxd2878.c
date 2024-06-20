@@ -2217,6 +2217,8 @@ static int SLtoAT2_BandSetting(struct cxd2878_dev*dev)
 			 /*  COEF01 COEF02 COEF11 COEF12 COEF21 COEF22 COEF31 COEF32 COEF41 COEF42 COEF51 COEF52 COEF61 COEF62 */
 				 0x31,	0xA8,  0x29,  0x9B,  0x27,	0x9C,  0x28,  0x9E,  0x29,	0xA4,  0x29,  0xA2,  0x29,	0xA8
 			 };
+	u8 nominalRate_1_7m[5]={0x1A,0x03,0xE8,0x8C,0xB3};
+	
 	ret = cxd2878_wr(dev,dev->slvt,0x00,0x20);
 	if(ret)
 		goto err;
@@ -2275,6 +2277,18 @@ static int SLtoAT2_BandSetting(struct cxd2878_dev*dev)
 			 data[2] = (u8) (dev->iffreqConfig.configDVBT2_5 & 0xFF);
 			 cxd2878_wrm(dev,dev->slvt,0xB6,data,3); 
 			 cxd2878_wr(dev,dev->slvt,0xD7,0x06); 
+		break;
+		case SONY_DTV_BW_1_7_MHZ:
+			cxd2878_wrm(dev,dev->slvt,0x9F,nominalRate_1_7m,5);
+			cxd2878_wr(dev,dev->slvt,0x00,0x27); 
+			cxd2878_wr(dev,dev->slvt,0x7A,0x03);
+			cxd2878_wr(dev,dev->slvt,0x00,0x10); 
+			cxd2878_wr(dev,dev->slvt,0xA5,0x00);
+			data[0] = (u8) ((dev->iffreqConfig.configDVBT2_1_7 >> 16) & 0xFF);
+			data[1] = (u8) ((dev->iffreqConfig.configDVBT2_1_7 >> 8) & 0xFF);
+			data[2] = (u8) (dev->iffreqConfig.configDVBT2_1_7 & 0xFF);
+			cxd2878_wrm(dev,dev->slvt,0xB6,data,3);
+			cxd2878_wr(dev,dev->slvt,0xD7,0x03); 
 		break;
 		 default:
 		 goto err;		
@@ -3347,7 +3361,7 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 			cxd2878_wr(dev,dev->slvm,0x00,0x09);
 			cxd2878_rdm(dev,dev->slvm,0x62,&data,1);
 			syncstat = (u8)((data & 0x10) ? 1 : 0);
-            unlockdetected = (u8)((data & 0x40) ? 0 : 1);
+            		unlockdetected = (u8)((data & 0x40) ? 0 : 1);
 			cxd2878_wr(dev,dev->slvm,0x00,0x0D);
 			cxd2878_rdm(dev,dev->slvm,0x86,&data,1);
 			vqlockstat = data&0x01;
@@ -3365,6 +3379,14 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 	}
 
 //	printk("syncstat=0x%x ,tslockstat=0x%x,unlockdetected =0x%x\n",syncstat ,tslockstat,unlockdetected);
+	//lock flag
+
+	   if(dev->base->config->lock_flag){	   
+	   if(*status &FE_HAS_LOCK)
+  	    	cxd2878_lock_flag(dev,1);//locked 
+  	    else
+  	    	cxd2878_lock_flag(dev,0);//unlocked 
+	  }
 
 	/*rf signal*/	
 	ret |= cxd2878_i2c_repeater(dev,1);
@@ -3389,14 +3411,6 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 	    return ret;
 	}
 		
-	//lock flag
-
-	   if(dev->base->config->lock_flag){	   
-	   if(*status &FE_HAS_LOCK)
-  	    	cxd2878_lock_flag(dev,1);//locked 
-  	    else
-  	    	cxd2878_lock_flag(dev,0);//unlocked 
-	  }
 	
 	if(*status &FE_HAS_VITERBI){
 		u8 tmp1[3];
@@ -3411,6 +3425,39 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 				tmp16=4996;
 			snr = 10*10*((s32)sony_math_log10(tmp16)-(s32)sony_math_log10(5350-tmp16));
 			snr += 28500;
+			cxd2878_rdm(dev,dev->slvt,0x2F,tmp,2);
+			qam = (tmp[0]>>6)&0x03;
+			switch(qam){
+			   default:
+			   case 0:
+			   	c->modulation = QPSK;
+			   	break;
+			   case 1 :
+			   	c->modulation = QAM_16;
+			   	break;
+			   case 2:
+			   	c->modulation = QAM_64;
+			   	break;
+			}
+			switch(tmp[0]&0x07){
+			  default:
+			  case 0:
+			   	c->code_rate_HP = FEC_1_2;
+			   	break;
+			   case 1 :
+			   	c->code_rate_HP = FEC_2_3;
+			   	break;
+			   case 2:
+			   	c->code_rate_HP = FEC_3_4;
+			   	break;
+			   case 3 :
+			   	c->code_rate_HP = FEC_5_6;
+			   	break;
+			   case 4:
+			   	c->code_rate_HP = FEC_7_8;
+			   	break;			
+			}
+			
 			break;
 		  case SYS_DVBT2:
 		  	cxd2878_wr(dev,dev->slvt,0x00,0x20);
@@ -3420,6 +3467,51 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 				tmp16=10876;
 			snr = 10*10*((s32)sony_math_log10(tmp16)-(s32)sony_math_log10(12600-tmp16));
 			snr += 32000;
+			cxd2878_rdm(dev,dev->slvt,0x5B,tmp,2);
+
+			switch(tmp[0]&0x7){
+			 default:
+			  case 0: 
+			  	c->fec_inner = FEC_1_2;
+			    break;
+			  case 1:  
+			  	c->fec_inner = FEC_3_5;
+			    break;
+			  case 2: 
+			   	c->fec_inner = FEC_2_3;
+			    break;
+			  case 3:	
+			  	c->fec_inner = FEC_3_4;
+			    break;
+			  case 4: 
+			  	c->fec_inner = FEC_4_5;
+			    break;
+			  case 5:  
+			  	c->fec_inner = FEC_5_6;
+			    break;
+			  case 6: 
+			   	c->fec_inner = FEC_1_3;
+			    break;
+			  case 7:	
+			  	c->fec_inner = FEC_2_5;
+			    break;			    			   
+			}
+			switch(tmp[1]&0x7){
+			 default:
+			  case 0: //16qam
+			  	c->modulation = QPSK;
+			    break;
+			  case 1:  //32qam
+			  	c->modulation = QAM_16;
+			    break;
+			  case 2: //64qam
+			   	c->modulation = QAM_64;
+			    break;
+			  case 3:	//128qam
+			  	c->modulation = QAM_256;
+			    break;			   
+			}			
+			
 			break;
 		  case SYS_DVBC_ANNEX_A:
 		  case SYS_DVBC_ANNEX_C:
@@ -3433,22 +3525,37 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 			switch(qam){
 			 default:
 			  case 0: //16qam
-			  case 2: //64qam
-			  case 4: //256qam
-			  if(tmp16<126)
-			  	tmp16 = 126;
-			  snr = -95*(s32)sony_math_log(tmp16)+95941;
-			  break;
+			  	c->modulation = QAM_16;
+			    break;
 			  case 1:  //32qam
+			  	c->modulation = QAM_32;
+			    break;
+			  case 2: //64qam
+			   	c->modulation = QAM_64;
+			    break;
 			  case 3:	//128qam
-			  if(tmp16<69)
-			  	tmp16 = 69;
-			  snr = -88*(s32)sony_math_log(tmp16) + 8699;
-			  	break;
+			  	c->modulation = QAM_128;
+			    break;			   
+			  case 4: //256qam
+			  	c->modulation = QAM_256;
+			    break;
+
 			}
-		  	break;
-		  case SYS_ATSC:
+			if((qam==1)||(qam==3)){
 			
+				if(tmp16<69)
+			  		tmp16 = 69;
+			  	snr = -88*(s32)sony_math_log(tmp16) + 8699;
+			}else{
+			
+				if(tmp16<126)
+			  		tmp16 = 126;
+			  	snr = -95*(s32)sony_math_log(tmp16)+95941;
+			}
+			
+			
+		  	break;
+		  case SYS_ATSC:			
 			cxd2878_wr(dev,dev->slvm,0x00,0x0D);
 			cxd2878_rdm(dev,dev->slvm,0x70,tmp1,3);
 			dcl_avgerr_fine = ((u32)(tmp1[2]&0x7F)<<16)|((u32)(tmp1[1]&0xFF)<<8)|tmp1[0];
