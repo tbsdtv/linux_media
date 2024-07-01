@@ -55,7 +55,7 @@ static int mxl603_ctrl_programRegisters(struct i2c_client *client, PMXL603_REG_C
 		// Check if partial bits of register were updated
 		if (ctrlRegInfoPtr[i].mask != 0xFF)  
 		{
-			ret = reg_read(dev->client,ctrlRegInfoPtr[i].regAddr, (int)&tmp);
+			ret = reg_read(dev->client,ctrlRegInfoPtr[i].regAddr, &tmp);
 			if (ret) break;;
 		}
 
@@ -80,7 +80,6 @@ static int mxl603_init(struct dvb_frontend *fe)
 
 	int ret;
 	u8 readData;
-	u8 dfeRegData;
 	u8 control = 0;
 	u16 ifFcw;
 	MXL603_REG_CTRL_INFO_T MxL603_OverwriteDefaults[] = 

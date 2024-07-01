@@ -528,7 +528,7 @@ static int tbs5580_frontend_attach(struct dvb_usb_adapter *adap)
 	si2183_config.RF_switch = NULL;
 	si2183_config.agc_mode = 0x5 ;
 	memset(&info, 0, sizeof(struct i2c_board_info));
-	strlcpy(info.type, "si2183", I2C_NAME_SIZE);
+	strscpy(info.type, "si2183", I2C_NAME_SIZE);
 	info.addr = 0x67;
 	info.platform_data = &si2183_config;
 	request_module(info.type);
@@ -561,7 +561,7 @@ static int tbs5580_frontend_attach(struct dvb_usb_adapter *adap)
 	si2157_config.fe = adap->fe_adap[0].fe;
 	si2157_config.if_port = 1;
 	memset(&info, 0, sizeof(struct i2c_board_info));
-	strlcpy(info.type, "si2157", I2C_NAME_SIZE);
+	strscpy(info.type, "si2157", I2C_NAME_SIZE);
 	info.addr = 0x61;
 	info.platform_data = &si2157_config;
 	request_module(info.type);
@@ -612,9 +612,9 @@ static int tbs5580_frontend_attach(struct dvb_usb_adapter *adap)
 	
 	tbs5580_init(adap);
 	
-	strlcpy(adap->fe_adap[0].fe->ops.info.name,d->props.devices[0].name,52);
+	strscpy(adap->fe_adap[0].fe->ops.info.name,d->props.devices[0].name,52);
 	strcat(adap->fe_adap[0].fe->ops.info.name," DVB-T/T2/C/C2/ISDB-T");
-	strlcpy(adap->fe_adap[0].fe2->ops.info.name,d->props.devices[0].name,52);
+	strscpy(adap->fe_adap[0].fe2->ops.info.name,d->props.devices[0].name,52);
 	strcat(adap->fe_adap[0].fe2->ops.info.name," DVB-S/S2/S2X");
 
 	return 0;

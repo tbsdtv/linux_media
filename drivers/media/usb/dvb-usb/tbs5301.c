@@ -283,7 +283,7 @@ static int tbs5301_frontend_attach(struct dvb_usb_adapter *d)
 	ret = tbs5301_op_rw(u->udev, 0x80, 0, 0,
 				buf, 4, TBS5301_WRITE_MSG);
 	
-	strlcpy(d->fe_adap->fe->ops.info.name,u->props.devices[0].name,52);
+	strscpy(d->fe_adap->fe->ops.info.name,u->props.devices[0].name,52);
 
 	return 0;
 err:

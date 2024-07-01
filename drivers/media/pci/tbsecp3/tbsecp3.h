@@ -87,8 +87,11 @@
 #define TBSECP3_BOARD_TBS6522H	43
 #define TBSECP3_BOARD_TBS6504H	44
 #define TBSECP3_BOARD_TBS6590SE	45
+#define TBSECP3_BOARD_TBS6308X	46
+#define TBSECP3_BOARD_TBS6916	 	47
 
-#define TBSECP3_MAX_ADAPTERS	(8)
+
+#define TBSECP3_MAX_ADAPTERS	(16)
 #define TBSECP3_MAX_I2C_BUS	(4)
 
 #define TBSECP3_GPIODEF_NONE	(0)
@@ -127,7 +130,7 @@ struct tbsecp3_board {
 	u32 i2c_speed;
 	u8 eeprom_i2c;
 	u8 eeprom_addr;
-	struct tbsecp3_adap_config adap_config[8];
+	struct tbsecp3_adap_config adap_config[16];
 };
 
 struct tbsecp3_i2c {
@@ -218,7 +221,7 @@ struct tbsecp3_dev {
 	bool msi;
 
 	/* dvb adapters */
-	struct tbsecp3_adapter adapter[TBSECP3_MAX_ADAPTERS];
+	struct tbsecp3_adapter adapter[16];
 
 	/* i2c */
 	struct tbsecp3_i2c i2c_bus[TBSECP3_MAX_I2C_BUS];

@@ -1201,7 +1201,7 @@ static int dvb_init(struct cx231xx *dev)
 		dev->cx231xx_reset_analog_tuner = NULL;
 		dvb->i2c_client_tuner = client;
 
-		strlcpy(dvb->frontend[0]->ops.info.name,dev->board.name,52);
+		strscpy(dvb->frontend[0]->ops.info.name,dev->board.name,52);
 
 		break;
 	}
@@ -1246,7 +1246,7 @@ static int dvb_init(struct cx231xx *dev)
 		dev->cx231xx_reset_analog_tuner = NULL;
 		dvb->i2c_client_tuner = client;
 
-		strlcpy(dvb->frontend[0]->ops.info.name,dev->board.name,52);
+		strscpy(dvb->frontend[0]->ops.info.name,dev->board.name,52);
 
 		break;
 	}
@@ -1279,7 +1279,7 @@ static int dvb_init(struct cx231xx *dev)
 		/* define general-purpose callback pointer */
 		dvb->frontend[0]->callback = cx231xx_tuner_callback;
 
-		strlcpy(dvb->frontend[0]->ops.info.name,dev->board.name,52);
+		strscpy(dvb->frontend[0]->ops.info.name,dev->board.name,52);
 
 		break;
 	}

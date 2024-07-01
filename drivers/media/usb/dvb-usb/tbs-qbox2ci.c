@@ -601,7 +601,7 @@ static int tbsqbox2ci_frontend_attach(struct dvb_usb_adapter *d)
 
 			tbsqbox2ci_init(d);
 
-			strlcpy(d->fe_adap->fe->ops.info.name,u->props.devices[0].name,52);
+			strscpy(d->fe_adap->fe->ops.info.name,u->props.devices[0].name,52);
 			return 0;
 		}
 	}

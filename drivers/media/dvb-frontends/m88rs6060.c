@@ -3506,7 +3506,6 @@ static int m88rs6060_probe(struct i2c_client *client)
 		base->count++;
 		dev->base = base;
 	}else{
-		
 		base = kzalloc(sizeof(struct m88rs6060_base),GFP_KERNEL);
 		if(!base)
 			goto err_kfree;
@@ -3519,17 +3518,19 @@ static int m88rs6060_probe(struct i2c_client *client)
 	}
 	
 	dev->regmap = regmap_init_i2c(client, &regmap_config);
-		if (IS_ERR(dev->regmap)) {
-			ret = PTR_ERR(dev->regmap);
-			goto err_base_kfree;
-		}
-		/*check demod i2c */
-		ret = regmap_read(dev->regmap, 0x00, &tmp);
-		if (ret)
-			goto err_regmap_exit;	
-		if (tmp != 0xe2)
-			goto err_regmap_exit;
-				
+	if (IS_ERR(dev->regmap)) {
+		ret = PTR_ERR(dev->regmap);
+		goto err_base_kfree;
+	}
+	/*check demod i2c */
+	ret = regmap_read(dev->regmap, 0x00, &tmp);
+	if (ret)
+		goto err_regmap_exit;	
+	if (tmp != 0xe2)
+	{
+		ret = -ENODEV;
+		goto err_regmap_exit;
+	}
 
 	dev->mclk = 96000;
 
@@ -3537,7 +3538,6 @@ static int m88rs6060_probe(struct i2c_client *client)
 	*cfg->fe = &dev->fe;
 	dev->fe_status = 0;
 
-	
 	if(dev->config.HAS_CI){  //for 6910SECI
 		//for ci clk si5351
 		struct si5351_priv *priv;
@@ -3593,7 +3593,11 @@ static int m88rs6060_probe(struct i2c_client *client)
  err_regmap_exit:
 	regmap_exit(dev->regmap);
  err_base_kfree:
-	kfree(base);
+	base->count--;
+	if (base->count==0) {
+		list_del(&base->m88rs6060list);
+		kfree(base);
+	}
  err_kfree:
 	kfree(dev);
 	
@@ -3610,15 +3614,15 @@ static void m88rs6060_remove(struct i2c_client *client)
 	dev->base->count --;
 	if(dev->base->count==0)
 	{	
-	list_del(&dev->base->m88rs6060list);
-	kfree(dev->base);	 
+		list_del(&dev->base->m88rs6060list);
+		kfree(dev->base);	 
 	}
 	if(dev->priv){
 		dev->priv->base1->count --;
 		if(dev->priv->base1->count==0){
 			list_del(&dev->priv->base1->si5351list);
 			kfree(dev->priv);	 
-			}
+		}
 	}
 	regmap_exit(dev->regmap);
 	dev->fe.ops.release = NULL;

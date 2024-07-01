@@ -164,11 +164,11 @@ static int tbs5230_frontend_attach(struct dvb_usb_adapter*adap)
 
 	adap->fe_adap[0].fe = dvb_attach(cxd2878_attach, &tbs5230_cfg, &d->i2c_adap);
 
-	if(adap->fe_adap[0].fe!=NULL){
-	 strlcpy(adap->fe_adap[0].fe->ops.info.name,d->props.devices[0].name,52);
-			return 0;
-		}
-	return -EIO;
+	if(adap->fe_adap[0].fe == NULL)
+		return -ENODEV;
+
+	strscpy(adap->fe_adap[0].fe->ops.info.name,d->props.devices[0].name,52);
+	return 0;		
 }
 
 static struct usb_device_id tbs5230_table[] = {
@@ -273,12 +273,13 @@ static struct dvb_usb_device_properties tbs5230_properties = {
 
 		.num_device_descs = 1,
 		.devices = {
-			{"TurboSight TBS 5230 DVB-T2/T/C(j83-a/b/c),ISDB-T,ATSC1.0",
+			{"TurboSight TBS 5230 DVB-T/T2/C/C2,ISDB-T/C,ATSC,J83B",
 				{&tbs5230_table[0], NULL},
 				{NULL},
 			}
 		}		
 };
+
 static int tbs5230_probe(struct usb_interface *intf,
 					const struct usb_device_id*id)
 {
@@ -288,6 +289,7 @@ static int tbs5230_probe(struct usb_interface *intf,
 	}
 	return -ENODEV;
 }
+
 static struct usb_driver tbs5230_driver ={
 		.name = "tbs5230",
 		.probe = tbs5230_probe,
@@ -295,6 +297,7 @@ static struct usb_driver tbs5230_driver ={
 		.id_table	= tbs5230_table,
 
 };
+
 static int __init tbs5230_module_init(void)
 {
 	int ret = usb_register(&tbs5230_driver);

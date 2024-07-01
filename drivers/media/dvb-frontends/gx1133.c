@@ -1447,7 +1447,7 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	enum fe_status tunerstat;
 	int ret, i;
-	u32 s, pls_mode, pls_code;
+	u32 s, pls_mode, pls_code, modcode;
 	u8 isi;
 	u8 buf[4],temp;
 
@@ -1500,6 +1500,11 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 	gx1133_rd(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,&temp);
 	temp&=0xfe;
 	gx1133_wr(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,temp);
+
+	/* Reset MODCODE filter */
+	gx1133_rd(priv,DVB_S2,GX1133_LDPC_PLS_CTRL,&temp);
+	temp&=0xfe;
+	gx1133_wr(priv,DVB_S2,GX1133_LDPC_PLS_CTRL,temp);
 	
 	gx1133_rd(priv,DVB_S2,GX1133_AUTO_RST,&temp);
 	temp|=0x01;
@@ -1554,9 +1559,9 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 		ret = gx1133_read_status(fe, &tunerstat);
 		if (tunerstat & FE_HAS_LOCK)
 		{
-			/* Setup ISI filtering */
 			if (c->delivery_system == SYS_DVBS2)
 			{
+				/* Setup ISI filtering */
 				gx1133_rd(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,&temp);
 				if (c->stream_id != NO_STREAM_ID_FILTER)
 					temp|=1;
@@ -1564,7 +1569,23 @@ static int gx1133_set_frontend(struct dvb_frontend *fe)
 					temp&=0xfe;
 				gx1133_wr(priv,DVB_S2,GX1133_LDPC_TSID_CTRL,temp);
 				gx1133_wr(priv,DVB_S2,GX1133_LDPC_TSID_CFG,isi);
-				
+
+				/* Setup MODCODE filtering */
+				gx1133_rd(priv,DVB_S2,GX1133_LDPC_PLS_CTRL,&temp);
+				if (c->modcode == MODCODE_ALL)
+					temp&=0xfe;
+				else
+				{
+					modcode = c->modcode;
+					for (i = 1; i < 29; i++)
+					{
+						modcode = modcode>>1;
+						if (modcode&1)
+							break;
+					}
+					temp = (1<<7) | (i<<1) | 1 ;
+				}
+				gx1133_wr(priv,DVB_S2,GX1133_LDPC_PLS_CTRL,temp);
 			}
 			return 0;
 		}

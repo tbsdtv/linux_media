@@ -20,6 +20,7 @@
 #define TBS5930_VOLTAGE_CTRL (0x1800)
 
 struct tbs5930_state {
+	struct i2c_client *i2c_client; 
 	u8 initialized;
 };
 
@@ -147,6 +148,7 @@ static struct dvb_usb_device_properties tbs5930_properties;
 static int tbs5930_frontend_attach(struct dvb_usb_adapter *adap)
 {
 	struct dvb_usb_device *d = adap->dev;
+	struct tbs5930_state *st = d->priv;
 	struct i2c_client *client;
 	struct i2c_board_info info;
 	struct m88rs6060_cfg m88rs6060_config;
@@ -166,7 +168,7 @@ static int tbs5930_frontend_attach(struct dvb_usb_adapter *adap)
 	m88rs6060_config.write_properties  = NULL;
 
 	memset(&info, 0, sizeof(struct i2c_board_info));
-	strlcpy(info.type, "m88rs6060", I2C_NAME_SIZE);
+	strscpy(info.type, "m88rs6060", I2C_NAME_SIZE);
 	info.addr = 0x69;
 	info.platform_data = &m88rs6060_config;
 	request_module(info.type);
@@ -178,8 +180,8 @@ static int tbs5930_frontend_attach(struct dvb_usb_adapter *adap)
 			return -ENODEV;
 	}
 
+	st->i2c_client = client;
 
-	
 	buf[0] = 0;
 	buf[1] = 0;
 	tbs5930_op_rw(d->udev, 0xb7, 0, 0,
@@ -190,7 +192,7 @@ static int tbs5930_frontend_attach(struct dvb_usb_adapter *adap)
 			buf, 2, TBS5930_WRITE_MSG);
 	msleep(10);
 	
-	strlcpy(adap->fe_adap->fe->ops.info.name,d->props.devices[0].name,52);
+	strscpy(adap->fe_adap[0].fe->ops.info.name,d->props.devices[0].name,52);
 
 	return 0;
 }
@@ -315,11 +317,27 @@ static int tbs5930_probe(struct usb_interface *intf,
 	return -ENODEV;
 }
 
+static void tbs5930_disconnect(struct usb_interface *intf)
+{
+#if 1
+	struct dvb_usb_device *d = usb_get_intfdata(intf);
+	struct tbs5930_state *st = d->priv;
+	struct i2c_client *client;
+
+	/* remove I2C client for tuner/demod*/
+	client = st->i2c_client;
+	if (client) {
+		module_put(client->dev.driver->owner);
+		i2c_unregister_device(client);
+	}
+#endif
+	dvb_usb_device_exit(intf);
+}
 
 static struct usb_driver tbs5930_driver = {
 	.name = "tbs5930",
 	.probe = tbs5930_probe,
-	.disconnect = dvb_usb_device_exit,
+	.disconnect = tbs5930_disconnect,
 	.id_table = tbs5930_table,
 };
 

@@ -278,7 +278,7 @@ static int tbs5931_frontend_attach(struct dvb_usb_adapter *adap)
 			buf, 2, TBS5931_WRITE_MSG);
 	msleep(10);
 	
-	strlcpy(adap->fe_adap->fe->ops.info.name,d->props.devices[0].name,52);
+	strscpy(adap->fe_adap->fe->ops.info.name,d->props.devices[0].name,52);
 	
 	return 0;
 	

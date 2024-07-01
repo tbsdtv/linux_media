@@ -590,7 +590,7 @@ static int tbs5880_frontend_attach(struct dvb_usb_adapter *d)
 					buf, 2, TBS5880_WRITE_MSG);
 
 			tbs5880_init(d);
-			strlcpy(d->fe_adap->fe->ops.info.name,u->props.devices[0].name,52);
+			strscpy(d->fe_adap->fe->ops.info.name,u->props.devices[0].name,52);
 			return 0;
 		}
 	}

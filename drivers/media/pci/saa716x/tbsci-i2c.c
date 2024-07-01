@@ -89,7 +89,7 @@ int tbsci_i2c_probe(struct saa716x_adapter *adap, int tbsci_i2c_nr)
 		sizeof(tbsci_i2c->algo));
 
 	tbsci_i2c->adap.dev.parent = &saa716x->pdev->dev;
-	strlcpy(tbsci_i2c->adap.name, 
+	strscpy(tbsci_i2c->adap.name, 
 		tbsci_i2c_nr ? "TBSCI I2C Adapter 0" : "TBSCI I2C Adapter 1",
 		sizeof(tbsci_i2c->adap.name));
 	tbsci_i2c->adap.owner = THIS_MODULE;

@@ -46,6 +46,11 @@ struct stid135_cfg {
 
 	// for stvlna
 	int vglna;
+	
+	//for tbs6916, because there are two stid135 (Demod 0 and Demod 1). 
+	//if two Demod send 22k simultaneity, it will be affect the signal . so disable the Demod1 22k function on mode 0&1
+	//keep Demod 1 send diseqc function on unicable mode.
+	bool control_22k;
 };
 
 #if IS_REACHABLE(CONFIG_DVB_STID135)
