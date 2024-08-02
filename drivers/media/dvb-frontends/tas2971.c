@@ -294,10 +294,10 @@ struct dvb_frontend *tas2971_attach(const struct tas2101_config *cfg,
 		goto err1;
 	}
 	base->muxc->priv = priv;
-	ret = i2c_mux_add_adapter(base->muxc, 0, 0, 0);
+	ret = i2c_mux_add_adapter(base->muxc, 0, 0);
 	if (ret)
 		goto err1;
-	ret = i2c_mux_add_adapter(base->muxc, 0, 1, 0);
+	ret = i2c_mux_add_adapter(base->muxc, 0, 1);
 	if (ret)
 		goto err1;
 	base->i2c_demod = base->muxc->adapter[0];

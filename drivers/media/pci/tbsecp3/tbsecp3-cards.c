@@ -844,6 +844,69 @@ struct tbsecp3_board tbsecp3_boards[] = {
 				}
 			}
 		},
+	[TBSECP3_BOARD_TBS6312X] = {
+			.board_id	= TBSECP3_BOARD_TBS6312X,
+			.name		= "TurboSight TBS 6312X HDMI Capture",
+			.adapters	= 12,
+			.i2c_speed	= 39,
+			.eeprom_i2c	= 1,
+			.eeprom_addr	= 0x10,
+			.adap_config	= {
+				{
+					.ts_in = 0,
+					.i2c_bus_nr = 0,
+				}, 
+				{
+					.ts_in = 1,
+					.i2c_bus_nr = 0,
+				},
+				{
+					.ts_in = 2,
+					.i2c_bus_nr = 0,
+				},
+				{
+					.ts_in = 3,
+					.i2c_bus_nr = 0,
+				},
+				{
+					.ts_in = 4,
+					.i2c_bus_nr = 0,
+				},
+				{
+					.ts_in = 5,
+					.i2c_bus_nr = 0,
+				},
+				{
+					.ts_in = 6,
+					.i2c_bus_nr = 0,
+				},
+				{
+					.ts_in = 7,
+					.i2c_bus_nr = 0,
+
+				},
+				{
+					.ts_in = 8,
+					.i2c_bus_nr = 0,
+
+				},
+				{
+					.ts_in = 9,
+					.i2c_bus_nr = 0,
+
+				},
+				{
+					.ts_in = 10,
+					.i2c_bus_nr = 0,
+
+				},
+				{
+					.ts_in = 11,
+					.i2c_bus_nr = 0,
+
+				}
+			}
+		},
     // added by pzw in 2017,12,12
 	[TBSECP3_BOARD_TBS6304] = {
 		.board_id	= TBSECP3_BOARD_TBS6304,

@@ -1734,7 +1734,7 @@ static int si2183_probe(struct i2c_client *client)
 			goto err_base_kfree;
 		}
 		base->muxc->priv = client;
-		ret = i2c_mux_add_adapter(base->muxc, 0, 0, 0);
+		ret = i2c_mux_add_adapter(base->muxc, 0, 0);
 		if (ret)
 			goto err_base_kfree;
 		base->tuner_adapter = base->muxc->adapter[0];
