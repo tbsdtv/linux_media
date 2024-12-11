@@ -2802,7 +2802,6 @@ static const struct file_operations dfs_fops = {
 	.read = dfs_file_read,
 	.write = dfs_file_write,
 	.owner = THIS_MODULE,
-	.llseek = no_llseek,
 };
 
 /**
@@ -2947,7 +2946,6 @@ static const struct file_operations dfs_global_fops = {
 	.read = dfs_global_file_read,
 	.write = dfs_global_file_write,
 	.owner = THIS_MODULE,
-	.llseek = no_llseek,
 };
 
 /**

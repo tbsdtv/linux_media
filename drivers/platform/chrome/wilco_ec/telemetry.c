@@ -329,7 +329,6 @@ static const struct file_operations telem_fops = {
 	.write = telem_write,
 	.read = telem_read,
 	.release = telem_release,
-	.llseek = no_llseek,
 	.owner = THIS_MODULE,
 };
 

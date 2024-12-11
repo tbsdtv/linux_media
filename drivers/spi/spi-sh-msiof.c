@@ -28,7 +28,7 @@
 #include <linux/spi/sh_msiof.h>
 #include <linux/spi/spi.h>
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 struct sh_msiof_chipdata {
 	u32 bits_per_word_mask;

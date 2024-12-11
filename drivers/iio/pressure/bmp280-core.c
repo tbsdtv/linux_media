@@ -41,7 +41,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/random.h>
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 #include "bmp280.h"
 

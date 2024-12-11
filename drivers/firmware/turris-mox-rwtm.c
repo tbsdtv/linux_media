@@ -428,7 +428,6 @@ static const struct file_operations do_sign_fops = {
 	.open	= rwtm_debug_open,
 	.read	= do_sign_read,
 	.write	= do_sign_write,
-	.llseek	= no_llseek,
 };
 
 static int rwtm_register_debugfs(struct mox_rwtm *rwtm)

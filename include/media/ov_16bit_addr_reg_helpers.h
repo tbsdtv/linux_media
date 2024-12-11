@@ -10,7 +10,7 @@
 #ifndef __OV_16BIT_ADDR_REG_HELPERS_H
 #define __OV_16BIT_ADDR_REG_HELPERS_H
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/dev_printk.h>
 #include <linux/i2c.h>
 

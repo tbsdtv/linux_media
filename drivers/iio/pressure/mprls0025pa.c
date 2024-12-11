@@ -31,7 +31,7 @@
 
 #include <linux/regulator/consumer.h>
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 /* bits in i2c status byte */
 #define MPR_I2C_POWER	BIT(6)	/* device is powered */
