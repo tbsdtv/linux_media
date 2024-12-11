@@ -18,7 +18,7 @@
 #include <asm/plpar_wrappers.h>
 #include <asm/papr_pdsm.h>
 #include <asm/mce.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/perf_event.h>
 
 #define BIND_ANY_ADDR (~0ul)

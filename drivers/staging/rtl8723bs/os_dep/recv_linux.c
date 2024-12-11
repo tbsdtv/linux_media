@@ -8,7 +8,7 @@
 #include <rtw_debug.h>
 #include <linux/jiffies.h>
 #include <net/cfg80211.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 void rtw_os_free_recvframe(union recv_frame *precvframe)
 {

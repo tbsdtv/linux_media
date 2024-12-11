@@ -35,7 +35,7 @@
 #include <linux/vmalloc.h>
 
 #include <asm/patch.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <asm/sections.h>
 
 #define ARCH_MODULE_DEBUG 0

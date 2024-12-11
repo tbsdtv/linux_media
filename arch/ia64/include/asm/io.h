@@ -20,7 +20,7 @@
  * Copyright (C) 1999 Don Dugger <don.dugger@intel.com>
  */
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <asm/early_ioremap.h>
 
 #define __IA64_UNCACHED_OFFSET	RGN_BASE(RGN_UNCACHED)

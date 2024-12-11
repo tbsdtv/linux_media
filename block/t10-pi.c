@@ -10,7 +10,7 @@
 #include <linux/crc64.h>
 #include <linux/module.h>
 #include <net/checksum.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 typedef __be16 (csum_fn) (void *, unsigned int);
 

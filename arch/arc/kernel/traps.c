@@ -17,7 +17,7 @@
 #include <linux/kprobes.h>
 #include <linux/kgdb.h>
 #include <asm/setup.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <asm/kprobes.h>
 
 void die(const char *str, struct pt_regs *regs, unsigned long address)
