@@ -39,7 +39,7 @@
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <asm/div64.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 
 #include "mxl58x.h"
