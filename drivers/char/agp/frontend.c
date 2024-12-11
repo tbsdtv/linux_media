@@ -1033,7 +1033,6 @@ ioctl_out:
 static const struct file_operations agp_fops =
 {
 	.owner		= THIS_MODULE,
-	.llseek		= no_llseek,
 	.unlocked_ioctl	= agp_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= compat_agp_ioctl,

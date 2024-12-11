@@ -1097,7 +1097,6 @@ static const struct file_operations pi433_fops = {
 	.compat_ioctl = compat_ptr_ioctl,
 	.open =		pi433_open,
 	.release =	pi433_release,
-	.llseek =	no_llseek,
 };
 
 static int pi433_debugfs_regs_show(struct seq_file *m, void *p)

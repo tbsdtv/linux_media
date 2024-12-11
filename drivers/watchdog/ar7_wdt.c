@@ -250,7 +250,6 @@ static const struct file_operations ar7_wdt_fops = {
 	.compat_ioctl	= compat_ptr_ioctl,
 	.open		= ar7_wdt_open,
 	.release	= ar7_wdt_release,
-	.llseek		= no_llseek,
 };
 
 static struct miscdevice ar7_wdt_miscdev = {
