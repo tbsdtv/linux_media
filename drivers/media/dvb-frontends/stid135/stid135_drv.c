@@ -4905,6 +4905,7 @@ fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 				if(pParams->bbframe) {
 					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FORCE_CONTINUOUS(Demod), 1);
 					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FRAME_MODE(Demod), 1);
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSINSDELM_TSINS_BBPADDING(Demod), 1);
 				//	error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 2);
 				}
 				#ifdef USER1
@@ -4944,6 +4945,7 @@ fe_lla_error_t fe_stid135_manage_matype_info(fe_stid135_handle_t handle,
 				if(pParams->bbframe) {
 					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FORCE_CONTINUOUS(Demod), 1);
 					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_PKTDELIN_PDELCTRL2_FRAME_MODE(Demod), 1);
+					error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSINSDELM_TSINS_BBPADDING(Demod), 1);
 				//	error |= ChipSetField(pParams->handle_demod, FLD_FC8CODEW_DVBSX_HWARE_TSSYNC_TSFIFO_SYNCMODE(Demod), 2);
 				}
 				#ifdef USER1
