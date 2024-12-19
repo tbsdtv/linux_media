@@ -1818,7 +1818,6 @@ static const struct file_operations ucma_fops = {
 	.release = ucma_close,
 	.write	 = ucma_write,
 	.poll    = ucma_poll,
-	.llseek	 = no_llseek,
 };
 
 static struct miscdevice ucma_misc = {

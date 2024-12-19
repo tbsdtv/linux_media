@@ -315,7 +315,10 @@ static int si2183_read_status(struct dvb_frontend *fe, enum fe_status *status)
 		c->cnr.stat[0].scale = FE_SCALE_DECIBEL;
 		c->cnr.stat[0].svalue = (s64) cmd.args[3] * 250;
 		c->cnr.stat[1].scale = FE_SCALE_RELATIVE;
-		c->cnr.stat[1].svalue = dev->snr;
+		c->cnr.stat[1].uvalue = dev->snr;
+		if (c->cnr.stat[1].uvalue > 0xffff)
+			c->cnr.stat[1].uvalue = 0xffff;
+
 
 		// writing missing properties
 		// CONSTELLATION or modulation
@@ -555,10 +558,13 @@ err:
 
 static int si2183_read_snr(struct dvb_frontend *fe, u16 *snr)
 {
-	struct i2c_client *client = fe->demodulator_priv;
-	struct si2183_dev *dev = i2c_get_clientdata(client);
-	
-	*snr = (dev->fe_status & FE_HAS_LOCK) ? dev->snr : 0;
+	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
+	int i;
+
+	*snr = 0;
+	for (i=0; i < c->cnr.len; i++)
+		if (c->cnr.stat[i].scale == FE_SCALE_RELATIVE)
+		  *snr = (u16)c->cnr.stat[i].uvalue;
 
 	return 0;
 }

@@ -761,7 +761,6 @@ static const struct file_operations pinmux_select_ops = {
 	.owner = THIS_MODULE,
 	.open = pinmux_select_open,
 	.write = pinmux_select,
-	.llseek = no_llseek,
 	.release = single_release,
 };
 

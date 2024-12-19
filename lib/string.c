@@ -24,7 +24,7 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <asm/byteorder.h>
 #include <asm/word-at-a-time.h>
 #include <asm/page.h>

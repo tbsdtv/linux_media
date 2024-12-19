@@ -1073,7 +1073,6 @@ static const struct file_operations umad_fops = {
 #endif
 	.open		= ib_umad_open,
 	.release	= ib_umad_close,
-	.llseek		= no_llseek,
 };
 
 static int ib_umad_sm_open(struct inode *inode, struct file *filp)
@@ -1141,7 +1140,6 @@ static const struct file_operations umad_sm_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = ib_umad_sm_open,
 	.release = ib_umad_sm_close,
-	.llseek	 = no_llseek,
 };
 
 static struct ib_umad_port *get_port(struct ib_device *ibdev,

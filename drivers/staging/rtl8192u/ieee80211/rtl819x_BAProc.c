@@ -6,7 +6,7 @@
  * WB 2008-05-27
  * *****************************************************************************************************************************/
 #include <asm/byteorder.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include "ieee80211.h"
 #include "rtl819x_BA.h"
 

@@ -39,7 +39,7 @@
 #include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <asm/div64.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 
 #include "mxl58x.h"
@@ -532,6 +532,8 @@ static int read_status(struct dvb_frontend *fe, enum fe_status *status)
 	p->cnr.stat[0].svalue = (s16)reg[0] * 10;
 	p->cnr.stat[1].scale = FE_SCALE_RELATIVE;
 	p->cnr.stat[1].uvalue = reg[0] * 33;
+	if (p->cnr.stat[1].uvalue > 0xffff)
+		p->cnr.stat[1].uvalue = 0xffff;
 
 	/* Read BER */
 	mutex_lock(&state->base->status_lock);

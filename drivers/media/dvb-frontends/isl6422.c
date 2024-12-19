@@ -310,7 +310,7 @@ exit:
 	fe->sec_priv = NULL;
 	return NULL;
 }
-EXPORT_SYMBOL(isl6422_attach);
+EXPORT_SYMBOL_GPL(isl6422_attach);
 
 MODULE_DESCRIPTION("ISL6422 SEC");
 MODULE_AUTHOR("Luis Alves");

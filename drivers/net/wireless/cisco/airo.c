@@ -37,7 +37,7 @@
 #include <linux/scatterlist.h>
 #include <linux/crypto.h>
 #include <linux/io.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>

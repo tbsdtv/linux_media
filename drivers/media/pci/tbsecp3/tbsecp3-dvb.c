@@ -1908,6 +1908,8 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		break;
 	case TBSECP3_BOARD_TBS6302X:
 	case TBSECP3_BOARD_TBS6302T:
+	case TBSECP3_BOARD_TBS6322:
+	case TBSECP3_BOARD_TBS6302RV:
 		adapter->fe = dvb_attach(tas2971_attach, &tbs6302se_demod_cfg[adapter->nr], i2c);
 		if (adapter->fe == NULL)
 		    goto frontend_atach_fail;
@@ -1916,6 +1918,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 	case TBSECP3_BOARD_TBS6304X:
 	case TBSECP3_BOARD_TBS6304T:
 	case TBSECP3_BOARD_TBS6324:
+	case TBSECP3_BOARD_TBS6304RV:
 		adapter->fe = dvb_attach(tas2971_attach, &tbs6304x_demod_cfg, i2c);
 		if (adapter->fe == NULL)
 		    goto frontend_atach_fail;

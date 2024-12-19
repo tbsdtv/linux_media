@@ -52,7 +52,7 @@
 #define TBSECP3_DMA_IE(_n)	(0x0018 + 4 * _n)
 #define TBSECP3_I2C_IF(_n)	(0x0001 << _n)
 #define TBSECP3_DMA_IF(_n)	(0x0010 << _n)
-#define TBSECP3_DMA_IF1(_n) 	(0x1000<<(_n-8))
+
 //spi flash
 #define SPI_CONFIG      	 0x10
 #define SPI_STATUS      	 0x10

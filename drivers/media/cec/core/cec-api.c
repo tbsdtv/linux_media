@@ -695,5 +695,4 @@ const struct file_operations cec_devnode_fops = {
 	.compat_ioctl = cec_ioctl,
 	.release = cec_release,
 	.poll = cec_poll,
-	.llseek = no_llseek,
 };

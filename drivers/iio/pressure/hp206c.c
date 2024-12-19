@@ -18,7 +18,7 @@
 #include <linux/util_macros.h>
 #include <linux/acpi.h>
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 /* I2C commands: */
 #define HP206C_CMD_SOFT_RST	0x06

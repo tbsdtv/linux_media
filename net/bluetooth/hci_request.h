@@ -20,7 +20,7 @@
    SOFTWARE IS DISCLAIMED.
 */
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 #define HCI_REQ_DONE	  0
 #define HCI_REQ_PEND	  1

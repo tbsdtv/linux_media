@@ -20,7 +20,7 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <asm/byteorder.h>
 #include <linux/input.h>
 #include <linux/wait.h>

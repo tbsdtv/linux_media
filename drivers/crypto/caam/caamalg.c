@@ -58,7 +58,7 @@
 #include "caamalg_desc.h"
 #include <crypto/engine.h>
 #include <crypto/xts.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/dma-mapping.h>
 #include <linux/device.h>
 #include <linux/err.h>
