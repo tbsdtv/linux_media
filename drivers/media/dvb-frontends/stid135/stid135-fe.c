@@ -59,6 +59,10 @@ static unsigned int bbframe;
 module_param(bbframe, int, 0644);
 MODULE_PARM_DESC(bbframe, "BBFrame L3 encapsulation for GCS, GSE-HEM (default:off)");
 
+static unsigned int timeout=5;
+module_param(timeout, int, 0644);
+MODULE_PARM_DESC(timeout, "Timeout for signal statistic retrieve 1-20 sec (default:5 sec)");
+
 struct stv_base {
 	struct list_head     stvlist;
 
@@ -696,8 +700,8 @@ static int stid135_read_status(struct dvb_frontend *fe, enum fe_status *status)
 
 	if (!state->stats_time ||
 		(time_after(jiffies, state->stats_time))) {
-		/* Prevent retrieving stats faster than once per 20 seconds */
-		state->stats_time = jiffies + msecs_to_jiffies(20000);
+		/* Prevent retrieving stats faster than once per n seconds */
+		state->stats_time = jiffies + msecs_to_jiffies(timeout*1000);
 
 		err = fe_stid135_get_signal_info(state->base->handle, state->nr + 1, &state->signal_info, 0);
 
@@ -1121,6 +1125,12 @@ struct dvb_frontend *stid135_attach(struct i2c_adapter *i2c,
 
 	if (base->mode == 2)
 		state->rf_in = 3;
+	
+	if (timeout < 1)
+		timeout = 1;
+
+	if (timeout > 20)
+		timeout = 20;
 
 	dev_info(&i2c->dev, "%s demod found at adr %02X on %s\n",
 		 state->fe.ops.info.name, cfg->adr, dev_name(&i2c->dev));
