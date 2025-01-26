@@ -1,9 +1,9 @@
-config TBS_PCIE_DVB
-	tristate "TBS PCIe DVB cards"
+config TBS_PCIE_CAP
+	tristate "TBS PCIe HDMI/SDI capture cards"
 	depends on PCI && I2C && DVB_CORE
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 
 	help
-	  Support for TBS PCIe DVB cards
+	  Support for TBS PCIe HDMI/SDI capture cards
 
 	  Say Y if you own such a device and want to use it.
