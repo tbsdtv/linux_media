@@ -2457,7 +2457,7 @@ static struct platform_driver pxa_camera_driver = {
 		.of_match_table = of_match_ptr(pxa_camera_of_match),
 	},
 	.probe		= pxa_camera_probe,
-	.remove_new	= pxa_camera_remove,
+	.remove	= pxa_camera_remove,
 };
 
 module_platform_driver(pxa_camera_driver);
