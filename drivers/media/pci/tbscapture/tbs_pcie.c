@@ -1,5 +1,5 @@
 /*
-    TurboSight TBS PCIE DVB driver
+    TurboSight TBS PCIE HDMI/SDI capture driver
     Copyright (C) 2017 www.tbsdtv.com
 */
 
@@ -1713,7 +1713,7 @@ static __exit void pcie_tbs_exit(void)
 module_init(pcie_tbs_init);
 module_exit(pcie_tbs_exit);
 
-MODULE_DESCRIPTION("TBS PCIE driver");
+MODULE_DESCRIPTION("TBS PCIE HDMI/SDI capture driver");
 MODULE_AUTHOR("kernelcoding <wugang@kernelcoding.com>");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");

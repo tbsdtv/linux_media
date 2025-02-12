@@ -1,5 +1,5 @@
 /*
-    TurboSight TBS PCIE DVB driver
+    TurboSight TBS PCIE HDMI/SDI capture driver
      Copyright (C) 2017 www.tbsdtv.com
 */
 

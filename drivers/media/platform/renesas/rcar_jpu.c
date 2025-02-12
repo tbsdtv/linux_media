@@ -1739,7 +1739,7 @@ static const struct dev_pm_ops jpu_pm_ops = {
 
 static struct platform_driver jpu_driver = {
 	.probe = jpu_probe,
-	.remove_new = jpu_remove,
+	.remove = jpu_remove,
 	.driver = {
 		.of_match_table = jpu_dt_ids,
 		.name = DRV_NAME,

@@ -98,6 +98,3 @@ bool sdi_write16bit(struct tbs_pcie_dev *dev,int sdi_base_addr, int reg_addr, in
 	}                   
 	return true ;
 }
-
-
-

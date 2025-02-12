@@ -2260,7 +2260,7 @@ MODULE_DEVICE_TABLE(of, imx7_csi_of_match);
 
 static struct platform_driver imx7_csi_driver = {
 	.probe = imx7_csi_probe,
-	.remove_new = imx7_csi_remove,
+	.remove = imx7_csi_remove,
 	.driver = {
 		.of_match_table = imx7_csi_of_match,
 		.name = "imx7-csi",
