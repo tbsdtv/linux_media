@@ -1,0 +1,21 @@
+#define DBL_DIG         15
+#define DBL_MANT_DIG    53
+#define DBL_MAX_10_EXP  +308
+#define DBL_MAX_EXP     +1024
+#define DBL_MIN_10_EXP  -307
+#define DBL_MIN_EXP     -1021
+#define DBL_MAX         0x1.fffffffffffffp1023
+#define DBL_MIN         0x1.0p-1022
+#define DBL_EPSILON     0x1.0p-52
+
+#define M_E             0x1.5bf0a8b145769p+1
+#define M_LOG2E         0x1.71547652b82fep+0
+#define M_LOG10E        0x1.bcb7b1526e50ep-2
+#define M_LN2           0x1.62e42fefa39efp-1
+#define M_LN10          0x1.26bb1bbb55516p+1
+#define M_PI            0x1.921fb54442d18p+1
+#define M_PI_2          0x1.921fb54442d18p+0
+#define M_PI_4          0x1.921fb54442d18p-1
+#define M_1_PI          0x1.45f306dc9c883p-2
+#define M_2_PI          0x1.45f306dc9c883p-1
+#define M_2_SQRTPI      0x1.20dd750429b6dp+0

@@ -1,0 +1,9 @@
+config TBS_PCIE2_CAP
+	tristate "TBS PCIex2 HDMI capture cards"
+	depends on PCI && I2C && DVB_CORE
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+
+	help
+	  Support for TBS PCIex2 HDMI capture cards
+
+	  Say Y if you own such a device and want to use it.
