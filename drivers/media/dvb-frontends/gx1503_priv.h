@@ -20,7 +20,8 @@ struct gx1503_dev {
 	u16 i2c_wr_max;
 	
 	struct dvb_frontend fe;
-	int ts_mode;	
+	int ts_mode;
+	int ts_config;	
 	int clk_freq;
 	bool fw_loaded;
 	bool active;
