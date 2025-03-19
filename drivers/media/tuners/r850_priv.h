@@ -15,6 +15,12 @@
 #define  R850_FILTER_GAIN_DELAY 5
 #define  R850_FILTER_CODE_DELAY 5
 
+#ifndef TRUE
+    #define TRUE 1
+#endif
+#ifndef FALSE
+    #define FALSE 8
+#endif
 
 enum R850_Standard_Type  //Don't remove standand list!!
 {
