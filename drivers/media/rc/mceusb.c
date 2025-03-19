@@ -774,7 +774,7 @@ static void mceusb_dev_printdata(struct mceusb_dev *ir, u8 *buf, int buf_len,
 
 /*
  * Schedule work that can't be done in interrupt handlers
- * (mceusb_dev_recv() and mce_write_callback()) nor BH work.
+ * (mceusb_dev_recv() and mce_write_callback()) nor tasklets.
  * Invokes mceusb_deferred_kevent() for recovering from
  * error events specified by the kevent bit field.
  */

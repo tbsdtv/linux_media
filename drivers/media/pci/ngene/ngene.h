@@ -16,7 +16,6 @@
 #include <linux/scatterlist.h>
 
 #include <linux/dvb/frontend.h>
-#include <linux/workqueue.h>
 
 #include <media/dmxdev.h>
 #include <media/dvbdev.h>
@@ -622,7 +621,7 @@ struct ngene_channel {
 	int                   users;
 	struct video_device  *v4l_dev;
 	struct dvb_device    *ci_dev;
-	struct work_struct    demux_bh_work;
+	struct tasklet_struct demux_tasklet;
 
 	struct SBufferHeader *nextBuffer;
 	enum KSSTATE          State;
@@ -718,7 +717,7 @@ struct ngene {
 	struct EVENT_BUFFER   EventQueue[EVENT_QUEUE_SIZE];
 	int                   EventQueueOverflowCount;
 	int                   EventQueueOverflowFlag;
-	struct work_struct    event_bh_work;
+	struct tasklet_struct event_tasklet;
 	struct EVENT_BUFFER  *EventBuffer;
 	int                   EventQueueWriteIndex;
 	int                   EventQueueReadIndex;

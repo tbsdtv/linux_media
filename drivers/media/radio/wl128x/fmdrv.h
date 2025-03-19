@@ -15,7 +15,6 @@
 #include <sound/core.h>
 #include <sound/initval.h>
 #include <linux/timer.h>
-#include <linux/workqueue.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-device.h>
@@ -201,10 +200,10 @@ struct fmdev {
 	int streg_cbdata; /* status of ST registration */
 
 	struct sk_buff_head rx_q;	/* RX queue */
-	struct work_struct rx_bh_work;	/* RX BH Work */
+	struct tasklet_struct rx_task;	/* RX Tasklet */
 
 	struct sk_buff_head tx_q;	/* TX queue */
-	struct work_struct tx_bh_work;	/* TX BH Work */
+	struct tasklet_struct tx_task;	/* TX Tasklet */
 	unsigned long last_tx_jiffies;	/* Timestamp of last pkt sent */
 	atomic_t tx_cnt;	/* Number of packets can send at a time */
 

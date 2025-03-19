@@ -19,7 +19,6 @@
 #include <linux/input.h>
 
 #include <linux/mutex.h>
-#include <linux/workqueue.h>
 
 #include <media/dmxdev.h>
 #include <media/dvb_demux.h>
@@ -140,7 +139,7 @@ struct ttusb_dec {
 	int			v_pes_postbytes;
 
 	struct list_head	urb_frame_list;
-	struct work_struct	urb_bh_work;
+	struct tasklet_struct	urb_tasklet;
 	spinlock_t		urb_frame_list_lock;
 
 	struct dvb_demux_filter	*audio_filter;
@@ -767,9 +766,9 @@ static void ttusb_dec_process_urb_frame(struct ttusb_dec *dec, u8 *b,
 	}
 }
 
-static void ttusb_dec_process_urb_frame_list(struct work_struct *t)
+static void ttusb_dec_process_urb_frame_list(struct tasklet_struct *t)
 {
-	struct ttusb_dec *dec = from_work(dec, t, urb_bh_work);
+	struct ttusb_dec *dec = from_tasklet(dec, t, urb_tasklet);
 	struct list_head *item;
 	struct urb_frame *frame;
 	unsigned long flags;
@@ -823,7 +822,7 @@ static void ttusb_dec_process_urb(struct urb *urb)
 				spin_unlock_irqrestore(&dec->urb_frame_list_lock,
 						       flags);
 
-				queue_work(system_bh_wq, &dec->urb_bh_work);
+				tasklet_schedule(&dec->urb_tasklet);
 			}
 		}
 	} else {
@@ -1199,11 +1198,11 @@ static int ttusb_dec_alloc_iso_urbs(struct ttusb_dec *dec)
 	return 0;
 }
 
-static void ttusb_dec_init_bh_work(struct ttusb_dec *dec)
+static void ttusb_dec_init_tasklet(struct ttusb_dec *dec)
 {
 	spin_lock_init(&dec->urb_frame_list_lock);
 	INIT_LIST_HEAD(&dec->urb_frame_list);
-	INIT_WORK(&dec->urb_bh_work, ttusb_dec_process_urb_frame_list);
+	tasklet_setup(&dec->urb_tasklet, ttusb_dec_process_urb_frame_list);
 }
 
 static int ttusb_init_rc( struct ttusb_dec *dec)
@@ -1589,12 +1588,12 @@ static void ttusb_dec_exit_usb(struct ttusb_dec *dec)
 	ttusb_dec_free_iso_urbs(dec);
 }
 
-static void ttusb_dec_exit_bh_work(struct ttusb_dec *dec)
+static void ttusb_dec_exit_tasklet(struct ttusb_dec *dec)
 {
 	struct list_head *item;
 	struct urb_frame *frame;
 
-	cancel_work_sync(&dec->urb_bh_work);
+	tasklet_kill(&dec->urb_tasklet);
 
 	while ((item = dec->urb_frame_list.next) != &dec->urb_frame_list) {
 		frame = list_entry(item, struct urb_frame, urb_frame_list);
@@ -1704,7 +1703,7 @@ static int ttusb_dec_probe(struct usb_interface *intf,
 
 	ttusb_dec_init_v_pes(dec);
 	ttusb_dec_init_filters(dec);
-	ttusb_dec_init_bh_work(dec);
+	ttusb_dec_init_tasklet(dec);
 
 	dec->active = 1;
 
@@ -1730,7 +1729,7 @@ static void ttusb_dec_disconnect(struct usb_interface *intf)
 	dprintk("%s\n", __func__);
 
 	if (dec->active) {
-		ttusb_dec_exit_bh_work(dec);
+		ttusb_dec_exit_tasklet(dec);
 		ttusb_dec_exit_filters(dec);
 		if(enable_rc)
 			ttusb_dec_exit_rc(dec);

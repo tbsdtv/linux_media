@@ -17,7 +17,6 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
-#include <linux/workqueue.h>
 #include <media/rc-core.h>
 
 #include "budget.h"
@@ -81,7 +80,7 @@ DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 
 struct budget_ci_ir {
 	struct rc_dev *dev;
-	struct work_struct msp430_irq_bh_work;
+	struct tasklet_struct msp430_irq_tasklet;
 	char name[72]; /* 40 + 32 for (struct saa7146_dev).name */
 	char phys[32];
 	int rc5_device;
@@ -92,7 +91,7 @@ struct budget_ci_ir {
 
 struct budget_ci {
 	struct budget budget;
-	struct work_struct ciintf_irq_bh_work;
+	struct tasklet_struct ciintf_irq_tasklet;
 	int slot_status;
 	int ci_irq;
 	struct dvb_ca_en50221 ca;
@@ -100,9 +99,9 @@ struct budget_ci {
 	u8 tuner_pll_address; /* used for philips_tdm1316l configs */
 };
 
-static void msp430_ir_interrupt(struct work_struct *t)
+static void msp430_ir_interrupt(struct tasklet_struct *t)
 {
-	struct budget_ci_ir *ir = from_work(ir, t, msp430_irq_bh_work);
+	struct budget_ci_ir *ir = from_tasklet(ir, t, msp430_irq_tasklet);
 	struct budget_ci *budget_ci = container_of(ir, typeof(*budget_ci), ir);
 	struct rc_dev *dev = budget_ci->ir.dev;
 	u32 command = ttpci_budget_debiread(&budget_ci->budget, DEBINOSWAP, DEBIADDR_IR, 2, 1, 0) >> 8;
@@ -231,7 +230,7 @@ static int msp430_ir_init(struct budget_ci *budget_ci)
 
 	budget_ci->ir.dev = dev;
 
-	INIT_WORK(&budget_ci->ir.msp430_irq_bh_work, msp430_ir_interrupt);
+	tasklet_setup(&budget_ci->ir.msp430_irq_tasklet, msp430_ir_interrupt);
 
 	SAA7146_IER_ENABLE(saa, MASK_06);
 	saa7146_setgpio(saa, 3, SAA7146_GPIO_IRQHI);
@@ -245,7 +244,7 @@ static void msp430_ir_deinit(struct budget_ci *budget_ci)
 
 	SAA7146_IER_DISABLE(saa, MASK_06);
 	saa7146_setgpio(saa, 3, SAA7146_GPIO_INPUT);
-	cancel_work_sync(&budget_ci->ir.msp430_irq_bh_work);
+	tasklet_kill(&budget_ci->ir.msp430_irq_tasklet);
 
 	rc_unregister_device(budget_ci->ir.dev);
 }
@@ -349,10 +348,10 @@ static int ciintf_slot_ts_enable(struct dvb_ca_en50221 *ca, int slot)
 	return 0;
 }
 
-static void ciintf_interrupt(struct work_struct *t)
+static void ciintf_interrupt(struct tasklet_struct *t)
 {
-	struct budget_ci *budget_ci = from_work(budget_ci, t,
-						   ciintf_irq_bh_work);
+	struct budget_ci *budget_ci = from_tasklet(budget_ci, t,
+						   ciintf_irq_tasklet);
 	struct saa7146_dev *saa = budget_ci->budget.dev;
 	unsigned int flags;
 
@@ -493,7 +492,7 @@ static int ciintf_init(struct budget_ci *budget_ci)
 
 	// Setup CI slot IRQ
 	if (budget_ci->ci_irq) {
-		INIT_WORK(&budget_ci->ciintf_irq_bh_work, ciintf_interrupt);
+		tasklet_setup(&budget_ci->ciintf_irq_tasklet, ciintf_interrupt);
 		if (budget_ci->slot_status != SLOTSTATUS_NONE) {
 			saa7146_setgpio(saa, 0, SAA7146_GPIO_IRQLO);
 		} else {
@@ -533,7 +532,7 @@ static void ciintf_deinit(struct budget_ci *budget_ci)
 	if (budget_ci->ci_irq) {
 		SAA7146_IER_DISABLE(saa, MASK_03);
 		saa7146_setgpio(saa, 0, SAA7146_GPIO_INPUT);
-		cancel_work_sync(&budget_ci->ciintf_irq_bh_work);
+		tasklet_kill(&budget_ci->ciintf_irq_tasklet);
 	}
 
 	// reset interface
@@ -559,13 +558,13 @@ static void budget_ci_irq(struct saa7146_dev *dev, u32 * isr)
 	dprintk(8, "dev: %p, budget_ci: %p\n", dev, budget_ci);
 
 	if (*isr & MASK_06)
-		queue_work(system_bh_wq, &budget_ci->ir.msp430_irq_bh_work);
+		tasklet_schedule(&budget_ci->ir.msp430_irq_tasklet);
 
 	if (*isr & MASK_10)
 		ttpci_budget_irq10_handler(dev, isr);
 
 	if ((*isr & MASK_03) && (budget_ci->budget.ci_present) && (budget_ci->ci_irq))
-		queue_work(system_bh_wq, &budget_ci->ciintf_irq_bh_work);
+		tasklet_schedule(&budget_ci->ciintf_irq_tasklet);
 }
 
 static u8 philips_su1278_tt_inittab[] = {
