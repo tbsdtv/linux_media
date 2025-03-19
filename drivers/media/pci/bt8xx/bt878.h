@@ -14,7 +14,6 @@
 #include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/mutex.h>
-#include <linux/workqueue.h>
 
 #include "bt848.h"
 #include "bttv.h"
@@ -121,7 +120,7 @@ struct bt878 {
 	dma_addr_t risc_dma;
 	u32 risc_pos;
 
-	struct work_struct bh_work;
+	struct tasklet_struct tasklet;
 	int shutdown;
 };
 
