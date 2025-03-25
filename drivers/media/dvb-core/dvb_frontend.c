@@ -40,7 +40,7 @@ static int dvb_frontend_debug;
 static int dvb_shutdown_timeout;
 static int dvb_force_auto_inversion;
 static int dvb_override_tune_delay;
-static int dvb_powerdown_on_sleep;
+static int dvb_powerdown_on_sleep = 1;
 static int dvb_mfe_wait_time = 5;
 
 module_param_named(frontend_debug, dvb_frontend_debug, int, 0644);
