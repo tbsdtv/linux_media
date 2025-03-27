@@ -2046,12 +2046,12 @@ static void tbs6984_lnb_pwr(struct dvb_frontend *fe, int pin, int onoff)
 		saa716x_gpio_write(dev, pin, 1);
 }
 
-void tbs6984_lnb_pwr0(struct dvb_frontend *fe, int demod, int onoff)
+static void tbs6984_lnb_pwr0(struct dvb_frontend *fe, int demod, int onoff)
 {
 	tbs6984_lnb_pwr(fe, (demod == 0) ? 19 : 2, onoff);
 }
 
-void tbs6984_lnb_pwr1(struct dvb_frontend *fe, int demod, int onoff)
+static void tbs6984_lnb_pwr1(struct dvb_frontend *fe, int demod, int onoff)
 {
 	tbs6984_lnb_pwr(fe, (demod == 0) ? 5 : 3, onoff);
 }
@@ -2427,11 +2427,11 @@ static void tbs6991_lnb1_power(struct dvb_frontend *fe, int onoff)
 */
 #define TBS6991_TSMODE0	    (0x33)
 #define TBS6991_TSMODE1	    (0x31)
-#define TBS6991_TSMODE	    TBS6991_TSMODE0
+#define TBS6991_TSMODE	    TBS6991_TSMODE1
 static struct tas2101_config tbs6991_cfg[] = {
 	{
 		.i2c_address   = 0x68,
-		.id            = ID_TAS2101,
+		.id            = ID_TAS2100,
 		.reset_demod   = tbs6991_reset_fe0,
 		.lnb_power     = tbs6991_lnb0_power,
 		.init          = {0x10, 0x32, 0x54, 0x76, 0xa8, 0x9b, TBS6991_TSMODE},
@@ -2439,7 +2439,7 @@ static struct tas2101_config tbs6991_cfg[] = {
 	},
 	{
 		.i2c_address   = 0x68,
-		.id            = ID_TAS2101,
+		.id            = ID_TAS2100,
 		.reset_demod   = tbs6991_reset_fe1,
 		.lnb_power     = tbs6991_lnb1_power,
 		.init          = {0x30, 0x21, 0x54, 0x76, 0xb8, 0x9a, TBS6991_TSMODE},
@@ -2449,7 +2449,7 @@ static struct tas2101_config tbs6991_cfg[] = {
 
 static struct av201x_config tbs6991_av201x_cfg = {
 	.i2c_address = 0x63,
-	.id          = ID_AV2012,
+	.id          = ID_AV2011,
 	.xtal_freq   = 27000,		/* kHz */
 };
 
@@ -2552,6 +2552,12 @@ static struct tas2101_config tbs6991se_cfg[] = {
 	}
 };
 
+static struct av201x_config tbs6991se_av201x_cfg = {
+	.i2c_address = 0x63,
+	.id          = ID_AV2012,
+	.xtal_freq   = 27000,		/* kHz */
+};
+
 static int saa716x_tbs6991se_frontend_attach(
 	struct saa716x_adapter *adapter, int count)
 {
@@ -2569,7 +2575,7 @@ static int saa716x_tbs6991se_frontend_attach(
 	if (adapter->fe == NULL)
 		goto err;
 
-	if (dvb_attach(av201x_attach, adapter->fe, &tbs6991_av201x_cfg,
+	if (dvb_attach(av201x_attach, adapter->fe, &tbs6991se_av201x_cfg,
 			tas2101_get_i2c_adapter(adapter->fe, 2)) == NULL) {
 		dvb_frontend_detach(adapter->fe);
 		adapter->fe = NULL;
