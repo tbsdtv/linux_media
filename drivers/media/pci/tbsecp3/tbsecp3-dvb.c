@@ -175,7 +175,7 @@ static int tbs6302se_read_mac(struct tbsecp3_adapter *adap)
 		//printk(" the receiver always busy !\n");
 		//check mcu status
 		*(u32 *)tmpbuf = tbs_read( BASE_ADDRESS_24CXX,  STATUS_MAC16_24CXX );
-		if((tmpbuf[0]&0x4) == 1) // bit2==1 mcu busy
+		if((tmpbuf[0]&0x4) != 0) // bit2==1 mcu busy
 		{
 			//printk("MCU status is busy!!!\n" );
 			// release cs;
@@ -243,7 +243,7 @@ static int tbs6304_read_mac(struct tbsecp3_adapter *adap)
 		//printk(" the receiver always busy !\n");
 		//check mcu status
 		*(u32 *)tmpbuf = tbs_read( BASE_ADDRESS_24CXX,  STATUS_MAC16_24CXX );
-		if((tmpbuf[0]&0x4) == 1) // bit2==1 mcu busy
+		if((tmpbuf[0]&0x4) != 0) // bit2==1 mcu busy
 		{
 			//printk("MCU status is busy!!!\n" );
 			// release cs;
@@ -349,7 +349,7 @@ static int tbs6308_read_mac_ext(struct tbsecp3_adapter *adap)
 		ret = 0;
 		//check mcu status
 		*(u32 *)tmpbuf = tbs_read_ext(adap, BASE_ADDRESS_24CXX,  STATUS_MAC16_24CXX );
-		if((tmpbuf[0]&0x4) == 1) // bit2==1 mcu busy
+		if((tmpbuf[0]&0x4) != 0) // bit2==1 mcu busy
 		{
 			//printk("MCU status is busy!!!\n" );
 			// release cs;
@@ -412,7 +412,7 @@ static void tbs6301_read_mac(struct tbsecp3_adapter *adap)
 		printk(" the receiver always busy !\n");
 		//check mcu status
 		*(u32 *)tmpbuf = tbs_read( BASE_ADDRESS_24CXX,  STATUS_MAC16_24CXX );
-		if((tmpbuf[0]&0x4) == 1) // bit2==1 mcu busy
+		if((tmpbuf[0]&0x4) != 0) // bit2==1 mcu busy
 		{
 			printk("MCU status is busy!!!\n" );
 			// release cs;
@@ -1877,16 +1877,14 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		adapter->fe = dvb_attach(tas2971_attach, &tbs6308_demod_cfg, i2c);
 		if (adapter->fe == NULL)
 		    goto frontend_atach_fail;
-		    if(adapter->nr <4)
-		    {
-			    if(tbs6304_read_mac(adapter)==0)
-				    tbs6304_read_mac(adapter);
-		    }
-		    else
-		    {
-			    if(tbs6308_read_mac_ext(adapter)==0)
-				    tbs6308_read_mac_ext(adapter);//try again
-		    }
+
+		if(adapter->nr < 4) {
+		    if(tbs6304_read_mac(adapter)==0)
+			tbs6304_read_mac(adapter);
+		} else {
+		    if(tbs6308_read_mac_ext(adapter)==0)
+			tbs6308_read_mac_ext(adapter);//try again
+		}
 		break;
 	case TBSECP3_BOARD_TBS6308X:
 		adapter->fe = dvb_attach(tas2971_attach, &tbs6308_demod_cfg, i2c);
