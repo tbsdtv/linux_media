@@ -1,5 +1,5 @@
 /*
-    TurboSight PCIex2 HDMI capture cards driver
+    TurboSight PCIe 2.0 HDMI capture cards driver
     Copyright (C) 2024 www.tbsdtv.com
 */
 
@@ -1670,7 +1670,7 @@ static int tbs_pcie_audio_copy_user(struct snd_pcm_substream *substream,
 	ret = copy_to_user(dst,runtime->dma_area+pos,count);
 	return 0;
 }
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(6, 14, 0)
 static int tbs_pcie_audio_copy(struct snd_pcm_substream *substream, int channel,
 		    unsigned long pos, struct iov_iter *iter, unsigned long bytes)
 {
@@ -1678,6 +1678,17 @@ static int tbs_pcie_audio_copy(struct snd_pcm_substream *substream, int channel,
 	int ret;
 //	printk(KERN_INFO "%s() index:%x\n",__func__,chip->index);
 	ret = copy_to_iter_fromio(iter,runtime->dma_area+pos,bytes);
+	return 0;
+
+};
+#else
+static int tbs_pcie_audio_copy(struct snd_pcm_substream *substream, int channel,
+		    unsigned long pos, struct iov_iter *iter, unsigned long bytes)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	size_t ret;
+//	printk(KERN_INFO "%s() index:%x\n",__func__,chip->index);
+	ret = copy_to_iter_fromio(runtime->dma_area+pos,bytes,iter);
 	return 0;
 
 };
@@ -2261,7 +2272,7 @@ static __exit void pcie_tbs_exit(void)
 module_init(pcie_tbs_init);
 module_exit(pcie_tbs_exit);
 
-MODULE_DESCRIPTION("TBS PCIEx2 HDMI capture driver");
+MODULE_DESCRIPTION("TBS PCIE 2.0 HDMI capture driver");
 MODULE_AUTHOR("tbs");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");

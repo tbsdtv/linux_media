@@ -1,6 +1,6 @@
 /*
-    TurboSight PCIex2 HDMI capture cards driver
-     Copyright (C) 2024 www.tbsdtv.com
+    TurboSight PCIe 2.0 HDMI capture cards driver
+     Copyright (C) 2025 www.tbsdtv.com
 */
 
 #ifndef _TBS_PCIE2_H_
