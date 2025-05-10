@@ -284,15 +284,14 @@ static int gx1503_set_frontend(struct dvb_frontend *fe)
 		temp = temp &0xbf;
 
 	regmap_write(dev->regmap,0xd0,temp);
-	
-	regmap_write(dev->regmap,GX1503B_CFG_TS_0,0x10);
-	regmap_write(dev->regmap,GX1503B_CFG_TS_2,0x32);
-			
-	regmap_write(dev->regmap,GX1503B_CFG_TS_4,0x54);
-	regmap_write(dev->regmap,GX1503B_CFG_TS_6,0x76);
-	regmap_write(dev->regmap,GX1503B_CFG_TS_8,0x9A);
-	regmap_write(dev->regmap,GX1503B_CFG_TS_A,0x8B);
-
+	if(dev->ts_config!=1){
+		regmap_write(dev->regmap,GX1503B_CFG_TS_0,0x10);
+		regmap_write(dev->regmap,GX1503B_CFG_TS_2,0x32);			
+		regmap_write(dev->regmap,GX1503B_CFG_TS_4,0x54);
+		regmap_write(dev->regmap,GX1503B_CFG_TS_6,0x76);
+		regmap_write(dev->regmap,GX1503B_CFG_TS_8,0x9A);
+		regmap_write(dev->regmap,GX1503B_CFG_TS_A,0x8B);
+	}
 	//Open sdram port
 	GX1503_WriteRegWithMask(client,0x0A,0,1,1 	);
 
@@ -362,6 +361,7 @@ err:
 
 static int gx1503_read_snr(struct dvb_frontend * fe,u16 * snr)
 {
+	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	struct i2c_client *client = fe->demodulator_priv;
 	struct gx1503_dev *dev = i2c_get_clientdata(client);
 	unsigned int Hl,Hh;
@@ -392,12 +392,39 @@ static int gx1503_read_snr(struct dvb_frontend * fe,u16 * snr)
 	
 	log_data = H_pow * 2048 / gi_len[gi_mode] * 64 / Noise_pow ;
 	SNR = GX1503_100Log(log_data)/10 - snr_mod[gi_mode] - 10;	
+	
 	if(SNR <= 0)
 		SNR = 0;
-
-	*snr = SNR;
+		
+	c->cnr.len = 2;
+	c->cnr.stat[0].scale = FE_SCALE_DECIBEL;
+	c->cnr.stat[0].svalue = (s64)SNR*250;
+	c->cnr.stat[1].scale = FE_SCALE_RELATIVE;
+	c->cnr.stat[1].uvalue = (s64)SNR*328;
+		
+	*snr = c->cnr.stat[1].uvalue;
 
 	return 0;
+}
+static int gx1503_read_strength(struct dvb_frontend*fe, u16 *strength)
+{
+    struct dtv_frontend_properties *c = &fe->dtv_property_cache;
+    int i = 0;
+    
+    *strength = 0;
+
+    if(fe->ops.tuner_ops.get_rf_strength)
+    	fe->ops.tuner_ops.get_rf_strength(fe,strength);	
+   else{		
+    for(i = 0;i<c->strength.len;i++)
+    {
+	if (c->strength.stat[i].scale == FE_SCALE_RELATIVE)
+		*strength = (u16)c->strength.stat[i].uvalue;
+	else if (c->strength.stat[i].scale == FE_SCALE_DECIBEL)
+		*strength = ((100000 + (s32)c->strength.stat[i].svalue)/1000) * 656;   
+    }
+    }
+    return 0;
 }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0)
@@ -451,7 +478,7 @@ static const struct dvb_frontend_ops gx1503_ops = {
 		.delsys = {SYS_DVBT},
 		.info = {
 			.name = "NationalChip gx1503",
-			.frequency_min_hz = 474 * MHz,
+			.frequency_min_hz = 100 * MHz,
 			.frequency_max_hz = 858 * MHz,
 			.frequency_stepsize_hz = 10 * kHz,
 			.caps = 
@@ -464,6 +491,7 @@ static const struct dvb_frontend_ops gx1503_ops = {
 		.init    = gx1503_init,
 		.set_frontend = gx1503_set_frontend,
 		.read_status = gx1503_read_status,
+		.read_signal_strength = gx1503_read_strength,
 		.read_snr = gx1503_read_snr,
 		
 };
@@ -537,6 +565,7 @@ static int gx1503_probe(struct i2c_client *client)
 	dev->fe.demodulator_priv = client;
 	*cfg->fe = &dev->fe;
 	dev->ts_mode = cfg->ts_mode;
+	dev->ts_config = cfg->ts_config;
 	dev->clk_freq = cfg->clk_freq;
 	dev->fw_loaded = false;
 	dev->active = false;
@@ -587,6 +616,6 @@ static struct i2c_driver gx1503_driver = {
 
 module_i2c_driver(gx1503_driver);
 
-MODULE_AUTHOR("Davin<smiledavin@gmail.com>");
+MODULE_AUTHOR("Davin<Davin@tbsdtv.com>");
 MODULE_DESCRIPTION("gx1503 DTMB(GB20600-2006) driver");
 MODULE_LICENSE("GPL");

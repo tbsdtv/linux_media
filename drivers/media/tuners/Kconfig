@@ -341,4 +341,11 @@ config MEDIA_TUNER_RDA5816
 	help
 	  Rafael micro Rda5816 tuner driver.
 
+config MEDIA_TUNER_R850
+        tristate "Rafael Micro R850 tuner"
+        depends on MEDIA_SUPPORT && I2C
+        default m if !MEDIA_SUBDRV_AUTOSELECT
+        select BITREVERSE
+        help
+          Rafael Micro R850 tuner driver.
 endmenu

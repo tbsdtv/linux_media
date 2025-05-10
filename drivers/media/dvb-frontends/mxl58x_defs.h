@@ -176,7 +176,7 @@ typedef struct
 typedef struct
 {
 	MBIN_FILE_HEADER_T  header;    
-	u8 data[1];                 
+	u8 data[];                 
 } MBIN_FILE_T;
 
 typedef struct
@@ -190,7 +190,7 @@ typedef struct
 typedef struct
 {
 	MBIN_SEGMENT_HEADER_T header;  
-	u8 data[1];                 
+	u8 data[];                 
 } MBIN_SEGMENT_T;
 
 

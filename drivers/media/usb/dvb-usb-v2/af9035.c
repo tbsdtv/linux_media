@@ -860,7 +860,9 @@ static int af9035_read_config(struct dvb_usb_device *d)
 		 * configurations seen so far.
 		 */
 		if ((le16_to_cpu(d->udev->descriptor.idVendor) == USB_VID_AVERMEDIA) &&
-		    (le16_to_cpu(d->udev->descriptor.idProduct) == USB_PID_AVERMEDIA_TD310)) {
+		(le16_to_cpu(d->udev->descriptor.idProduct) == USB_PID_AVERMEDIA_TD310) ||
+		(le16_to_cpu(d->udev->descriptor.idVendor) == USB_VID_AVERMEDIA) &&
+		(le16_to_cpu(d->udev->descriptor.idProduct) == 0x0510)) {
 			state->it930x_addresses = 1;
 		}
 		return 0;
@@ -1637,6 +1639,8 @@ static int it930x_tuner_attach(struct dvb_usb_adapter *adap)
 	 */
 	if ((le16_to_cpu(d->udev->descriptor.idVendor) == USB_VID_DEXATEK &&
 	     le16_to_cpu(d->udev->descriptor.idProduct) == 0x0100) ||
+		 (le16_to_cpu(d->udev->descriptor.idVendor) == USB_VID_AVERMEDIA &&
+	     le16_to_cpu(d->udev->descriptor.idProduct) == 0x0510) ||
 	    (le16_to_cpu(d->udev->descriptor.idVendor) == USB_VID_TERRATEC &&
 	     le16_to_cpu(d->udev->descriptor.idProduct) == USB_PID_TERRATEC_CINERGY_TC2_STICK))
 		si2157_config.dont_load_firmware = true;
@@ -2156,6 +2160,8 @@ static const struct usb_device_id af9035_id_table[] = {
 		&it930x_props, "Logilink VG0022A", NULL) },
 	{ DVB_USB_DEVICE(USB_VID_TERRATEC, USB_PID_TERRATEC_CINERGY_TC2_STICK,
 		&it930x_props, "TerraTec Cinergy TC2 Stick", NULL) },
+	{ DVB_USB_DEVICE(USB_VID_AVERMEDIA, 0x0510,
+		&it930x_props, "AVerMedia Mobile-T2", NULL) },
 	{ }
 };
 MODULE_DEVICE_TABLE(usb, af9035_id_table);

@@ -56,7 +56,7 @@ enum MT_FE_ROLL_OFF {
 	MtFeRollOff_Undef =
 	    0, MtFeRollOff_0p35, MtFeRollOff_0p25, MtFeRollOff_0p20,
 	    MtFeRollOff_0p15, MtFeRollOff_0p10, MtFeRollOff_0p05
-} MT_FE_ROLL_OFF;
+};
 
 enum MT_FE_SPECTRUM_MODE {
 	MtFeSpectrum_Undef = 0, MtFeSpectrum_Normal, MtFeSpectrum_Inversion

@@ -10,6 +10,7 @@ struct gx1503_config{
 	struct i2c_adapter **i2c_adapter;
 
 	int ts_mode; // 0 :serial  1:parallel
+	int ts_config;
 
 	u16 i2c_wr_max;
 

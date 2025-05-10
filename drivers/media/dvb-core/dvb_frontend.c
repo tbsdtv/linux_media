@@ -52,7 +52,7 @@ MODULE_PARM_DESC(dvb_force_auto_inversion, "0: normal (default), 1: INVERSION_AU
 module_param(dvb_override_tune_delay, int, 0644);
 MODULE_PARM_DESC(dvb_override_tune_delay, "0: normal (default), >0 => delay in milliseconds to wait for lock after a tune attempt");
 module_param(dvb_powerdown_on_sleep, int, 0644);
-MODULE_PARM_DESC(dvb_powerdown_on_sleep, "0: do not power down, 1: turn LNB voltage off on sleep (default)");
+MODULE_PARM_DESC(dvb_powerdown_on_sleep, "0: do not power down (default), 1: turn LNB voltage off on sleep");
 module_param(dvb_mfe_wait_time, int, 0644);
 MODULE_PARM_DESC(dvb_mfe_wait_time, "Wait up to <mfe_wait_time> seconds on open() for multi-frontend to become available (default:5 seconds)");
 
@@ -443,8 +443,8 @@ static int dvb_frontend_swzigzag_autotune(struct dvb_frontend *fe, int check_wra
 
 		default:
 			fepriv->auto_step++;
-			fepriv->auto_sub_step = -1; /* it'll be incremented to 0 in a moment */
-			break;
+			fepriv->auto_sub_step = 0;
+			continue;
 		}
 
 		if (!ready) fepriv->auto_sub_step++;
@@ -679,12 +679,10 @@ static int dvb_frontend_thread(void *data)
 	set_freezable();
 	while (1) {
 		up(&fepriv->sem);	    /* is locked when we enter the thread... */
-restart:
-		wait_event_interruptible_timeout(fepriv->wait_queue,
-						 dvb_frontend_should_wakeup(fe) ||
-						 kthread_should_stop() ||
-						 freezing(current),
-			fepriv->delay);
+		wait_event_freezable_timeout(fepriv->wait_queue,
+					     dvb_frontend_should_wakeup(fe) ||
+					     kthread_should_stop(),
+					     fepriv->delay);
 
 		if (kthread_should_stop() || dvb_frontend_is_exiting(fe)) {
 			/* got signal or quitting */
@@ -693,9 +691,6 @@ restart:
 			fe->exit = DVB_FE_NORMAL_EXIT;
 			break;
 		}
-
-		if (try_to_freeze())
-			goto restart;
 
 		if (down_interruptible(&fepriv->sem))
 			break;

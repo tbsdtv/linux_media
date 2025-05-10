@@ -34,7 +34,9 @@
 #include "mxl603.h"
 
 #include "mtv23x.h"
+
 #include "gx1503.h"
+#include "r850.h"
 #include "tas2971.h"
 
 #include "stid135.h"
@@ -1442,6 +1444,24 @@ static void tbs6590se_reset_demod(struct tbsecp3_adapter *adapter) //for the cxd
 	
 	return ;
 }
+static unsigned char  tbsecp3_get_hwver(struct tbsecp3_adapter *adapter) //for get the hardware version
+{
+	struct tbsecp3_dev *dev = adapter->dev;
+	u8 ver = 0;
+	u32 tmp = 0;
+	
+	tmp = tbs_read(TBSECP3_GPIO_BASE, 0x68);
+	ver = (u8) (tmp>>8)&0xff;
+	
+	return ver;	
+	
+}
+static struct r850_config r850_config={
+
+	 .i2c_address = 0x7C,
+	.R850_Xtal=24000,
+
+};
 static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 {
 	struct tbsecp3_dev *dev = adapter->dev;
@@ -1458,6 +1478,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 	struct i2c_board_info info;
 	struct i2c_adapter *i2c = &adapter->i2c->i2c_adap;
 	struct i2c_client *client_demod, *client_tuner;
+
 
 	adapter->fe = NULL;
 	adapter->fe2 = NULL;
@@ -1956,11 +1977,25 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		break;
 
 	case TBSECP3_BOARD_TBS6514:
+	
 		memset(&gx1503_config,0,sizeof(gx1503_config));
+		unsigned char ver=tbsecp3_get_hwver(adapter);
+		if(ver==0x32){
+			dev->info->eeprom_i2c = 2;
+			if(adapter->nr==0)
+				set_mac_address(adapter);
+			}
+		 
+
 		gx1503_config.i2c_adapter =&i2c;
 		gx1503_config.fe = &adapter->fe;
 		gx1503_config.clk_freq = 30400;//KHZ
-		gx1503_config.ts_mode = 1;
+		if(ver==0x32)
+			gx1503_config.ts_config = 1;
+		else
+			gx1503_config.ts_config = 0;
+			
+		gx1503_config.ts_mode = 1;	
 		gx1503_config.i2c_wr_max = 8;
 
 		memset(&info, 0, sizeof(struct i2c_board_info));
@@ -1978,26 +2013,39 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		}
 
 		adapter->i2c_client_demod = client_demod;
-
-		/*attach tuner*/
-		memset(&si2157_config, 0, sizeof(si2157_config));
-		si2157_config.fe = adapter->fe;
-		si2157_config.if_port = 0;
-
-		memset(&info, 0, sizeof(struct i2c_board_info));
-		strscpy(info.type, "si2157", I2C_NAME_SIZE);
-		info.addr = 0x60;
-		info.platform_data = &si2157_config;
-		request_module(info.type);
-		client_tuner = i2c_new_client_device(i2c, &info);
-		if (!i2c_client_has_driver(client_tuner))
+		
+		if(ver==0x32)
+		{
+			if (dvb_attach(r850_attach, adapter->fe, &r850_config,
+			i2c) == NULL) {
+		   	 dvb_frontend_detach(adapter->fe);
+		   	 adapter->fe = NULL;
+		   	 dev_err(&dev->pci_dev->dev,
+			    "frontend %d tuner attach failed\n",
+			    adapter->nr);
 		    goto frontend_atach_fail;
+			}
+		 }else{		
+			/*attach tuner*/
+			memset(&si2157_config, 0, sizeof(si2157_config));
+			si2157_config.fe = adapter->fe;
+			si2157_config.if_port = 0;
 
-		if (!try_module_get(client_tuner->dev.driver->owner)) {
-		    i2c_unregister_device(client_tuner);
-		    goto frontend_atach_fail;
+			memset(&info, 0, sizeof(struct i2c_board_info));
+			strscpy(info.type, "si2157", I2C_NAME_SIZE);
+			info.addr = 0x60;
+			info.platform_data = &si2157_config;
+			request_module(info.type);
+			client_tuner = i2c_new_client_device(i2c, &info);
+			if (!i2c_client_has_driver(client_tuner))
+			    goto frontend_atach_fail;
+
+			if (!try_module_get(client_tuner->dev.driver->owner)) {
+			    i2c_unregister_device(client_tuner);
+			    goto frontend_atach_fail;
+			}
+			adapter->i2c_client_tuner = client_tuner;
 		}
-		adapter->i2c_client_tuner = client_tuner;
 		break;
 
 	case TBSECP3_BOARD_TBS6814:
