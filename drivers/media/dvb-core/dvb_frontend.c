@@ -40,7 +40,7 @@ static int dvb_frontend_debug;
 static int dvb_shutdown_timeout;
 static int dvb_force_auto_inversion;
 static int dvb_override_tune_delay;
-static int dvb_powerdown_on_sleep = 1;
+static int dvb_powerdown_on_sleep;
 static int dvb_mfe_wait_time = 5;
 
 module_param_named(frontend_debug, dvb_frontend_debug, int, 0644);
@@ -52,7 +52,7 @@ MODULE_PARM_DESC(dvb_force_auto_inversion, "0: normal (default), 1: INVERSION_AU
 module_param(dvb_override_tune_delay, int, 0644);
 MODULE_PARM_DESC(dvb_override_tune_delay, "0: normal (default), >0 => delay in milliseconds to wait for lock after a tune attempt");
 module_param(dvb_powerdown_on_sleep, int, 0644);
-MODULE_PARM_DESC(dvb_powerdown_on_sleep, "0: do not power down, 1: turn LNB voltage off on sleep (default)");
+MODULE_PARM_DESC(dvb_powerdown_on_sleep, "0: do not power down (default), 1: turn LNB voltage off on sleep");
 module_param(dvb_mfe_wait_time, int, 0644);
 MODULE_PARM_DESC(dvb_mfe_wait_time, "Wait up to <mfe_wait_time> seconds on open() for multi-frontend to become available (default:5 seconds)");
 
