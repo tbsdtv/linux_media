@@ -2429,7 +2429,7 @@ static int m88rs6060_set_clock_ratio(struct m88rs6060_dev *dev )
 
 	m88rs6060_get_channel_info(dev,&p_info);
 
-	if(p_info.type==MtFeType_DvbS2){
+	if(p_info.type==MtFeType_DvbS2 || p_info.type == MtFeType_DvbS2X){
 		dev_dbg(&i2c->dev, "iPlsCode = 0x%02X\n", p_info.iPlsCode);
 		switch(p_info.mod_mode)
 		{
