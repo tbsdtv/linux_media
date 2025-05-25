@@ -3204,7 +3204,7 @@ static int m88rs6060_get_frontend(struct dvb_frontend *fe, struct dtv_frontend_p
         }
          switch(p_info.code_rate)
 		{
-			case MtFeCodeRate_1_4:		p->fec_inner = FEC_1_4;     	break;
+			case MtFeCodeRate_1_4:		p->fec_inner = FEC_1_4; break;
 			case MtFeCodeRate_1_3:		p->fec_inner = FEC_1_3;	break;
 			case MtFeCodeRate_2_5:		p->fec_inner = FEC_2_5;	break;
 			case MtFeCodeRate_1_2:		p->fec_inner = FEC_1_2;	break;
@@ -3213,6 +3213,7 @@ static int m88rs6060_get_frontend(struct dvb_frontend *fe, struct dtv_frontend_p
 			case MtFeCodeRate_3_4:		p->fec_inner = FEC_3_4;	break;
 			case MtFeCodeRate_4_5:		p->fec_inner = FEC_4_5;	break;
 			case MtFeCodeRate_5_6:		p->fec_inner = FEC_5_6;	break;
+			case MtFeCodeRate_7_8:          p->fec_inner = FEC_7_8; break;
 			case MtFeCodeRate_8_9:		p->fec_inner = FEC_8_9;	break;
 			case MtFeCodeRate_9_10:	p->fec_inner = FEC_9_10;	break;
 			case MtFeCodeRate_5_9:		p->fec_inner = FEC_5_9;	break;
