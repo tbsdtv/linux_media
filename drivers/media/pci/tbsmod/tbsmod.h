@@ -8,11 +8,18 @@
 
 #define CHANNELS	32
 #define	FIFOSIZE	(2048 * 1024)
-#define	DMASIZE		(32 * 1024)
 
 #define BLOCKSIZE(id)	(188*32)
+
+#define FPGA_BLK	4
+#define CELLSIZE	(32 * 188)
+#define	DMATOTAL	(CELLSIZE * 16)
+
+
 //#define BLOCKSIZE(id) ((id==0x6008)?(188*32):(188*96))
 #define BLOCKCEEL	(32)
+#define TBSMOD_DMA_IF(_n)	(0x0010 << _n)
+#define TBSMOD_DMA_IF16(_n)	(0x10000 <<( _n -16))
 
 struct mod_channel
 {
@@ -21,11 +28,11 @@ struct mod_channel
 	dma_addr_t		dmaphy;	
 	dev_t			devno;
 	u8 			dma_start_flag;
+	u8 			dma_num;
 	struct kfifo 		fifo; 
 	u8			channel_index;
 	u32			input_bitrate;
 	spinlock_t           	adap_lock; //  dma lock
-	
 };
 
 

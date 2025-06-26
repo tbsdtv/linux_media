@@ -106,14 +106,23 @@ enum{
 	AD9789_BITS_SIGNATURE_1			= 0x53
 };
 
+#define DMA_STATUS	    0x00
 #define DMA_GO	        0x00
 #define DMA_SIZE		0x04
+#define DMA_SIZE_TOTAL	0x04
 #define DMA_ADDR_HIGH	0x08
 #define DMA_ADDR_LOW	0x0c
+
+#define DMA_ADDR_CELL	0x48
+
+
 #define DMA_DELAY		0x14
 #define DMA_DELAYSHORT	0x18
 #define DMA_SPEED_CTRL	0x20
 #define DMA_INT_MONITOR 0x1c
+#define DMARD_SPEED     0x54  //add¡¡6032
+#define EMPTY_PACKAGE_SPEED 0x58 //add¡¡6032
+#define DMARD_SIZE      0x5C //add¡¡6032
 
 #define DMA_FRAME_CNT 0x24
 
