@@ -1485,7 +1485,7 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 	adapter->i2c_client_demod = NULL;
 	adapter->i2c_client_tuner = NULL;
 
-	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id) && (TBSECP3_BOARD_TBS6302SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6209SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6909SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6504H!= dev->info->board_id)){
+	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id) && (TBSECP3_BOARD_TBS6302SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6209SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6909SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6504H!= dev->info->board_id)&&(TBSECP3_BOARD_TBS6331!= dev->info->board_id)){
 		reset_demod(adapter);
 		set_mac_address(adapter);
 	}
@@ -1947,7 +1947,8 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		break;
 
 	case TBSECP3_BOARD_TBS690a:
-		adapter->fe = dvb_attach(tas2971_attach, &tbs6904_demod_cfg[adapter->nr], i2c);
+	case TBSECP3_BOARD_TBS6331:
+		adapter->fe = dvb_attach(tas2971_attach, &tbs6304_demod_cfg[adapter->nr], i2c);
 		if (adapter->fe == NULL)
 		    goto frontend_atach_fail;
 
@@ -1966,8 +1967,9 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 		tbs_write( ASI0_BASEADDRESS, ASI_SPI_ENABLE, *(u32 *)&mpbuf[0]);
 
 		regdata = asi_read16bit(dev,ASI0_BASEADDRESS,0x24);
-		asi_write16bit(dev,ASI0_BASEADDRESS,0x24,3);	 
-		regdata = asi_read16bit(dev,ASI0_BASEADDRESS, 0x24);
+		 printk("asi card read 0x24 = %x\n", regdata);
+		//asi_write16bit(dev,ASI0_BASEADDRESS,0x24,3);	 
+		//regdata = asi_read16bit(dev,ASI0_BASEADDRESS, 0x24);
 
 		mpbuf[0] = 0; //spi disable, enter "z" state;
 		tbs_write( ASI0_BASEADDRESS, ASI_SPI_ENABLE, *(u32 *)&mpbuf[0]);

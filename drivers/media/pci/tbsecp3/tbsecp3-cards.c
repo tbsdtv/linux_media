@@ -1195,6 +1195,23 @@ struct tbsecp3_board tbsecp3_boards[] = {
 			}, 
 		}
 	},
+		[TBSECP3_BOARD_TBS6331] = {
+		.board_id	= TBSECP3_BOARD_TBS6331,
+		.name		= "TurboSight TBS 6331 ASI Capture ",
+		.adapters	= 1,
+		.i2c_speed	= 39,
+		.eeprom_i2c	= 1,
+		.adap_config	= {
+			{
+				.ts_in = 0,
+				.i2c_bus_nr = 3,
+				.gpio.demod_reset.lvl = TBSECP3_GPIODEF_LOW,
+				.gpio.demod_reset.nr  = TBSECP3_GPIO_PIN(3, 0),
+				.gpio.lnb_power.lvl   = TBSECP3_GPIODEF_LOW,
+				.gpio.lnb_power.nr    = TBSECP3_GPIO_PIN(3, 2),
+			},
+		}
+	},
 	[TBSECP3_BOARD_TBS6514] = {
 		.board_id	= TBSECP3_BOARD_TBS6514,
 		.name  		= "Turbosight TBS 6514 (Quad DTMB)",
