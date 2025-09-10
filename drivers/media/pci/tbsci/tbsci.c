@@ -299,7 +299,7 @@ static long tbsci_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 					break;
 			}
 		}
-
+		break;
 	case FE_ECP3FW_READ:
 		ret = copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
 		spi_read(dev, &wrinfo);
