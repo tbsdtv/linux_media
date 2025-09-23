@@ -15,7 +15,9 @@ static bool enable_msi = true;//false;
 module_param(enable_msi, bool, 0444);
 MODULE_PARM_DESC(enable_msi, "use an msi interrupt if available");
 
+static int tbs_sdi_video_param(struct tbs_video *pvideo,int index);
 static int tbs_get_video_param(struct tbs_video *pvideo);
+static int tbs_4k_video_param(struct tbs_video *pvideo);
 static void audio_wake_process(struct work_struct *p_work);
 static void video_wake_process(struct work_struct *p_work);
 static void i2c_wake_process(struct work_struct *p_work);
@@ -107,6 +109,101 @@ static void i2c_write_tab_new(struct i2c_adapter *adapter, u8 *script)
 		i2c_write_reg(adapter,*(script),temp,2 );
 		script += 3;
 	}while(*script != 0xff);
+}
+u8 sdi_CheckFree(struct tbs_pcie_dev *dev,int sdi_base_addr, unsigned char OpbyteNum)
+{
+	unsigned char tmpbuf[4];
+	int i;
+	int j=500;
+	if(OpbyteNum==2)
+		j=400;
+	else if(OpbyteNum==1)
+		j=200;	
+	msleep(20);
+
+	tmpbuf[0] = 0;
+	for(i=0;(i<j) && (tmpbuf[0] != 1);i++)
+	{
+		*(u32 *)tmpbuf = TBS_PCIE_READ(sdi_base_addr, ASI_STATUS );  
+	}
+	//return (tmpbuf[0] == 1);
+
+	if(tmpbuf[0] == 1)
+		return true;
+	else
+	{
+		printk("----------sdi spi interface check error! %x\n",tmpbuf[0]);
+		return false;
+	} 
+}
+
+bool sdi_chip_reset(struct tbs_pcie_dev *dev,int sdi_reset_addr)
+{
+	unsigned char tmpbuf[4];
+
+	tmpbuf[0] = 0;
+	TBS_PCIE_WRITE( TBS_GPIO_BASE, sdi_reset_addr, *(u32 *)&tmpbuf[0]);
+
+	msleep(20);
+
+	tmpbuf[0] = 1;
+	TBS_PCIE_WRITE( TBS_GPIO_BASE, sdi_reset_addr, *(u32 *)&tmpbuf[0]);
+	
+	msleep(100);
+	return true ;
+}
+int sdi_read16bit(struct tbs_pcie_dev *dev,int sdi_base_addr,int reg_addr)
+{
+	unsigned char tmpbuf[4];
+	int regData;
+
+	tmpbuf[0] = (unsigned char) (reg_addr>>8)&0xff; //read_address, msb first;
+	tmpbuf[1] = (unsigned char)(reg_addr&0xff);
+	tmpbuf[0] += 0x80;  //read data;
+
+	
+	TBS_PCIE_WRITE( sdi_base_addr, ASI_SPI_CMD, *(u32 *)&tmpbuf[0]);
+	
+	tmpbuf[0] = 0xf0;	//cs low,cs high, write, read;	
+	tmpbuf[1] = 0x20;	// 2 bytes command for writing;
+    	tmpbuf[1] += 0x02;	 //read 2 bytes data;
+	TBS_PCIE_WRITE( sdi_base_addr, ASI_SPI_CONFIG, *(u32 *)&tmpbuf[0]);
+
+	if(sdi_CheckFree(dev,sdi_base_addr,2)== false)
+	{
+		printk(" spi_read16bit error!\n");
+		return false;	
+	}                   
+
+	*(u32 *)tmpbuf =  TBS_PCIE_READ(sdi_base_addr, ASI_SPI_RD_32 ); 
+
+	regData = ((tmpbuf[0]<<8) | tmpbuf[1]);
+
+	return regData;
+}
+
+bool sdi_write16bit(struct tbs_pcie_dev *dev,int sdi_base_addr, int reg_addr, int data16bit)
+{
+	unsigned char tmpbuf[4];
+
+	tmpbuf[0] = (unsigned char) (reg_addr>>8)&0xff; //read_address, msb first;
+	tmpbuf[1] = (unsigned char)(reg_addr&0xff);
+
+	tmpbuf[2] = (unsigned char) (data16bit>>8)&0xff; //read_address, msb first;
+	tmpbuf[3] = (unsigned char)(data16bit&0xff);
+
+	TBS_PCIE_WRITE( sdi_base_addr, ASI_SPI_CMD, *(u32 *)&tmpbuf[0]);
+	
+	tmpbuf[0] = 0xe0;	//cs low,cs high, write, no read;	
+	tmpbuf[1] = 0x40;	// 4 bytes command for writing;
+	TBS_PCIE_WRITE( sdi_base_addr, ASI_SPI_CONFIG, *(u32 *)&tmpbuf[0]);
+
+	if(sdi_CheckFree(dev,sdi_base_addr,2)== false)
+	{
+		printk(" spi_write16bit error!\n");
+		return false;	
+	}                   
+	return true ;
 }
 
 static int tbs_vidioc_querycap(struct file *file, void *priv, struct v4l2_capability *cap)
@@ -205,7 +302,7 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,struct v4l2_format
 	file_instance->select_pixelformat=pix->pixelformat;
 
 	if(pix->width<DEFAULT_WIDTH || pix->height<DEFAULT_HEIGH ||
-		pix->width > 1920 || pix->height >1080 )
+		pix->width > 4096 || pix->height >2160 )
 	{
 		file_instance->select_width=DEFAULT_WIDTH;
 		file_instance->select_height=DEFAULT_HEIGH;
@@ -803,13 +900,22 @@ static const struct v4l2_ioctl_ops tbs_ioctl_fops = {
 static int tbs_open(struct file *file)
 {
 	struct tbs_video *videodev = video_drvdata(file);
+	struct pci_dev *pci = videodev->dev->pdev;
 	unsigned char * filebuf=NULL;
 	struct tbs_videofile_instance *file_instance;
 	struct vb2_queue *vb_q ;
 	int err;
 
 	//printk( "%s() index:%x entry\n", __func__,videodev->index);
-	tbs_get_video_param(videodev);
+	if((pci->subsystem_vendor == 0x6334)||(pci->subsystem_vendor == 0x6331)) // sdi
+	{
+		tbs_sdi_video_param(videodev, videodev->index>>1);
+	}
+	else if(pci->subsystem_vendor == 0x6311)
+		tbs_4k_video_param(videodev);
+	else
+		tbs_get_video_param(videodev);
+		
 	if(videodev->dst_width<=DEFAULT_WIDTH || videodev->height <= DEFAULT_HEIGH){
 		//printk(KERN_ERR "%s  1 \n", __func__);
 		//return -1;
@@ -1143,7 +1249,7 @@ static void tbs_i2c_exit(struct tbs_pcie_dev *dev)
 	TBS_PCIE_WRITE(TBS_INT_BASE, TBS_I2C_MASK_2, 0x00000000);
 	TBS_PCIE_WRITE(TBS_INT_BASE, TBS_I2C_MASK_3, 0x00000000);
 
-	for (i = 0; i < INTERFACES; i++) {
+	for (i = 0; i < dev->nr; i++) {
 		i2c = &dev->i2c_bus[i];
 		adap = &i2c->i2c_adap;
 		i2c_del_adapter(adap);
@@ -1295,6 +1401,336 @@ static irqreturn_t tbs_pcie_irq(int irq, void *dev_id)
 	TBS_PCIE_WRITE(TBS_INT_BASE, TBS_INT_ENABLE, 0x00000001);
 	return IRQ_HANDLED;
 }
+static void signaltable(u32 val, u32 *wid, u32 *high,u32 *freq, u32 *interlaced )
+{
+	switch(val)
+	{
+		case 0x16:
+		case 0x17:
+		case 0x1B:
+		case 0x19:
+			// 720(1440)*480i @ 59.94/60hz
+			*wid = 720;
+			*high = 480;
+			*freq = 60;
+			*interlaced = 1;
+		break;
+		case 0x18:
+		case 0x1A:
+			// 720(1440)*576i @ 50hz 
+			*wid = 720;
+			*high = 576;///2;
+			*freq = 50;
+			*interlaced = 1;
+		break;
+		case 0x20:
+		case 0x00:
+			// 1280*720p @ 59.94/60hz
+			*wid = 1280;
+			*high = 720;
+			*freq = 60;
+			*interlaced = 0;
+		break;
+		case 0x24:
+		case 0x04:
+			// 1280*720p @ 50hz
+			*wid = 1280;
+			*high = 720;
+			*freq = 50;
+			*interlaced = 0;
+		break;
+		case 0x2a:
+		case 0x0a:
+			// 1920*1080i @ 59.94/60hz
+			*wid = 1920;
+			*high = 1080;
+			*freq = 60;
+			*interlaced = 1;
+		break;
+		case 0x2c:
+		case 0x0c:
+			// 1920*1080i @ 50hz 
+			*wid = 1920;
+			*high = 1080;
+			*freq = 50;
+			*interlaced = 1;
+		break;
+		case 0x0b:
+			// 1920*1080p @ 29.97/30hz
+			*wid = 1920;
+			*high = 1080;
+			*freq = 30;
+			*interlaced = 0;
+		break;
+
+		case 0x0d:
+			// 1920*1080p @ 25hz
+			*wid = 1920;
+			*high = 1080;
+			*freq = 25;
+			*interlaced = 0; 
+		break;
+
+		case 0x30:
+		case 0x10:
+			// 1920*1080p @ 23.98/24hz
+			*wid = 1920;
+			*high = 1080;
+			*freq = 24;
+			*interlaced = 0;
+		break;
+		case 0x2b:
+			// 1920*1080p @ 59.94/60hz
+			*wid = 1920;
+			*high = 1080;
+			*freq = 60;
+			*interlaced = 0;
+		break;
+		case 0x2d:
+			// 1280*720p @ 50hz
+			*wid = 1920;
+			*high = 1080;
+			*freq = 50;
+			*interlaced = 0;
+		break;
+
+		/////// add /////////////////
+		case 0x02:
+			// 1280*720p @ 30
+			*wid = 1280;
+			*high = 720;
+			*freq = 30;
+			*interlaced = 0;
+		break;
+		case 0x03:
+			// 1280*720p @ 30 -EM
+			*wid = 1280;
+			*high = 720;
+			*freq = 30;
+			*interlaced = 0;
+		break;
+		case 0x05:
+			// 1280*720p @ 50 -EM
+			*wid = 1280;
+			*high = 720;
+			*freq = 50;
+			*interlaced = 0;
+		break;
+		case 0x06:
+			// 1280*720p @ 25
+			*wid = 1280;
+			*high = 720;
+			*freq = 25;
+			*interlaced = 0;
+		break;
+		case 0x07:
+			// 1280*720p @ 25 -EM
+			*wid = 1280;
+			*high = 720;
+			*freq = 25;
+			*interlaced = 0;
+		break;
+		case 0x08:
+			// 1280*720p @ 24
+			*wid = 1280;
+			*high = 720;
+			*freq = 24;
+			*interlaced = 0;
+		break;
+		case 0x09:
+			// 1280*720p @ 24 -EM
+			*wid = 1280;
+			*high = 720;
+			*freq = 24;
+			*interlaced = 0;
+		break;
+		case 0x12:
+			// 1920*1080p @ 24 -
+			*wid = 1920;
+			*high = 1080;
+			*freq = 24;
+			*interlaced = 0;
+		break;
+		case 0x14:
+			// 1920*1080i @ 50
+			*wid = 1920;
+			*high = 1080;
+			*freq = 50;
+			*interlaced = 1;
+		break;
+		case 0x15:
+			// 1920*1035i @ 60
+			*wid = 1920;
+			*high = 1035;
+			*freq = 60;
+			*interlaced = 1;
+		break;
+		case 0x26:
+			// 1280*720p @ 25
+			*wid = 1280;
+			*high = 720;
+			*freq = 25;
+			*interlaced = 0;
+		break;
+		case 0x28:
+			// 1280*720p @ 24
+			*wid = 1280;
+			*high = 720;
+			*freq = 24;
+			*interlaced = 0;
+		break;
+		default:
+			// 1920*1080p @ 25hz
+			*wid = 1920;
+			*high = 1080;
+			*freq = 25;
+			*interlaced = 0;
+		break;
+	}
+	return;
+
+}
+static int tbs_sdi_video_param(struct tbs_video *pvideo,int index)
+{	
+	unsigned char tmp[10];
+	unsigned int width;
+	unsigned int height;
+	unsigned int interlaced = 0;
+	unsigned int fps = 0;
+	u32 v_regdata;
+	struct tbs_pcie_dev *dev = pvideo->dev;
+	struct pci_dev *pci = dev->pdev;
+	
+	mutex_lock(&dev->devicemutex);
+	tmp[3] = index + 1;
+	tmp[0] = 1;
+	TBS_PCIE_WRITE( TBS_GPIO_BASE, 0x1c , *(u32 *)&tmp[0]); 
+	
+	v_regdata = sdi_read16bit(dev,TBS_GPIO_BASE,0x06);
+    	v_regdata = (v_regdata & 0x3f00)>>8;
+    	if(v_regdata==0x1d)
+	{
+        	mutex_unlock(&dev->devicemutex);
+        	//printk("SDI cable %d is not connected!\n",index);
+		pvideo->dst_width=DEFAULT_WIDTH;
+		pvideo->dst_height=DEFAULT_HEIGH;
+		pvideo->present=0;
+        	return -1;
+	}
+	else
+	{
+		if((pvideo->videostatus & 0x2000000)&&(v_regdata == 0xa))
+		{
+			pvideo->Interlaced = 0;
+			pvideo->fps = 60;
+			pvideo->dst_width=
+			pvideo->width = 1920;
+			pvideo->dst_height=
+			pvideo->height = 1080;
+		}
+		else if((pvideo->videostatus & 0x2000000)&&(v_regdata == 0xc))
+		{
+			pvideo->Interlaced = 0;
+			pvideo->fps = 50;
+			pvideo->dst_width=
+			pvideo->width = 1920;
+			pvideo->dst_height=
+			pvideo->height = 1080;
+		}
+		else
+		{
+			signaltable(v_regdata,&width,&height,&fps,&interlaced);
+			//printk(" signal : %d * %d  %d %d \n",width,height,fps,interlaced);
+			/*
+			if(pci->subsystem_vendor == 0x6331)
+			{
+				if((height == 1080)&&(width == 1920)&&(fps >=50)&&(interlaced ==0))
+				{
+					tmp[3] = 0x02;
+					TBS_PCIE_WRITE( TBS_GPIO_BASE, GS2972_RATE_SEL , *(u32 *)&tmp[0]); 
+				}
+				else
+				{
+					tmp[3] = 0x00;
+					TBS_PCIE_WRITE( TBS_GPIO_BASE, GS2972_RATE_SEL , *(u32 *)&tmp[0]); 
+				}
+			}
+			*/
+			pvideo->Interlaced = interlaced;
+			pvideo->fps = fps >> interlaced;
+			pvideo->dst_width=
+			pvideo->width = width;
+			pvideo->dst_height=
+			pvideo->height = height;
+		}
+		
+	}
+	
+        mutex_unlock(&dev->devicemutex);
+	pvideo->present=1;
+	return 0;	
+
+}
+
+static int tbs_4k_video_param(struct tbs_video *pvideo)
+{
+	struct i2c_adapter *tbs_adap = &pvideo->dev->i2c_bus[pvideo->index>>1].i2c_adap ;
+	struct tbs_pcie_dev *dev = pvideo->dev;
+	
+    unsigned char tmp[10];
+    unsigned int width;
+    unsigned int height;
+    unsigned int interlaced = 0;
+    unsigned int tmp32, fps = 0;
+
+    mutex_lock(&dev->devicemutex);
+    tmp32 = TBS_PCIE_READ(STATUS_BASE, STATUS_SIGNAL);
+   // printk("4k connect tmp %x\n",tmp32);
+    if ((tmp32 & 0x01) == 0x1) {
+    
+    
+        *(u32 *)tmp = TBS_PCIE_READ(TBS4K_GPIO_BASE, TBS4K_WIDTH);
+        width = (tmp[0] <<24) +(tmp[1]<<16) +(tmp[2]<<8) +tmp[3];
+
+       *(u32 *)tmp = TBS_PCIE_READ(TBS4K_GPIO_BASE, TBS4K_HEIGHT);
+        height = (tmp[0] <<24) +(tmp[1]<<16) +(tmp[2]<<8) +tmp[3];
+        
+       *(u32 *)tmp = TBS_PCIE_READ(TBS4K_GPIO_BASE, TBS4K_INTERLACED);
+        interlaced = (tmp[0] <<24) +(tmp[1]<<16) +(tmp[2]<<8) +tmp[3];
+        if(interlaced)
+        	height<<=1;
+
+        *(u32 *)tmp = TBS_PCIE_READ(TBS4K_GPIO_BASE, TBS4K_VIDEOFPS);
+        fps = (tmp[0] <<24) +(tmp[1]<<16) +(tmp[2]<<8) +tmp[3];
+        //printk("HDMI size:%d*%d %d %d  \n", width,height,interlaced,fps);
+
+        mutex_unlock(&dev->devicemutex);
+        if (width == 0 || height == 0 || height > 2160 || width > 4096) {
+            //printk("HDMI cable %d image size error width:%d height:%d\n",(pvideo->index>>1),width, height);
+			pvideo->dst_width=DEFAULT_WIDTH;
+			pvideo->dst_height=DEFAULT_HEIGH;
+			pvideo->present=0;
+            return -1;
+        }
+
+
+    }else {
+        mutex_unlock(&dev->devicemutex);
+        //printk("HDMI cable %d is not connected!\n",(pvideo->index>>1));
+		pvideo->dst_width=DEFAULT_WIDTH;
+		pvideo->dst_height=DEFAULT_HEIGH;
+		pvideo->present=0;
+        return -1;
+    }
+    pvideo->Interlaced = interlaced;
+    pvideo->fps = fps >> interlaced;
+	pvideo->dst_width=
+    pvideo->width = width;
+	pvideo->dst_height=
+    pvideo->height = height;
+	pvideo->present=1;
+    return 0;
+}
 
 static int tbs_get_video_param(struct tbs_video *pvideo)
 {
@@ -1399,6 +1835,7 @@ static void tbs_adapters_init(struct tbs_pcie_dev *dev)
 {
 	struct i2c_adapter *tbs_adap;
 	struct tbs_video *pvideo;
+	struct pci_dev *pci = dev->pdev;
 	int i;
 
 	/* disable all interrupts */
@@ -1414,15 +1851,85 @@ static void tbs_adapters_init(struct tbs_pcie_dev *dev)
 	TBS_PCIE_WRITE(TBS_DMA_BASE_6, TBS_DMA_START, 0x00000000);
 	TBS_PCIE_WRITE(TBS_DMA_BASE_7, TBS_DMA_START, 0x00000000);	
 
-	for (i = 0; i < INTERFACES; i++) {
+	switch(pci->subsystem_vendor){
+	case 0x6331:
+		printk("tbs6331R SDI card\n");
+		dev->nr = 1;
+		break;
+	case 0x6311: //4k
+		printk("tbs6311R 4k HDMI card\n");
+		dev->nr = 1;
+		break;
+	case 0x6314:
+		printk("tbs6314R HDMI card\n");
+		dev->nr = 4;
+		break;
+	case 0x6334:
+		printk("tbs6334R SDI card\n");
+		dev->nr = 4;
+		break;
+	default:
+		printk("unknonw card\n");
+	}
+	
+	for (i = 0; i < dev->nr; i++) {
 		tbs_adap = &dev->i2c_bus[i].i2c_adap;
 		dev->i2c_bus[i].dev = dev;
 		//printk( "\n%s(): %x \n", __func__, i);
-		tbs_adapters_reset(tbs_adap);
 		pvideo = &dev->video[i];
 		pvideo->dev=dev;
 		pvideo->index = i*2+1;
-		tbs_get_video_param(pvideo);
+		if(pci->subsystem_vendor == 0x6314)
+		{
+			tbs_adapters_reset(tbs_adap);
+			tbs_get_video_param(pvideo);
+		}
+		else if(pci->subsystem_vendor == 0x6311)
+		{
+			int regdata=TBS_PCIE_READ(TBS4K_GPIO_BASE, 0);
+			printk("4k fpga date: %x\n",ntohl(regdata));
+			tbs_4k_video_param(pvideo);
+		}
+		else if(pci->subsystem_vendor == 0x6334)
+		{
+			int regdata;
+			u8 mpbuf[4];
+			mpbuf[3] = i+1; //select chip
+			mpbuf[0] = 1; //active spi bus from "z"
+			TBS_PCIE_WRITE( TBS_GPIO_BASE, 0x1c , *(u32 *)&mpbuf[0]); 
+			sdi_chip_reset(dev,SDI_RST_2971_0+i*4);
+			
+			regdata = sdi_read16bit(dev,TBS_GPIO_BASE,0x24);
+			printk("GS2971(%d) chip id : %x\n",i, regdata);
+			tbs_sdi_video_param(pvideo,i);
+		}
+		else if(pci->subsystem_vendor == 0x6331)
+		{
+			int regdata;
+			u8 mpbuf[4];
+			mpbuf[3] = i+1; //select chip
+			mpbuf[0] = 1; //active spi bus from "z"
+			TBS_PCIE_WRITE( TBS_GPIO_BASE, 0x1c , *(u32 *)&mpbuf[0]); 
+			sdi_chip_reset(dev,SDI_RST_2971_0+i*4);			
+			regdata = sdi_read16bit(dev,TBS_GPIO_BASE,0x24);
+			printk("GS2971(%d) chip id : %x\n",i, regdata);
+			
+			//set 2971 audio out
+			regdata = sdi_read16bit(dev,TBS_GPIO_BASE,0x200);
+			regdata = (regdata & 0xf0ff);
+			sdi_write16bit(dev,TBS_GPIO_BASE,0x200, regdata);
+			/*
+			//init_chip_2972
+			mpbuf[3] = i+2; //select chip
+			mpbuf[0] = 1; //active spi bus from "z"
+			TBS_PCIE_WRITE( TBS_GPIO_BASE, 0x1c , *(u32 *)&mpbuf[0]); 
+			sdi_chip_reset(dev,SDI_RST_2972);
+			regdata = sdi_read16bit(dev,TBS_GPIO_BASE,0x24);
+			printk("GS2972(%d) chip id : %x\n",i, regdata);
+			*/
+			tbs_sdi_video_param(pvideo,i);
+			
+		}
 	}
 }
 
@@ -1432,7 +1939,7 @@ static int tbs_video_register(struct tbs_pcie_dev *dev)
 	int i;
 	int err=-1;
 
-	for(i=0;i<INTERFACES;i++){
+	for(i=0;i<dev->nr;i++){
 
 		err = v4l2_device_register(&dev->pdev->dev, &dev->video[i].v4l2_dev);
 		if(err<0){
@@ -1462,17 +1969,17 @@ static int tbs_video_register(struct tbs_pcie_dev *dev)
 
 		init_waitqueue_head(&dev->video[i].wq);
 		
-		dev->video[i].dmabuf[0].virtaddr = dma_alloc_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL, &dev->video[i].dmabuf[0].dma,GFP_DMA32);
+		dev->video[i].dmabuf[0].virtaddr = dma_alloc_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL, &dev->video[i].dmabuf[0].dma,GFP_KERNEL);//GFP_DMA32 
 		if (!dev->video[i].dmabuf[0].virtaddr) {
 			printk(" allocate memory 0 failed\n");
 			goto fail;
 		}
-		dev->video[i].dmabuf[1].virtaddr = dma_alloc_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL, &dev->video[i].dmabuf[1].dma,GFP_DMA32);
+		dev->video[i].dmabuf[1].virtaddr = dma_alloc_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL, &dev->video[i].dmabuf[1].dma,GFP_KERNEL);
 		if (!dev->video[i].dmabuf[1].virtaddr) {
 			printk(" allocate memory 1 failed\n");
 			goto fail;
 		}
-		dev->video[i].dmabuf[2].virtaddr = dma_alloc_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL, &dev->video[i].dmabuf[2].dma,GFP_DMA32);
+		dev->video[i].dmabuf[2].virtaddr = dma_alloc_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL, &dev->video[i].dmabuf[2].dma,GFP_KERNEL);
 		if (!dev->video[i].dmabuf[2].virtaddr) {
 			printk(" allocate memory 2 failed\n");
 			goto fail;
@@ -1483,12 +1990,12 @@ static int tbs_video_register(struct tbs_pcie_dev *dev)
 			printk(KERN_ERR " v4l2_device_register failed !!!!! \n");
 			goto fail;
 		}else{
-			printk(" TBS6314R video %d register OK ! \n",i);
+			printk(" TBS HDMI/SDI video%d register OK ! \n",i);
 		}
 	}
 	return 0;
 fail:
-	for(i=0;i<INTERFACES;i++){
+	for(i=0;i<dev->nr;i++){
 		if(dev->video[i].dmabuf[0].virtaddr){
 				dma_free_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL, dev->video[i].dmabuf[0].virtaddr, dev->video[i].dmabuf[0].dma);
 				dev->video[i].dmabuf[0].virtaddr =NULL;
@@ -1562,13 +2069,13 @@ static int tbs_pcie_audio_open(struct snd_pcm_substream *substream)
 
 	chip->substream = substream;
 	runtime->hw = mycard_capture_stero;
-	
+	/*
 	tbs_adap = &chip->dev->i2c_bus[chip->index>>1].i2c_adap;
 	i2c_read_reg(tbs_adap,0x68, 0x39,tmp, 1);	
 	rate = cs_data_fs[tmp[0]&15];
 	if(rate)
 		setrate = rate;
-		
+	*/	
 	setrate = 48000;
 	
 	//printk(KERN_INFO "%s() rate:%d setrate:%d tmp[0]:%d\n",__func__, rate,setrate,tmp[0]&15);
@@ -1716,7 +2223,7 @@ static int tbs_audio_register(struct tbs_pcie_dev *dev)
 	int ret;
 	int i;
 	char audioname[100];
-	for(i=0;i<INTERFACES;i++){
+	for(i=0;i<dev->nr;i++){
 		sprintf(audioname,"tbsaudio%02d",i);
 		ret = snd_card_new(&dev->pdev->dev, -1, audioname, THIS_MODULE,	sizeof(struct tbs_audio), &card);
 		if (ret < 0){
@@ -1752,7 +2259,7 @@ static int tbs_audio_register(struct tbs_pcie_dev *dev)
 	return 0;
 
 fail1:
-	for(i=0;i<INTERFACES;i++){
+	for(i=0;i<dev->nr;i++){
 		if(dev->audio[i].pcm){
 			snd_pcm_lib_preallocate_free_for_all(dev->audio[i].pcm);
 		}
@@ -1782,7 +2289,7 @@ static void tbs_remove(struct pci_dev *pdev)
 	}
 
 
-	for(i=0;i<INTERFACES;i++){
+	for(i=0;i<dev->nr;i++){
 		if(dev->audio[i].pcm){
 			snd_pcm_lib_preallocate_free_for_all(dev->audio[i].pcm);
 		}
@@ -1798,7 +2305,7 @@ static void tbs_remove(struct pci_dev *pdev)
 	tbs_i2c_exit(dev);
 	/* disable interrupts */
 
-	for(i=0;i<INTERFACES;i++){
+	for(i=0;i<dev->nr;i++){
 		if(dev->video[i].dmabuf[0].virtaddr){
 				dma_free_coherent(&dev->pdev->dev,  DMA_VIDEO_TOTAL,dev->video[i].dmabuf[0].virtaddr, dev->video[i].dmabuf[0].dma);
 				dev->video[i].dmabuf[0].virtaddr =NULL;
@@ -1900,7 +2407,7 @@ static int ProcessStreamThread(void *data){
 
 		rwidth = videodev->dst_width;
 		rheight = videodev->dst_height;
-		iNum = (videodev->videostatus) & 0x3;
+		iNum = (videodev->videostatus) % 0x3;
 
 		if(videodev->Interlaced){
 			int i;
@@ -2024,6 +2531,7 @@ static int ProcessStreamThread(void *data){
 
 static int SignalDetectThread(void *data){
 	struct tbs_pcie_dev *dev = (struct tbs_pcie_dev *)data;
+	struct pci_dev *pci = dev->pdev;
 	int status;
 	unsigned long channelwidth[4];
 	unsigned long channelheigh[4];
@@ -2036,8 +2544,16 @@ static int SignalDetectThread(void *data){
 	//printk(KERN_INFO "%s() start\n",__func__);
 	while (!kthread_should_stop())
 	{
-		for(i=0;i<INTERFACES;i++){		
-			status = tbs_get_video_param(&dev->video[i]);
+		for(i=0;i<dev->nr;i++){		
+			if((pci->subsystem_vendor == 0x6334)||(pci->subsystem_vendor == 0x6331))// sdi
+			{
+				status = tbs_sdi_video_param(&dev->video[i], i);
+			}
+			else if(pci->subsystem_vendor == 0x6311)
+				status = tbs_4k_video_param(&dev->video[i]);
+			else		
+				status = tbs_get_video_param(&dev->video[i]);
+				
 			if (status || dev->video[i].runstatus == 0) {
 				stop_video_dma_transfer(&dev->video[i]);
 				channelwidth[i] = dev->video[i].width = DEFAULT_WIDTH;
@@ -2047,8 +2563,15 @@ static int SignalDetectThread(void *data){
 				if (channelwidth[i] != dev->video[i].width ||
 					channelheigh[i] != dev->video[i].height ||
 					channelinterlaced[i] != dev->video[i].Interlaced) {
-
-					//printk(KERN_INFO "%s() video %d switch\n", __func__,i);
+					//update video0 hdmi status to gpio regs
+					if(i==0)
+					{
+						TBS_PCIE_WRITE( STATUS_BASE, STATUS_WIDTH , dev->video[i].width);
+						TBS_PCIE_WRITE( STATUS_BASE, STATUS_HEIGHT , dev->video[i].height); 
+						TBS_PCIE_WRITE( STATUS_BASE, STATUS_INTERLACED , dev->video[i].Interlaced); 
+						TBS_PCIE_WRITE( STATUS_BASE, STATUS_VIDEOFPS , dev->video[i].fps);  
+					}
+					//printk(KERN_INFO "signalDetect %d * %d %d %d\n",dev->video[i].width,dev->video[i].height,dev->video[i].Interlaced,dev->video[i].fps);
 					stop_video_dma_transfer(&dev->video[i]);
 					msleep(50);
 					start_video_dma_transfer(&dev->video[i]);
@@ -2063,10 +2586,15 @@ static int SignalDetectThread(void *data){
 		dev->signal_ready=0;
 	}
 	//printk(KERN_INFO "%s() end\n",__func__);
-	stop_video_dma_transfer(&dev->video[0]);
-	stop_video_dma_transfer(&dev->video[1]);
-	stop_video_dma_transfer(&dev->video[2]);
-	stop_video_dma_transfer(&dev->video[3]);
+	//printk(KERN_INFO "%s() end\n",__func__);
+	//stop_video_dma_transfer(&dev->video[0]);
+	//stop_video_dma_transfer(&dev->video[1]);
+	//stop_video_dma_transfer(&dev->video[2]);
+	//stop_video_dma_transfer(&dev->video[3]);
+	for(i=0;i< dev->nr;i++)
+	{
+		stop_video_dma_transfer(&dev->video[i]);
+	}
 	return 0;
 }
 static bool tbs_enable_msi(struct pci_dev *pdev, struct tbs_pcie_dev *dev)
@@ -2184,7 +2712,7 @@ static int tbs_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	}
 
 	dev->signalthread=kthread_run(SignalDetectThread,dev,"tbs_signalthread");
-	printk("%s end\n",__func__);			
+	//printk("%s end\n",__func__);			
 	return 0;
 
 	printk("%s failed:%d end\n",__func__,ret);			
@@ -2239,6 +2767,9 @@ static int  tbs_resume(struct pci_dev *pdev)
 
 static const struct pci_device_id tbs_pci_table[] = {
 	MAKE_ENTRY(0x544d, 0x6178, 0x6314, 0x0003, NULL),
+	MAKE_ENTRY(0x544d, 0x6178, 0x6334, 0x0003, NULL), // sdi
+	MAKE_ENTRY(0x544d, 0x6178, 0x6331, 0x0001, NULL), // TBS6331R sdi
+	MAKE_ENTRY(0x544d, 0x6178, 0x6311, 0x0007, NULL), // TBS6311R 4k
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, tbs_pci_table);

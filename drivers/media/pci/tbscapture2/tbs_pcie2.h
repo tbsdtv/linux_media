@@ -35,8 +35,8 @@
 #define AUDIO_CELLS             16
 #define DMA_AUDIO_TOTAL         (DMA_AUDIO_CELL*AUDIO_CELLS)
 
-#define DMA_VIDEO_TOTAL			(4096*1024)
-#define FILE_INSTANCE_SIZE		(8192*1024)
+#define DMA_VIDEO_TOTAL			(4096*5120)
+#define FILE_INSTANCE_SIZE		(8192*5120)
 #define FILE_HANDLE_POS			(0x3F5000)
 
 
@@ -120,6 +120,7 @@ struct tbs_audio{
 struct tbs_pcie_dev {
 	struct pci_dev			*pdev;
 	void __iomem			*mmio;	
+	int 				nr;
 	struct tbs_audio		audio[INTERFACES];
 	struct tbs_video		video[INTERFACES];
 	struct tbs_i2c			i2c_bus[INTERFACES];
@@ -144,5 +145,10 @@ struct tbs_videofile_instance {
 	unsigned char	*		imgbuf0;
 	unsigned char	*		imgbuf1;
 };
+
+u8 sdi_CheckFree(struct tbs_pcie_dev *dev,int asi_base_addr, unsigned char OpbyteNum);
+bool sdi_chip_reset(struct tbs_pcie_dev *dev,int asi_base_addr);
+int sdi_read16bit(struct tbs_pcie_dev *dev,int asi_base_addr,int reg_addr);
+bool sdi_write16bit(struct tbs_pcie_dev *dev,int asi_base_addr, int reg_addr, int data16bit);
 
 #endif

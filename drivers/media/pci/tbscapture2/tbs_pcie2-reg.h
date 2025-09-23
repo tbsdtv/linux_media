@@ -6,6 +6,36 @@
 #ifndef _TBS_PCIE2_REG_H
 #define _TBS_PCIE2_REG_H
 
+#define TBS4K_GPIO_BASE		0x10000
+#define TBS4K_WIDTH	 	0x08
+#define TBS4K_HEIGHT	 	0x0c
+#define TBS4K_INTERLACED	0x10
+#define TBS4K_VIDEOFPS	 	0x14
+
+#define STATUS_BASE	 	0x00
+#define STATUS_SIGNAL	 	0x58
+#define STATUS_WIDTH	 	0x60
+#define STATUS_HEIGHT	 	0x64
+#define STATUS_INTERLACED	0x68
+#define STATUS_VIDEOFPS	 	0x6c
+
+#define TBS_GPIO_BASE		0x1000
+#define SDI_RST_2971_0  	0x60
+#define SDI_RST_2971_1  	0x64
+#define SDI_RST_2971_2  	0x68
+#define SDI_RST_2971_3  	0x6c
+
+#define SDI_RST_2972  		0x50
+#define GS2972_RATE_SEL		0x70
+
+#define ASI_SPI_CONFIG  0x10
+#define ASI_SPI_CMD  	0x14
+#define ASI_SPI_WT_32  	0x18
+#define ASI_SPI_ENABLE  0x1c
+
+#define ASI_STATUS  	0x10
+#define ASI_SPI_RD_32   0x1c
+
 #define TBS_I2C_BASE_0		0x4000
 #define TBS_I2C_BASE_1		0x5000
 #define TBS_I2C_BASE_2		0x6000
