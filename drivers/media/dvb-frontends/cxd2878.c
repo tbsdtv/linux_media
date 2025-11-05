@@ -970,7 +970,7 @@ static int freia_read_rssi(struct cxd2878_dev*dev,u32 frequency,s32 *rssi)
     u32 ifgain = 0,rfgain=0;
     s32 if_bpf_gc_table[] = {-3, -1, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 23, 23};
     s32 if_bpf_gc_x100 = 0;
-    s32 agcreg_x150 = ifagcreg * 150;   
+ 
     
     u8 cdata[2] = {0x84,0x41};
     ret = cxd2878_wrm(dev,dev->tuner_addr,0x87,cdata,sizeof(cdata));
@@ -1001,7 +1001,9 @@ static int freia_read_rssi(struct cxd2878_dev*dev,u32 frequency,s32 *rssi)
     cxd2878_wr(dev,dev->tuner_addr,0x59,0x04);   
     cxd2878_wr(dev,dev->tuner_addr,0x88,0x00);   
     cxd2878_wr(dev,dev->tuner_addr,0x87,0x80); 
-    
+
+    s32 agcreg_x150 = ifagcreg * 150;  
+        
     cxd2878_rdm(dev,dev->tuner_addr, 0x69, &rdata, 1);
     if_bpf_gc_x100 = if_bpf_gc_table[rdata & 0x0F] * 100;
 
@@ -3288,7 +3290,7 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 	u32 ifout,per = 0;
 	u8 tmp[2],qam = 0;
 	u16 tmp16 = 0;
-	s32  rflevel,snr=0;
+	s32  rflevel,snr=0,rflevel_dBm=0;
 	
 	mutex_lock(&dev->base->i2c_lock);
 	
@@ -3397,12 +3399,26 @@ static int cxd2878_read_status(struct dvb_frontend *fe,
 	ret |= cxd2878_i2c_repeater(dev,0);
 	
 	rflevel-=ifout;
-	rflevel+=200;
+	rflevel+=256;
+	rflevel_dBm =rflevel/100;
 	c->strength.len = 2;
 	c->strength.stat[0].scale = FE_SCALE_DECIBEL;
 	c->strength.stat[0].svalue = rflevel*10;
+	
 	c->strength.stat[1].scale = FE_SCALE_RELATIVE;
-	c->strength.stat[1].svalue = min(max(2*(rflevel/100+90),0),100)*635;
+	if(rflevel_dBm>=-10)
+		c->strength.stat[1].svalue = 65535;	//strong
+	else if(rflevel_dBm>=-35)
+		c->strength.stat[1].svalue= (90+((35+rflevel_dBm)*10/25))*656; //good signal
+	else if(rflevel_dBm>=-45)
+		c->strength.stat[1].svalue= (85+((45+rflevel_dBm)/2))*656;   //normal signal
+	else if(rflevel_dBm>=-65)
+		c->strength.stat[1].svalue= (50+((65+rflevel_dBm)*5/4))*656; // signal
+	else if(rflevel_dBm>=-75)
+		c->strength.stat[1].svalue= (20+((75+rflevel_dBm)*3))*656; //weak signal
+	else 
+		c->strength.stat[1].svalue = 10;   //no signal or very weak signal
+		
 	c->cnr.len =1;
 	c->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 
