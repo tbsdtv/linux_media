@@ -179,10 +179,13 @@ void tbsecp3_i2c_reg_init(struct tbsecp3_dev *dev)
 	if (!baud)
 		baud = 9;
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < 8; i++) {
 		tbs_write(dev->i2c_bus[i].base, TBSECP3_I2C_BAUD, baud);
 		tbs_read(dev->i2c_bus[i].base, TBSECP3_I2C_STAT);
-		tbs_write(TBSECP3_INT_BASE, TBSECP3_I2C_IE(i), 1);
+		if(i<4)
+		  tbs_write(TBSECP3_INT_BASE, TBSECP3_I2C_IE(i), 1);
+		else
+		  tbs_write(TBSECP3_INT_BASE, TBSECP3_I2C_IE1(i), 1);
 	}
 }
 
@@ -191,7 +194,7 @@ int tbsecp3_i2c_init(struct tbsecp3_dev *dev)
 	int i, ret = 0;
 
 	/* I2C Defaults / setup */
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < 8; i++) {
 		dev->i2c_bus[i].base = TBSECP3_I2C_BASE(i);
 		dev->i2c_bus[i].dev = dev;
 		ret = tbsecp3_i2c_register(&dev->i2c_bus[i]);
@@ -211,7 +214,7 @@ int tbsecp3_i2c_init(struct tbsecp3_dev *dev)
 void tbsecp3_i2c_exit(struct tbsecp3_dev *dev)
 {
 	int i;
-	for (i = 0; i < 4; i++)
+	for (i = 0; i < 8; i++)
 		tbsecp3_i2c_unregister(&dev->i2c_bus[i]);
 }
 

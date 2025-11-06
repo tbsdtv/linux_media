@@ -73,7 +73,16 @@ static irqreturn_t tbsecp3_irq_handler(int irq, void *dev_id)
 			}
 		}
 	}
-
+	if (stat & 0xf0000000) {
+		/* i2c 4~7*/
+		for (i = 4; i < 8; i++) {
+			i2c = &dev->i2c_bus[i];
+			if (stat & TBSECP3_I2C_IF1(i)) {
+				i2c->done = 1;
+				wake_up(&i2c->wq);
+			}
+		}
+	}
 	tbs_write(TBSECP3_INT_BASE, TBSECP3_INT_EN, 1);
 	return IRQ_HANDLED;
 }
@@ -375,7 +384,8 @@ static const struct pci_device_id tbsecp3_id_table[] = {
 	TBSECP3_ID(TBSECP3_BOARD_TBS6322,0x6322,0x0010),
 	TBSECP3_ID(TBSECP3_BOARD_TBS6304RV,0x6304,0x0008),
 	TBSECP3_ID(TBSECP3_BOARD_TBS6302RV,0x6302,0x0008),
-	TBSECP3_ID(TBSECP3_BOARD_TBS6331,0x6331,0xa001),				
+	TBSECP3_ID(TBSECP3_BOARD_TBS6331,0x6331,0xa001),
+	TBSECP3_ID(TBSECP3_BOARD_TBS6216,0x6216,0x0001),				
 	{0}
 };
 MODULE_DEVICE_TABLE(pci, tbsecp3_id_table);

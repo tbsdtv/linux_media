@@ -1280,7 +1280,39 @@ static struct cxd2878_config tbs6209se_cfg[] = {
 		.read_eeprom = ecp3_eeprom_read,	
 	}	
 };
-
+static struct cxd2878_config tbs6216_cfg[] = {
+	{
+		.addr_slvt = 0x64,
+		.xtal      = SONY_DEMOD_XTAL_24000KHz,
+		.tuner_addr = 0x60,
+		.tuner_xtal = SONY_ASCOT3_XTAL_24000KHz,
+		.ts_mode	= 0,
+		.ts_ser_data = 0,
+		.ts_clk = 1,
+		.ts_valid = 0,
+		.atscCoreDisable = 0,
+		.write_properties = ecp3_spi_write, 
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
+	},
+	{
+		.addr_slvt = 0x6c,
+		.xtal      = SONY_DEMOD_XTAL_24000KHz,
+		.tuner_addr = 0x63,
+		.tuner_xtal = SONY_ASCOT3_XTAL_24000KHz,
+		.ts_mode	= 0,
+		.ts_ser_data = 0,
+		.ts_clk = 1,
+		.ts_valid = 0,
+		.atscCoreDisable = 0,
+		.write_properties = ecp3_spi_write, 
+		.read_properties = ecp3_spi_read,
+		.write_eeprom = ecp3_eeprom_write, 
+		.read_eeprom = ecp3_eeprom_read,	
+	}
+	
+	};
 static struct cxd2878_config tbsserial_cfg = {
 	
 		.addr_slvt = 0x64,
@@ -1462,6 +1494,24 @@ static struct r850_config r850_config={
 	.R850_Xtal=24000,
 
 };
+static void tbs6216_reset_demod(struct tbsecp3_adapter *adapter)
+{
+	struct tbsecp3_dev *dev = adapter->dev;
+	u32 tmp;
+	u32 gpio;
+	if(adapter->nr<4)
+		gpio= 0x4*(adapter->nr);
+	else
+		gpio = 0x30+0x4*(adapter->nr-4);
+
+	tmp = tbs_read(TBSECP3_GPIO_BASE, gpio);
+	tmp = tmp &0xfffffffe;
+	tbs_write(TBSECP3_GPIO_BASE, gpio, tmp);	
+	msleep(50);
+	tmp = tmp|0x01;
+	tbs_write(TBSECP3_GPIO_BASE, gpio, tmp);
+	msleep(50);
+}
 static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 {
 	struct tbsecp3_dev *dev = adapter->dev;
@@ -1485,12 +1535,21 @@ static int tbsecp3_frontend_attach(struct tbsecp3_adapter *adapter)
 	adapter->i2c_client_demod = NULL;
 	adapter->i2c_client_tuner = NULL;
 
-	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id) && (TBSECP3_BOARD_TBS6302SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6209SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6909SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6504H!= dev->info->board_id)&&(TBSECP3_BOARD_TBS6331!= dev->info->board_id)){
+	if((TBSECP3_BOARD_TBS6304 != dev->info->board_id) && (TBSECP3_BOARD_TBS6308 != dev->info->board_id) && (TBSECP3_BOARD_TBS6302SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6209SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6909SE != dev->info->board_id)&&(TBSECP3_BOARD_TBS6504H!= dev->info->board_id)&&(TBSECP3_BOARD_TBS6331!= dev->info->board_id)
+	&&(TBSECP3_BOARD_TBS6216!= dev->info->board_id)){
 		reset_demod(adapter);
 		set_mac_address(adapter);
 	}
 
 	switch (dev->info->board_id) {
+	  case TBSECP3_BOARD_TBS6216:
+	   	       tbs6216_reset_demod(adapter);
+	   		set_mac_address(adapter);		
+	   		adapter->fe = dvb_attach(cxd2878_attach, &tbs6216_cfg[(adapter->nr)%2], i2c);
+
+		if (adapter->fe == NULL)
+		    goto frontend_atach_fail;
+	   break;
 	   case TBSECP3_BOARD_TBS6590SE:   
 	   	tbs6590se_reset_demod(adapter);
 	   //	adapter->fe2 = &adapter->_fe2;
