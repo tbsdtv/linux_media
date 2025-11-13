@@ -3819,7 +3819,7 @@ static int cxd2878_set_property(struct dvb_frontend*fe,
 				case SYS_DVBC_ANNEX_B:
 				case SYS_DVBC_ANNEX_C:
 					fe->ops.info.frequency_min_hz = 47*MHz;
-					fe->ops.info.frequency_max_hz = 862*MHz;
+					fe->ops.info.frequency_max_hz = 1002*MHz;
 					fe->ops.info.frequency_stepsize_hz = 62500;
 					fe->ops.info.symbol_rate_min = 1700000;
 					fe->ops.info.symbol_rate_max = 7200000;
