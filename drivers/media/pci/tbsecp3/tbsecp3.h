@@ -27,6 +27,8 @@
 #include <linux/pci.h>
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
+#include <linux/fs.h>
+#include <linux/kfifo.h>
 
 #include <media/dmxdev.h>
 #include <media/dvbdev.h>
@@ -96,6 +98,7 @@
 #define TBSECP3_BOARD_TBS6302RV	52
 #define TBSECP3_BOARD_TBS6331	53
 #define TBSECP3_BOARD_TBS6216   54
+#define TBSECP3_BOARD_TBS6910X	55
 
 #define TBSECP3_MAX_ADAPTERS	(16)
 #define TBSECP3_MAX_I2C_BUS	(8)
@@ -127,15 +130,19 @@ struct tbsecp3_adap_config {
 	u8 i2c_bus_nr;
 	struct tbsecp3_gpio_config gpio;
 };
-
+struct tbsecp3_ci_config{
+	u32 base;
+};
 struct tbsecp3_board {
 	u16  board_id;
 	char *name;
 	int adapters;
+	int sec;	//for sec files.
 	u32 i2c_speed;
 	u8 eeprom_i2c;
 	u8 eeprom_addr;
 	struct tbsecp3_adap_config adap_config[16];
+	struct tbsecp3_ci_config ci_config[2];
 };
 
 struct tbsecp3_i2c {
@@ -172,6 +179,37 @@ struct tbsecp3_ca {
 	int status;
 };
 
+struct tbsecp3_ci{
+	int nr;
+	u32 base;
+	u8			dma_offset;
+	u8			next_buffer;
+	u8			cnt;
+	struct tbsecp3_adapter *adapter;
+	struct work_struct	read_work;
+	struct work_struct	write_work;
+	wait_queue_head_t	write_wq;
+	wait_queue_head_t	read_wq;
+	u8			write_ready;
+	u8			read_ready;
+	spinlock_t 		readlock;
+	spinlock_t		writelock;
+
+	__le32			*w_dmavirt;
+	dma_addr_t		w_dmaphy;	
+	__le32			*r_dmavirt;
+	dma_addr_t		r_dmaphy;	
+	struct kfifo 		w_fifo; 
+	struct kfifo 		r_fifo; 
+	u8			is_open;	
+	u32			w_bitrate;
+	int is_open_for_read;
+	int feeds;
+	struct dvb_device    *ci_dev;
+
+};
+
+
 struct tbsecp3_adapter {
 	int nr;
 	struct tbsecp3_adap_config *cfg;
@@ -203,6 +241,8 @@ struct tbsecp3_adapter {
 
 	/* ca interface */
 	struct tbsecp3_ca *tbsca;
+	/*6910X*/
+	struct tbsecp3_ci *tbsci;
 };
 
 struct tbsecp3_dev {
@@ -220,6 +260,7 @@ struct tbsecp3_dev {
 	struct tbsecp3_i2c i2c_bus[TBSECP3_MAX_I2C_BUS];
 	
 	u8 mac_num;
+	int cimode; //for 6910X
 };
 
 #define tbs_read(_b, _o)	readl(dev->lmmio + (_b + _o))
@@ -259,5 +300,10 @@ extern void tbsecp3_dma_disable(struct tbsecp3_adapter *adap);
 /* tbsecp3-ca.c */
 int tbsecp3_ca_init(struct tbsecp3_adapter *adap, int nr);
 void tbsecp3_ca_release(struct tbsecp3_adapter *adap);
+
+/*tbsecp3-ci.c*/
+int tbsecp3_ci_init(struct tbsecp3_adapter *adap,int nr,int cimode);
+void tbsecp3_ci_remove(struct tbsecp3_adapter *adap);
+
 
 #endif
