@@ -11,7 +11,7 @@
 
 #define BLOCKSIZE(id)	(188*32)
 
-#define FPGA_BLK	4
+#define FPGA_BLK	3
 #define CELLSIZE	(32 * 188)
 #define	DMATOTAL	(CELLSIZE * 16)
 

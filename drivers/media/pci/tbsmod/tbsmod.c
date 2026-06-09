@@ -2710,6 +2710,17 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
 		spi_write(dev, &wrinfo);
 		break;
+		
+	case FE_24CXX_READ:
+		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
+		spi_read(dev, &wrinfo);
+		copy_to_user((void __user *)arg, &wrinfo, sizeof(struct mcu24cxx_info ));
+		break;
+	case FE_24CXX_WRITE:
+		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
+		spi_write(dev, &wrinfo);
+		break;
+
 
 	default:
 		ret = -EINVAL;

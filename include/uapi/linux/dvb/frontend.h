@@ -1081,7 +1081,7 @@ struct ecp3_info
 struct mcu24cxx_info
 {
 	__u32 bassaddr;
-	__u8 reg;
+	__u32 reg;
 	__u32 data;
 };
 
