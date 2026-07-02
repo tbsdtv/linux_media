@@ -2457,6 +2457,16 @@ void spi_write(struct tbs_pcie_dev *dev, struct mcu24cxx_info *info)
 	TBS_PCIE_WRITE(info->bassaddr,info->reg,info->data);	
 	//printk("%s size:%x, reg: %x, val: %x\n", __func__, info->bassaddr, info->reg,info->data);
 }
+void spi_read32(struct tbs_pcie_dev *dev, struct mcu24cxx32_info *info)
+{
+	info->data = TBS_PCIE_READ(info->bassaddr, info->reg);
+	//printk("%s bassaddr:%x ,reg: %x,val: %x\n", __func__, info->bassaddr, info->reg,info->data);
+}
+void spi_write32(struct tbs_pcie_dev *dev, struct mcu24cxx32_info *info)
+{
+	TBS_PCIE_WRITE(info->bassaddr,info->reg,info->data);	
+	//printk("%s size:%x, reg: %x, val: %x\n", __func__, info->bassaddr, info->reg,info->data);
+}
 static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct mod_channel *pchannel = (struct mod_channel *)file->private_data;
@@ -2466,6 +2476,7 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	//struct dtv_property *prop = NULL;
 	struct dtv_property prop;
 	struct mcu24cxx_info wrinfo;
+	struct mcu24cxx32_info wrinfo32;
 	int ret = 0;
 	struct dvb_modulator_parameters params;
 	struct dvb_frontend_info finfo;
@@ -2712,13 +2723,13 @@ static long tbsmod_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 		
 	case FE_24CXX_READ:
-		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
-		spi_read(dev, &wrinfo);
-		copy_to_user((void __user *)arg, &wrinfo, sizeof(struct mcu24cxx_info ));
+		copy_from_user(&wrinfo32 , (const char*)arg, sizeof(struct mcu24cxx32_info ));
+		spi_read32(dev, &wrinfo32);
+		copy_to_user((void __user *)arg, &wrinfo32, sizeof(struct mcu24cxx32_info ));
 		break;
 	case FE_24CXX_WRITE:
-		copy_from_user(&wrinfo , (const char*)arg, sizeof(struct mcu24cxx_info ));
-		spi_write(dev, &wrinfo);
+		copy_from_user(&wrinfo32 , (const char*)arg, sizeof(struct mcu24cxx32_info ));
+		spi_write32(dev, &wrinfo32);
 		break;
 
 
