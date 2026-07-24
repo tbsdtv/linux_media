@@ -348,16 +348,16 @@ static int si2183_read_status(struct dvb_frontend *fe, enum fe_status *status)
 			c->modulation = APSK_16;
 			break;
 			case 0x17:
-			c->modulation = APSK_8L;
+			c->modulation = APSK_8_L;
 			break;
 			case 0x18:
-			c->modulation = APSK_16L;
+			c->modulation = APSK_16_L;
 			break;
 			case 0x15:
 			c->modulation = APSK_32;
 			break;
 			case 0x19:
-			c->modulation = APSK_32L;
+			c->modulation = APSK_32_L;
 			break;
 			case 0x1a:
 			c->modulation = APSK_32;
