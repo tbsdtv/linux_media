@@ -322,8 +322,6 @@ enum fe_code_rate {
 	FEC_1_4,
 	FEC_5_9,
 	FEC_7_9,
-	FEC_4_15,
-	FEC_7_15,
 	FEC_8_15,
 	FEC_11_15,
 	FEC_13_18,
@@ -331,20 +329,23 @@ enum fe_code_rate {
 	FEC_11_20,
 	FEC_23_36,
 	FEC_25_36,
-	FEC_11_45,
 	FEC_13_45,
-	FEC_14_45,
 	FEC_26_45,
 	FEC_28_45,
-	FEC_29_45,
-	FEC_31_45,
 	FEC_32_45,
 	FEC_77_90, 
+	FEC_11_45,
+	FEC_4_15,
+	FEC_14_45,
+	FEC_7_15,
+	FEC_29_45,
+	FEC_31_45,
 	FEC_R_58,
 	FEC_R_60,
 	FEC_R_62,
 	FEC_R_5E,
 };
+
 
 /**
  * enum fe_modulation - Type of modulation/constellation
@@ -388,20 +389,21 @@ enum fe_modulation {
 	APSK_32,
 	DQPSK,
 	QAM_4_NR,
-	QAM_512,
 	QAM_1024,
 	QAM_4096,
+	APSK_8_L,
+	APSK_16_L,
+	APSK_32_L,
 	APSK_64,
+	APSK_64_L,
+	QAM_512,
 	APSK_128,
 	APSK_256,
-	APSK_8L,
-	APSK_16L,
-	APSK_32L,
-	APSK_64L,
-	APSK_128L,
-	APSK_256L,
+	APSK_128_L,
+	APSK_256_L,
 	APSK_1024,
 };
+
 
 /**
  * enum fe_transmit_mode - Transmission mode
