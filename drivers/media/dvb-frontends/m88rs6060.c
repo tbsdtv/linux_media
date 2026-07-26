@@ -3366,7 +3366,22 @@ static int m88rs6060_ready(struct m88rs6060_dev *dev)
 		
 	dev_dbg(&dev->base->i2c->dev, "%s", __func__);
 
-	//rest the harware and wake up the demod and tuner;
+	/*
+	 * Only run the cold-boot sequence when the chip is actually cold; if it's
+	 * already warm, leave it alone.
+	 */
+	ret = regmap_read(dev->regmap, 0xb9, &val);
+	if (!ret && val) {
+		dev_info(&i2c->dev, "found a '%s' already in warm state\n",
+			 dev->fe.ops.info.name);
+		dev_info(&i2c->dev, "firmware version:%X\n", val);
+		m88res6060_set_ts_mode(dev);
+		regmap_read(dev->regmap, 0x4d, &val);
+		regmap_write(dev->regmap, 0x4d, val & 0xfd);
+		return 0;
+	}
+
+	//reset the hardware and wake up the demod and tuner;
 	m88rs6060_hard_rest(dev);
 	rs6060_init(dev);
 
