@@ -271,6 +271,7 @@ struct fe_stid135_internal_param {
 	struct gse_ram_byte		gse_flt[8];
 	struct modcod_data		mc_flt[NB_SAT_MODCOD];
 	BOOL 				mis_mode[8]; /* Memorisation of MIS mode */
+	u32				pio_north_cfg1000; /* DiSEqC pin mux, see fe_stid135_diseqc_init() */
 
 	struct mutex *master_lock;
 };

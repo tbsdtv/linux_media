@@ -1004,6 +1004,11 @@ STCHIP_Error_t ChipSetField(STCHIP_Handle_t hChip,u32 FieldId,s32 Value)
 			if(hChip->Abort==FALSE)
 			{
 			hChip->Error=ChipGetOneRegister(hChip,(u16)((FieldId >> 16)&0xFFFF), (u32*) &regValue);		/*	Read the register	*/
+			/* On a failed read regValue is 0xFFFFFFFF, and ChipSetOneRegister()
+			   below clears the error before writing, so the other bits of the
+			   register would be written as 1s. Keep the register as it is. */
+			if(hChip->Error)
+				return hChip->Error;
 			sign = ChipGetFieldSign(FieldId);
 			mask = ChipGetFieldMask(FieldId);
 			pos = ChipGetFieldPosition((u8)mask);

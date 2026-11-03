@@ -5354,7 +5354,6 @@ fe_lla_error_t fe_stid135_diseqc_init(fe_stid135_handle_t handle,
 	fe_lla_error_t error = FE_LLA_NO_ERROR;
 	struct fe_stid135_internal_param *pParams = (struct fe_stid135_internal_param *) handle;
 	s32 mode_fld, envelop_fld;
-	u32 reg_value;
 
 	if (pParams == NULL)
 		return FE_LLA_INVALID_HANDLE;
@@ -5388,24 +5387,28 @@ fe_lla_error_t fe_stid135_diseqc_init(fe_stid135_handle_t handle,
 		break;
 	}
 	
-	/* Set alternate function #1 */
+	/* Set alternate function #1.
+	   SYSTEM_CONFIG1000 is the PIO0 pin mux. It is reset to 0 at init and
+	   nothing else touches it, so keep its value here and only write it.
+	   Reading it back is not safe: after an I2C timeout the read leaves
+	   0xFFFFFFFF, which used to be written back, re-muxing every PIO0 pin
+	   (DiSEqC included) until the driver was re-probed. Writing the whole
+	   value each time also repairs a register damaged by a failed write. */
 	switch(tuner_nb) {
 	case AFE_TUNER2:
-		error |= ChipGetOneRegister(pParams->handle_soc, (u16)REG_RSTID135_SYSCFG_NORTH_SYSTEM_CONFIG1000, &reg_value);
-		reg_value |= 0x00000001;
-		error |= ChipSetOneRegister(pParams->handle_soc, (u16)REG_RSTID135_SYSCFG_NORTH_SYSTEM_CONFIG1000, reg_value);
+		pParams->pio_north_cfg1000 |= 0x00000001;
 	break;
 	case AFE_TUNER3:
-		error |= ChipGetOneRegister(pParams->handle_soc, (u16)REG_RSTID135_SYSCFG_NORTH_SYSTEM_CONFIG1000, &reg_value);
-		reg_value |= 0x00000010;
-		error |= ChipSetOneRegister(pParams->handle_soc, (u16)REG_RSTID135_SYSCFG_NORTH_SYSTEM_CONFIG1000, reg_value);
+		pParams->pio_north_cfg1000 |= 0x00000010;
 	break;
 	case AFE_TUNER4:
-		error |= ChipGetOneRegister(pParams->handle_soc, (u16)REG_RSTID135_SYSCFG_NORTH_SYSTEM_CONFIG1000, &reg_value);
-		reg_value |= 0x00000100;
-		error |= ChipSetOneRegister(pParams->handle_soc, (u16)REG_RSTID135_SYSCFG_NORTH_SYSTEM_CONFIG1000, reg_value);
+		pParams->pio_north_cfg1000 |= 0x00000100;
+	break;
+	default:
 	break;
 	}
+	if (pParams->pio_north_cfg1000)
+		error |= ChipSetOneRegister(pParams->handle_soc, (u16)REG_RSTID135_SYSCFG_NORTH_SYSTEM_CONFIG1000, pParams->pio_north_cfg1000);
 
 	error |= ChipSetField(pParams->handle_demod,
 				FLD_FC8CODEW_DVBSX_LNBCTRL_LNB_VCTRL_VLNB_ON_EN, 1);
